@@ -851,6 +851,7 @@ function buildPrompt(
     `当前目标分页签是“${feedLabel}”。`,
     `请严格输出 JSON 数组，并且包含 ${count} 个对象，不要输出额外解释。`,
     "每个对象必须包含以下字段：displayName, handle, text, tags, replies, reposts, likes, views。",
+    "输出必须是可以直接被 JSON.parse 解析的合法 JSON，所有字符串都必须使用双引号包裹。",
     "text 需要像 X 首页上的真实讨论帖，长度控制在 40 到 130 字之间，语气自然、有观点、有轻微冲突感。",
     "tags 必须是数组，至少 2 个、最多 5 个标签；每个标签都必须以 # 开头，例如 #榜单、#行业洞察。",
     "这些标签必须根据该条内容本身提炼，不能空泛重复；text 字段里不要重复输出标签行，标签只放在 tags 数组中。",
@@ -1854,13 +1855,39 @@ function extractJsonArray(text) {
   return "";
 }
 
+function repairMalformedJsonArrayText(jsonText) {
+  return String(jsonText || "")
+    .replace(/,\s*([}\]])/g, "$1")
+    .replace(/([,\[]\s*)(#([^"\],\r\n]+))"(?=\s*[,}\]])/g, '$1"$2"')
+    .replace(/([,\[]\s*)(#([^"\],\r\n]+))(?=\s*[,}\]])/g, '$1"$2"');
+}
+
+function parseJsonArrayWithRepair(jsonText, errorMessage) {
+  try {
+    return JSON.parse(jsonText);
+  } catch (originalError) {
+    const repairedJsonText = repairMalformedJsonArrayText(jsonText);
+    if (repairedJsonText !== jsonText) {
+      try {
+        return JSON.parse(repairedJsonText);
+      } catch (_repairError) {
+        throw new Error(errorMessage || originalError.message);
+      }
+    }
+    throw originalError;
+  }
+}
+
 function parseGeneratedPosts(rawText, count = DEFAULT_POST_COUNT) {
   const jsonText = extractJsonArray(rawText);
   if (!jsonText) {
     throw new Error("接口已返回内容，但没有找到 JSON 数组。");
   }
 
-  const parsed = JSON.parse(jsonText);
+  const parsed = parseJsonArrayWithRepair(
+    jsonText,
+    "接口返回的 JSON 解析失败，请检查 tags 是否都使用双引号包裹。"
+  );
   if (!Array.isArray(parsed) || !parsed.length) {
     throw new Error("接口返回的 JSON 不是有效的讨论数组。");
   }
@@ -1874,7 +1901,7 @@ function parseGeneratedReplies(rawText, count = DEFAULT_REPLY_COUNT, seed = "rep
     throw new Error("接口已返回内容，但没有找到 JSON 数组。");
   }
 
-  const parsed = JSON.parse(jsonText);
+  const parsed = parseJsonArrayWithRepair(jsonText, "接口返回的回复 JSON 解析失败。");
   if (!Array.isArray(parsed) || !parsed.length) {
     throw new Error("接口返回的 JSON 不是有效的回复数组。");
   }
@@ -2279,7 +2306,7 @@ async function requestGeneratedDirectMessages(
     throw new Error("私信接口返回内容中没有 JSON 数组。");
   }
 
-  const parsed = JSON.parse(jsonText);
+  const parsed = parseJsonArrayWithRepair(jsonText, "私信接口返回的 JSON 解析失败。");
   if (!Array.isArray(parsed) || !parsed.length) {
     throw new Error("接口返回的私信数据不是有效数组。");
   }
@@ -2333,7 +2360,7 @@ async function requestGeneratedConversationReply(settings, profile, conversation
     throw new Error("私信回复接口返回内容中没有 JSON 数组。");
   }
 
-  const parsed = JSON.parse(jsonText);
+  const parsed = parseJsonArrayWithRepair(jsonText, "私信回复接口返回的 JSON 解析失败。");
   if (!Array.isArray(parsed) || !parsed.length) {
     throw new Error("接口返回的私信回复不是有效数组。");
   }
