@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>X 风格消息流 Demo</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="left-nav">
+        <div class="brand">𝕏</div>
+        <nav>
+          <a href="#home" class="nav-item active" data-tab="home">首页</a>
+          <a href="#settings" class="nav-item" data-tab="settings">设置</a>
+        </nav>
+      </aside>
+
+      <main class="timeline">
+        <header class="timeline-header">
+          <h1 id="page-title">首页</h1>
+        </header>
+
+        <section id="home-page" class="page-section">
+          <section id="feed" class="feed" aria-label="消息流">
+            <p id="empty-feed" class="empty-feed">暂无消息</p>
+          </section>
+        </section>
+
+        <section id="settings-page" class="page-section hidden">
+          <section class="composer">
+            <h2>API 设置与生成</h2>
+            <form id="generate-form">
+              <label>
+                接口类型
+                <select id="api-mode">
+                  <option value="openai">OpenAI 兼容接口</option>
+                  <option value="generic">通用接口（prompt）</option>
+                </select>
+              </label>
+
+              <label>
+                API 地址
+                <input
+                  id="api-endpoint"
+                  type="url"
+                  placeholder="https://api.openai.com/v1/chat/completions"
+                  required
+                />
+              </label>
+
+              <label>
+                Bearer Token / API Key
+                <input
+                  id="api-token"
+                  type="password"
+                  placeholder="输入 API Key"
+                />
+              </label>
+
+              <label id="model-wrap">
+                模型（OpenAI 模式）
+                <input id="api-model" type="text" placeholder="gpt-4.1-mini" />
+              </label>
+
+              <label>
+                主题 / 提示词
+                <textarea
+                  id="api-prompt"
+                  rows="3"
+                  placeholder="例如：生成一条关于前端开发的简短动态"
+                  required
+                ></textarea>
+              </label>
+
+              <button id="generate-btn" type="submit">调用 API 生成消息</button>
+            </form>
+            <p id="status" class="status"></p>
+          </section>
+        </section>
+      </main>
+
+      <aside class="right-panel">
+        <h3>说明</h3>
+        <p>OpenAI 兼容模式请求格式：</p>
+        <pre>{
+  "model": "gpt-4.1-mini",
+  "messages": [
+    { "role": "user", "content": "你的提示词" }
+  ]
+}</pre>
+        <p>通用模式请求格式：</p>
+        <pre>{
+  "prompt": "你的提示词"
+}</pre>
+        <p>支持解析以下返回结构：</p>
+        <ul>
+          <li><code>choices[0].message.content</code>（OpenAI）</li>
+          <li><code>message</code></li>
+          <li><code>text</code></li>
+          <li><code>content</code></li>
+          <li><code>data.message</code></li>
+        </ul>
+      </aside>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
