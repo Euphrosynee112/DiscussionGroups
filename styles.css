@@ -466,11 +466,20 @@ button {
   font-size: 14px;
   line-height: 1.7;
   white-space: pre-wrap;
+  display: block;
 }
 
 .post-tag {
   color: #16639c;
   font-weight: 600;
+  display: inline;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.post-tag + .post-tag {
+  margin-left: 10px;
 }
 
 .post-actions {
@@ -682,6 +691,17 @@ button {
   background: rgba(248, 250, 252, 0.92);
 }
 
+.conversation-card--interactive,
+.tag-stat-card {
+  cursor: pointer;
+}
+
+.conversation-card--interactive:hover,
+.tag-stat-card:hover {
+  border-color: rgba(29, 155, 240, 0.28);
+  box-shadow: 0 12px 28px rgba(29, 155, 240, 0.08);
+}
+
 .tag-stats-list {
   display: grid;
   gap: 12px;
@@ -695,11 +715,27 @@ button {
   background: rgba(248, 250, 252, 0.92);
 }
 
+.tag-filter-shell {
+  padding: 18px 18px 0;
+}
+
+.tag-filter-shell__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
 .tag-stat-card__head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+}
+
+.tag-stat-card__head .post-tag {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .tag-stat-meta {
@@ -726,6 +762,62 @@ button {
   margin: 10px 0 0;
   color: #475467;
   line-height: 1.6;
+}
+
+.chat-shell {
+  display: grid;
+  gap: 14px;
+}
+
+.chat-shell__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.chat-history {
+  display: grid;
+  gap: 12px;
+  max-height: 58vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.chat-bubble {
+  max-width: min(82%, 560px);
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(248, 250, 252, 0.96);
+}
+
+.chat-bubble--user {
+  margin-left: auto;
+  background: rgba(29, 155, 240, 0.12);
+  border-color: rgba(29, 155, 240, 0.22);
+}
+
+.chat-bubble p {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-bubble .post-time {
+  display: block;
+  margin-top: 8px;
+}
+
+.chat-input-form {
+  display: grid;
+  gap: 12px;
+}
+
+.chat-textarea {
+  min-height: 96px;
 }
 
 .profile-hero {

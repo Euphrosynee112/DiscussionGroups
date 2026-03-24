@@ -183,6 +183,9 @@ const state = {
   discussions: createDiscussionState(),
   activeFeed: DEFAULT_CONTENT_FEED,
   lastContentFeed: DEFAULT_CONTENT_FEED,
+  activeTagFilter: "",
+  activeConversationId: null,
+  replyingConversationId: null,
   profileEditorOpen: false,
   profilePostMenuId: null,
   profilePostEditingId: null,
@@ -244,7 +247,7 @@ function normalizeSingleTag(value) {
   if (!trimmed) {
     return "";
   }
-  return `#${truncate(trimmed, 18)}`;
+  return `#${trimmed}`;
 }
 
 function normalizeTags(value, max = 5) {
@@ -425,7 +428,14 @@ function createDefaultDirectMessages() {
     id: `dm_${index}_${hashText(item[0])}`,
     sender: item[0],
     handle: `@dm_${index + 1}`,
-    text: item[1],
+    messages: [
+      {
+        role: "incoming",
+        sender: item[0],
+        text: item[1],
+        time: `${index + 1}h`
+      }
+    ],
     context: index === 0 ? "热点跟进" : index === 1 ? "内容协作" : "灵感交换",
     time: `${index + 1}h`
   }));
@@ -447,6 +457,20 @@ function loadDirectMessages() {
   } catch (_error) {
     return createDefaultDirectMessages();
   }
+}
+
+function normalizeChatMessage(item, senderFallback = "联系人", index = 0) {
+  const role = item?.role === "user" ? "user" : "incoming";
+  return {
+    id: item?.id || `chat_${index}_${hashText(`${item?.text || ""}-${role}`)}`,
+    role,
+    sender:
+      role === "user"
+        ? "你"
+        : truncate(item?.sender || item?.displayName || senderFallback, 24),
+    text: truncate(item?.text || "一条新的消息正在生成。", 320),
+    time: item?.time || `${index + 1}m`
+  };
 }
 
 function loadProfilePosts() {
@@ -830,6 +854,8 @@ function buildPrompt(
     "text 需要像 X 首页上的真实讨论帖，长度控制在 40 到 130 字之间，语气自然、有观点、有轻微冲突感。",
     "tags 必须是数组，至少 2 个、最多 5 个标签；每个标签都必须以 # 开头，例如 #榜单、#行业洞察。",
     "这些标签必须根据该条内容本身提炼，不能空泛重复；text 字段里不要重复输出标签行，标签只放在 tags 数组中。",
+    "严禁直接复制、引用或轻微改写世界观文本、热点文本、文娱文本里的原句。你需要先理解这些设定，再把它们转化成更口语化、更具体的讨论表达。",
+    "不要在帖子里出现类似“这是一个强调长期主义、产品洞察和公共讨论质量的中文社交世界”这种设定原文。",
     "所有内容都应遵循以下世界观：",
     settings.worldview || DEFAULT_SETTINGS.worldview,
     feedInstruction,
@@ -875,6 +901,43 @@ function buildMessagesPrompt(
     "补充要求：",
     settings.extraInstructions || DEFAULT_SETTINGS.extraInstructions,
     "请让不同私信发件人的动机不同，例如约稿、交流观点、递送情报、邀请合作或追问某条公开讨论。"
+  ].join("\n\n");
+}
+
+function buildConversationReplyPrompt(settings, profile, conversation, userMessage) {
+  const username = profile.username || DEFAULT_PROFILE.username;
+  const handle = normalizeProfileUserId(profile.userId, username);
+  const history = (conversation.messages || [])
+    .slice(-6)
+    .map((message) =>
+      `${message.role === "user" ? "用户" : conversation.sender}：${message.text}`
+    )
+    .join("\n");
+
+  return [
+    "你正在生成一个 X 风格社交产品里的单条私信回复。",
+    "请严格输出 JSON 数组，并且只包含 1 个对象，不要输出额外解释。",
+    "对象必须包含以下字段：text, time。",
+    `当前聊天对象：${conversation.sender} ${conversation.handle || ""}`.trim(),
+    `当前会话主题：${conversation.context || "私信互动"}`,
+    "你回复的对象不是陌生第三方，而是这个具体用户：",
+    `用户名：${username}`,
+    `主页标识：${handle}`,
+    `个人签名：${profile.signature || DEFAULT_PROFILE.signature}`,
+    `用户人设：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt}`,
+    "最近聊天记录：",
+    history || "暂无历史消息",
+    "用户刚刚发送的新消息：",
+    userMessage,
+    "世界观文本：",
+    settings.worldview || DEFAULT_SETTINGS.worldview,
+    "热点文本：",
+    settings.hotTopics || DEFAULT_SETTINGS.hotTopics,
+    "文娱文本：",
+    settings.entertainmentText || DEFAULT_SETTINGS.entertainmentText,
+    "补充要求：",
+    settings.extraInstructions || DEFAULT_SETTINGS.extraInstructions,
+    "回复要像真实私聊，长度控制在 18 到 90 字之间，要直接回应用户刚发的内容，也要体现聊天对象知道用户是谁。"
   ].join("\n\n");
 }
 
@@ -1244,6 +1307,50 @@ function normalizePost(item, index = 0) {
   };
 }
 
+function renderFeedPost(post, bucketName = state.activeFeed) {
+  const actualBucket = bucketName === "tags" ? post.feedType || getCurrentContentFeed() : bucketName;
+  const avatarMarkup = post.authorOwned
+    ? renderAvatarMarkup(
+        truncate(state.profile.avatar || DEFAULT_PROFILE.avatar, 2),
+        "avatar",
+        state.profile.avatarImage || ""
+      )
+    : renderAvatarMarkup(post.displayName.slice(0, 2).toUpperCase(), "avatar");
+  const tagMarkup = renderPostTags(post, post.feedType || actualBucket);
+
+  return `
+    <article class="post" data-post-id="${escapeHtml(post.id)}">
+      <div class="post-shell post-shell--interactive" data-action="toggle-post" data-bucket="${escapeHtml(
+        actualBucket
+      )}" data-post-id="${escapeHtml(post.id)}">
+        ${avatarMarkup}
+        <div>
+          <div class="post-head">
+            <strong>${escapeHtml(post.displayName)}</strong>
+            <span class="post-handle">${escapeHtml(post.handle)}</span>
+            <span class="post-time">· ${escapeHtml(post.time)}</span>
+          </div>
+          <p class="post-text">${escapeHtml(post.text)}</p>
+          ${tagMarkup}
+          ${renderEditedNote(post)}
+          <div class="post-actions">
+            <button class="action-link" type="button" data-action="toggle-post" data-bucket="${escapeHtml(
+              actualBucket
+            )}" data-post-id="${escapeHtml(post.id)}">
+              ${getPostThreadState(post.id, actualBucket)?.expanded ? "收起讨论" : "展开讨论"}
+            </button>
+            <span>回复 ${post.replies}</span>
+            <span>转发 ${post.reposts}</span>
+            <span>喜欢 ${post.likes}</span>
+            <span>浏览 ${post.views}</span>
+          </div>
+        </div>
+      </div>
+      ${renderPostDiscussion(post, actualBucket)}
+    </article>
+  `;
+}
+
 function renderFeed(posts) {
   if (!posts.length) {
     feedEl.innerHTML = `<p class="empty-state">${escapeHtml(
@@ -1252,54 +1359,7 @@ function renderFeed(posts) {
     return;
   }
 
-  feedEl.innerHTML = posts
-    .map(
-      (post) => {
-        const avatarMarkup = post.authorOwned
-          ? renderAvatarMarkup(
-              truncate(state.profile.avatar || DEFAULT_PROFILE.avatar, 2),
-              "avatar",
-              state.profile.avatarImage || ""
-            )
-          : renderAvatarMarkup(post.displayName.slice(0, 2).toUpperCase(), "avatar");
-        const tagMarkup = renderPostTags(post, post.feedType || state.activeFeed);
-
-        return `
-        <article class="post" data-post-id="${escapeHtml(post.id)}">
-          <div class="post-shell post-shell--interactive" data-action="toggle-post" data-bucket="${escapeHtml(
-            state.activeFeed
-          )}" data-post-id="${escapeHtml(post.id)}">
-            ${avatarMarkup}
-            <div>
-              <div class="post-head">
-                <strong>${escapeHtml(post.displayName)}</strong>
-                <span class="post-handle">${escapeHtml(post.handle)}</span>
-                <span class="post-time">· ${escapeHtml(post.time)}</span>
-              </div>
-              <p class="post-text">${escapeHtml(post.text)}</p>
-              ${tagMarkup}
-              ${renderEditedNote(post)}
-              <div class="post-actions">
-                <button class="action-link" type="button" data-action="toggle-post" data-bucket="${escapeHtml(
-                  state.activeFeed
-                )}" data-post-id="${escapeHtml(
-                  post.id
-                )}">
-                  ${getPostThreadState(post.id, state.activeFeed)?.expanded ? "收起讨论" : "展开讨论"}
-                </button>
-                <span>回复 ${post.replies}</span>
-                <span>转发 ${post.reposts}</span>
-                <span>喜欢 ${post.likes}</span>
-                <span>浏览 ${post.views}</span>
-              </div>
-            </div>
-          </div>
-          ${renderPostDiscussion(post, state.activeFeed)}
-        </article>
-      `;
-      }
-    )
-    .join("");
+  feedEl.innerHTML = posts.map((post) => renderFeedPost(post, state.activeFeed)).join("");
 }
 
 function buildPopularTagStats() {
@@ -1324,6 +1384,23 @@ function buildPopularTagStats() {
 }
 
 function renderPopularTags() {
+  if (state.activeTagFilter) {
+    const filteredPosts = getTagFilteredPosts(state.activeTagFilter);
+    feedEl.innerHTML = `
+      <section class="tag-filter-shell">
+        <div class="tag-filter-shell__head">
+          <button class="ghost-chip" type="button" data-action="clear-tag-filter">返回标签列表</button>
+          <div>
+            <strong class="post-tag">${escapeHtml(state.activeTagFilter)}</strong>
+            <p class="tag-stat-meta">当前缓存中共命中 ${escapeHtml(String(filteredPosts.length))} 条讨论。</p>
+          </div>
+        </div>
+      </section>
+      ${filteredPosts.length ? filteredPosts.map((post) => renderFeedPost(post, "tags")).join("") : '<p class="empty-state">当前标签下还没有讨论内容。</p>'}
+    `;
+    return;
+  }
+
   const tagStats = buildPopularTagStats();
   if (!tagStats.length) {
     feedEl.innerHTML =
@@ -1336,7 +1413,7 @@ function renderPopularTags() {
       ${tagStats
         .map(
           (item) => `
-            <article class="tag-stat-card">
+            <article class="tag-stat-card" data-action="open-tag-feed" data-tag="${escapeHtml(item.tag)}">
               <div class="tag-stat-card__head">
                 <strong class="post-tag">${escapeHtml(item.tag)}</strong>
                 <span class="badge">${escapeHtml(String(item.total))} 条</span>
@@ -1450,6 +1527,31 @@ function renderActiveFeed() {
   renderFeed(state.feeds[state.activeFeed] || []);
 }
 
+function getTagFilteredPosts(tag) {
+  return dedupePosts([
+    ...(state.feeds.hot || []),
+    ...(state.feeds.entertainment || [])
+  ]).filter((post) => getRenderableTags(post, post.feedType || "hot").includes(tag));
+}
+
+function findPostById(postId, bucketName = state.activeFeed) {
+  const preferredBucket =
+    bucketName === "tags" ? getCurrentContentFeed() : bucketName;
+  const bucketPost = (state.feeds[preferredBucket] || []).find((item) => item.id === postId);
+  if (bucketPost) {
+    return bucketPost;
+  }
+
+  const allFeedPost = ["hot", "entertainment"].flatMap((bucket) => state.feeds[bucket] || []).find(
+    (item) => item.id === postId
+  );
+  if (allFeedPost) {
+    return allFeedPost;
+  }
+
+  return state.profilePosts.find((item) => item.id === postId) || null;
+}
+
 function renderFollowingPage() {
   const topics = parseTopics(getCurrentSettings().hotTopics);
   followingListEl.innerHTML = FOLLOWING_CARDS.map((item, index) => {
@@ -1471,15 +1573,22 @@ function renderFollowingPage() {
 
 function renderMessagesPage() {
   if (!state.directMessages.length) {
+    state.activeConversationId = null;
     messagesListEl.innerHTML =
       '<p class="empty-state">还没有私信内容，点击“新建消息”生成新的私信会话。</p>';
     return;
   }
 
-  messagesListEl.innerHTML = state.directMessages
-    .map(
-      (item) => `
-        <article class="conversation-card">
+  const activeConversation = state.directMessages.find(
+    (item) => item.id === state.activeConversationId
+  );
+
+  if (!activeConversation) {
+    messagesListEl.innerHTML = state.directMessages
+      .map((item) => `
+        <article class="conversation-card conversation-card--interactive" data-action="open-conversation" data-conversation-id="${escapeHtml(
+          item.id
+        )}">
           <div class="conversation-card__head">
             <div>
               <strong>${escapeHtml(item.sender)}</strong>
@@ -1490,11 +1599,55 @@ function renderMessagesPage() {
           <p>${escapeHtml(item.text)}</p>
           <div class="reply-actions">
             <span>${escapeHtml(item.context || "相关私信")}</span>
+            <span>${escapeHtml(String(item.messages?.length || 1))} 条消息</span>
           </div>
         </article>
-      `
-    )
-    .join("");
+      `)
+      .join("");
+    return;
+  }
+
+  messagesListEl.innerHTML = `
+    <section class="chat-shell">
+      <div class="chat-shell__head">
+        <button class="ghost-chip" type="button" data-action="close-conversation">返回会话列表</button>
+        <div>
+          <strong>${escapeHtml(activeConversation.sender)}</strong>
+          <div class="post-handle">${escapeHtml(activeConversation.handle || "@unknown")}</div>
+        </div>
+      </div>
+      <p class="tag-stat-meta">${escapeHtml(activeConversation.context || "相关私信")}</p>
+      <div class="chat-history">
+        ${activeConversation.messages
+          .map(
+            (message) => `
+              <article class="chat-bubble ${message.role === "user" ? "chat-bubble--user" : ""}">
+                <p>${escapeHtml(message.text)}</p>
+                <span class="post-time">${escapeHtml(message.time || "刚刚")}</span>
+              </article>
+            `
+          )
+          .join("")}
+        ${
+          state.replyingConversationId === activeConversation.id
+            ? '<article class="chat-bubble"><p>正在生成回复…</p></article>'
+            : ""
+        }
+      </div>
+      <form class="chat-input-form" data-action="send-conversation-message" data-conversation-id="${escapeHtml(
+        activeConversation.id
+      )}">
+        <textarea name="message" class="chat-textarea" rows="3" placeholder="输入你要回复的内容"></textarea>
+        <div class="settings-actions">
+          <button class="solid-button" type="submit" ${
+            state.replyingConversationId === activeConversation.id ? "disabled" : ""
+          }>
+            发送消息
+          </button>
+        </div>
+      </form>
+    </section>
+  `;
 }
 
 function renderProfilePage() {
@@ -1778,6 +1931,39 @@ function buildLocalReplies(
   });
 }
 
+function buildLocalWorldviewAngle(fragment, feedType = "hot", index = 0) {
+  const source = String(fragment || "");
+  const genericAngles =
+    feedType === "entertainment"
+      ? [
+          "真正把讨论带起来的，通常不是表面热度，而是大家开始重新站队。",
+          "这类内容一旦引发情绪分层，后面的讨论就会越滚越大。",
+          "大家最后争的往往不是事实本身，而是谁先看懂风向。"
+        ]
+      : [
+          "大家真正争论的，通常不是事件本身，而是谁更早形成判断。",
+          "这类话题一旦牵到结构变化，讨论就不会停在表面。",
+          "真正有信息量的讨论，往往都在拆判断逻辑，而不是复述消息。"
+        ];
+
+  if (/(长期|复利|持续)/.test(source)) {
+    return "表面热度很快会过去，但最后留下来的还是长期判断。";
+  }
+  if (/(产品|洞察|用户)/.test(source)) {
+    return "真正能把这件事讲透的人，通常会先回到产品和用户感受本身。";
+  }
+  if (/(ai|模型|agent|自动化)/i.test(source)) {
+    return "一旦话题碰到 AI 或自动化，讨论重点很快就会转向谁更快适应变化。";
+  }
+  if (/(内容|表达|讨论)/.test(source)) {
+    return "这类讨论最有意思的地方，在于大家会立刻暴露各自的表达立场。";
+  }
+  if (/(增长|平台|流量|收入)/.test(source)) {
+    return "一旦牵到平台和增长，大家看问题的尺度就会马上拉开。";
+  }
+  return genericAngles[index % genericAngles.length];
+}
+
 function findReplyNode(replies, replyId) {
   for (const reply of replies) {
     if (reply.id === replyId) {
@@ -1792,13 +1978,32 @@ function findReplyNode(replies, replyId) {
 }
 
 function normalizeDirectMessage(item, index = 0) {
+  const sender = truncate(item?.sender || item?.displayName || `联系人 ${index + 1}`, 24);
+  const messages = Array.isArray(item?.messages) && item.messages.length
+    ? item.messages.map((message, messageIndex) =>
+        normalizeChatMessage(message, sender, messageIndex)
+      )
+    : [
+        normalizeChatMessage(
+          {
+            role: "incoming",
+            sender,
+            text: item?.text || "一条新的私信正在生成。",
+            time: item?.time || `${index + 1}m`
+          },
+          sender,
+          0
+        )
+      ];
+  const latestMessage = messages[messages.length - 1];
   return {
     id: item?.id || `dm_${index}_${hashText(item?.text || item?.sender || "")}`,
-    sender: truncate(item?.sender || item?.displayName || `联系人 ${index + 1}`, 24),
+    sender,
     handle: truncate(item?.handle || `@contact_${index + 1}`, 24),
-    text: truncate(item?.text || "一条新的私信正在生成。", 160),
+    text: latestMessage.text,
     context: truncate(item?.context || "私信互动", 24),
-    time: item?.time || `${index + 1}m`
+    time: latestMessage.time || item?.time || `${index + 1}m`,
+    messages
   };
 }
 
@@ -1841,7 +2046,11 @@ function buildLocalPosts(settings, count = DEFAULT_POST_COUNT, feedType = "hot")
 
   return Array.from({ length: count }, (_, index) => {
     const topic = baseTopics[index % baseTopics.length];
-    const worldview = worldviewBase[index % worldviewBase.length];
+    const worldview = buildLocalWorldviewAngle(
+      worldviewBase[index % worldviewBase.length],
+      feedType,
+      index
+    );
     const [displayName, handle] = FEED_NAMES[index % FEED_NAMES.length];
     const text = `${openings[index % openings.length]}${topic}，而是它背后暴露出的结构变化。${worldview} ${endings[index % endings.length]}`;
     const tags = ensurePostTags(
@@ -2079,6 +2288,85 @@ async function requestGeneratedDirectMessages(
   return parsed.slice(0, count).map((item, index) => normalizeDirectMessage(item, index));
 }
 
+async function requestGeneratedConversationReply(settings, profile, conversation, userMessage) {
+  const normalizedEndpoint = normalizeOpenAICompatibleEndpoint(settings.endpoint);
+  settings.endpoint = normalizedEndpoint;
+
+  if (!settings.endpoint) {
+    throw new Error("未配置 API 地址，已切换为本地回退生成。");
+  }
+
+  const prompt = buildConversationReplyPrompt(settings, profile, conversation, userMessage);
+  const headers = {
+    "Content-Type": "application/json"
+  };
+
+  if (settings.token) {
+    headers.Authorization = `Bearer ${settings.token}`;
+  }
+
+  const response = await fetch(settings.endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(buildRequestBody(settings, prompt, 1))
+  });
+
+  if (!response.ok) {
+    throw new Error(`私信回复请求失败：HTTP ${response.status}`);
+  }
+
+  const rawResponse = await response.text();
+  let payload = rawResponse;
+
+  try {
+    payload = JSON.parse(rawResponse);
+  } catch (_error) {
+    payload = rawResponse;
+  }
+
+  const message = resolveMessage(payload);
+  if (!message) {
+    throw new Error("接口返回成功，但没有可解析的私信回复。");
+  }
+
+  const jsonText = extractJsonArray(message);
+  if (!jsonText) {
+    throw new Error("私信回复接口返回内容中没有 JSON 数组。");
+  }
+
+  const parsed = JSON.parse(jsonText);
+  if (!Array.isArray(parsed) || !parsed.length) {
+    throw new Error("接口返回的私信回复不是有效数组。");
+  }
+
+  return normalizeChatMessage(
+    {
+      role: "incoming",
+      sender: conversation.sender,
+      text: parsed[0]?.text || "收到，我接着跟你聊。",
+      time: parsed[0]?.time || "刚刚"
+    },
+    conversation.sender,
+    conversation.messages?.length || 0
+  );
+}
+
+function buildLocalConversationReply(profile, conversation, userMessage) {
+  const username = profile.username || DEFAULT_PROFILE.username;
+  const persona = truncate(profile.personaPrompt || DEFAULT_PROFILE.personaPrompt, 18);
+  const context = conversation.context || "当前讨论";
+  return normalizeChatMessage(
+    {
+      role: "incoming",
+      sender: conversation.sender,
+      text: `你刚刚这句我收到了。围绕“${context}”继续聊的话，我会觉得这很像${username}一贯那种“${persona}”的判断方式，所以我更在意你想把这个观点往哪一步推进。`,
+      time: "刚刚"
+    },
+    conversation.sender,
+    conversation.messages?.length || 0
+  );
+}
+
 async function requestGeneratedReplies(
   settings,
   profile,
@@ -2135,9 +2423,7 @@ async function requestGeneratedReplies(
 }
 
 async function expandPostDiscussion(postId, bucketName = state.activeFeed) {
-  const post =
-    (state.feeds[state.activeFeed] || []).find((item) => item.id === postId) ||
-    state.profilePosts.find((item) => item.id === postId);
+  const post = findPostById(postId, bucketName);
   if (!post) {
     return;
   }
@@ -2219,9 +2505,7 @@ async function toggleNestedReply(postId, replyId, bucketName = state.activeFeed)
   }
 
   const targetReply = findReplyNode(threadState.replies || [], replyId);
-  const rootPost =
-    (state.feeds[state.activeFeed] || []).find((item) => item.id === postId) ||
-    state.profilePosts.find((item) => item.id === postId);
+  const rootPost = findPostById(postId, bucketName);
   if (!targetReply || !rootPost) {
     return;
   }
@@ -2302,6 +2586,8 @@ async function generateDirectMessages() {
     }
 
     state.directMessages = messages;
+    state.activeConversationId = null;
+    state.replyingConversationId = null;
     persistDirectMessages(state.directMessages);
     renderMessagesPage();
     if (sourceLabel === "API") {
@@ -2310,6 +2596,71 @@ async function generateDirectMessages() {
     }
   } finally {
     messagesGenerateBtn.disabled = false;
+  }
+}
+
+async function sendConversationMessage(conversationId, userMessage) {
+  const trimmedMessage = String(userMessage || "").trim();
+  if (!trimmedMessage) {
+    messagesStatusEl.textContent = "请输入消息内容后再发送。";
+    messagesStatusEl.className = "status-text error";
+    return;
+  }
+
+  const conversation = state.directMessages.find((item) => item.id === conversationId);
+  if (!conversation) {
+    return;
+  }
+
+  const userEntry = normalizeChatMessage(
+    {
+      role: "user",
+      text: trimmedMessage,
+      time: "刚刚"
+    },
+    "你",
+    conversation.messages?.length || 0
+  );
+
+  conversation.messages = [...(conversation.messages || []), userEntry];
+  conversation.text = userEntry.text;
+  conversation.time = userEntry.time;
+  state.activeConversationId = conversationId;
+  state.replyingConversationId = conversationId;
+  persistDirectMessages(state.directMessages);
+  renderMessagesPage();
+  messagesStatusEl.textContent = "已发送，正在生成对方回复…";
+  messagesStatusEl.className = "status-text";
+
+  const settings = { ...getCurrentSettings() };
+  const profile = { ...getCurrentProfile() };
+
+  try {
+    let replyMessage;
+    try {
+      replyMessage = await requestGeneratedConversationReply(
+        settings,
+        profile,
+        conversation,
+        trimmedMessage
+      );
+    } catch (_error) {
+      replyMessage = buildLocalConversationReply(profile, conversation, trimmedMessage);
+      messagesStatusEl.textContent = "接口不可用，已自动使用本地回复继续会话。";
+      messagesStatusEl.className = "status-text error";
+    }
+
+    conversation.messages = [...conversation.messages, replyMessage];
+    conversation.text = replyMessage.text;
+    conversation.time = replyMessage.time;
+    persistDirectMessages(state.directMessages);
+    if (!messagesStatusEl.classList.contains("error")) {
+      messagesStatusEl.textContent = "对方已回复。";
+      messagesStatusEl.className = "status-text success";
+    }
+  } finally {
+    state.replyingConversationId = null;
+    renderMessagesPage();
   }
 }
 
@@ -2522,6 +2873,10 @@ function attachEvents() {
       if (tab.dataset.feed === "hot" || tab.dataset.feed === "entertainment") {
         state.lastContentFeed = tab.dataset.feed;
         lastKnownContentFeed = tab.dataset.feed;
+        state.activeTagFilter = "";
+      }
+      if (tab.dataset.feed === "tags") {
+        state.activeTagFilter = "";
       }
       renderActiveFeed();
       updatePromptPreview();
@@ -2548,6 +2903,20 @@ function attachEvents() {
       return;
     }
 
+    if (action === "open-tag-feed" && actionEl.dataset.tag) {
+      state.activeTagFilter = actionEl.dataset.tag;
+      renderActiveFeed();
+      setHomeStatus(`当前查看标签：${state.activeTagFilter}`, "");
+      return;
+    }
+
+    if (action === "clear-tag-filter") {
+      state.activeTagFilter = "";
+      renderActiveFeed();
+      setHomeStatus("当前查看：热门标签", "");
+      return;
+    }
+
     if (action === "toggle-post" && actionEl.dataset.postId) {
       await togglePostDiscussion(
         actionEl.dataset.postId,
@@ -2566,6 +2935,51 @@ function attachEvents() {
         actionEl.dataset.bucket || state.activeFeed
       );
     }
+  });
+
+  messagesListEl.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+
+    const actionEl = target.closest("[data-action]");
+    if (!(actionEl instanceof HTMLElement)) {
+      return;
+    }
+
+    if (actionEl.dataset.action === "open-conversation" && actionEl.dataset.conversationId) {
+      state.activeConversationId = actionEl.dataset.conversationId;
+      renderMessagesPage();
+      return;
+    }
+
+    if (actionEl.dataset.action === "close-conversation") {
+      state.activeConversationId = null;
+      renderMessagesPage();
+    }
+  });
+
+  messagesListEl.addEventListener("submit", async (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLFormElement)) {
+      return;
+    }
+
+    if (target.dataset.action !== "send-conversation-message") {
+      return;
+    }
+
+    event.preventDefault();
+    const formData = new FormData(target);
+    const message = String(formData.get("message") || "");
+    const conversationId = target.dataset.conversationId;
+    if (!conversationId) {
+      return;
+    }
+
+    target.reset();
+    await sendConversationMessage(conversationId, message);
   });
 
   profilePostsEl.addEventListener("click", async (event) => {
