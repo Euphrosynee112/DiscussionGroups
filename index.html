@@ -48,17 +48,53 @@
             <p class="header-kicker">X 风格原型</p>
             <h1 id="page-title">首页</h1>
           </div>
-          <button id="top-refresh-btn" class="ghost-button" type="button">
-            刷新时间线
-          </button>
+          <div class="header-actions">
+            <button id="top-refresh-btn" class="ghost-button" type="button">
+              刷新时间线
+            </button>
+            <button id="profile-header-edit-btn" class="ghost-button" type="button" hidden>
+              编辑资料
+            </button>
+            <button id="home-composer-toggle-btn" class="ghost-button" type="button">
+              发布新帖子
+            </button>
+          </div>
         </header>
 
         <section id="home-page" class="page-section active" aria-label="首页">
           <div id="home-scroll" class="page-scroll">
-            <div id="pull-indicator" class="pull-indicator" aria-live="polite">
-              <strong id="pull-label">向下滑动以刷新</strong>
-              <span id="pull-meta">默认生成 10 条讨论信息</span>
-            </div>
+            <section id="home-composer-card" class="section-card hidden">
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">Composer</p>
+                  <h2>新帖子</h2>
+                </div>
+              </div>
+              <form id="home-composer-form" class="settings-form">
+                <label>
+                  帖子内容
+                  <textarea
+                    id="home-composer-input"
+                    rows="4"
+                    placeholder="输入你想发送的新帖子内容，它会出现在个人主页，并可继续展开回复。"
+                  ></textarea>
+                </label>
+                <label>
+                  ID 后蓝色标记（可选）
+                  <input
+                    id="home-composer-topic-input"
+                    type="text"
+                    placeholder="例如：首发观察 / 跟进 / 独家线索，不填则留空"
+                  />
+                </label>
+                <div class="settings-actions">
+                  <button id="home-composer-submit" class="solid-button" type="submit">
+                    发送帖子
+                  </button>
+                </div>
+                <p id="home-composer-status" class="status-text"></p>
+              </form>
+            </section>
 
             <section class="timeline-card">
               <div class="timeline-card__header">
@@ -108,7 +144,7 @@
         <section id="profile-page" class="page-section" aria-label="个人主页">
           <div class="page-scroll">
             <section class="profile-hero">
-              <div class="profile-banner"></div>
+              <div id="profile-banner" class="profile-banner"></div>
               <div class="profile-body">
                 <div id="profile-avatar" class="profile-avatar">WG</div>
                 <div class="profile-summary">
@@ -116,11 +152,13 @@
                     <h2 id="profile-username">Worldview Generator</h2>
                     <p id="profile-handle" class="profile-handle">@worldview_lab</p>
                   </div>
-                  <button id="profile-edit-toggle-btn" class="ghost-button ghost-button--small" type="button">
-                    编辑资料
-                  </button>
                 </div>
-                <p id="profile-bio" class="profile-bio"></p>
+                <div class="profile-detail-grid">
+                  <div class="profile-detail-card">
+                    <span class="profile-detail-label">个性签名</span>
+                    <p id="profile-bio" class="profile-bio"></p>
+                  </div>
+                </div>
                 <div class="profile-stats">
                   <span class="profile-stat"><strong id="profile-following">128</strong><em>正在关注</em></span>
                   <span class="profile-stat"><strong id="profile-followers">8.6K</strong><em>关注者</em></span>
@@ -152,11 +190,29 @@
                   </label>
 
                   <label>
+                    头像图片
+                    <input
+                      id="profile-avatar-file-input"
+                      type="file"
+                      accept="image/*"
+                    />
+                  </label>
+
+                  <label>
                     用户名
                     <input
                       id="profile-username-input"
                       type="text"
                       placeholder="输入展示用户名"
+                    />
+                  </label>
+
+                  <label>
+                    用户 ID
+                    <input
+                      id="profile-userid-input"
+                      type="text"
+                      placeholder="@worldview_lab"
                     />
                   </label>
 
@@ -175,6 +231,15 @@
                       id="profile-followers-input"
                       type="text"
                       placeholder="例如 8.6K"
+                    />
+                  </label>
+
+                  <label>
+                    主页背景图片
+                    <input
+                      id="profile-banner-file-input"
+                      type="file"
+                      accept="image/*"
                     />
                   </label>
                 </div>
@@ -265,6 +330,55 @@
                     模型名称
                     <input id="api-model" type="text" placeholder="deepseek-chat" />
                   </label>
+
+                  <label>
+                    Temperature
+                    <input
+                      id="api-temperature"
+                      type="number"
+                      min="0"
+                      max="2"
+                      step="0.1"
+                      placeholder="0.8"
+                    />
+                    <span class="field-hint">输入范围 0 到 2，数值越低越稳定，越高越发散。</span>
+                  </label>
+
+                  <label>
+                    首页生成数量
+                    <input
+                      id="home-count"
+                      type="number"
+                      min="1"
+                      max="50"
+                      step="1"
+                      placeholder="10"
+                    />
+                  </label>
+
+                  <label>
+                    私信生成数量
+                    <input
+                      id="dm-count"
+                      type="number"
+                      min="1"
+                      max="20"
+                      step="1"
+                      placeholder="4"
+                    />
+                  </label>
+
+                  <label>
+                    展开讨论回复数量
+                    <input
+                      id="reply-count"
+                      type="number"
+                      min="1"
+                      max="20"
+                      step="1"
+                      placeholder="4"
+                    />
+                  </label>
                 </div>
 
                 <label>
@@ -334,6 +448,16 @@
                 </div>
               </div>
               <pre id="message-prompt-preview" class="prompt-preview"></pre>
+            </section>
+
+            <section class="section-card">
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">Reply Prompt Preview</p>
+                  <h2>回复生成 Prompt 预览</h2>
+                </div>
+              </div>
+              <pre id="reply-prompt-preview" class="prompt-preview"></pre>
             </section>
           </div>
         </section>
