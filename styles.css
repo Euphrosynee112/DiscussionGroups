@@ -448,17 +448,9 @@ button {
 
 .post-handle,
 .post-time,
-.post-topic,
 .profile-handle {
   color: var(--muted);
   font-size: 14px;
-}
-
-.post-topic {
-  padding: 3px 8px;
-  border-radius: 999px;
-  background: rgba(29, 155, 240, 0.12);
-  color: #16639c;
 }
 
 .post-text {
@@ -466,6 +458,19 @@ button {
   line-height: 1.68;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.post-tags {
+  margin: 10px 0 0;
+  color: #16639c;
+  font-size: 14px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.post-tag {
+  color: #16639c;
+  font-weight: 600;
 }
 
 .post-actions {
@@ -675,6 +680,32 @@ button {
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: rgba(248, 250, 252, 0.92);
+}
+
+.tag-stats-list {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+}
+
+.tag-stat-card {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(248, 250, 252, 0.92);
+}
+
+.tag-stat-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tag-stat-meta {
+  margin: 10px 0 0;
+  color: var(--muted);
+  line-height: 1.6;
 }
 
 .follow-card__head,

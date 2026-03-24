@@ -11,11 +11,14 @@ const DEFAULT_REPLY_COUNT = 4;
 const MAX_FEED_ITEMS = 30;
 const DEFAULT_TEMPERATURE = 0.8;
 const PULL_THRESHOLD = 88;
+const DEFAULT_CONTENT_FEED = "hot";
 const HOME_FEED_LABELS = {
   hot: "热点消息",
-  entertainment: "文娱"
+  entertainment: "文娱",
+  tags: "热门标签"
 };
 const NESTED_REPLY_COUNT = 3;
+let lastKnownContentFeed = DEFAULT_CONTENT_FEED;
 
 const DEFAULT_SETTINGS = {
   mode: "openai",
@@ -120,7 +123,7 @@ const homeComposerCardEl = document.querySelector("#home-composer-card");
 const homeComposerToggleBtn = document.querySelector("#home-composer-toggle-btn");
 const homeComposerForm = document.querySelector("#home-composer-form");
 const homeComposerInput = document.querySelector("#home-composer-input");
-const homeComposerTopicInput = document.querySelector("#home-composer-topic-input");
+const homeComposerTagsInput = document.querySelector("#home-composer-tags-input");
 const homeComposerStatusEl = document.querySelector("#home-composer-status");
 const settingsStatusEl = document.querySelector("#settings-status");
 const promptPreviewEl = document.querySelector("#prompt-preview");
@@ -178,7 +181,8 @@ const state = {
   profile: loadProfile(),
   profilePosts: loadProfilePosts(),
   discussions: createDiscussionState(),
-  activeFeed: "hot",
+  activeFeed: DEFAULT_CONTENT_FEED,
+  lastContentFeed: DEFAULT_CONTENT_FEED,
   profileEditorOpen: false,
   profilePostMenuId: null,
   profilePostEditingId: null,
@@ -230,6 +234,85 @@ function parseWorldviewFragments(source) {
     .split(/[\n。！？!?]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function normalizeSingleTag(value) {
+  const trimmed = String(value || "")
+    .trim()
+    .replace(/^#+/, "")
+    .replace(/\s+/g, "");
+  if (!trimmed) {
+    return "";
+  }
+  return `#${truncate(trimmed, 18)}`;
+}
+
+function normalizeTags(value, max = 5) {
+  const source = Array.isArray(value)
+    ? value
+    : String(value || "").match(/#?[^\s,，、#]+/g) || [];
+
+  const seen = new Set();
+  return source
+    .map((item) => normalizeSingleTag(item))
+    .filter((item) => {
+      if (!item || seen.has(item)) {
+        return false;
+      }
+      seen.add(item);
+      return true;
+    })
+    .slice(0, max);
+}
+
+function ensurePostTags(tags, feedType = "hot", index = 0) {
+  const normalized = normalizeTags(tags, 5);
+  if (normalized.length >= 2) {
+    return normalized;
+  }
+
+  const fallbackPools = {
+    hot: ["#热点追踪", "#行业洞察", "#趋势判断", "#平台观察", "#公共讨论"],
+    entertainment: ["#文娱热议", "#口碑观察", "#热搜现场", "#角色讨论", "#二创发酵"]
+  };
+  const pool = fallbackPools[feedType] || fallbackPools.hot;
+  const extra = [];
+
+  for (let offset = 0; offset < pool.length && normalized.length + extra.length < 2; offset += 1) {
+    const candidate = pool[(index + offset) % pool.length];
+    if (!normalized.includes(candidate) && !extra.includes(candidate)) {
+      extra.push(candidate);
+    }
+  }
+
+  return [...normalized, ...extra].slice(0, 5);
+}
+
+function getRenderableTags(post, fallbackFeedType = "hot") {
+  if (Array.isArray(post?.tags)) {
+    return normalizeTags(post.tags, 5);
+  }
+  if (post?.topic) {
+    return normalizeTags([post.topic], 5);
+  }
+  return ensurePostTags([], fallbackFeedType, 0);
+}
+
+function renderPostTags(post, fallbackFeedType = "hot") {
+  const tags = getRenderableTags(post, fallbackFeedType);
+  if (!tags.length) {
+    return "";
+  }
+  return `<p class="post-tags">${tags
+    .map((tag) => `<span class="post-tag">${escapeHtml(tag)}</span>`)
+    .join(" ")}</p>`;
+}
+
+function getCurrentContentFeed(feedType) {
+  if (feedType === "entertainment" || feedType === "hot") {
+    return feedType;
+  }
+  return lastKnownContentFeed || DEFAULT_CONTENT_FEED;
 }
 
 function createDiscussionState() {
@@ -728,13 +811,14 @@ function buildPrompt(
   feedType = state.activeFeed,
   count = settings.homeCount || DEFAULT_POST_COUNT
 ) {
-  const feedLabel = HOME_FEED_LABELS[feedType] || HOME_FEED_LABELS.hot;
+  const resolvedFeedType = getCurrentContentFeed(feedType);
+  const feedLabel = HOME_FEED_LABELS[resolvedFeedType] || HOME_FEED_LABELS.hot;
   const feedSource =
-    feedType === "entertainment"
+    resolvedFeedType === "entertainment"
       ? settings.entertainmentText || DEFAULT_SETTINGS.entertainmentText
       : settings.hotTopics || DEFAULT_SETTINGS.hotTopics;
   const feedInstruction =
-    feedType === "entertainment"
+    resolvedFeedType === "entertainment"
       ? "当前文娱话题："
       : "当前热点：";
 
@@ -742,15 +826,17 @@ function buildPrompt(
     "你是一个负责生成 X 风格中文讨论流的内容助手。",
     `当前目标分页签是“${feedLabel}”。`,
     `请严格输出 JSON 数组，并且包含 ${count} 个对象，不要输出额外解释。`,
-    "每个对象必须包含以下字段：displayName, handle, text, topic, replies, reposts, likes, views。",
+    "每个对象必须包含以下字段：displayName, handle, text, tags, replies, reposts, likes, views。",
     "text 需要像 X 首页上的真实讨论帖，长度控制在 40 到 130 字之间，语气自然、有观点、有轻微冲突感。",
+    "tags 必须是数组，至少 2 个、最多 5 个标签；每个标签都必须以 # 开头，例如 #榜单、#行业洞察。",
+    "这些标签必须根据该条内容本身提炼，不能空泛重复；text 字段里不要重复输出标签行，标签只放在 tags 数组中。",
     "所有内容都应遵循以下世界观：",
     settings.worldview || DEFAULT_SETTINGS.worldview,
     feedInstruction,
     feedSource,
     "补充要求：",
     settings.extraInstructions || DEFAULT_SETTINGS.extraInstructions,
-    "请保证 10 条内容不重复，角度不同，并贴近中文互联网的实时讨论氛围。"
+    `请保证 ${count} 条内容不重复，角度不同，并贴近中文互联网的实时讨论氛围。`
   ].join("\n\n");
 }
 
@@ -837,7 +923,7 @@ function buildReplyPrompt(
 
 function getReplyPreviewSeedPost(settings) {
   const currentFeedPost = state.profilePosts.find(
-    (post) => (post.feedType || state.activeFeed) === state.activeFeed
+    (post) => (post.feedType || getCurrentContentFeed()) === getCurrentContentFeed()
   );
   if (currentFeedPost) {
     return currentFeedPost;
@@ -847,12 +933,13 @@ function getReplyPreviewSeedPost(settings) {
     return state.profilePosts[0];
   }
 
-  const topicCandidates = parseTopics(buildFeedSourceText(settings, state.activeFeed));
-  const topic = topicCandidates[0] || HOME_FEED_LABELS[state.activeFeed] || "当前讨论";
+  const resolvedFeedType = getCurrentContentFeed();
+  const topicCandidates = parseTopics(buildFeedSourceText(settings, resolvedFeedType));
+  const topic = topicCandidates[0] || HOME_FEED_LABELS[resolvedFeedType] || "当前讨论";
   return {
     id: "reply_preview_seed",
-    feedType: state.activeFeed,
-    topic,
+    feedType: resolvedFeedType,
+    tags: ensurePostTags([topic], resolvedFeedType),
     text: `我觉得“${topic}”现在最值得讨论的，不是表面热度，而是它暴露出的判断分歧。很多人都在追热点，但真正能把这件事说透的人并不多。`
   };
 }
@@ -978,7 +1065,7 @@ function switchTab(tabName) {
 }
 
 function updatePromptPreview() {
-  promptPreviewEl.textContent = buildPrompt(getCurrentSettings(), state.activeFeed);
+  promptPreviewEl.textContent = buildPrompt(getCurrentSettings(), getCurrentContentFeed());
 }
 
 function updateMessagePromptPreview() {
@@ -1137,14 +1224,15 @@ function mergeFeedHistory(existingPosts, incomingPosts, limit = MAX_FEED_ITEMS) 
 function normalizePost(item, index = 0) {
   const [fallbackName, fallbackHandle] = FEED_NAMES[index % FEED_NAMES.length];
   const stableSeed = `${item?.text || ""}-${item?.displayName || fallbackName}-${index}`;
-  const hasTopic = Boolean(item) && Object.prototype.hasOwnProperty.call(item, "topic");
-  const resolvedTopic = hasTopic ? String(item.topic || "").trim() : "热点话题";
+  const feedType = item?.feedType || undefined;
+  const resolvedFeedType = getCurrentContentFeed(feedType);
+  const resolvedTags = getRenderableTags(item, resolvedFeedType);
   return {
     id: item?.id || `post_${index}_${hashText(stableSeed)}`,
     displayName: truncate(item?.displayName || fallbackName, 28),
     handle: truncate(item?.handle || fallbackHandle, 28),
     text: truncate(item?.text || "讨论内容生成中。", 160),
-    topic: resolvedTopic ? truncate(resolvedTopic, 24) : "",
+    tags: resolvedTags,
     replies: formatMetric(item?.replies, 8 + index * 3),
     reposts: formatMetric(item?.reposts, 6 + index * 4),
     likes: formatMetric(item?.likes, 45 + index * 27),
@@ -1152,7 +1240,7 @@ function normalizePost(item, index = 0) {
     time: item?.time || `${Math.max(1, index + 1)}m`,
     edited: Boolean(item?.edited),
     authorOwned: Boolean(item?.authorOwned),
-    feedType: item?.feedType || undefined
+    feedType
   };
 }
 
@@ -1174,9 +1262,7 @@ function renderFeed(posts) {
               state.profile.avatarImage || ""
             )
           : renderAvatarMarkup(post.displayName.slice(0, 2).toUpperCase(), "avatar");
-        const topicMarkup = post.topic
-          ? `<span class="post-topic">${escapeHtml(post.topic)}</span>`
-          : "";
+        const tagMarkup = renderPostTags(post, post.feedType || state.activeFeed);
 
         return `
         <article class="post" data-post-id="${escapeHtml(post.id)}">
@@ -1189,9 +1275,9 @@ function renderFeed(posts) {
                 <strong>${escapeHtml(post.displayName)}</strong>
                 <span class="post-handle">${escapeHtml(post.handle)}</span>
                 <span class="post-time">· ${escapeHtml(post.time)}</span>
-                ${topicMarkup}
               </div>
               <p class="post-text">${escapeHtml(post.text)}</p>
+              ${tagMarkup}
               ${renderEditedNote(post)}
               <div class="post-actions">
                 <button class="action-link" type="button" data-action="toggle-post" data-bucket="${escapeHtml(
@@ -1214,6 +1300,56 @@ function renderFeed(posts) {
       }
     )
     .join("");
+}
+
+function buildPopularTagStats() {
+  const counts = new Map();
+  ["hot", "entertainment"].forEach((bucketName) => {
+    (state.feeds[bucketName] || []).forEach((post) => {
+      getRenderableTags(post, bucketName).forEach((tag) => {
+        const current = counts.get(tag) || { tag, total: 0, hot: 0, entertainment: 0 };
+        current.total += 1;
+        current[bucketName] += 1;
+        counts.set(tag, current);
+      });
+    });
+  });
+
+  return [...counts.values()].sort((left, right) => {
+    if (right.total !== left.total) {
+      return right.total - left.total;
+    }
+    return left.tag.localeCompare(right.tag, "zh-CN");
+  });
+}
+
+function renderPopularTags() {
+  const tagStats = buildPopularTagStats();
+  if (!tagStats.length) {
+    feedEl.innerHTML =
+      '<p class="empty-state">当前缓存里还没有可统计的标签，请先刷新“热点消息”或“文娱”。</p>';
+    return;
+  }
+
+  feedEl.innerHTML = `
+    <section class="tag-stats-list">
+      ${tagStats
+        .map(
+          (item) => `
+            <article class="tag-stat-card">
+              <div class="tag-stat-card__head">
+                <strong class="post-tag">${escapeHtml(item.tag)}</strong>
+                <span class="badge">${escapeHtml(String(item.total))} 条</span>
+              </div>
+              <p class="tag-stat-meta">热点消息 ${escapeHtml(String(item.hot))} 条 · 文娱 ${escapeHtml(
+                String(item.entertainment)
+              )} 条</p>
+            </article>
+          `
+        )
+        .join("")}
+    </section>
+  `;
 }
 
 function getDiscussionBucket(bucketName = state.activeFeed) {
@@ -1307,6 +1443,10 @@ function renderHomeTabs() {
 
 function renderActiveFeed() {
   renderHomeTabs();
+  if (state.activeFeed === "tags") {
+    renderPopularTags();
+    return;
+  }
   renderFeed(state.feeds[state.activeFeed] || []);
 }
 
@@ -1423,9 +1563,7 @@ function renderProfilePage() {
             ${renderEditedNote(post)}
           </div>
         `;
-      const topicMarkup = post.topic
-        ? `<span class="post-topic">${escapeHtml(post.topic)}</span>`
-        : "";
+      const tagMarkup = renderPostTags(post, post.feedType || "hot");
 
       return `
         <article class="post" data-post-id="${escapeHtml(post.id)}">
@@ -1437,7 +1575,6 @@ function renderProfilePage() {
                 <strong>${escapeHtml(profile.username || DEFAULT_PROFILE.username)}</strong>
                 <span class="post-handle">${escapeHtml(resolvedUserId)}</span>
                 <span class="post-time">· ${escapeHtml(post.time || "刚刚")}</span>
-                ${topicMarkup}
               </div>
                 <div class="post-menu">
                   <button class="ghost-button post-menu__button" type="button" data-action="toggle-post-menu" data-post-id="${escapeHtml(
@@ -1464,6 +1601,7 @@ function renderProfilePage() {
                 </div>
               </div>
               ${editorBlock}
+              ${tagMarkup}
               <div class="post-actions">
                 <button class="action-link" type="button" data-action="toggle-post" data-bucket="profile" data-post-id="${escapeHtml(
                   post.id
@@ -1603,7 +1741,7 @@ function buildLocalReplies(
   count = settings.replyCount || DEFAULT_REPLY_COUNT
 ) {
   const parentText = parentReply ? parentReply.text : rootPost.text;
-  const topic = rootPost.topic || HOME_FEED_LABELS[feedType] || "当前讨论";
+  const topic = getRenderableTags(rootPost, feedType)[0] || HOME_FEED_LABELS[feedType] || "当前讨论";
   const focus = truncate(parentText, 30);
   const personaHint = profile?.personaPrompt
     ? `像你这种“${truncate(profile.personaPrompt, 18)}”的人设说出这段话，`
@@ -1696,19 +1834,28 @@ function buildLocalPosts(settings, count = DEFAULT_POST_COUNT, feedType = "hot")
     "如果只看表面热度，很容易错过真正的信号。",
     "这件事不是有没有机会，而是谁更快形成判断。"
   ];
+  const tagPools = {
+    hot: ["#热点追踪", "#行业洞察", "#趋势判断", "#平台观察", "#公共讨论"],
+    entertainment: ["#文娱热议", "#口碑观察", "#热搜现场", "#角色讨论", "#二创发酵"]
+  };
 
   return Array.from({ length: count }, (_, index) => {
     const topic = baseTopics[index % baseTopics.length];
     const worldview = worldviewBase[index % worldviewBase.length];
     const [displayName, handle] = FEED_NAMES[index % FEED_NAMES.length];
     const text = `${openings[index % openings.length]}${topic}，而是它背后暴露出的结构变化。${worldview} ${endings[index % endings.length]}`;
+    const tags = ensurePostTags(
+      [topic, tagPools[feedType][index % tagPools[feedType].length], tagPools[feedType][(index + 2) % tagPools[feedType].length]],
+      feedType,
+      index
+    );
 
     return normalizePost(
       {
         displayName,
         handle,
         text,
-        topic,
+        tags,
         replies: 10 + index * 3,
         reposts: 7 + index * 4,
         likes: 80 + index * 29,
@@ -1758,15 +1905,16 @@ function buildLocalDirectMessages(
   );
 }
 
-function createAuthoredPost(content, feedType = state.activeFeed, topic = "") {
+function createAuthoredPost(content, feedType = state.activeFeed, tagsInput = "") {
   const profile = getCurrentProfile();
+  const tags = normalizeTags(tagsInput, 5);
   const post = normalizePost(
     {
       id: `profile_post_${Date.now()}_${hashText(content)}`,
       displayName: profile.username,
       handle: normalizeProfileUserId(profile.userId, profile.username),
       text: content,
-      topic: String(topic || "").trim(),
+      tags,
       replies: 0,
       reposts: 0,
       likes: 0,
@@ -1791,23 +1939,24 @@ function setHomeComposerStatus(message, tone = "") {
 
 function submitHomePost() {
   const content = homeComposerInput.value.trim();
-  const topic = homeComposerTopicInput?.value.trim() || "";
+  const tagsInput = homeComposerTagsInput?.value.trim() || "";
+  const targetFeed = getCurrentContentFeed();
   if (!content) {
     setHomeComposerStatus("请输入帖子内容后再发送。", "error");
     return;
   }
 
-  const post = createAuthoredPost(content, state.activeFeed, topic);
+  const post = createAuthoredPost(content, targetFeed, tagsInput);
   state.profilePosts = [post, ...state.profilePosts];
-  state.feeds[state.activeFeed] = [post, ...(state.feeds[state.activeFeed] || [])];
+  state.feeds[targetFeed] = [post, ...(state.feeds[targetFeed] || [])];
   persistProfilePosts(state.profilePosts);
   persistFeeds(state.feeds);
   renderActiveFeed();
   renderProfilePage();
   updateReplyPromptPreview();
   homeComposerInput.value = "";
-  if (homeComposerTopicInput) {
-    homeComposerTopicInput.value = "";
+  if (homeComposerTagsInput) {
+    homeComposerTagsInput.value = "";
   }
   setHomeComposerOpen(false);
   setHomeComposerStatus("帖子已发送，并同步到个人主页。", "success");
@@ -1818,6 +1967,7 @@ async function requestGeneratedPosts(
   feedType = state.activeFeed,
   count = settings.homeCount || DEFAULT_POST_COUNT
 ) {
+  const resolvedFeedType = getCurrentContentFeed(feedType);
   const normalizedEndpoint = normalizeOpenAICompatibleEndpoint(settings.endpoint);
   settings.endpoint = normalizedEndpoint;
 
@@ -1829,7 +1979,7 @@ async function requestGeneratedPosts(
     throw new Error("DeepSeek / OpenAI 兼容模式需要填写模型名称。");
   }
 
-  const prompt = buildPrompt(settings, feedType);
+  const prompt = buildPrompt(settings, resolvedFeedType, count);
   const headers = {
     "Content-Type": "application/json"
   };
@@ -2169,9 +2319,10 @@ async function refreshHomeFeed(trigger = "manual") {
   }
 
   saveCurrentSettings();
+  const targetFeed = getCurrentContentFeed();
   state.isRefreshing = true;
   setPullIndicator(state.pullDistance, "loading");
-  setHomeStatus(`正在生成“${HOME_FEED_LABELS[state.activeFeed]}”讨论流…`, "");
+  setHomeStatus(`正在生成“${HOME_FEED_LABELS[targetFeed]}”讨论流…`, "");
   setSettingsStatus("如果接口可用，将优先使用 API 返回的 10 条讨论。");
   topRefreshBtn.disabled = true;
   settingsGenerateBtn.disabled = true;
@@ -2185,10 +2336,10 @@ async function refreshHomeFeed(trigger = "manual") {
     let sourceLabel = "API";
 
     try {
-      posts = await requestGeneratedPosts(settings, state.activeFeed, homeCount);
+      posts = await requestGeneratedPosts(settings, targetFeed, homeCount);
     } catch (error) {
       sourceLabel = "本地回退";
-      posts = buildLocalPosts(settings, homeCount, state.activeFeed);
+      posts = buildLocalPosts(settings, homeCount, targetFeed);
       setSettingsStatus(
         `${error.message || "请求失败"} 已自动使用本地模板生成内容。`,
         "error"
@@ -2198,12 +2349,12 @@ async function refreshHomeFeed(trigger = "manual") {
     syncAuthoredPostIdentity(profile);
     refreshAuthoredPostsEngagement(profile);
     const normalizedIncomingPosts = posts.map((item, index) => normalizePost(item, index));
-    state.feeds[state.activeFeed] = mergeFeedHistory(
-      state.feeds[state.activeFeed] || [],
+    state.feeds[targetFeed] = mergeFeedHistory(
+      state.feeds[targetFeed] || [],
       normalizedIncomingPosts,
       MAX_FEED_ITEMS
     );
-    state.discussions[state.activeFeed] = {};
+    state.discussions[targetFeed] = {};
     persistFeeds(state.feeds);
     state.lastRefreshAt = `${formatDateTime()} · ${sourceLabel}`;
     localStorage.setItem(REFRESH_KEY, state.lastRefreshAt);
@@ -2211,12 +2362,12 @@ async function refreshHomeFeed(trigger = "manual") {
     renderProfilePage();
     updateInsightPanel();
     setHomeStatus(
-      `已通过${sourceLabel}刷新“${HOME_FEED_LABELS[state.activeFeed]}”${homeCount} 条讨论 · 来源 ${trigger}`,
+      `已通过${sourceLabel}刷新“${HOME_FEED_LABELS[targetFeed]}”${homeCount} 条讨论 · 来源 ${trigger}`,
       "success"
     );
     if (sourceLabel === "API") {
       setSettingsStatus(
-        `配置已保存，当前分页签“${HOME_FEED_LABELS[state.activeFeed]}”已使用 API 重新生成 ${homeCount} 条讨论。`,
+        `配置已保存，当前分页签“${HOME_FEED_LABELS[targetFeed]}”已使用 API 重新生成 ${homeCount} 条讨论。`,
         "success"
       );
     }
@@ -2368,6 +2519,10 @@ function attachEvents() {
   miniTabs.forEach((tab) => {
     tab.addEventListener("click", () => {
       state.activeFeed = tab.dataset.feed;
+      if (tab.dataset.feed === "hot" || tab.dataset.feed === "entertainment") {
+        state.lastContentFeed = tab.dataset.feed;
+        lastKnownContentFeed = tab.dataset.feed;
+      }
       renderActiveFeed();
       updatePromptPreview();
       updateMessagePromptPreview();
