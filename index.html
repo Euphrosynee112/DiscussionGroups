@@ -3,105 +3,341 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>X 风格消息流 Demo</title>
+    <title>X 风格社交界面 Demo</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="layout">
-      <aside class="left-nav">
-        <div class="brand">𝕏</div>
-        <nav>
-          <a href="#home" class="nav-item active" data-tab="home">首页</a>
-          <a href="#settings" class="nav-item" data-tab="settings">设置</a>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand-lockup">
+          <div class="brand-mark">𝕏</div>
+          <div>
+            <p class="brand-overline">Social Console</p>
+            <strong class="brand-name">Pulse Generator</strong>
+          </div>
+        </div>
+
+        <nav class="primary-nav" aria-label="主导航">
+          <button class="nav-item active" data-tab="home" type="button">
+            <span class="nav-icon">⌂</span>
+            <span>首页</span>
+          </button>
+          <button class="nav-item" data-tab="following" type="button">
+            <span class="nav-icon">◎</span>
+            <span>关注</span>
+          </button>
+          <button class="nav-item" data-tab="messages" type="button">
+            <span class="nav-icon">✉</span>
+            <span>私信</span>
+          </button>
+          <button class="nav-item" data-tab="profile" type="button">
+            <span class="nav-icon">◐</span>
+            <span>个人主页</span>
+          </button>
+          <button class="nav-item" data-tab="settings" type="button">
+            <span class="nav-icon">⋯</span>
+            <span>设置</span>
+          </button>
         </nav>
+
       </aside>
 
-      <main class="timeline">
-        <header class="timeline-header">
-          <h1 id="page-title">首页</h1>
+      <main class="main-column">
+        <header class="main-header">
+          <div>
+            <p class="header-kicker">X 风格原型</p>
+            <h1 id="page-title">首页</h1>
+          </div>
+          <button id="top-refresh-btn" class="ghost-button" type="button">
+            刷新时间线
+          </button>
         </header>
 
-        <section id="home-page" class="page-section">
-          <section id="feed" class="feed" aria-label="消息流">
-            <p id="empty-feed" class="empty-feed">暂无消息</p>
-          </section>
+        <section id="home-page" class="page-section active" aria-label="首页">
+          <div id="home-scroll" class="page-scroll">
+            <div id="pull-indicator" class="pull-indicator" aria-live="polite">
+              <strong id="pull-label">向下滑动以刷新</strong>
+              <span id="pull-meta">默认生成 10 条讨论信息</span>
+            </div>
+
+            <section class="timeline-card">
+              <div class="timeline-card__header">
+                <div class="mini-tabs" aria-label="首页分类">
+                  <button class="mini-tab active" data-feed="hot" type="button">热点消息</button>
+                  <button class="mini-tab" data-feed="entertainment" type="button">文娱</button>
+                </div>
+                <p id="home-status" class="inline-status">等待下一次刷新</p>
+              </div>
+
+              <div id="feed" class="feed" aria-live="polite"></div>
+            </section>
+          </div>
         </section>
 
-        <section id="settings-page" class="page-section hidden">
-          <section class="composer">
-            <h2>API 设置与生成</h2>
-            <form id="generate-form">
-              <label>
-                接口类型
-                <select id="api-mode">
-                  <option value="openai">OpenAI 兼容接口</option>
-                  <option value="generic">通用接口（prompt）</option>
-                </select>
-              </label>
+        <section id="following-page" class="page-section" aria-label="关注">
+          <div class="page-scroll">
+            <section class="section-card">
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">Following</p>
+                  <h2>关注账号流</h2>
+                </div>
+                <span class="badge">精选关注</span>
+              </div>
+              <div id="following-list" class="stack-list"></div>
+            </section>
+          </div>
+        </section>
 
-              <label>
-                API 地址
-                <input
-                  id="api-endpoint"
-                  type="url"
-                  placeholder="https://api.openai.com/v1/chat/completions"
-                  required
-                />
-              </label>
+        <section id="messages-page" class="page-section" aria-label="私信">
+          <div class="page-scroll">
+            <section class="section-card">
+                <div class="section-card__head">
+                  <div>
+                    <p class="section-card__eyebrow">Messages</p>
+                    <h2>私信会话</h2>
+                  </div>
+                <button id="messages-generate-btn" class="ghost-chip" type="button">新建消息</button>
+              </div>
+              <p id="messages-status" class="status-text">点击“新建消息”生成与当前设定相关的私信内容。</p>
+              <div id="messages-list" class="conversation-list"></div>
+            </section>
+          </div>
+        </section>
 
-              <label>
-                Bearer Token / API Key
-                <input
-                  id="api-token"
-                  type="password"
-                  placeholder="输入 API Key"
-                />
-              </label>
+        <section id="profile-page" class="page-section" aria-label="个人主页">
+          <div class="page-scroll">
+            <section class="profile-hero">
+              <div class="profile-banner"></div>
+              <div class="profile-body">
+                <div id="profile-avatar" class="profile-avatar">WG</div>
+                <div class="profile-summary">
+                  <div class="profile-summary__identity">
+                    <h2 id="profile-username">Worldview Generator</h2>
+                    <p id="profile-handle" class="profile-handle">@worldview_lab</p>
+                  </div>
+                  <button id="profile-edit-toggle-btn" class="ghost-button ghost-button--small" type="button">
+                    编辑资料
+                  </button>
+                </div>
+                <p id="profile-bio" class="profile-bio"></p>
+                <div class="profile-stats">
+                  <span class="profile-stat"><strong id="profile-following">128</strong><em>正在关注</em></span>
+                  <span class="profile-stat"><strong id="profile-followers">8.6K</strong><em>关注者</em></span>
+                  <span class="profile-stat"><strong id="profile-post-count">0</strong><em>帖子</em></span>
+                </div>
+              </div>
+            </section>
 
-              <label id="model-wrap">
-                模型（OpenAI 模式）
-                <input id="api-model" type="text" placeholder="gpt-4.1-mini" />
-              </label>
+            <section id="profile-editor-card" class="section-card hidden">
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">Profile editor</p>
+                  <h2>个人资料编辑</h2>
+                </div>
+                <button id="profile-editor-close-btn" class="ghost-chip" type="button">
+                  收起
+                </button>
+              </div>
+              <form id="profile-form" class="profile-editor">
+                <div class="form-grid">
+                  <label>
+                    头像文字 / Emoji
+                    <input
+                      id="profile-avatar-input"
+                      type="text"
+                      maxlength="4"
+                      placeholder="例如 WG 或 😎"
+                    />
+                  </label>
 
-              <label>
-                主题 / 提示词
-                <textarea
-                  id="api-prompt"
-                  rows="3"
-                  placeholder="例如：生成一条关于前端开发的简短动态"
-                  required
-                ></textarea>
-              </label>
+                  <label>
+                    用户名
+                    <input
+                      id="profile-username-input"
+                      type="text"
+                      placeholder="输入展示用户名"
+                    />
+                  </label>
 
-              <button id="generate-btn" type="submit">调用 API 生成消息</button>
-            </form>
-            <p id="status" class="status"></p>
-          </section>
+                  <label>
+                    关注人数
+                    <input
+                      id="profile-following-input"
+                      type="text"
+                      placeholder="例如 128"
+                    />
+                  </label>
+
+                  <label>
+                    粉丝人数
+                    <input
+                      id="profile-followers-input"
+                      type="text"
+                      placeholder="例如 8.6K"
+                    />
+                  </label>
+                </div>
+
+                <label>
+                  个人签名
+                  <textarea
+                    id="profile-signature-input"
+                    rows="4"
+                    placeholder="输入个人签名或简介"
+                  ></textarea>
+                </label>
+
+                <label>
+                  用户人设 Prompt（仅存储，不展示）
+                  <textarea
+                    id="profile-persona-input"
+                    rows="5"
+                    placeholder="记录这个用户的人设、偏好、说话方式、经历背景等，用于私信和互动生成。"
+                  ></textarea>
+                </label>
+
+                <div class="settings-actions">
+                  <button id="profile-save-btn" class="solid-button" type="submit">
+                    保存个人资料
+                  </button>
+                  <button id="profile-cancel-btn" class="ghost-button" type="button">
+                    关闭编辑
+                  </button>
+                </div>
+
+                <p id="profile-status" class="status-text" aria-live="polite"></p>
+              </form>
+            </section>
+
+            <section class="section-card">
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">Profile timeline</p>
+                  <h2>用户发言</h2>
+                </div>
+              </div>
+              <div id="profile-posts" class="feed"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="settings-page" class="page-section" aria-label="设置">
+          <div class="page-scroll">
+            <section class="section-card">
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">Settings</p>
+                  <h2>API 与内容生成配置</h2>
+                </div>
+                <span class="badge badge-live">本地持久化</span>
+              </div>
+
+              <form id="settings-form" class="settings-form">
+                <div class="form-grid">
+                  <label>
+                    接口类型
+                    <select id="api-mode">
+                      <option value="openai">DeepSeek / OpenAI 兼容接口</option>
+                      <option value="generic">通用 JSON 接口</option>
+                    </select>
+                  </label>
+
+                  <label>
+                    API 地址
+                    <input
+                      id="api-endpoint"
+                      type="url"
+                      placeholder="https://api.deepseek.com/chat/completions"
+                    />
+                  </label>
+
+                  <label>
+                    API Key / Bearer Token
+                    <input
+                      id="api-token"
+                      type="password"
+                      placeholder="输入用于请求的密钥"
+                    />
+                  </label>
+
+                  <label id="model-wrap">
+                    模型名称
+                    <input id="api-model" type="text" placeholder="deepseek-chat" />
+                  </label>
+                </div>
+
+                <label>
+                  世界观文本
+                  <textarea
+                    id="worldview-text"
+                    rows="7"
+                    placeholder="输入世界观设定，例如人物立场、叙事风格、价值观、禁忌和语气。"
+                  ></textarea>
+                </label>
+
+                <label>
+                  热点文本
+                  <textarea
+                    id="hot-topics-text"
+                    rows="6"
+                    placeholder="输入热点议题，建议一行一个，或用逗号分隔。"
+                  ></textarea>
+                </label>
+
+                <label>
+                  文娱文本
+                  <textarea
+                    id="entertainment-text"
+                    rows="6"
+                    placeholder="输入文娱相关主题，例如电影、综艺、明星、演出、游戏或二创热点。"
+                  ></textarea>
+                </label>
+
+                <label>
+                  自定义补充要求
+                  <textarea
+                    id="extra-instructions"
+                    rows="4"
+                    placeholder="例如：观点要有冲突感，但避免极端语言；保持中文互联网讨论氛围。"
+                  ></textarea>
+                </label>
+
+                <div class="settings-actions">
+                  <button id="save-settings-btn" class="solid-button" type="submit">
+                    保存配置
+                  </button>
+                  <button id="settings-generate-btn" class="ghost-button" type="button">
+                    保存并刷新首页
+                  </button>
+                </div>
+
+                <p id="settings-status" class="status-text" aria-live="polite"></p>
+              </form>
+            </section>
+
+            <section class="section-card">
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">Prompt Preview</p>
+                  <h2>首页刷新 Prompt 预览</h2>
+                </div>
+              </div>
+              <pre id="prompt-preview" class="prompt-preview"></pre>
+            </section>
+
+            <section class="section-card">
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">DM Prompt Preview</p>
+                  <h2>私信生成 Prompt 预览</h2>
+                </div>
+              </div>
+              <pre id="message-prompt-preview" class="prompt-preview"></pre>
+            </section>
+          </div>
         </section>
       </main>
-
-      <aside class="right-panel">
-        <h3>说明</h3>
-        <p>OpenAI 兼容模式请求格式：</p>
-        <pre>{
-  "model": "gpt-4.1-mini",
-  "messages": [
-    { "role": "user", "content": "你的提示词" }
-  ]
-}</pre>
-        <p>通用模式请求格式：</p>
-        <pre>{
-  "prompt": "你的提示词"
-}</pre>
-        <p>支持解析以下返回结构：</p>
-        <ul>
-          <li><code>choices[0].message.content</code>（OpenAI）</li>
-          <li><code>message</code></li>
-          <li><code>text</code></li>
-          <li><code>content</code></li>
-          <li><code>data.message</code></li>
-        </ul>
-      </aside>
     </div>
 
     <script src="./app.js"></script>
