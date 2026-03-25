@@ -194,6 +194,7 @@ const state = {
   isRefreshing: false,
   lastRefreshAt: localStorage.getItem(REFRESH_KEY) || "",
   pullDistance: 0,
+  feedTopAnchorAt: Date.now(),
   touchStartY: 0,
   touchTracking: false,
   wheelReleaseTimer: null
@@ -2710,17 +2711,15 @@ async function refreshHomeFeed(trigger = "manual") {
 
   try {
     let posts;
-    let sourceLabel = "API";
+    const sourceLabel = "API";
 
     try {
       posts = await requestGeneratedPosts(settings, targetFeed, homeCount);
     } catch (error) {
-      sourceLabel = "本地回退";
-      posts = buildLocalPosts(settings, homeCount, targetFeed);
-      setSettingsStatus(
-        `${error.message || "请求失败"} 已自动使用本地模板生成内容。`,
-        "error"
-      );
+      const errorMessage = error.message || "请求失败";
+      setSettingsStatus(errorMessage, "error");
+      setHomeStatus(`刷新失败：${errorMessage}`, "error");
+      return;
     }
 
     syncAuthoredPostIdentity(profile);
@@ -2742,12 +2741,10 @@ async function refreshHomeFeed(trigger = "manual") {
       `已通过${sourceLabel}刷新“${HOME_FEED_LABELS[targetFeed]}”${homeCount} 条讨论 · 来源 ${trigger}`,
       "success"
     );
-    if (sourceLabel === "API") {
-      setSettingsStatus(
-        `配置已保存，当前分页签“${HOME_FEED_LABELS[targetFeed]}”已使用 API 重新生成 ${homeCount} 条讨论。`,
-        "success"
-      );
-    }
+    setSettingsStatus(
+      `配置已保存，当前分页签“${HOME_FEED_LABELS[targetFeed]}”已使用 API 重新生成 ${homeCount} 条讨论。`,
+      "success"
+    );
     switchTab("home");
   } finally {
     state.isRefreshing = false;
@@ -2768,7 +2765,8 @@ function releasePull() {
 }
 
 function handleTouchStart(event) {
-  if (state.activeTab !== "home" || feedEl.scrollTop > 0 || state.isRefreshing) {
+  const atTop = feedEl.scrollTop <= 1;
+  if (state.activeTab !== "home" || !atTop || state.isRefreshing) {
     return;
   }
   state.touchTracking = true;
@@ -2781,7 +2779,7 @@ function handleTouchMove(event) {
   }
 
   const delta = event.touches[0].clientY - state.touchStartY;
-  if (delta <= 0 || feedEl.scrollTop > 0) {
+  if (delta <= 0 || feedEl.scrollTop > 1) {
     return;
   }
 
@@ -2802,10 +2800,13 @@ function handleTouchEnd() {
 }
 
 function handleWheel(event) {
+  const atTop = feedEl.scrollTop <= 1;
+  const topStableLongEnough = Date.now() - state.feedTopAnchorAt > 160;
   if (
     state.activeTab !== "home" ||
     state.isRefreshing ||
-    feedEl.scrollTop > 0 ||
+    !atTop ||
+    !topStableLongEnough ||
     event.deltaY >= 0
   ) {
     return;
@@ -2960,6 +2961,21 @@ function attachEvents() {
         actionEl.dataset.replyId,
         actionEl.dataset.bucket || state.activeFeed
       );
+    }
+  });
+
+  feedEl.addEventListener("scroll", () => {
+    if (feedEl.scrollTop <= 1) {
+      if (!state.feedTopAnchorAt) {
+        state.feedTopAnchorAt = Date.now();
+      }
+      return;
+    }
+
+    state.feedTopAnchorAt = 0;
+    if (state.pullDistance > 0 && !state.isRefreshing) {
+      state.pullDistance = 0;
+      setPullIndicator(0, "idle");
     }
   });
 
