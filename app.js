@@ -1,20 +1,25 @@
 const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
+const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
 const PROFILE_KEY = "x_style_generator_profile_v1";
 const PROFILE_POSTS_KEY = "x_style_generator_profile_posts_v1";
 const DIRECT_MESSAGES_KEY = "x_style_generator_direct_messages_v1";
+const DISCUSSIONS_KEY = "x_style_generator_discussions_v1";
 const DEFAULT_POST_COUNT = 10;
 const DEFAULT_DM_COUNT = 4;
 const DEFAULT_REPLY_COUNT = 4;
-const MAX_FEED_ITEMS = 30;
+const MAX_FEED_ITEMS = 50;
 const DEFAULT_TEMPERATURE = 0.8;
 const PULL_THRESHOLD = 88;
-const DEFAULT_CONTENT_FEED = "hot";
+const DEFAULT_CONTENT_FEED = "entertainment";
+const CUSTOM_TAB_LIMIT = 4;
+const API_CONFIG_LIMIT = 12;
+const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
+const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 const HOME_FEED_LABELS = {
-  hot: "热点消息",
-  entertainment: "文娱",
+  entertainment: "默认话题",
   tags: "热门标签"
 };
 const NESTED_REPLY_COUNT = 3;
@@ -24,19 +29,16 @@ const DEFAULT_SETTINGS = {
   mode: "openai",
   endpoint: DEFAULT_OPENAI_ENDPOINT,
   token: "",
-  model: "deepseek-chat",
+  model: DEFAULT_DEEPSEEK_MODEL,
   worldview:
     "这是一个强调长期主义、产品洞察和公共讨论质量的中文社交世界。用户习惯像在 X 上一样快速表达观点，但会天然追问效率、增长、AI 和平台变迁。整体语气要真实、犀利、能引发跟帖，不要写成官方通稿。",
-  hotTopics:
-    "AI Agent 正在重构内容生产\n大模型创业进入精细化竞争\n短视频平台与开放社交平台的流量分配\n独立开发者如何建立可持续收入\n产品经理在 AI 时代的角色变化",
-  entertainmentText:
-    "热门电影口碑分化\n综艺名场面引发二创\n明星演出与巡演热度\n游戏联动和社区讨论\n平台热门短剧与话题角色",
   homeCount: DEFAULT_POST_COUNT,
   dmCount: DEFAULT_DM_COUNT,
   replyCount: DEFAULT_REPLY_COUNT,
   temperature: DEFAULT_TEMPERATURE,
-  extraInstructions:
-    "请写成中文互联网讨论帖，观点彼此有差异，但都与世界观保持一致。避免重复句式，避免营销口吻。"
+  customTabs: [],
+  apiConfigs: [],
+  activeApiConfigId: ""
 };
 
 const DEFAULT_PROFILE = {
@@ -109,7 +111,7 @@ const pages = {
 
 const navItems = [...document.querySelectorAll(".nav-item[data-tab]")];
 const jumpLinks = [...document.querySelectorAll("[data-jump-tab]")];
-const miniTabs = [...document.querySelectorAll(".mini-tab[data-feed]")];
+const homeMiniTabsContainer = document.querySelector("#home-mini-tabs");
 const pageTitleEl = document.querySelector("#page-title");
 const feedEl = document.querySelector("#feed");
 const followingListEl = document.querySelector("#following-list");
@@ -132,6 +134,19 @@ const replyPromptPreviewEl = document.querySelector("#reply-prompt-preview");
 const topRefreshBtn = document.querySelector("#top-refresh-btn");
 const settingsGenerateBtn = document.querySelector("#settings-generate-btn");
 const settingsForm = document.querySelector("#settings-form");
+const customTabsManageBtn = document.querySelector("#custom-tabs-manage-btn");
+const customTabsPanel = document.querySelector("#custom-tabs-manager");
+const customTabsListEl = document.querySelector("#custom-tabs-list");
+const customTabForm = document.querySelector("#custom-tab-form");
+const customTabNameInput = document.querySelector("#custom-tab-name-input");
+const customTabTextInput = document.querySelector("#custom-tab-text-input");
+const customTabFormStatusEl = document.querySelector("#custom-tab-form-status");
+const customTabCancelBtn = document.querySelector("#custom-tab-cancel-btn");
+const customTabsCloseBtn = document.querySelector("#custom-tabs-close-btn");
+const customTabsLimitHintEl = document.querySelector("#custom-tabs-limit-hint");
+const customTabSettingsSection = document.querySelector("#custom-tabs-settings-section");
+const customTabSettingsListEl = document.querySelector("#custom-tabs-settings-list");
+const customTabSettingsEmptyEl = document.querySelector("#custom-tabs-settings-empty");
 const homeScrollEl = document.querySelector("#home-scroll");
 const pullIndicatorEl = document.querySelector("#pull-indicator");
 const pullLabelEl = document.querySelector("#pull-label");
@@ -169,9 +184,10 @@ const homeCountInput = document.querySelector("#home-count");
 const dmCountInput = document.querySelector("#dm-count");
 const replyCountInput = document.querySelector("#reply-count");
 const worldviewInput = document.querySelector("#worldview-text");
-const hotTopicsInput = document.querySelector("#hot-topics-text");
-const entertainmentTextInput = document.querySelector("#entertainment-text");
-const extraInstructionsInput = document.querySelector("#extra-instructions");
+const apiConfigNameInput = document.querySelector("#api-config-name-input");
+const apiConfigSaveBtn = document.querySelector("#api-config-save-btn");
+const apiConfigStatusEl = document.querySelector("#api-config-status");
+const apiConfigListEl = document.querySelector("#api-config-list");
 
 const state = {
   activeTab: "home",
@@ -180,7 +196,11 @@ const state = {
   directMessages: loadDirectMessages(),
   profile: loadProfile(),
   profilePosts: loadProfilePosts(),
-  discussions: createDiscussionState(),
+  discussions: loadDiscussions(),
+  customTabs: [],
+  customTabEditorOpen: false,
+  customTabEditingId: "",
+  draggingCustomTabId: "",
   activeFeed: DEFAULT_CONTENT_FEED,
   lastContentFeed: DEFAULT_CONTENT_FEED,
   activeTagFilter: "",
@@ -200,6 +220,17 @@ const state = {
   wheelReleaseTimer: null
 };
 
+state.customTabs = normalizeCustomTabs(state.settings.customTabs);
+state.settings.customTabs = [...state.customTabs];
+state.settings.apiConfigs = normalizeApiConfigs(state.settings.apiConfigs);
+if (
+  state.settings.activeApiConfigId &&
+  !state.settings.apiConfigs.some((item) => item.id === state.settings.activeApiConfigId)
+) {
+  state.settings.activeApiConfigId = "";
+}
+synchronizeCustomTabBuckets();
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -207,6 +238,17 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function getEventHTMLElement(event) {
+  const target = event.target;
+  if (target instanceof HTMLElement) {
+    return target;
+  }
+  if (target instanceof Node && target.parentElement instanceof HTMLElement) {
+    return target.parentElement;
+  }
+  return null;
 }
 
 function formatDateTime(value = new Date()) {
@@ -240,6 +282,201 @@ function parseWorldviewFragments(source) {
     .filter(Boolean);
 }
 
+function normalizeCustomTabs(tabs = []) {
+  if (!Array.isArray(tabs)) {
+    return [];
+  }
+
+  return tabs
+    .map((tab, index) => {
+      if (typeof tab === "string") {
+        const name = String(tab).trim().slice(0, 20) || "自定义页签";
+        return {
+          id: `custom_${index}_${hashText(name)}`,
+          name,
+          text: ""
+        };
+      }
+      if (!tab || typeof tab !== "object") {
+        return null;
+      }
+      const rawName = tab.name || tab.label || tab.title || tab.tabName || tab.tabLabel || "";
+      const rawText =
+        tab.text ||
+        tab.prompt ||
+        tab.content ||
+        tab.description ||
+        tab.topicText ||
+        tab.topic ||
+        "";
+      return {
+        id:
+          tab.id ||
+          tab.feedId ||
+          tab.key ||
+          `custom_${index}_${hashText(`${rawName || ""}-${rawText || ""}`)}`,
+        name: String(rawName || "自定义页签").trim().slice(0, 20) || "自定义页签",
+        text: String(rawText || "").trim()
+      };
+    })
+    .filter(Boolean)
+    .slice(0, CUSTOM_TAB_LIMIT)
+    .map((tab) => ({
+      id: tab.id || createCustomTabId(tab.name || "custom"),
+      name: String(tab.name || "自定义页签").trim().slice(0, 20) || "自定义页签",
+      text: String(tab.text || "").trim()
+    }));
+}
+
+function normalizeApiMode(mode) {
+  if (mode === "gemini" || mode === "generic") {
+    return mode;
+  }
+  return "openai";
+}
+
+function getApiModeLabel(mode) {
+  const resolvedMode = normalizeApiMode(mode);
+  if (resolvedMode === "gemini") {
+    return "Gemini API";
+  }
+  if (resolvedMode === "generic") {
+    return "通用 JSON 接口";
+  }
+  return "DeepSeek / OpenAI 兼容";
+}
+
+function getDefaultModelByMode(mode) {
+  return normalizeApiMode(mode) === "gemini" ? DEFAULT_GEMINI_MODEL : DEFAULT_DEEPSEEK_MODEL;
+}
+
+function normalizeApiConfigToken(token) {
+  return String(token || "").trim();
+}
+
+function normalizeApiConfigs(configs = []) {
+  if (!Array.isArray(configs)) {
+    return [];
+  }
+
+  return configs
+    .filter((item) => item && typeof item === "object")
+    .slice(0, API_CONFIG_LIMIT)
+    .map((item, index) => {
+      const mode = normalizeApiMode(item.mode);
+      const fallbackName = `接口配置 ${index + 1}`;
+      return {
+        id: item.id || `api_cfg_${index}_${hashText(`${item.name || ""}-${item.endpoint || ""}`)}`,
+        name: String(item.name || fallbackName).trim().slice(0, 20) || fallbackName,
+        mode,
+        endpoint: String(item.endpoint || "").trim(),
+        token: normalizeApiConfigToken(item.token),
+        model:
+          mode === "generic"
+            ? ""
+            : String(item.model || getDefaultModelByMode(mode)).trim() || getDefaultModelByMode(mode),
+        updatedAt: Number(item.updatedAt) || Date.now()
+      };
+    });
+}
+
+function findCustomTabInSettings(settings, tabId) {
+  if (!Array.isArray(settings?.customTabs)) {
+    return null;
+  }
+  return settings.customTabs.find((tab) => tab.id === tabId) || null;
+}
+
+function getCustomTab(tabId) {
+  return state.customTabs.find((tab) => tab.id === tabId) || null;
+}
+
+function isBuiltinFeed(feedType) {
+  return feedType === "entertainment";
+}
+
+function isCustomFeed(feedType) {
+  return state.customTabs.some((tab) => tab.id === feedType);
+}
+
+function isTimelineFeed(feedType) {
+  return isBuiltinFeed(feedType) || isCustomFeed(feedType);
+}
+
+function getDefaultVisibleHomeFeed() {
+  if (state.customTabs.length) {
+    return state.customTabs[0].id;
+  }
+  return "tags";
+}
+
+function getFeedLabel(feedType = DEFAULT_CONTENT_FEED) {
+  if (isBuiltinFeed(feedType)) {
+    return HOME_FEED_LABELS[feedType] || "默认话题";
+  }
+  const tab = getCustomTab(feedType);
+  if (tab) {
+    return tab.name || "自定义页签";
+  }
+  return HOME_FEED_LABELS.entertainment;
+}
+
+function createCustomTabId(seed = "custom") {
+  return `custom_${Date.now()}_${hashText(seed)}`;
+}
+
+function synchronizeCustomTabBuckets() {
+  const validIds = new Set(state.customTabs.map((tab) => tab.id));
+  state.customTabs.forEach((tab) => {
+    if (!state.feeds[tab.id]) {
+      state.feeds[tab.id] = [];
+    }
+    if (!state.discussions[tab.id]) {
+      state.discussions[tab.id] = {};
+    }
+  });
+
+  Object.keys(state.feeds).forEach((key) => {
+    if (!isBuiltinFeed(key) && !validIds.has(key)) {
+      delete state.feeds[key];
+    }
+  });
+
+  Object.keys(state.discussions).forEach((key) => {
+    if (key !== "profile" && !isBuiltinFeed(key) && !validIds.has(key)) {
+      delete state.discussions[key];
+    }
+  });
+
+  if (state.activeFeed !== "tags" && !isCustomFeed(state.activeFeed)) {
+    state.activeFeed = getDefaultVisibleHomeFeed();
+  }
+  if (state.customTabs.length) {
+    if (!isCustomFeed(state.lastContentFeed)) {
+      state.lastContentFeed = state.customTabs[0].id;
+    }
+  } else if (!isTimelineFeed(state.lastContentFeed)) {
+    state.lastContentFeed = DEFAULT_CONTENT_FEED;
+  }
+}
+
+function commitCustomTabs(nextTabs) {
+  state.customTabs = normalizeCustomTabs(nextTabs);
+  state.settings.customTabs = [...state.customTabs];
+  synchronizeCustomTabBuckets();
+  persistSettings(state.settings);
+  persistFeeds(state.feeds);
+  persistDiscussions();
+  renderHomeTabs();
+  renderCustomTabsManager();
+  renderCustomTabSettings();
+  renderActiveFeed();
+  updatePromptPreview();
+  updateMessagePromptPreview();
+  updateReplyPromptPreview();
+  updateInsightPanel();
+}
+
 function normalizeSingleTag(value) {
   const trimmed = String(value || "")
     .trim()
@@ -269,7 +506,7 @@ function normalizeTags(value, max = 5) {
     .slice(0, max);
 }
 
-function ensurePostTags(tags, feedType = "hot", index = 0) {
+function ensurePostTags(tags, feedType = DEFAULT_CONTENT_FEED, index = 0) {
   const normalized = normalizeTags(tags, 5);
   if (normalized.length >= 2) {
     return normalized;
@@ -292,7 +529,7 @@ function ensurePostTags(tags, feedType = "hot", index = 0) {
   return [...normalized, ...extra].slice(0, 5);
 }
 
-function getRenderableTags(post, fallbackFeedType = "hot") {
+function getRenderableTags(post, fallbackFeedType = DEFAULT_CONTENT_FEED) {
   if (Array.isArray(post?.tags)) {
     return normalizeTags(post.tags, 5);
   }
@@ -302,7 +539,7 @@ function getRenderableTags(post, fallbackFeedType = "hot") {
   return ensurePostTags([], fallbackFeedType, 0);
 }
 
-function renderPostTags(post, fallbackFeedType = "hot") {
+function renderPostTags(post, fallbackFeedType = DEFAULT_CONTENT_FEED) {
   const tags = getRenderableTags(post, fallbackFeedType);
   if (!tags.length) {
     return "";
@@ -312,19 +549,114 @@ function renderPostTags(post, fallbackFeedType = "hot") {
     .join(" ")}</p>`;
 }
 
-function getCurrentContentFeed(feedType) {
-  if (feedType === "entertainment" || feedType === "hot") {
+function getCurrentContentFeed(feedType = state.activeFeed) {
+  if (isCustomFeed(feedType)) {
     return feedType;
   }
-  return lastKnownContentFeed || DEFAULT_CONTENT_FEED;
+  if (isBuiltinFeed(feedType) && !state.customTabs.length) {
+    return feedType;
+  }
+  if (isCustomFeed(state.lastContentFeed)) {
+    return state.lastContentFeed;
+  }
+  if (state.customTabs.length) {
+    return state.customTabs[0].id;
+  }
+  if (isBuiltinFeed(state.lastContentFeed)) {
+    return state.lastContentFeed;
+  }
+  return DEFAULT_CONTENT_FEED;
 }
 
 function createDiscussionState() {
   return {
-    hot: {},
     entertainment: {},
     profile: {}
   };
+}
+
+function normalizeCachedReplyTree(replies = []) {
+  if (!Array.isArray(replies)) {
+    return [];
+  }
+
+  return replies
+    .filter((reply) => reply && typeof reply === "object")
+    .map((reply, index) => normalizeReply(reply, index, `cached_${reply.id || index}`))
+    .map((reply, index) => ({
+      ...reply,
+      expanded: false,
+      loading: false,
+      children: normalizeCachedReplyTree(replies[index]?.children || [])
+    }));
+}
+
+function normalizeDiscussionBucket(bucket = {}) {
+  if (!bucket || typeof bucket !== "object") {
+    return {};
+  }
+
+  const normalized = {};
+  Object.entries(bucket).forEach(([postId, thread]) => {
+    if (!postId || !thread || typeof thread !== "object") {
+      return;
+    }
+    const replies = normalizeCachedReplyTree(thread.replies || []);
+    if (!replies.length) {
+      return;
+    }
+    normalized[postId] = {
+      expanded: false,
+      loading: false,
+      replies
+    };
+  });
+  return normalized;
+}
+
+function loadDiscussions() {
+  const raw = localStorage.getItem(DISCUSSIONS_KEY);
+  if (!raw) {
+    return createDiscussionState();
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return createDiscussionState();
+    }
+    const normalized = createDiscussionState();
+    Object.entries(parsed).forEach(([bucketName, bucket]) => {
+      normalized[bucketName] = normalizeDiscussionBucket(bucket);
+    });
+    return normalized;
+  } catch (_error) {
+    return createDiscussionState();
+  }
+}
+
+function trimDiscussionBucketsByFeed() {
+  Object.keys(state.discussions).forEach((bucketName) => {
+    if (bucketName === "profile") {
+      return;
+    }
+    const bucket = state.discussions[bucketName] || {};
+    const validPostIds = new Set(
+      (state.feeds[bucketName] || []).slice(0, MAX_FEED_ITEMS).map((post) => post.id)
+    );
+    const trimmed = {};
+    Object.keys(bucket).forEach((postId) => {
+      if (validPostIds.has(postId)) {
+        trimmed[postId] = bucket[postId];
+      }
+    });
+    state.discussions[bucketName] = trimmed;
+  });
+}
+
+function persistDiscussions() {
+  trimDiscussionBucketsByFeed();
+  localStorage.setItem(DISCUSSIONS_KEY, JSON.stringify(state.discussions));
 }
 
 function hashText(value) {
@@ -337,8 +669,9 @@ function hashText(value) {
 }
 
 function getCurrentSettings() {
+  const mode = normalizeApiMode(modeSelect.value);
   return {
-    mode: modeSelect.value,
+    mode,
     endpoint: endpointInput.value.trim(),
     token: tokenInput.value.trim(),
     model: modelInput.value.trim(),
@@ -347,9 +680,9 @@ function getCurrentSettings() {
     dmCount: normalizePositiveInteger(dmCountInput.value, DEFAULT_DM_COUNT),
     replyCount: normalizePositiveInteger(replyCountInput.value, DEFAULT_REPLY_COUNT),
     worldview: worldviewInput.value.trim(),
-    hotTopics: hotTopicsInput.value.trim(),
-    entertainmentText: entertainmentTextInput.value.trim(),
-    extraInstructions: extraInstructionsInput.value.trim()
+    customTabs: [...state.customTabs],
+    apiConfigs: normalizeApiConfigs(state.settings.apiConfigs),
+    activeApiConfigId: state.settings.activeApiConfigId || ""
   };
 }
 
@@ -376,17 +709,42 @@ function persistSettings(nextSettings) {
 function loadSettings() {
   const raw = localStorage.getItem(SETTINGS_KEY);
   if (!raw) {
-    return { ...DEFAULT_SETTINGS };
+    return {
+      ...DEFAULT_SETTINGS,
+      customTabs: normalizeCustomTabs(DEFAULT_SETTINGS.customTabs),
+      apiConfigs: normalizeApiConfigs(DEFAULT_SETTINGS.apiConfigs),
+      activeApiConfigId: ""
+    };
   }
 
   try {
     const parsed = JSON.parse(raw);
-    return {
+    const merged = {
       ...DEFAULT_SETTINGS,
       ...parsed
     };
+    merged.mode = normalizeApiMode(merged.mode);
+    const legacyCustomTabs =
+      merged.customTabs ||
+      parsed?.customTabs ||
+      parsed?.customFeeds ||
+      parsed?.customTabList ||
+      [];
+    merged.customTabs = normalizeCustomTabs(legacyCustomTabs);
+    const legacyApiConfigs =
+      merged.apiConfigs || parsed?.apiConfigs || parsed?.apiPresets || parsed?.apiProfiles || [];
+    merged.apiConfigs = normalizeApiConfigs(legacyApiConfigs);
+    if (!merged.apiConfigs.some((item) => item.id === merged.activeApiConfigId)) {
+      merged.activeApiConfigId = "";
+    }
+    return merged;
   } catch (_error) {
-    return { ...DEFAULT_SETTINGS };
+    return {
+      ...DEFAULT_SETTINGS,
+      customTabs: normalizeCustomTabs(DEFAULT_SETTINGS.customTabs),
+      apiConfigs: normalizeApiConfigs(DEFAULT_SETTINGS.apiConfigs),
+      activeApiConfigId: ""
+    };
   }
 }
 
@@ -486,7 +844,7 @@ function loadProfilePosts() {
       ? parsed.map((item, index) => {
           const post = normalizePost(item, index);
           post.authorOwned = true;
-          post.feedType = item.feedType || "hot";
+          post.feedType = item.feedType || DEFAULT_CONTENT_FEED;
           return post;
         })
       : [];
@@ -499,67 +857,80 @@ function persistProfilePosts(posts) {
   localStorage.setItem(PROFILE_POSTS_KEY, JSON.stringify(posts));
 }
 
+function createDefaultFeeds() {
+  return {
+    entertainment: buildLocalPosts(DEFAULT_SETTINGS, DEFAULT_POST_COUNT, "entertainment")
+  };
+}
+
 function loadFeeds() {
   const raw = localStorage.getItem(POSTS_KEY);
   if (!raw) {
-    return {
-      hot: buildLocalPosts(DEFAULT_SETTINGS, DEFAULT_POST_COUNT, "hot"),
-      entertainment: []
-    };
+    return createDefaultFeeds();
   }
 
   try {
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length) {
       return {
-        hot: parsed.map((item, index) => normalizePost(item, index)),
-        entertainment: []
+        entertainment: parsed
+          .map((item, index) => normalizePost(item, index, "entertainment"))
+          .slice(0, MAX_FEED_ITEMS)
       };
     }
-
     if (parsed && typeof parsed === "object") {
-      return {
-        hot: Array.isArray(parsed.hot)
-          ? parsed.hot.map((item, index) => normalizePost(item, index))
-          : [],
-        entertainment: Array.isArray(parsed.entertainment)
-          ? parsed.entertainment.map((item, index) => normalizePost(item, index))
-          : []
-      };
+      const normalized = {};
+      Object.keys(parsed).forEach((key) => {
+        if (Array.isArray(parsed[key])) {
+          const mappedKey = key === "hot" ? "entertainment" : key;
+          const mappedPosts = parsed[key].map((item, index) =>
+            normalizePost(item, index, mappedKey)
+          );
+          normalized[mappedKey] = [...(normalized[mappedKey] || []), ...mappedPosts].slice(
+            0,
+            MAX_FEED_ITEMS
+          );
+        }
+      });
+      if (!normalized.entertainment) {
+        normalized.entertainment = [];
+      }
+      const totalPosts = Object.values(normalized).reduce(
+        (total, posts) => total + (Array.isArray(posts) ? posts.length : 0),
+        0
+      );
+      if (totalPosts === 0) {
+        normalized.entertainment = buildLocalPosts(
+          DEFAULT_SETTINGS,
+          DEFAULT_POST_COUNT,
+          "entertainment"
+        );
+      }
+      return normalized;
     }
   } catch (_error) {
-    return {
-      hot: buildLocalPosts(DEFAULT_SETTINGS, DEFAULT_POST_COUNT, "hot"),
-      entertainment: []
-    };
+    return createDefaultFeeds();
   }
 
-  return {
-    hot: buildLocalPosts(DEFAULT_SETTINGS, DEFAULT_POST_COUNT, "hot"),
-    entertainment: []
-  };
+  return createDefaultFeeds();
 }
 
 function applySettingsToForm(settings) {
-  const normalizedEndpoint =
-    settings.mode === "openai"
-      ? normalizeOpenAICompatibleEndpoint(settings.endpoint)
-      : settings.endpoint;
-  modeSelect.value = settings.mode || "openai";
-  endpointInput.value = normalizedEndpoint || DEFAULT_OPENAI_ENDPOINT;
+  const resolvedMode = normalizeApiMode(settings.mode);
+  modeSelect.value = resolvedMode;
+  endpointInput.value = normalizeSettingsEndpointByMode(
+    resolvedMode,
+    settings.endpoint || ""
+  );
   tokenInput.value = settings.token || "";
-  modelInput.value = settings.model || "deepseek-chat";
+  modelInput.value = settings.model || getDefaultModelByMode(resolvedMode);
   temperatureInput.value = String(normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE));
   homeCountInput.value = String(settings.homeCount || DEFAULT_POST_COUNT);
   dmCountInput.value = String(settings.dmCount || DEFAULT_DM_COUNT);
   replyCountInput.value = String(settings.replyCount || DEFAULT_REPLY_COUNT);
   worldviewInput.value = settings.worldview || DEFAULT_SETTINGS.worldview;
-  hotTopicsInput.value = settings.hotTopics || DEFAULT_SETTINGS.hotTopics;
-  entertainmentTextInput.value =
-    settings.entertainmentText || DEFAULT_SETTINGS.entertainmentText;
-  extraInstructionsInput.value =
-    settings.extraInstructions || DEFAULT_SETTINGS.extraInstructions;
   updateModeUI();
+  renderApiConfigList();
 }
 
 function applyProfileToForm(profile) {
@@ -576,10 +947,22 @@ function applyProfileToForm(profile) {
 }
 
 function updateModeUI() {
-  const isOpenAI = modeSelect.value === "openai";
-  modelWrap.style.display = isOpenAI ? "grid" : "none";
-  if (isOpenAI && !endpointInput.value.trim()) {
+  const mode = normalizeApiMode(modeSelect.value);
+  const needsModel = mode === "openai" || mode === "gemini";
+  modelWrap.style.display = needsModel ? "grid" : "none";
+  if (mode === "openai" && !endpointInput.value.trim()) {
     endpointInput.value = DEFAULT_OPENAI_ENDPOINT;
+  }
+  if (mode === "gemini" && !endpointInput.value.trim()) {
+    endpointInput.value = DEFAULT_GEMINI_ENDPOINT;
+  }
+  if (needsModel && !modelInput.value.trim()) {
+    modelInput.value = getDefaultModelByMode(mode);
+  }
+  if (mode === "gemini") {
+    modelInput.placeholder = DEFAULT_GEMINI_MODEL;
+  } else {
+    modelInput.placeholder = DEFAULT_DEEPSEEK_MODEL;
   }
 }
 
@@ -601,6 +984,9 @@ function getCurrentProfile() {
 }
 
 function setProfileStatus(message, tone = "") {
+  if (!profileStatusEl) {
+    return;
+  }
   profileStatusEl.textContent = message;
   profileStatusEl.className = "status-text";
   if (tone) {
@@ -635,7 +1021,9 @@ function saveCurrentProfile() {
 
 function setProfileEditorOpen(isOpen) {
   state.profileEditorOpen = isOpen;
-  profileEditorCardEl.classList.toggle("hidden", !isOpen);
+  if (profileEditorCardEl) {
+    profileEditorCardEl.classList.toggle("hidden", !isOpen);
+  }
   if (profileEditToggleBtn) {
     profileEditToggleBtn.textContent = isOpen ? "收起编辑" : "编辑资料";
   }
@@ -676,6 +1064,7 @@ function syncPostAcrossViews(postId, updater) {
 
   persistProfilePosts(state.profilePosts);
   persistFeeds(state.feeds);
+  persistDiscussions();
 }
 
 function syncAuthoredPostIdentity(profile) {
@@ -706,6 +1095,7 @@ function syncAuthoredPostIdentity(profile) {
 
   persistProfilePosts(state.profilePosts);
   persistFeeds(state.feeds);
+  persistDiscussions();
 }
 
 function removePostAcrossViews(postId) {
@@ -720,6 +1110,7 @@ function removePostAcrossViews(postId) {
   });
   persistProfilePosts(state.profilePosts);
   persistFeeds(state.feeds);
+  persistDiscussions();
 }
 
 function openProfilePostEditor(postId) {
@@ -831,21 +1222,248 @@ function normalizeOpenAICompatibleEndpoint(endpoint) {
   }
 }
 
+function normalizeGeminiEndpoint(endpoint) {
+  const trimmed = String(endpoint || "").trim();
+  if (!trimmed) {
+    return DEFAULT_GEMINI_ENDPOINT;
+  }
+  return trimmed.replace(/\/+$/, "");
+}
+
+function normalizeSettingsEndpointByMode(mode, endpoint) {
+  const resolvedMode = normalizeApiMode(mode);
+  if (resolvedMode === "openai") {
+    return normalizeOpenAICompatibleEndpoint(endpoint);
+  }
+  if (resolvedMode === "gemini") {
+    return normalizeGeminiEndpoint(endpoint);
+  }
+  return String(endpoint || "").trim();
+}
+
+function resolveGeminiGenerateEndpoint(endpoint, model) {
+  const normalizedEndpoint = normalizeGeminiEndpoint(endpoint);
+  const normalizedModel = String(model || DEFAULT_GEMINI_MODEL).trim() || DEFAULT_GEMINI_MODEL;
+
+  if (normalizedEndpoint.includes(":generateContent")) {
+    return normalizedEndpoint;
+  }
+  if (/\/models\/[^/]+$/.test(normalizedEndpoint)) {
+    return `${normalizedEndpoint}:generateContent`;
+  }
+  if (normalizedEndpoint.endsWith("/models")) {
+    return `${normalizedEndpoint}/${normalizedModel}:generateContent`;
+  }
+  return `${normalizedEndpoint}/models/${normalizedModel}:generateContent`;
+}
+
+function resolveApiRequestEndpoint(settings) {
+  const resolvedMode = normalizeApiMode(settings.mode);
+  if (resolvedMode === "openai") {
+    return normalizeOpenAICompatibleEndpoint(settings.endpoint);
+  }
+  if (resolvedMode === "gemini") {
+    return resolveGeminiGenerateEndpoint(settings.endpoint, settings.model);
+  }
+  return String(settings.endpoint || "").trim();
+}
+
+function buildRequestHeaders(settings) {
+  const headers = {
+    "Content-Type": "application/json"
+  };
+
+  const token = normalizeApiConfigToken(settings.token);
+  if (!token) {
+    return headers;
+  }
+  if (normalizeApiMode(settings.mode) === "gemini") {
+    headers["x-goog-api-key"] = token;
+    return headers;
+  }
+  headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
+function buildApiConfigSnapshot() {
+  const mode = normalizeApiMode(modeSelect.value);
+  const endpoint = normalizeSettingsEndpointByMode(mode, endpointInput.value);
+  const model =
+    mode === "generic"
+      ? ""
+      : String(modelInput.value || "").trim() || getDefaultModelByMode(mode);
+  return {
+    mode,
+    endpoint,
+    token: normalizeApiConfigToken(tokenInput.value),
+    model
+  };
+}
+
+function setApiConfigStatus(message, tone = "") {
+  if (!apiConfigStatusEl) {
+    return;
+  }
+  apiConfigStatusEl.textContent = message;
+  apiConfigStatusEl.className = "status-text";
+  if (tone) {
+    apiConfigStatusEl.classList.add(tone);
+  }
+}
+
+function renderApiConfigList() {
+  if (!apiConfigListEl) {
+    return;
+  }
+
+  state.settings.apiConfigs = normalizeApiConfigs(state.settings.apiConfigs);
+  if (
+    state.settings.activeApiConfigId &&
+    !state.settings.apiConfigs.some((item) => item.id === state.settings.activeApiConfigId)
+  ) {
+    state.settings.activeApiConfigId = "";
+  }
+
+  if (!state.settings.apiConfigs.length) {
+    apiConfigListEl.innerHTML =
+      '<p class="empty-state">还没有缓存的 API 配置，可先填写参数后点击“保存当前 API 配置”。</p>';
+    return;
+  }
+
+  apiConfigListEl.innerHTML = state.settings.apiConfigs
+    .slice()
+    .sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0))
+    .map((item) => {
+      const isActive = item.id === state.settings.activeApiConfigId;
+      const modelText = item.model ? `模型：${item.model}` : "模型：无";
+      const tokenText = item.token ? "密钥：已保存" : "密钥：未保存";
+      return `
+        <article class="api-config-item${isActive ? " active" : ""}">
+          <div class="api-config-item__head">
+            <strong>${escapeHtml(item.name)}</strong>
+            <span class="badge">${isActive ? "当前配置" : "已缓存"}</span>
+          </div>
+          <p class="api-config-item__meta">
+            类型：${escapeHtml(getApiModeLabel(item.mode))}
+            \n地址：${escapeHtml(item.endpoint || "未填写")}
+            \n${escapeHtml(modelText)} · ${escapeHtml(tokenText)}
+          </p>
+          <div class="settings-actions">
+            <button class="ghost-chip" type="button" data-action="switch-api-config" data-config-id="${escapeHtml(
+              item.id
+            )}">
+              一键切换
+            </button>
+            <button class="ghost-chip ghost-chip--danger" type="button" data-action="delete-api-config" data-config-id="${escapeHtml(
+              item.id
+            )}">
+              删除
+            </button>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function saveCurrentApiConfig() {
+  const snapshot = buildApiConfigSnapshot();
+  if (!snapshot.endpoint) {
+    setApiConfigStatus("请先填写 API 地址后再保存配置。", "error");
+    return;
+  }
+
+  const customName = String(apiConfigNameInput?.value || "").trim();
+  state.settings.apiConfigs = normalizeApiConfigs(state.settings.apiConfigs);
+  let targetConfig = null;
+
+  if (customName) {
+    targetConfig =
+      state.settings.apiConfigs.find((item) => item.name === customName) || null;
+  }
+  if (!targetConfig && state.settings.activeApiConfigId) {
+    targetConfig =
+      state.settings.apiConfigs.find((item) => item.id === state.settings.activeApiConfigId) ||
+      null;
+  }
+
+  if (targetConfig) {
+    targetConfig.name = customName || targetConfig.name;
+    targetConfig.mode = snapshot.mode;
+    targetConfig.endpoint = snapshot.endpoint;
+    targetConfig.token = snapshot.token;
+    targetConfig.model = snapshot.model;
+    targetConfig.updatedAt = Date.now();
+  } else {
+    targetConfig = {
+      id: `api_cfg_${Date.now()}_${hashText(`${customName}-${snapshot.endpoint}`)}`,
+      name: customName || `${getApiModeLabel(snapshot.mode)} ${formatDateTime()}`,
+      ...snapshot,
+      updatedAt: Date.now()
+    };
+    state.settings.apiConfigs = [targetConfig, ...state.settings.apiConfigs].slice(
+      0,
+      API_CONFIG_LIMIT
+    );
+  }
+
+  state.settings.activeApiConfigId = targetConfig.id;
+  if (apiConfigNameInput) {
+    apiConfigNameInput.value = "";
+  }
+  saveCurrentSettings();
+  setApiConfigStatus(`API 配置“${targetConfig.name}”已保存并设为当前。`, "success");
+}
+
+function switchApiConfig(configId) {
+  const config =
+    normalizeApiConfigs(state.settings.apiConfigs).find((item) => item.id === configId) || null;
+  if (!config) {
+    setApiConfigStatus("未找到对应的 API 配置。", "error");
+    return;
+  }
+
+  modeSelect.value = normalizeApiMode(config.mode);
+  endpointInput.value = normalizeSettingsEndpointByMode(config.mode, config.endpoint);
+  tokenInput.value = config.token || "";
+  modelInput.value = config.model || getDefaultModelByMode(config.mode);
+  state.settings.activeApiConfigId = config.id;
+  updateModeUI();
+  saveCurrentSettings();
+  setApiConfigStatus(`已一键切换到“${config.name}”。`, "success");
+}
+
+function deleteApiConfig(configId) {
+  const currentConfigs = normalizeApiConfigs(state.settings.apiConfigs);
+  const target = currentConfigs.find((item) => item.id === configId);
+  if (!target) {
+    return;
+  }
+  const confirmed = window.confirm(`确定删除 API 配置“${target.name}”吗？`);
+  if (!confirmed) {
+    return;
+  }
+
+  state.settings.apiConfigs = currentConfigs.filter((item) => item.id !== configId);
+  if (state.settings.activeApiConfigId === configId) {
+    state.settings.activeApiConfigId = "";
+  }
+  saveCurrentSettings();
+  setApiConfigStatus(`API 配置“${target.name}”已删除。`, "success");
+}
+
 function buildPrompt(
   settings,
   feedType = state.activeFeed,
   count = settings.homeCount || DEFAULT_POST_COUNT
 ) {
   const resolvedFeedType = getCurrentContentFeed(feedType);
-  const feedLabel = HOME_FEED_LABELS[resolvedFeedType] || HOME_FEED_LABELS.hot;
-  const feedSource =
-    resolvedFeedType === "entertainment"
-      ? settings.entertainmentText || DEFAULT_SETTINGS.entertainmentText
-      : settings.hotTopics || DEFAULT_SETTINGS.hotTopics;
-  const feedInstruction =
-    resolvedFeedType === "entertainment"
-      ? "当前文娱话题："
-      : "当前热点：";
+  const feedLabel = getFeedLabel(resolvedFeedType);
+  const feedSource = buildFeedSourceText(settings, resolvedFeedType).trim();
+  const feedInstruction = `当前“${feedLabel}”页签文本：`;
+  const resolvedSource =
+    feedSource ||
+    "暂无页签文本，请结合世界观与实时讨论语境自行展开内容。";
 
   return [
     "你是一个负责生成 X 风格中文讨论流的内容助手。",
@@ -853,24 +1471,37 @@ function buildPrompt(
     `请严格输出 JSON 数组，并且包含 ${count} 个对象，不要输出额外解释。`,
     "每个对象必须包含以下字段：displayName, handle, text, tags, replies, reposts, likes, views。",
     "输出必须是可以直接被 JSON.parse 解析的合法 JSON，所有字符串都必须使用双引号包裹。",
-    "text 需要像 X 首页上的真实讨论帖，长度控制在 40 到 130 字之间，语气自然、有观点、有轻微冲突感。",
+    "text 需要像 X 首页上的真实讨论帖，长度控制在 50 到 300 字之间，语气自然、有观点、有轻微冲突感。",
     "tags 必须是数组，至少 2 个、最多 5 个标签；每个标签都必须以 # 开头，例如 #榜单、#行业洞察。",
     "这些标签必须根据该条内容本身提炼，不能空泛重复；text 字段里不要重复输出标签行，标签只放在 tags 数组中。",
-    "严禁直接复制、引用或轻微改写世界观文本、热点文本、文娱文本里的原句。你需要先理解这些设定，再把它们转化成更口语化、更具体的讨论表达。",
+    "严禁直接复制、引用或轻微改写世界观文本或页签文本里的原句。你需要先理解这些设定，再把它们转化成更口语化、更具体的讨论表达。",
     "所有内容都应遵循以下世界观：",
     settings.worldview || DEFAULT_SETTINGS.worldview,
     feedInstruction,
-    feedSource,
-    "补充要求：",
-    settings.extraInstructions || DEFAULT_SETTINGS.extraInstructions,
+    resolvedSource,
     `请保证 ${count} 条内容不重复，角度不同，并贴近中文互联网的实时讨论氛围。`
   ].join("\n\n");
 }
 
 function buildFeedSourceText(settings, feedType = state.activeFeed) {
-  return feedType === "entertainment"
-    ? settings.entertainmentText || DEFAULT_SETTINGS.entertainmentText
-    : settings.hotTopics || DEFAULT_SETTINGS.hotTopics;
+  const customTab = findCustomTabInSettings(settings, feedType);
+  if (customTab) {
+    return customTab.text || "";
+  }
+  return "";
+}
+
+function buildCustomTabsSummary(settings) {
+  const tabs = normalizeCustomTabs(settings.customTabs || []);
+  if (!tabs.length) {
+    return "暂无自定义页签。";
+  }
+  return tabs
+    .map(
+      (tab) =>
+        `${tab.name || "自定义页签"}：${tab.text?.trim() || "尚未填写内容"}`
+    )
+    .join("\n");
 }
 
 function buildMessagesPrompt(
@@ -893,14 +1524,10 @@ function buildMessagesPrompt(
     "私信内容必须让人看得出发件人知道自己是在联系这个具体用户，而不是在对一个模糊的第三方发消息。可以自然提到对方的公开表达风格、身份气质、近期发言方向或适合合作的原因。",
     "世界观文本：",
     settings.worldview || DEFAULT_SETTINGS.worldview,
-    "热点文本：",
-    settings.hotTopics || DEFAULT_SETTINGS.hotTopics,
-    "文娱文本：",
-    settings.entertainmentText || DEFAULT_SETTINGS.entertainmentText,
+    "自定义页签文本：",
+    buildCustomTabsSummary(settings),
     "用户人设：",
     profile.personaPrompt || DEFAULT_PROFILE.personaPrompt,
-    "补充要求：",
-    settings.extraInstructions || DEFAULT_SETTINGS.extraInstructions,
     "请让不同私信发件人的动机不同，例如约稿、交流观点、递送情报、邀请合作或追问某条公开讨论。"
   ].join("\n\n");
 }
@@ -932,12 +1559,8 @@ function buildConversationReplyPrompt(settings, profile, conversation, userMessa
     userMessage,
     "世界观文本：",
     settings.worldview || DEFAULT_SETTINGS.worldview,
-    "热点文本：",
-    settings.hotTopics || DEFAULT_SETTINGS.hotTopics,
-    "文娱文本：",
-    settings.entertainmentText || DEFAULT_SETTINGS.entertainmentText,
-    "补充要求：",
-    settings.extraInstructions || DEFAULT_SETTINGS.extraInstructions,
+    "自定义页签文本：",
+    buildCustomTabsSummary(settings),
     "回复要像真实私聊，长度控制在 18 到 90 字之间，要直接回应用户刚发的内容，也要体现聊天对象知道用户是谁。"
   ].join("\n\n");
 }
@@ -950,9 +1573,10 @@ function buildReplyPrompt(
   parentReply = null,
   count = settings.replyCount || DEFAULT_REPLY_COUNT
 ) {
-  const feedLabel = HOME_FEED_LABELS[feedType] || HOME_FEED_LABELS.hot;
+  const feedLabel = getFeedLabel(feedType);
   const targetText = parentReply ? parentReply.text : rootPost.text;
   const promptTitle = parentReply ? "楼中楼回复" : "主楼回复";
+  const feedSourceText = buildFeedSourceText(settings, feedType);
 
   return [
     `你正在生成 X 风格中文讨论串中的${promptTitle}。`,
@@ -964,23 +1588,19 @@ function buildReplyPrompt(
     "回复生成优先级：",
     "1. 首先直接回应当前帖子或上一层回复的具体内容，抓住文本里的观点、情绪、判断、细节或矛盾点。",
     "2. 识别当前发帖用户的人设，让回复看起来像是在对这样一个具体的人说话，而不是对匿名文本发言。",
-    "3. 再结合整体世界观、热点文本和文娱文本补充背景判断，但这些背景只能辅助，不能盖过帖子内容本身。",
+    "3. 再结合整体世界观与自定义页签文本补充背景判断，但这些背景只能辅助，不能盖过帖子内容本身。",
     "当前发帖用户人设：",
     profile?.personaPrompt || DEFAULT_PROFILE.personaPrompt,
     "整体世界观：",
     settings.worldview || DEFAULT_SETTINGS.worldview,
-    "热点文本：",
-    settings.hotTopics || DEFAULT_SETTINGS.hotTopics,
-    "文娱文本：",
-    settings.entertainmentText || DEFAULT_SETTINGS.entertainmentText,
+    "当前页签参考文本：",
+    feedSourceText || "尚未提供页签文本，请根据帖子语境自行补充。",
     "主楼内容：",
     rootPost.text,
     parentReply ? "当前正在回复的上一层内容：" : "当前需要围绕主楼展开讨论的内容：",
     targetText,
     "当前板块参考素材：",
     buildFeedSourceText(settings, feedType),
-    "补充要求：",
-    settings.extraInstructions || DEFAULT_SETTINGS.extraInstructions,
     "请避免重复句式，并保持楼中讨论的连贯性。"
   ].join("\n\n");
 }
@@ -999,7 +1619,7 @@ function getReplyPreviewSeedPost(settings) {
 
   const resolvedFeedType = getCurrentContentFeed();
   const topicCandidates = parseTopics(buildFeedSourceText(settings, resolvedFeedType));
-  const topic = topicCandidates[0] || HOME_FEED_LABELS[resolvedFeedType] || "当前讨论";
+  const topic = topicCandidates[0] || getFeedLabel(resolvedFeedType) || "当前讨论";
   return {
     id: "reply_preview_seed",
     feedType: resolvedFeedType,
@@ -1027,6 +1647,9 @@ function normalizeReply(item, index = 0, seed = "root") {
 }
 
 function setSettingsStatus(message, tone = "") {
+  if (!settingsStatusEl) {
+    return;
+  }
   settingsStatusEl.textContent = message;
   settingsStatusEl.className = "status-text";
   if (tone) {
@@ -1035,6 +1658,9 @@ function setSettingsStatus(message, tone = "") {
 }
 
 function setHomeStatus(message, tone = "") {
+  if (!homeStatusEl) {
+    return;
+  }
   homeStatusEl.textContent = message;
   homeStatusEl.className = "inline-status";
   if (tone) {
@@ -1073,9 +1699,22 @@ function setPullIndicator(distance = 0, mode = "idle") {
 
 function saveCurrentSettings() {
   state.settings = getCurrentSettings();
-  if (state.settings.mode === "openai") {
-    state.settings.endpoint = normalizeOpenAICompatibleEndpoint(state.settings.endpoint);
-    endpointInput.value = state.settings.endpoint;
+  state.settings.mode = normalizeApiMode(state.settings.mode);
+  state.settings.endpoint = normalizeSettingsEndpointByMode(
+    state.settings.mode,
+    state.settings.endpoint
+  );
+  if (state.settings.mode === "openai" || state.settings.mode === "gemini") {
+    state.settings.model = state.settings.model || getDefaultModelByMode(state.settings.mode);
+    modelInput.value = state.settings.model;
+  }
+  endpointInput.value = state.settings.endpoint;
+  state.settings.apiConfigs = normalizeApiConfigs(state.settings.apiConfigs);
+  if (
+    state.settings.activeApiConfigId &&
+    !state.settings.apiConfigs.some((item) => item.id === state.settings.activeApiConfigId)
+  ) {
+    state.settings.activeApiConfigId = "";
   }
   persistSettings(state.settings);
   updatePromptPreview();
@@ -1085,39 +1724,76 @@ function saveCurrentSettings() {
   renderFollowingPage();
   renderMessagesPage();
   renderProfilePage();
+  renderCustomTabSettings();
+  renderApiConfigList();
 }
 
 function setHomeComposerOpen(isOpen) {
   state.composerOpen = Boolean(isOpen);
-  homeComposerCardEl.classList.toggle("hidden", !state.composerOpen);
-  homeComposerToggleBtn.textContent = state.composerOpen ? "收起发帖" : "发布新帖子";
+  if (homeComposerCardEl) {
+    homeComposerCardEl.classList.toggle("hidden", !state.composerOpen);
+  }
+  if (homeComposerToggleBtn) {
+    homeComposerToggleBtn.textContent = state.composerOpen ? "收起发帖" : "发布新帖子";
+  }
   if (state.composerOpen) {
-    if (!homeComposerInput.value.trim()) {
+    if (homeComposerInput && !homeComposerInput.value.trim()) {
       setHomeComposerStatus("");
     }
     window.setTimeout(() => {
-      homeComposerInput.focus();
+      homeComposerInput?.focus();
     }, 0);
   }
+}
+
+function switchHomeFeed(nextFeed) {
+  if (nextFeed === "tags") {
+    state.activeFeed = "tags";
+    renderActiveFeed();
+    setHomeStatus("当前查看：热门标签", "");
+    return;
+  }
+
+  const resolvedFeed = isCustomFeed(nextFeed) ? nextFeed : getDefaultVisibleHomeFeed();
+  state.activeFeed = resolvedFeed;
+  if (isCustomFeed(resolvedFeed)) {
+    state.lastContentFeed = resolvedFeed;
+    lastKnownContentFeed = resolvedFeed;
+  }
+  state.activeTagFilter = "";
+  renderActiveFeed();
+  updatePromptPreview();
+  updateMessagePromptPreview();
+  updateReplyPromptPreview();
+  updateInsightPanel();
+  setHomeStatus(`当前查看：${getFeedLabel(state.activeFeed)}`, "");
 }
 
 function switchTab(tabName) {
   state.activeTab = tabName;
   Object.entries(pages).forEach(([name, page]) => {
-    page.classList.toggle("active", name === tabName);
+    if (page) {
+      page.classList.toggle("active", name === tabName);
+    }
   });
 
   navItems.forEach((item) => {
     item.classList.toggle("active", item.dataset.tab === tabName);
   });
 
-  pageTitleEl.textContent = pageTitleMap[tabName] || "首页";
+  if (pageTitleEl) {
+    pageTitleEl.textContent = pageTitleMap[tabName] || "首页";
+  }
   const isHomeTab = tabName === "home";
   const isProfileTab = tabName === "profile";
-  topRefreshBtn.hidden = !isHomeTab;
-  homeComposerToggleBtn.hidden = !isHomeTab;
-  topRefreshBtn.style.display = isHomeTab ? "inline-flex" : "none";
-  homeComposerToggleBtn.style.display = isHomeTab ? "inline-flex" : "none";
+  if (topRefreshBtn) {
+    topRefreshBtn.hidden = !isHomeTab;
+    topRefreshBtn.style.display = isHomeTab ? "inline-flex" : "none";
+  }
+  if (homeComposerToggleBtn) {
+    homeComposerToggleBtn.hidden = !isHomeTab;
+    homeComposerToggleBtn.style.display = isHomeTab ? "inline-flex" : "none";
+  }
   if (profileEditToggleBtn) {
     profileEditToggleBtn.hidden = !isProfileTab;
     profileEditToggleBtn.style.display = isProfileTab ? "inline-flex" : "none";
@@ -1129,10 +1805,16 @@ function switchTab(tabName) {
 }
 
 function updatePromptPreview() {
+  if (!promptPreviewEl) {
+    return;
+  }
   promptPreviewEl.textContent = buildPrompt(getCurrentSettings(), getCurrentContentFeed());
 }
 
 function updateMessagePromptPreview() {
+  if (!messagePromptPreviewEl) {
+    return;
+  }
   messagePromptPreviewEl.textContent = buildMessagesPrompt(
     getCurrentSettings(),
     getCurrentProfile(),
@@ -1285,11 +1967,19 @@ function mergeFeedHistory(existingPosts, incomingPosts, limit = MAX_FEED_ITEMS) 
   ]).slice(0, limit);
 }
 
-function normalizePost(item, index = 0) {
+function normalizePost(item, index = 0, fallbackFeedType = DEFAULT_CONTENT_FEED) {
   const [fallbackName, fallbackHandle] = FEED_NAMES[index % FEED_NAMES.length];
   const stableSeed = `${item?.text || ""}-${item?.displayName || fallbackName}-${index}`;
-  const feedType = item?.feedType || undefined;
-  const resolvedFeedType = getCurrentContentFeed(feedType);
+  const incomingFeedType =
+    typeof item?.feedType === "string" ? String(item.feedType).trim() : "";
+  const normalizedIncomingFeedType = incomingFeedType === "hot" ? "entertainment" : incomingFeedType;
+  const resolvedFallbackFeedType =
+    typeof fallbackFeedType === "string" && String(fallbackFeedType).trim()
+      ? String(fallbackFeedType).trim()
+      : DEFAULT_CONTENT_FEED;
+  const normalizedFallbackFeedType =
+    resolvedFallbackFeedType === "hot" ? "entertainment" : resolvedFallbackFeedType;
+  const resolvedFeedType = normalizedIncomingFeedType || normalizedFallbackFeedType;
   const resolvedTags = getRenderableTags(item, resolvedFeedType);
   return {
     id: item?.id || `post_${index}_${hashText(stableSeed)}`,
@@ -1304,7 +1994,7 @@ function normalizePost(item, index = 0) {
     time: item?.time || `${Math.max(1, index + 1)}m`,
     edited: Boolean(item?.edited),
     authorOwned: Boolean(item?.authorOwned),
-    feedType
+    feedType: resolvedFeedType
   };
 }
 
@@ -1353,9 +2043,12 @@ function renderFeedPost(post, bucketName = state.activeFeed) {
 }
 
 function renderFeed(posts) {
+  if (!feedEl) {
+    return;
+  }
   if (!posts.length) {
     feedEl.innerHTML = `<p class="empty-state">${escapeHtml(
-      HOME_FEED_LABELS[state.activeFeed]
+      getFeedLabel(state.activeFeed)
     )} 还没有内容，请先刷新当前分页签。</p>`;
     return;
   }
@@ -1363,14 +2056,28 @@ function renderFeed(posts) {
   feedEl.innerHTML = posts.map((post) => renderFeedPost(post, state.activeFeed)).join("");
 }
 
+function getTagStatisticBuckets() {
+  const customBuckets = state.customTabs
+    .map((tab) => tab.id)
+    .filter((bucketName) => Array.isArray(state.feeds[bucketName]));
+  if (customBuckets.length) {
+    return customBuckets;
+  }
+  if (Array.isArray(state.feeds[DEFAULT_CONTENT_FEED])) {
+    return [DEFAULT_CONTENT_FEED];
+  }
+  return Object.keys(state.feeds).filter((key) => isTimelineFeed(key));
+}
+
 function buildPopularTagStats() {
   const counts = new Map();
-  ["hot", "entertainment"].forEach((bucketName) => {
+  const bucketNames = getTagStatisticBuckets();
+  bucketNames.forEach((bucketName) => {
     (state.feeds[bucketName] || []).forEach((post) => {
       getRenderableTags(post, bucketName).forEach((tag) => {
-        const current = counts.get(tag) || { tag, total: 0, hot: 0, entertainment: 0 };
+        const current = counts.get(tag) || { tag, total: 0, feeds: {} };
         current.total += 1;
-        current[bucketName] += 1;
+        current.feeds[bucketName] = (current.feeds[bucketName] || 0) + 1;
         counts.set(tag, current);
       });
     });
@@ -1385,6 +2092,9 @@ function buildPopularTagStats() {
 }
 
 function renderPopularTags() {
+  if (!feedEl) {
+    return;
+  }
   if (state.activeTagFilter) {
     const filteredPosts = getTagFilteredPosts(state.activeTagFilter);
     feedEl.innerHTML = `
@@ -1405,26 +2115,32 @@ function renderPopularTags() {
   const tagStats = buildPopularTagStats();
   if (!tagStats.length) {
     feedEl.innerHTML =
-      '<p class="empty-state">当前缓存里还没有可统计的标签，请先刷新“热点消息”或“文娱”。</p>';
+      '<p class="empty-state">当前缓存里还没有可统计的标签，请先刷新首页或先创建自定义页签内容。</p>';
     return;
   }
 
   feedEl.innerHTML = `
     <section class="tag-stats-list">
       ${tagStats
-        .map(
-          (item) => `
+        .map((item, index) => {
+          const feedSummary = Object.entries(item.feeds || {})
+            .filter(([feedId]) => feedId !== DEFAULT_CONTENT_FEED)
+            .map(([feedId, total]) => `${escapeHtml(getFeedLabel(feedId))} ${escapeHtml(String(total))} 条`)
+            .join(" · ");
+          const tagLabel = `${item.tag}${index === 0 ? " 🔥" : ""}`;
+          const feedSummaryMarkup = feedSummary
+            ? `<p class="tag-stat-meta">${feedSummary}</p>`
+            : "";
+          return `
             <article class="tag-stat-card" data-action="open-tag-feed" data-tag="${escapeHtml(item.tag)}">
               <div class="tag-stat-card__head">
-                <strong class="post-tag">${escapeHtml(item.tag)}</strong>
+                <strong class="post-tag">${escapeHtml(tagLabel)}</strong>
                 <span class="badge">${escapeHtml(String(item.total))} 条</span>
               </div>
-              <p class="tag-stat-meta">热点消息 ${escapeHtml(String(item.hot))} 条 · 文娱 ${escapeHtml(
-                String(item.entertainment)
-              )} 条</p>
+              ${feedSummaryMarkup}
             </article>
-          `
-        )
+          `;
+        })
         .join("")}
     </section>
   `;
@@ -1514,9 +2230,38 @@ function renderReplyBranch(postId, replies, bucketName = state.activeFeed, depth
 }
 
 function renderHomeTabs() {
-  miniTabs.forEach((tab) => {
-    tab.classList.toggle("active", tab.dataset.feed === state.activeFeed);
-  });
+  if (!homeMiniTabsContainer) {
+    return;
+  }
+
+  const customFeeds = state.customTabs.map((tab) => ({
+    id: tab.id,
+    label: tab.name || "自定义页签"
+  }));
+
+  if (!customFeeds.some((feed) => feed.id === state.activeFeed) && state.activeFeed !== "tags") {
+    state.activeFeed = getDefaultVisibleHomeFeed();
+  }
+
+  const customButtons = customFeeds
+    .map(
+      (feed) => `
+        <button class="mini-tab${state.activeFeed === feed.id ? " active" : ""}" data-feed="${escapeHtml(
+          feed.id
+        )}" type="button">
+          ${escapeHtml(feed.label)}
+        </button>
+      `
+    )
+    .join("");
+
+  const tagsButton = `
+    <button class="mini-tab${state.activeFeed === "tags" ? " active" : ""}" data-feed="tags" type="button">
+      ${escapeHtml(HOME_FEED_LABELS.tags)}
+    </button>
+  `;
+
+  homeMiniTabsContainer.innerHTML = tagsButton + customButtons;
 }
 
 function renderActiveFeed() {
@@ -1528,11 +2273,302 @@ function renderActiveFeed() {
   renderFeed(state.feeds[state.activeFeed] || []);
 }
 
+function setCustomTabFormStatus(message, tone = "") {
+  if (!customTabFormStatusEl) {
+    return;
+  }
+  customTabFormStatusEl.textContent = message;
+  customTabFormStatusEl.className = "status-text";
+  if (tone) {
+    customTabFormStatusEl.classList.add(tone);
+  }
+}
+
+function resetCustomTabForm(preserveStatus = false) {
+  state.customTabEditingId = "";
+  if (customTabNameInput) {
+    customTabNameInput.value = "";
+  }
+  if (customTabTextInput) {
+    customTabTextInput.value = "";
+  }
+  if (!preserveStatus) {
+    setCustomTabFormStatus("");
+  }
+  renderCustomTabsManager();
+}
+
+function setCustomTabsPanelOpen(isOpen) {
+  if (!customTabsPanel) {
+    return;
+  }
+  state.customTabEditorOpen = Boolean(isOpen);
+  customTabsPanel.classList.toggle("hidden", !state.customTabEditorOpen);
+  if (state.customTabEditorOpen) {
+    renderCustomTabsManager();
+  }
+}
+
+function startCustomTabEdit(tabId) {
+  const tab = getCustomTab(tabId);
+  if (!tab) {
+    return;
+  }
+  state.customTabEditingId = tabId;
+  if (customTabNameInput) {
+    customTabNameInput.value = tab.name || "";
+  }
+  if (customTabTextInput) {
+    customTabTextInput.value = tab.text || "";
+  }
+  setCustomTabFormStatus(`正在编辑“${tab.name || "自定义页签"}”`, "");
+  renderCustomTabsManager();
+}
+
+function deleteCustomTab(tabId) {
+  const tab = getCustomTab(tabId);
+  if (!tab) {
+    return;
+  }
+  const confirmed = window.confirm(`确定删除“${tab.name || "自定义页签"}”页签吗？`);
+  if (!confirmed) {
+    return;
+  }
+  const nextTabs = state.customTabs.filter((item) => item.id !== tabId);
+  commitCustomTabs(nextTabs);
+  if (state.customTabEditingId === tabId) {
+    resetCustomTabForm(true);
+  } else {
+    renderCustomTabsManager();
+  }
+  setCustomTabFormStatus("自定义页签已删除。", "success");
+}
+
+function clearCustomTabDragClasses() {
+  if (!customTabsListEl) {
+    return;
+  }
+  customTabsListEl
+    .querySelectorAll(".custom-tab-item.is-dragging, .custom-tab-item.drag-over")
+    .forEach((item) => item.classList.remove("is-dragging", "drag-over"));
+}
+
+function reorderCustomTabs(draggedId, targetId) {
+  if (!draggedId || !targetId || draggedId === targetId) {
+    return;
+  }
+
+  const sourceIndex = state.customTabs.findIndex((tab) => tab.id === draggedId);
+  const targetIndex = state.customTabs.findIndex((tab) => tab.id === targetId);
+  if (sourceIndex === -1 || targetIndex === -1) {
+    return;
+  }
+
+  const nextTabs = [...state.customTabs];
+  const [draggedTab] = nextTabs.splice(sourceIndex, 1);
+  const resolvedTargetIndex = nextTabs.findIndex((tab) => tab.id === targetId);
+  if (!draggedTab || resolvedTargetIndex === -1) {
+    return;
+  }
+  nextTabs.splice(resolvedTargetIndex, 0, draggedTab);
+  commitCustomTabs(nextTabs);
+  setCustomTabFormStatus("已更新自定义页签顺序。", "success");
+}
+
+function renderCustomTabsManager() {
+  if (!customTabsListEl || !customTabForm) {
+    return;
+  }
+
+  if (!state.customTabs.length) {
+    customTabsListEl.innerHTML =
+      '<p class="empty-state">还没有自定义页签，使用下方表单新增。</p>';
+  } else {
+    customTabsListEl.innerHTML = state.customTabs
+      .map((tab) => {
+        const snippet = truncate(tab.text || "尚未设置文本", 88);
+        return `
+          <article class="custom-tab-item" data-tab-id="${escapeHtml(tab.id)}" draggable="true">
+            <div>
+              <strong>${escapeHtml(tab.name || "未命名页签")}</strong>
+              <p class="tag-stat-meta">${escapeHtml(snippet)}</p>
+            </div>
+            <div class="custom-tab-item__actions">
+              <button class="ghost-chip" type="button" data-action="edit-custom-tab" data-tab-id="${escapeHtml(
+                tab.id
+              )}">编辑</button>
+              <button class="ghost-chip ghost-chip--danger" type="button" data-action="delete-custom-tab" data-tab-id="${escapeHtml(
+                tab.id
+              )}">删除</button>
+            </div>
+          </article>
+        `;
+      })
+      .join("");
+  }
+
+  if (customTabsLimitHintEl) {
+    const remaining = Math.max(0, CUSTOM_TAB_LIMIT - state.customTabs.length);
+    customTabsLimitHintEl.textContent =
+      remaining > 0
+        ? `还可新增 ${remaining} 个自定义页签。`
+        : `已达到 ${CUSTOM_TAB_LIMIT} 个自定义页签上限，需要删除后才能新增。`;
+  }
+
+  const isEditing = Boolean(state.customTabEditingId);
+  const reachedLimit = state.customTabs.length >= CUSTOM_TAB_LIMIT;
+  const disableCreation = !isEditing && reachedLimit;
+  const saveButton = customTabForm.querySelector("#custom-tab-save-btn");
+  [customTabNameInput, customTabTextInput, saveButton].forEach((field) => {
+    if (field) {
+      field.disabled = disableCreation;
+    }
+  });
+  if (disableCreation) {
+    setCustomTabFormStatus("已达到自定义页签上限，请删除后再新增。", "error");
+  } else if (!isEditing && customTabFormStatusEl?.classList.contains("error")) {
+    setCustomTabFormStatus("");
+  }
+}
+
+function renderCustomTabSettings() {
+  if (!customTabSettingsListEl || !customTabSettingsEmptyEl) {
+    return;
+  }
+
+  if (!state.customTabs.length) {
+    customTabSettingsEmptyEl.style.display = "block";
+    customTabSettingsListEl.innerHTML = "";
+    return;
+  }
+
+  customTabSettingsEmptyEl.style.display = "none";
+  const currentSettings = getCurrentSettings();
+  const postCount = currentSettings.homeCount || DEFAULT_POST_COUNT;
+  customTabSettingsListEl.innerHTML = state.customTabs
+    .map((tab) => {
+      const promptPreview = buildPrompt(currentSettings, tab.id, postCount);
+      return `
+        <article class="custom-tab-settings-item" data-custom-tab-id="${escapeHtml(tab.id)}">
+          <div class="custom-tab-settings-head">
+            <strong>${escapeHtml(tab.name || "未命名页签")}</strong>
+            <span class="badge">${escapeHtml(getFeedLabel(tab.id))}</span>
+          </div>
+          <label>
+            页签名称
+            <input type="text" data-field="name" maxlength="10" value="${escapeHtml(tab.name || "")}" />
+          </label>
+          <label>
+            页签文本
+            <textarea data-field="text" rows="4" placeholder="输入该页签要聚焦的主题、设定或提示。">${escapeHtml(
+              tab.text || ""
+            )}</textarea>
+          </label>
+          <p class="tag-stat-meta">Prompt 预览</p>
+          <pre class="prompt-preview custom-tab-prompt">${escapeHtml(promptPreview)}</pre>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function handleCustomTabFormSubmit() {
+  if (!customTabForm) {
+    return;
+  }
+  const rawName = customTabNameInput?.value || "";
+  const rawText = customTabTextInput?.value || "";
+  const name = rawName.trim().slice(0, 10) || "自定义页签";
+  const text = rawText.trim();
+  if (!text) {
+    setCustomTabFormStatus("请填写页签文本，用于生成该页签的讨论内容。", "error");
+    return;
+  }
+
+  if (state.customTabEditingId) {
+    const tabId = state.customTabEditingId;
+    const nextTabs = state.customTabs.map((tab) =>
+      tab.id === tabId
+        ? {
+            ...tab,
+            name,
+            text
+          }
+        : tab
+    );
+    commitCustomTabs(nextTabs);
+    setCustomTabFormStatus("自定义页签已更新。", "success");
+    resetCustomTabForm(true);
+    return;
+  }
+
+  if (state.customTabs.length >= CUSTOM_TAB_LIMIT) {
+    setCustomTabFormStatus("已达到自定义页签上限，请删除后再新增。", "error");
+    return;
+  }
+
+  const tabId = createCustomTabId(name);
+  const nextTabs = [...state.customTabs, { id: tabId, name, text }];
+  commitCustomTabs(nextTabs);
+  switchHomeFeed(tabId);
+  setCustomTabFormStatus("自定义页签已保存。", "success");
+  resetCustomTabForm(true);
+}
+
+function handleCustomTabSettingsInput(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLTextAreaElement)) {
+    return;
+  }
+  const wrapper = target.closest("[data-custom-tab-id]");
+  if (!(wrapper instanceof HTMLElement)) {
+    return;
+  }
+  const tabId = wrapper.dataset.customTabId;
+  const field = target.dataset.field;
+  if (!tabId || !field) {
+    return;
+  }
+
+  const index = state.customTabs.findIndex((tab) => tab.id === tabId);
+  if (index === -1) {
+    return;
+  }
+
+  const value =
+    field === "name" ? target.value.trim().slice(0, 10) || "自定义页签" : target.value;
+  state.customTabs[index] = {
+    ...state.customTabs[index],
+    [field]: value
+  };
+  state.settings.customTabs = [...state.customTabs];
+  persistSettings(state.settings);
+  if (field === "name") {
+    const headEl = wrapper.querySelector(".custom-tab-settings-head strong");
+    if (headEl) {
+      headEl.textContent = value;
+    }
+    renderHomeTabs();
+    renderCustomTabsManager();
+  }
+
+  const currentSettings = getCurrentSettings();
+  const promptPreview = buildPrompt(
+    currentSettings,
+    tabId,
+    currentSettings.homeCount || DEFAULT_POST_COUNT
+  );
+  const previewEl = wrapper.querySelector(".custom-tab-prompt");
+  if (previewEl) {
+    previewEl.textContent = promptPreview;
+  }
+}
+
 function getTagFilteredPosts(tag) {
-  return dedupePosts([
-    ...(state.feeds.hot || []),
-    ...(state.feeds.entertainment || [])
-  ]).filter((post) => getRenderableTags(post, post.feedType || "hot").includes(tag));
+  const timelinePosts = getTagStatisticBuckets().flatMap((key) => state.feeds[key] || []);
+  return dedupePosts(timelinePosts).filter((post) =>
+    getRenderableTags(post, post.feedType || DEFAULT_CONTENT_FEED).includes(tag)
+  );
 }
 
 function findPostById(postId, bucketName = state.activeFeed) {
@@ -1543,9 +2579,10 @@ function findPostById(postId, bucketName = state.activeFeed) {
     return bucketPost;
   }
 
-  const allFeedPost = ["hot", "entertainment"].flatMap((bucket) => state.feeds[bucket] || []).find(
-    (item) => item.id === postId
-  );
+  const allFeedPost = Object.keys(state.feeds)
+    .filter((key) => isTimelineFeed(key))
+    .flatMap((bucket) => state.feeds[bucket] || [])
+    .find((item) => item.id === postId);
   if (allFeedPost) {
     return allFeedPost;
   }
@@ -1554,7 +2591,15 @@ function findPostById(postId, bucketName = state.activeFeed) {
 }
 
 function renderFollowingPage() {
-  const topics = parseTopics(getCurrentSettings().hotTopics);
+  if (!followingListEl) {
+    return;
+  }
+  const settings = getCurrentSettings();
+  const customTopics = normalizeCustomTabs(settings.customTabs || []).flatMap((tab) =>
+    parseTopics(tab.text)
+  );
+  const worldviewTopics = parseWorldviewFragments(settings.worldview);
+  const topics = [...customTopics, ...worldviewTopics].filter(Boolean);
   followingListEl.innerHTML = FOLLOWING_CARDS.map((item, index) => {
     const relatedTopic = topics[index] || "世界观扩展";
     return `
@@ -1573,6 +2618,9 @@ function renderFollowingPage() {
 }
 
 function renderMessagesPage() {
+  if (!messagesListEl) {
+    return;
+  }
   if (!state.directMessages.length) {
     state.activeConversationId = null;
     messagesListEl.innerHTML =
@@ -1652,6 +2700,18 @@ function renderMessagesPage() {
 }
 
 function renderProfilePage() {
+  if (
+    !profileAvatarEl ||
+    !profileUsernameEl ||
+    !profileBioEl ||
+    !profileHandleEl ||
+    !profileFollowingEl ||
+    !profileFollowersEl ||
+    !profilePostCountEl ||
+    !profilePostsEl
+  ) {
+    return;
+  }
   const profile = state.profile;
   const postCount = state.profilePosts.length;
   const resolvedUserId = normalizeProfileUserId(
@@ -1717,7 +2777,7 @@ function renderProfilePage() {
             ${renderEditedNote(post)}
           </div>
         `;
-      const tagMarkup = renderPostTags(post, post.feedType || "hot");
+      const tagMarkup = renderPostTags(post, post.feedType || DEFAULT_CONTENT_FEED);
 
       return `
         <article class="post" data-post-id="${escapeHtml(post.id)}">
@@ -1777,7 +2837,7 @@ function renderProfilePage() {
 }
 
 function buildRequestBody(settings, prompt, count = DEFAULT_POST_COUNT) {
-  if (settings.mode === "openai") {
+  if (normalizeApiMode(settings.mode) === "openai") {
     return {
       model: settings.model || DEFAULT_SETTINGS.model,
       temperature: normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE),
@@ -1792,6 +2852,23 @@ function buildRequestBody(settings, prompt, count = DEFAULT_POST_COUNT) {
         }
       ],
       stream: false
+    };
+  }
+
+  if (normalizeApiMode(settings.mode) === "gemini") {
+    return {
+      systemInstruction: {
+        parts: [{ text: "你只输出 JSON 数组，不要输出额外解释。" }]
+      },
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: prompt }]
+        }
+      ],
+      generationConfig: {
+        temperature: normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE)
+      }
     };
   }
 
@@ -1810,6 +2887,17 @@ function resolveMessage(payload) {
 
   if (Array.isArray(payload)) {
     return JSON.stringify(payload);
+  }
+
+  const geminiParts = payload?.candidates?.[0]?.content?.parts;
+  if (Array.isArray(geminiParts)) {
+    const merged = geminiParts
+      .map((item) => item?.text || "")
+      .join("\n")
+      .trim();
+    if (merged) {
+      return merged;
+    }
   }
 
   const content = payload?.choices?.[0]?.message?.content;
@@ -1879,7 +2967,11 @@ function parseJsonArrayWithRepair(jsonText, errorMessage) {
   }
 }
 
-function parseGeneratedPosts(rawText, count = DEFAULT_POST_COUNT) {
+function parseGeneratedPosts(
+  rawText,
+  count = DEFAULT_POST_COUNT,
+  feedType = DEFAULT_CONTENT_FEED
+) {
   const jsonText = extractJsonArray(rawText);
   if (!jsonText) {
     throw new Error("接口已返回内容，但没有找到 JSON 数组。");
@@ -1893,7 +2985,9 @@ function parseGeneratedPosts(rawText, count = DEFAULT_POST_COUNT) {
     throw new Error("接口返回的 JSON 不是有效的讨论数组。");
   }
 
-  return parsed.slice(0, count).map((item, index) => normalizePost(item, index));
+  return parsed
+    .slice(0, count)
+    .map((item, index) => normalizePost(item, index, feedType));
 }
 
 function parseGeneratedReplies(rawText, count = DEFAULT_REPLY_COUNT, seed = "reply") {
@@ -1921,7 +3015,7 @@ function buildLocalReplies(
   count = settings.replyCount || DEFAULT_REPLY_COUNT
 ) {
   const parentText = parentReply ? parentReply.text : rootPost.text;
-  const topic = getRenderableTags(rootPost, feedType)[0] || HOME_FEED_LABELS[feedType] || "当前讨论";
+  const topic = getRenderableTags(rootPost, feedType)[0] || getFeedLabel(feedType) || "当前讨论";
   const focus = truncate(parentText, 30);
   const personaHint = profile?.personaPrompt
     ? `像你这种“${truncate(profile.personaPrompt, 18)}”的人设说出这段话，`
@@ -1958,7 +3052,7 @@ function buildLocalReplies(
   });
 }
 
-function buildLocalWorldviewAngle(fragment, feedType = "hot", index = 0) {
+function buildLocalWorldviewAngle(fragment, feedType = DEFAULT_CONTENT_FEED, index = 0) {
   const source = String(fragment || "");
   const genericAngles =
     feedType === "entertainment"
@@ -2034,18 +3128,12 @@ function normalizeDirectMessage(item, index = 0) {
   };
 }
 
-function buildLocalPosts(settings, count = DEFAULT_POST_COUNT, feedType = "hot") {
-  const sourceText =
-    feedType === "entertainment"
-      ? settings.entertainmentText || DEFAULT_SETTINGS.entertainmentText
-      : settings.hotTopics || DEFAULT_SETTINGS.hotTopics;
+function buildLocalPosts(settings, count = DEFAULT_POST_COUNT, feedType = DEFAULT_CONTENT_FEED) {
+  const sourceText = buildFeedSourceText(settings, feedType);
   const topics = parseTopics(sourceText);
   const worldviewParts = parseWorldviewFragments(settings.worldview);
-  const baseTopics = topics.length
-    ? topics
-    : feedType === "entertainment"
-      ? ["电影口碑", "综艺热梗", "演出巡演"]
-      : ["AI Agent", "产品增长", "独立开发"];
+  const fallbackTopic = feedType === "entertainment" ? "文娱趋势" : getFeedLabel(feedType) || "当前讨论";
+  const baseTopics = topics.length ? topics : [fallbackTopic];
   const worldviewBase = worldviewParts.length
     ? worldviewParts
     : ["这个社区偏爱真实、锋利且能引发互动的观点。"];
@@ -2067,8 +3155,8 @@ function buildLocalPosts(settings, count = DEFAULT_POST_COUNT, feedType = "hot")
     "这件事不是有没有机会，而是谁更快形成判断。"
   ];
   const tagPools = {
-    hot: ["#热点追踪", "#行业洞察", "#趋势判断", "#平台观察", "#公共讨论"],
-    entertainment: ["#文娱热议", "#口碑观察", "#热搜现场", "#角色讨论", "#二创发酵"]
+    entertainment: ["#文娱热议", "#口碑观察", "#热搜现场", "#角色讨论", "#二创发酵"],
+    default: ["#趋势观察", "#行业洞察", "#观点交锋", "#平台观察", "#公共讨论"]
   };
 
   return Array.from({ length: count }, (_, index) => {
@@ -2080,8 +3168,9 @@ function buildLocalPosts(settings, count = DEFAULT_POST_COUNT, feedType = "hot")
     );
     const [displayName, handle] = FEED_NAMES[index % FEED_NAMES.length];
     const text = `${openings[index % openings.length]}${topic}，而是它背后暴露出的结构变化。${worldview} ${endings[index % endings.length]}`;
+    const pool = tagPools[feedType] || tagPools.default;
     const tags = ensurePostTags(
-      [topic, tagPools[feedType][index % tagPools[feedType].length], tagPools[feedType][(index + 2) % tagPools[feedType].length]],
+      [topic, pool[index % pool.length], pool[(index + 2) % pool.length]],
       feedType,
       index
     );
@@ -2096,9 +3185,11 @@ function buildLocalPosts(settings, count = DEFAULT_POST_COUNT, feedType = "hot")
         reposts: 7 + index * 4,
         likes: 80 + index * 29,
         views: 1300 + index * 520,
-        time: `${index + 1}m`
+        time: `${index + 1}m`,
+        feedType
       },
-      index
+      index,
+      feedType
     );
   });
 }
@@ -2108,9 +3199,11 @@ function buildLocalDirectMessages(
   profile,
   count = settings.dmCount || DEFAULT_DM_COUNT
 ) {
-  const hotTopics = parseTopics(settings.hotTopics);
-  const entertainmentTopics = parseTopics(settings.entertainmentText);
-  const allTopics = [...hotTopics, ...entertainmentTopics].filter(Boolean);
+  const customTabTopics = normalizeCustomTabs(settings.customTabs || []).flatMap((tab) =>
+    parseTopics(tab.text).map((topic) => `${tab.name || "自定义页签"} · ${topic}`)
+  );
+  const worldviewTopics = parseWorldviewFragments(settings.worldview);
+  const allTopics = [...customTabTopics, ...worldviewTopics].filter(Boolean);
   const topics = allTopics.length ? allTopics : ["当前讨论"];
   const senders = [
     "内容合作者",
@@ -2176,7 +3269,7 @@ function setHomeComposerStatus(message, tone = "") {
 function submitHomePost() {
   const content = homeComposerInput.value.trim();
   const tagsInput = homeComposerTagsInput?.value.trim() || "";
-  const targetFeed = getCurrentContentFeed();
+  const targetFeed = getCurrentContentFeed(state.activeFeed);
   if (!content) {
     setHomeComposerStatus("请输入帖子内容后再发送。", "error");
     return;
@@ -2184,9 +3277,13 @@ function submitHomePost() {
 
   const post = createAuthoredPost(content, targetFeed, tagsInput);
   state.profilePosts = [post, ...state.profilePosts];
-  state.feeds[targetFeed] = [post, ...(state.feeds[targetFeed] || [])];
+  state.feeds[targetFeed] = [post, ...(state.feeds[targetFeed] || [])].slice(
+    0,
+    MAX_FEED_ITEMS
+  );
   persistProfilePosts(state.profilePosts);
   persistFeeds(state.feeds);
+  persistDiscussions();
   renderActiveFeed();
   renderProfilePage();
   updateReplyPromptPreview();
@@ -2204,33 +3301,30 @@ async function requestGeneratedPosts(
   count = settings.homeCount || DEFAULT_POST_COUNT
 ) {
   const resolvedFeedType = getCurrentContentFeed(feedType);
-  const normalizedEndpoint = normalizeOpenAICompatibleEndpoint(settings.endpoint);
-  settings.endpoint = normalizedEndpoint;
+  const requestEndpoint = resolveApiRequestEndpoint(settings);
+  settings.endpoint = requestEndpoint;
 
-  if (!settings.endpoint) {
+  if (!requestEndpoint) {
     throw new Error("未配置 API 地址，已切换为本地回退生成。");
   }
 
-  if (settings.mode === "openai" && !settings.model) {
+  if (normalizeApiMode(settings.mode) === "openai" && !settings.model) {
     throw new Error("DeepSeek / OpenAI 兼容模式需要填写模型名称。");
+  }
+  if (normalizeApiMode(settings.mode) === "gemini" && !settings.token) {
+    throw new Error("Gemini 模式需要填写 API Key。");
   }
 
   const prompt = buildPrompt(settings, resolvedFeedType, count);
-  const headers = {
-    "Content-Type": "application/json"
-  };
+  const headers = buildRequestHeaders(settings);
 
-  if (settings.token) {
-    headers.Authorization = `Bearer ${settings.token}`;
-  }
-
-  const response = await fetch(settings.endpoint, {
+  const response = await fetch(requestEndpoint, {
     method: "POST",
     headers,
     body: JSON.stringify(buildRequestBody(settings, prompt, count))
   });
 
-  if (response.status === 404 && settings.endpoint.includes("api.deepseek.com")) {
+  if (response.status === 404 && requestEndpoint.includes("api.deepseek.com")) {
     throw new Error(
       "DeepSeek 接口返回 404。请确认地址为 https://api.deepseek.com/chat/completions，而不是 /v1/chat/completions 或仅填写域名。"
     );
@@ -2254,7 +3348,7 @@ async function requestGeneratedPosts(
     throw new Error("接口请求成功，但响应中没有可解析的文本。");
   }
 
-  return parseGeneratedPosts(message, count);
+  return parseGeneratedPosts(message, count, resolvedFeedType);
 }
 
 async function requestGeneratedDirectMessages(
@@ -2262,23 +3356,20 @@ async function requestGeneratedDirectMessages(
   profile,
   count = settings.dmCount || DEFAULT_DM_COUNT
 ) {
-  const normalizedEndpoint = normalizeOpenAICompatibleEndpoint(settings.endpoint);
-  settings.endpoint = normalizedEndpoint;
+  const requestEndpoint = resolveApiRequestEndpoint(settings);
+  settings.endpoint = requestEndpoint;
 
-  if (!settings.endpoint) {
+  if (!requestEndpoint) {
     throw new Error("未配置 API 地址，已切换为本地回退生成。");
+  }
+  if (normalizeApiMode(settings.mode) === "gemini" && !settings.token) {
+    throw new Error("Gemini 模式需要填写 API Key。");
   }
 
   const prompt = buildMessagesPrompt(settings, profile, count);
-  const headers = {
-    "Content-Type": "application/json"
-  };
+  const headers = buildRequestHeaders(settings);
 
-  if (settings.token) {
-    headers.Authorization = `Bearer ${settings.token}`;
-  }
-
-  const response = await fetch(settings.endpoint, {
+  const response = await fetch(requestEndpoint, {
     method: "POST",
     headers,
     body: JSON.stringify(buildRequestBody(settings, prompt, count))
@@ -2316,23 +3407,20 @@ async function requestGeneratedDirectMessages(
 }
 
 async function requestGeneratedConversationReply(settings, profile, conversation, userMessage) {
-  const normalizedEndpoint = normalizeOpenAICompatibleEndpoint(settings.endpoint);
-  settings.endpoint = normalizedEndpoint;
+  const requestEndpoint = resolveApiRequestEndpoint(settings);
+  settings.endpoint = requestEndpoint;
 
-  if (!settings.endpoint) {
+  if (!requestEndpoint) {
     throw new Error("未配置 API 地址，已切换为本地回退生成。");
+  }
+  if (normalizeApiMode(settings.mode) === "gemini" && !settings.token) {
+    throw new Error("Gemini 模式需要填写 API Key。");
   }
 
   const prompt = buildConversationReplyPrompt(settings, profile, conversation, userMessage);
-  const headers = {
-    "Content-Type": "application/json"
-  };
+  const headers = buildRequestHeaders(settings);
 
-  if (settings.token) {
-    headers.Authorization = `Bearer ${settings.token}`;
-  }
-
-  const response = await fetch(settings.endpoint, {
+  const response = await fetch(requestEndpoint, {
     method: "POST",
     headers,
     body: JSON.stringify(buildRequestBody(settings, prompt, 1))
@@ -2402,23 +3490,20 @@ async function requestGeneratedReplies(
   parentReply = null,
   count = settings.replyCount || DEFAULT_REPLY_COUNT
 ) {
-  const normalizedEndpoint = normalizeOpenAICompatibleEndpoint(settings.endpoint);
-  settings.endpoint = normalizedEndpoint;
+  const requestEndpoint = resolveApiRequestEndpoint(settings);
+  settings.endpoint = requestEndpoint;
 
-  if (!settings.endpoint) {
+  if (!requestEndpoint) {
     throw new Error("未配置 API 地址，已切换为本地回退生成。");
+  }
+  if (normalizeApiMode(settings.mode) === "gemini" && !settings.token) {
+    throw new Error("Gemini 模式需要填写 API Key。");
   }
 
   const prompt = buildReplyPrompt(settings, profile, feedType, rootPost, parentReply, count);
-  const headers = {
-    "Content-Type": "application/json"
-  };
+  const headers = buildRequestHeaders(settings);
 
-  if (settings.token) {
-    headers.Authorization = `Bearer ${settings.token}`;
-  }
-
-  const response = await fetch(settings.endpoint, {
+  const response = await fetch(requestEndpoint, {
     method: "POST",
     headers,
     body: JSON.stringify(buildRequestBody(settings, prompt, count))
@@ -2456,6 +3541,24 @@ async function expandPostDiscussion(postId, bucketName = state.activeFeed) {
   }
 
   const feedState = getDiscussionBucket(bucketName);
+  if (feedState[postId]?.replies?.length) {
+    feedState[postId] = {
+      ...feedState[postId],
+      expanded: true,
+      loading: false
+    };
+    if (post.authorOwned && bucketName !== "profile") {
+      state.discussions.profile[postId] = feedState[postId];
+    }
+    if (post.authorOwned && bucketName === "profile" && post.feedType) {
+      getDiscussionBucket(post.feedType)[postId] = feedState[postId];
+    }
+    persistDiscussions();
+    renderActiveFeed();
+    renderProfilePage();
+    return;
+  }
+
   feedState[postId] = {
     expanded: true,
     loading: true,
@@ -2498,8 +3601,9 @@ async function expandPostDiscussion(postId, bucketName = state.activeFeed) {
       state.discussions.profile[postId] = feedState[postId];
     }
     if (post.authorOwned && bucketName === "profile" && post.feedType) {
-      state.discussions[post.feedType][postId] = feedState[postId];
+      getDiscussionBucket(post.feedType)[postId] = feedState[postId];
     }
+    persistDiscussions();
     renderActiveFeed();
     renderProfilePage();
   } catch (_error) {
@@ -2508,6 +3612,7 @@ async function expandPostDiscussion(postId, bucketName = state.activeFeed) {
       loading: false,
       replies: []
     };
+    persistDiscussions();
     renderActiveFeed();
     renderProfilePage();
   }
@@ -2517,6 +3622,7 @@ async function togglePostDiscussion(postId, bucketName = state.activeFeed) {
   const threadState = getPostThreadState(postId, bucketName);
   if (threadState?.expanded) {
     threadState.expanded = false;
+    persistDiscussions();
     renderActiveFeed();
     renderProfilePage();
     return;
@@ -2539,6 +3645,16 @@ async function toggleNestedReply(postId, replyId, bucketName = state.activeFeed)
 
   if (targetReply.expanded) {
     targetReply.expanded = false;
+    persistDiscussions();
+    renderActiveFeed();
+    renderProfilePage();
+    return;
+  }
+
+  if (targetReply.children?.length) {
+    targetReply.expanded = true;
+    targetReply.loading = false;
+    persistDiscussions();
     renderActiveFeed();
     renderProfilePage();
     return;
@@ -2576,16 +3692,18 @@ async function toggleNestedReply(postId, replyId, bucketName = state.activeFeed)
     targetReply.children = replies;
     targetReply.loading = false;
     if (rootPost.authorOwned && bucketName === "profile" && rootPost.feedType) {
-      state.discussions[rootPost.feedType][postId] = threadState;
+      getDiscussionBucket(rootPost.feedType)[postId] = threadState;
     }
     if (rootPost.authorOwned && bucketName !== "profile") {
       state.discussions.profile[postId] = threadState;
     }
+    persistDiscussions();
     renderActiveFeed();
     renderProfilePage();
   } catch (_error) {
     targetReply.children = [];
     targetReply.loading = false;
+    persistDiscussions();
     renderActiveFeed();
     renderProfilePage();
   }
@@ -2697,10 +3815,10 @@ async function refreshHomeFeed(trigger = "manual") {
   }
 
   saveCurrentSettings();
-  const targetFeed = getCurrentContentFeed();
+  const targetFeed = getCurrentContentFeed(state.activeFeed);
   state.isRefreshing = true;
   setPullIndicator(state.pullDistance, "loading");
-  setHomeStatus(`正在生成“${HOME_FEED_LABELS[targetFeed]}”讨论流…`, "");
+  setHomeStatus(`正在生成“${getFeedLabel(targetFeed)}”讨论流…`, "");
   setSettingsStatus("如果接口可用，将优先使用 API 返回的 10 条讨论。");
   topRefreshBtn.disabled = true;
   settingsGenerateBtn.disabled = true;
@@ -2724,7 +3842,9 @@ async function refreshHomeFeed(trigger = "manual") {
 
     syncAuthoredPostIdentity(profile);
     refreshAuthoredPostsEngagement(profile);
-    const normalizedIncomingPosts = posts.map((item, index) => normalizePost(item, index));
+    const normalizedIncomingPosts = posts.map((item, index) =>
+      normalizePost(item, index, targetFeed)
+    );
     state.feeds[targetFeed] = mergeFeedHistory(
       state.feeds[targetFeed] || [],
       normalizedIncomingPosts,
@@ -2732,17 +3852,18 @@ async function refreshHomeFeed(trigger = "manual") {
     );
     state.discussions[targetFeed] = {};
     persistFeeds(state.feeds);
+    persistDiscussions();
     state.lastRefreshAt = `${formatDateTime()} · ${sourceLabel}`;
     localStorage.setItem(REFRESH_KEY, state.lastRefreshAt);
     renderActiveFeed();
     renderProfilePage();
     updateInsightPanel();
     setHomeStatus(
-      `已通过${sourceLabel}刷新“${HOME_FEED_LABELS[targetFeed]}”${homeCount} 条讨论 · 来源 ${trigger}`,
+      `已通过${sourceLabel}刷新“${getFeedLabel(targetFeed)}”${homeCount} 条讨论 · 来源 ${trigger}`,
       "success"
     );
     setSettingsStatus(
-      `配置已保存，当前分页签“${HOME_FEED_LABELS[targetFeed]}”已使用 API 重新生成 ${homeCount} 条讨论。`,
+      `配置已保存，当前分页签“${getFeedLabel(targetFeed)}”已使用 API 重新生成 ${homeCount} 条讨论。`,
       "success"
     );
     switchTab("home");
@@ -2848,36 +3969,48 @@ function attachEvents() {
     });
   });
 
-  homeComposerToggleBtn.addEventListener("click", () => {
-    setHomeComposerOpen(!state.composerOpen);
-  });
+  if (homeComposerToggleBtn) {
+    homeComposerToggleBtn.addEventListener("click", () => {
+      setHomeComposerOpen(!state.composerOpen);
+    });
+  }
 
-  messagesGenerateBtn.addEventListener("click", () => {
-    generateDirectMessages();
-  });
+  if (messagesGenerateBtn) {
+    messagesGenerateBtn.addEventListener("click", () => {
+      generateDirectMessages();
+    });
+  }
 
-  homeComposerForm.addEventListener("submit", (event) => {
-    event.preventDefault();
-    submitHomePost();
-  });
+  if (homeComposerForm) {
+    homeComposerForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      submitHomePost();
+    });
+  }
 
-  settingsGenerateBtn.addEventListener("click", () => {
-    saveCurrentSettings();
-    refreshHomeFeed("settings");
-  });
+  if (settingsGenerateBtn) {
+    settingsGenerateBtn.addEventListener("click", () => {
+      saveCurrentSettings();
+      refreshHomeFeed("settings");
+    });
+  }
 
-  settingsForm.addEventListener("submit", (event) => {
-    event.preventDefault();
-    saveCurrentSettings();
-    setSettingsStatus("配置已保存到本地浏览器存储。", "success");
-  });
+  if (settingsForm) {
+    settingsForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      saveCurrentSettings();
+      setSettingsStatus("配置已保存到本地浏览器存储。", "success");
+    });
+  }
 
-  profileForm.addEventListener("submit", (event) => {
-    event.preventDefault();
-    saveCurrentProfile();
-    setProfileEditorOpen(false);
-    setProfileStatus("个人资料已保存到本地浏览器存储。", "success");
-  });
+  if (profileForm) {
+    profileForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      saveCurrentProfile();
+      setProfileEditorOpen(false);
+      setProfileStatus("个人资料已保存到本地浏览器存储。", "success");
+    });
+  }
 
   if (profileEditToggleBtn) {
     profileEditToggleBtn.addEventListener("click", () => {
@@ -2885,216 +4018,385 @@ function attachEvents() {
     });
   }
 
-  profileEditorCloseBtn.addEventListener("click", () => {
-    setProfileEditorOpen(false);
-  });
-
-  profileCancelBtn.addEventListener("click", () => {
-    applyProfileToForm(state.profile);
-    setProfileEditorOpen(false);
-  });
-
-  miniTabs.forEach((tab) => {
-    tab.addEventListener("click", () => {
-      state.activeFeed = tab.dataset.feed;
-      if (tab.dataset.feed === "hot" || tab.dataset.feed === "entertainment") {
-        state.lastContentFeed = tab.dataset.feed;
-        lastKnownContentFeed = tab.dataset.feed;
-        state.activeTagFilter = "";
-      }
-      if (tab.dataset.feed === "tags") {
-        state.activeTagFilter = "";
-      }
-      renderActiveFeed();
-      updatePromptPreview();
-      updateMessagePromptPreview();
-      updateReplyPromptPreview();
-      updateInsightPanel();
-      setHomeStatus(`当前查看：${HOME_FEED_LABELS[state.activeFeed]}`, "");
+  if (profileEditorCloseBtn) {
+    profileEditorCloseBtn.addEventListener("click", () => {
+      setProfileEditorOpen(false);
     });
-  });
+  }
 
-  feedEl.addEventListener("click", async (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLElement)) {
-      return;
-    }
+  if (profileCancelBtn) {
+    profileCancelBtn.addEventListener("click", () => {
+      applyProfileToForm(state.profile);
+      setProfileEditorOpen(false);
+    });
+  }
 
-    const actionEl = target.closest("[data-action]");
-    if (!(actionEl instanceof HTMLElement)) {
-      return;
-    }
-
-    const action = actionEl.dataset.action;
-    if (!action) {
-      return;
-    }
-
-    if (action === "open-tag-feed" && actionEl.dataset.tag) {
-      state.activeTagFilter = actionEl.dataset.tag;
-      renderActiveFeed();
-      setHomeStatus(`当前查看标签：${state.activeTagFilter}`, "");
-      return;
-    }
-
-    if (action === "clear-tag-filter") {
-      state.activeTagFilter = "";
-      renderActiveFeed();
-      setHomeStatus("当前查看：热门标签", "");
-      return;
-    }
-
-    if (action === "toggle-post" && actionEl.dataset.postId) {
-      await togglePostDiscussion(
-        actionEl.dataset.postId,
-        actionEl.dataset.bucket || state.activeFeed
-      );
-    }
-
-    if (
-      action === "toggle-reply" &&
-      actionEl.dataset.postId &&
-      actionEl.dataset.replyId
-    ) {
-      await toggleNestedReply(
-        actionEl.dataset.postId,
-        actionEl.dataset.replyId,
-        actionEl.dataset.bucket || state.activeFeed
-      );
-    }
-  });
-
-  feedEl.addEventListener("scroll", () => {
-    if (feedEl.scrollTop <= 1) {
-      if (!state.feedTopAnchorAt) {
-        state.feedTopAnchorAt = Date.now();
+  if (homeMiniTabsContainer) {
+    homeMiniTabsContainer.addEventListener("click", (event) => {
+      const target = getEventHTMLElement(event);
+      if (!target) {
+        return;
       }
-      return;
-    }
+      const button = target.closest(".mini-tab[data-feed]");
+      if (!(button instanceof HTMLElement)) {
+        return;
+      }
+      switchHomeFeed(button.dataset.feed);
+    });
+  }
 
-    state.feedTopAnchorAt = 0;
-    if (state.pullDistance > 0 && !state.isRefreshing) {
-      state.pullDistance = 0;
-      setPullIndicator(0, "idle");
-    }
-  });
+  if (customTabsManageBtn) {
+    customTabsManageBtn.addEventListener("click", () => {
+      const nextOpen = !state.customTabEditorOpen;
+      setCustomTabsPanelOpen(nextOpen);
+      if (nextOpen) {
+        resetCustomTabForm();
+      }
+    });
+  }
 
-  messagesListEl.addEventListener("click", (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLElement)) {
-      return;
-    }
+  if (customTabsCloseBtn) {
+    customTabsCloseBtn.addEventListener("click", () => {
+      setCustomTabsPanelOpen(false);
+    });
+  }
 
-    const actionEl = target.closest("[data-action]");
-    if (!(actionEl instanceof HTMLElement)) {
-      return;
-    }
+  if (customTabCancelBtn) {
+    customTabCancelBtn.addEventListener("click", () => {
+      resetCustomTabForm();
+    });
+  }
 
-    if (actionEl.dataset.action === "open-conversation" && actionEl.dataset.conversationId) {
-      state.activeConversationId = actionEl.dataset.conversationId;
-      renderMessagesPage();
-      return;
-    }
+  if (customTabForm) {
+    customTabForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      handleCustomTabFormSubmit();
+    });
+  }
 
-    if (actionEl.dataset.action === "close-conversation") {
-      state.activeConversationId = null;
-      renderMessagesPage();
-    }
-  });
+  if (customTabsListEl) {
+    customTabsListEl.addEventListener("click", (event) => {
+      const target = getEventHTMLElement(event);
+      if (!target) {
+        return;
+      }
+      const actionEl = target.closest("[data-action]");
+      if (!(actionEl instanceof HTMLElement)) {
+        return;
+      }
+      const { action } = actionEl.dataset;
+      const tabId = actionEl.dataset.tabId;
+      if (!tabId) {
+        return;
+      }
+      if (action === "edit-custom-tab") {
+        startCustomTabEdit(tabId);
+      } else if (action === "delete-custom-tab") {
+        deleteCustomTab(tabId);
+      }
+    });
 
-  messagesListEl.addEventListener("submit", async (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLFormElement)) {
-      return;
-    }
+    customTabsListEl.addEventListener("dragstart", (event) => {
+      const target = getEventHTMLElement(event);
+      if (!target) {
+        return;
+      }
+      const item = target.closest(".custom-tab-item[data-tab-id]");
+      if (!(item instanceof HTMLElement)) {
+        return;
+      }
+      const tabId = item.dataset.tabId || "";
+      if (!tabId) {
+        return;
+      }
+      state.draggingCustomTabId = tabId;
+      clearCustomTabDragClasses();
+      item.classList.add("is-dragging");
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", tabId);
+      }
+    });
 
-    if (target.dataset.action !== "send-conversation-message") {
-      return;
-    }
+    customTabsListEl.addEventListener("dragover", (event) => {
+      const target = getEventHTMLElement(event);
+      if (!target) {
+        return;
+      }
+      const item = target.closest(".custom-tab-item[data-tab-id]");
+      if (!(item instanceof HTMLElement)) {
+        return;
+      }
+      const targetId = item.dataset.tabId || "";
+      const draggedId = state.draggingCustomTabId;
+      if (!targetId || !draggedId || targetId === draggedId) {
+        return;
+      }
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "move";
+      }
+      customTabsListEl
+        .querySelectorAll(".custom-tab-item.drag-over")
+        .forEach((node) => node.classList.remove("drag-over"));
+      item.classList.add("drag-over");
+    });
 
-    event.preventDefault();
-    const formData = new FormData(target);
-    const message = String(formData.get("message") || "");
-    const conversationId = target.dataset.conversationId;
-    if (!conversationId) {
-      return;
-    }
+    customTabsListEl.addEventListener("drop", (event) => {
+      event.preventDefault();
+      const target = getEventHTMLElement(event);
+      if (!target) {
+        return;
+      }
+      const item = target.closest(".custom-tab-item[data-tab-id]");
+      if (!(item instanceof HTMLElement)) {
+        return;
+      }
+      const targetId = item.dataset.tabId || "";
+      const draggedId =
+        state.draggingCustomTabId ||
+        event.dataTransfer?.getData("text/plain") ||
+        "";
+      clearCustomTabDragClasses();
+      state.draggingCustomTabId = "";
+      reorderCustomTabs(draggedId, targetId);
+    });
 
-    target.reset();
-    await sendConversationMessage(conversationId, message);
-  });
+    customTabsListEl.addEventListener("dragend", () => {
+      clearCustomTabDragClasses();
+      state.draggingCustomTabId = "";
+    });
+  }
 
-  profilePostsEl.addEventListener("click", async (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLElement)) {
-      return;
-    }
+  if (customTabSettingsListEl) {
+    customTabSettingsListEl.addEventListener("input", (event) => {
+      handleCustomTabSettingsInput(event);
+    });
+  }
 
-    const actionEl = target.closest("[data-action]");
-    if (!(actionEl instanceof HTMLElement)) {
-      return;
-    }
+  if (apiConfigSaveBtn) {
+    apiConfigSaveBtn.addEventListener("click", () => {
+      saveCurrentApiConfig();
+    });
+  }
 
-    if (actionEl.dataset.action === "toggle-post-menu" && actionEl.dataset.postId) {
-      state.profilePostMenuId =
-        state.profilePostMenuId === actionEl.dataset.postId
-          ? null
-          : actionEl.dataset.postId;
-      renderProfilePage();
-      return;
-    }
+  if (apiConfigListEl) {
+    apiConfigListEl.addEventListener("click", (event) => {
+      const target = getEventHTMLElement(event);
+      if (!target) {
+        return;
+      }
+      const actionEl = target.closest("[data-action]");
+      if (!(actionEl instanceof HTMLElement)) {
+        return;
+      }
+      const configId = actionEl.dataset.configId;
+      if (!configId) {
+        return;
+      }
+      const { action } = actionEl.dataset;
+      if (action === "switch-api-config") {
+        switchApiConfig(configId);
+      } else if (action === "delete-api-config") {
+        deleteApiConfig(configId);
+      }
+    });
+  }
 
-    if (actionEl.dataset.action === "start-post-edit" && actionEl.dataset.postId) {
-      openProfilePostEditor(actionEl.dataset.postId);
-      return;
-    }
+  if (feedEl) {
+    feedEl.addEventListener("click", async (event) => {
+      const target = getEventHTMLElement(event);
+      if (!target) {
+        return;
+      }
 
-    if (actionEl.dataset.action === "cancel-post-edit") {
-      cancelProfilePostEditor();
-      return;
-    }
+      const actionEl = target.closest("[data-action]");
+      if (!(actionEl instanceof HTMLElement)) {
+        return;
+      }
 
-    if (actionEl.dataset.action === "save-post-edit" && actionEl.dataset.postId) {
-      saveProfilePostEdit(actionEl.dataset.postId);
-      return;
-    }
+      const action = actionEl.dataset.action;
+      if (!action) {
+        return;
+      }
 
-    if (actionEl.dataset.action === "delete-post" && actionEl.dataset.postId) {
-      deleteProfilePost(actionEl.dataset.postId);
-      return;
-    }
+      if (action === "open-tag-feed" && actionEl.dataset.tag) {
+        state.activeTagFilter = actionEl.dataset.tag;
+        renderActiveFeed();
+        setHomeStatus(`当前查看标签：${state.activeTagFilter}`, "");
+        return;
+      }
 
-    if (actionEl.dataset.action === "toggle-post" && actionEl.dataset.postId) {
-      state.profilePostMenuId = null;
-      await togglePostDiscussion(actionEl.dataset.postId, "profile");
-      return;
-    }
+      if (action === "clear-tag-filter") {
+        state.activeTagFilter = "";
+        renderActiveFeed();
+        setHomeStatus("当前查看：热门标签", "");
+        return;
+      }
 
-    if (
-      actionEl.dataset.action === "toggle-reply" &&
-      actionEl.dataset.postId &&
-      actionEl.dataset.replyId
-    ) {
-      state.profilePostMenuId = null;
-      await toggleNestedReply(actionEl.dataset.postId, actionEl.dataset.replyId, "profile");
-      return;
-    }
-  });
+      if (action === "toggle-post" && actionEl.dataset.postId) {
+        await togglePostDiscussion(
+          actionEl.dataset.postId,
+          actionEl.dataset.bucket || state.activeFeed
+        );
+      }
 
-  profilePostsEl.addEventListener("input", (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLTextAreaElement)) {
-      return;
-    }
-    if (!("postEditorInput" in target.dataset)) {
-      return;
-    }
-    state.profilePostEditingDraft = target.value;
-  });
+      if (
+        action === "toggle-reply" &&
+        actionEl.dataset.postId &&
+        actionEl.dataset.replyId
+      ) {
+        await toggleNestedReply(
+          actionEl.dataset.postId,
+          actionEl.dataset.replyId,
+          actionEl.dataset.bucket || state.activeFeed
+        );
+      }
+    });
 
-  [modeSelect, endpointInput, tokenInput, modelInput, temperatureInput, homeCountInput, dmCountInput, replyCountInput, worldviewInput, hotTopicsInput, entertainmentTextInput, extraInstructionsInput].forEach(
+    feedEl.addEventListener("scroll", () => {
+      if (feedEl.scrollTop <= 1) {
+        if (!state.feedTopAnchorAt) {
+          state.feedTopAnchorAt = Date.now();
+        }
+        return;
+      }
+
+      state.feedTopAnchorAt = 0;
+      if (state.pullDistance > 0 && !state.isRefreshing) {
+        state.pullDistance = 0;
+        setPullIndicator(0, "idle");
+      }
+    });
+  }
+
+  if (messagesListEl) {
+    messagesListEl.addEventListener("click", (event) => {
+      const target = getEventHTMLElement(event);
+      if (!target) {
+        return;
+      }
+
+      const actionEl = target.closest("[data-action]");
+      if (!(actionEl instanceof HTMLElement)) {
+        return;
+      }
+
+      if (actionEl.dataset.action === "open-conversation" && actionEl.dataset.conversationId) {
+        state.activeConversationId = actionEl.dataset.conversationId;
+        renderMessagesPage();
+        return;
+      }
+
+      if (actionEl.dataset.action === "close-conversation") {
+        state.activeConversationId = null;
+        renderMessagesPage();
+      }
+    });
+
+    messagesListEl.addEventListener("submit", async (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLFormElement)) {
+        return;
+      }
+
+      if (target.dataset.action !== "send-conversation-message") {
+        return;
+      }
+
+      event.preventDefault();
+      const formData = new FormData(target);
+      const message = String(formData.get("message") || "");
+      const conversationId = target.dataset.conversationId;
+      if (!conversationId) {
+        return;
+      }
+
+      target.reset();
+      await sendConversationMessage(conversationId, message);
+    });
+  }
+
+  if (profilePostsEl) {
+    profilePostsEl.addEventListener("click", async (event) => {
+      const target = getEventHTMLElement(event);
+      if (!target) {
+        return;
+      }
+
+      const actionEl = target.closest("[data-action]");
+      if (!(actionEl instanceof HTMLElement)) {
+        return;
+      }
+
+      if (actionEl.dataset.action === "toggle-post-menu" && actionEl.dataset.postId) {
+        state.profilePostMenuId =
+          state.profilePostMenuId === actionEl.dataset.postId
+            ? null
+            : actionEl.dataset.postId;
+        renderProfilePage();
+        return;
+      }
+
+      if (actionEl.dataset.action === "start-post-edit" && actionEl.dataset.postId) {
+        openProfilePostEditor(actionEl.dataset.postId);
+        return;
+      }
+
+      if (actionEl.dataset.action === "cancel-post-edit") {
+        cancelProfilePostEditor();
+        return;
+      }
+
+      if (actionEl.dataset.action === "save-post-edit" && actionEl.dataset.postId) {
+        saveProfilePostEdit(actionEl.dataset.postId);
+        return;
+      }
+
+      if (actionEl.dataset.action === "delete-post" && actionEl.dataset.postId) {
+        deleteProfilePost(actionEl.dataset.postId);
+        return;
+      }
+
+      if (actionEl.dataset.action === "toggle-post" && actionEl.dataset.postId) {
+        state.profilePostMenuId = null;
+        await togglePostDiscussion(actionEl.dataset.postId, "profile");
+        return;
+      }
+
+      if (
+        actionEl.dataset.action === "toggle-reply" &&
+        actionEl.dataset.postId &&
+        actionEl.dataset.replyId
+      ) {
+        state.profilePostMenuId = null;
+        await toggleNestedReply(actionEl.dataset.postId, actionEl.dataset.replyId, "profile");
+        return;
+      }
+    });
+
+    profilePostsEl.addEventListener("input", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLTextAreaElement)) {
+        return;
+      }
+      if (!("postEditorInput" in target.dataset)) {
+        return;
+      }
+      state.profilePostEditingDraft = target.value;
+    });
+  }
+
+  const apiFields = [modeSelect, endpointInput, tokenInput, modelInput];
+  [modeSelect, endpointInput, tokenInput, modelInput, temperatureInput, homeCountInput, dmCountInput, replyCountInput, worldviewInput]
+    .filter(Boolean)
+    .forEach(
     (field) => {
       field.addEventListener("input", () => {
+        if (apiFields.includes(field) && state.settings.activeApiConfigId) {
+          state.settings.activeApiConfigId = "";
+          renderApiConfigList();
+        }
         updateModeUI();
         updatePromptPreview();
         updateMessagePromptPreview();
@@ -3108,7 +4410,9 @@ function attachEvents() {
     }
   );
 
-  [profileAvatarInput, profileUsernameInput, profileUserIdInput, profileFollowingInput, profileFollowersInput, profileSignatureInput, profilePersonaInput].forEach(
+  [profileAvatarInput, profileUsernameInput, profileUserIdInput, profileFollowingInput, profileFollowersInput, profileSignatureInput, profilePersonaInput]
+    .filter(Boolean)
+    .forEach(
     (field) => {
       field.addEventListener("input", () => {
         state.profile = getCurrentProfile();
@@ -3123,43 +4427,79 @@ function attachEvents() {
     }
   );
 
-  profileAvatarFileInput.addEventListener("change", async () => {
-    const [file] = profileAvatarFileInput.files || [];
-    await handleProfileImageUpload(file, "avatarImage", "头像图片已更新。");
-  });
+  if (profileAvatarFileInput) {
+    profileAvatarFileInput.addEventListener("change", async () => {
+      const [file] = profileAvatarFileInput.files || [];
+      await handleProfileImageUpload(file, "avatarImage", "头像图片已更新。");
+    });
+  }
 
-  profileBannerFileInput.addEventListener("change", async () => {
-    const [file] = profileBannerFileInput.files || [];
-    await handleProfileImageUpload(file, "bannerImage", "主页背景图片已更新。");
-  });
+  if (profileBannerFileInput) {
+    profileBannerFileInput.addEventListener("change", async () => {
+      const [file] = profileBannerFileInput.files || [];
+      await handleProfileImageUpload(file, "bannerImage", "主页背景图片已更新。");
+    });
+  }
 
-  feedEl.addEventListener("touchstart", handleTouchStart, { passive: true });
-  feedEl.addEventListener("touchmove", handleTouchMove, { passive: false });
-  feedEl.addEventListener("touchend", handleTouchEnd);
-  feedEl.addEventListener("wheel", handleWheel, { passive: false });
+  if (feedEl) {
+    feedEl.addEventListener("touchstart", handleTouchStart, { passive: true });
+    feedEl.addEventListener("touchmove", handleTouchMove, { passive: false });
+    feedEl.addEventListener("touchend", handleTouchEnd);
+    feedEl.addEventListener("wheel", handleWheel, { passive: false });
+  }
 }
 
 function init() {
-  applySettingsToForm(state.settings);
-  applyProfileToForm(state.profile);
-  setProfileEditorOpen(false);
-  setHomeComposerOpen(false);
-  setPullIndicator(0, "idle");
-  renderActiveFeed();
-  renderFollowingPage();
-  renderMessagesPage();
-  renderProfilePage();
-  updatePromptPreview();
-  updateMessagePromptPreview();
-  updateReplyPromptPreview();
-  updateInsightPanel();
-  setHomeStatus(
-    state.lastRefreshAt ? `已载入上次生成内容 · ${state.lastRefreshAt}` : "等待下一次刷新",
-    state.lastRefreshAt ? "success" : ""
+  window.__appBootstrap = {
+    ready: false,
+    errors: []
+  };
+  const safeRun = (label, fn) => {
+    try {
+      fn();
+    } catch (error) {
+      const errorText = error?.message || String(error);
+      window.__appBootstrap.errors.push(`${label}: ${errorText}`);
+      if (homeStatusEl && !homeStatusEl.textContent.includes("初始化异常")) {
+        homeStatusEl.textContent = `初始化异常：${label}`;
+        homeStatusEl.className = "inline-status error";
+      }
+      if (typeof console !== "undefined" && typeof console.error === "function") {
+        console.error(`[init] ${label} failed`, error);
+      }
+    }
+  };
+
+  safeRun("apply settings", () => applySettingsToForm(state.settings));
+  safeRun("apply profile", () => applyProfileToForm(state.profile));
+  safeRun("profile editor", () => setProfileEditorOpen(false));
+  safeRun("home composer", () => setHomeComposerOpen(false));
+  safeRun("pull indicator", () => setPullIndicator(0, "idle"));
+  safeRun("render active feed", () => renderActiveFeed());
+  safeRun("render following", () => renderFollowingPage());
+  safeRun("render messages", () => renderMessagesPage());
+  safeRun("render profile", () => renderProfilePage());
+  safeRun("render custom tabs manager", () => renderCustomTabsManager());
+  safeRun("render custom tabs settings", () => renderCustomTabSettings());
+  safeRun("render api config list", () => renderApiConfigList());
+  safeRun("persist discussions", () => persistDiscussions());
+  safeRun("update prompt preview", () => updatePromptPreview());
+  safeRun("update dm prompt preview", () => updateMessagePromptPreview());
+  safeRun("update reply prompt preview", () => updateReplyPromptPreview());
+  safeRun("update insight panel", () => updateInsightPanel());
+  safeRun("set home status", () =>
+    setHomeStatus(
+      state.lastRefreshAt ? `已载入上次生成内容 · ${state.lastRefreshAt}` : "等待下一次刷新",
+      state.lastRefreshAt ? "success" : ""
+    )
   );
-  setSettingsStatus("设置页会自动保存 API、世界观文本、热点文本和文娱文本。");
-  switchTab("home");
-  attachEvents();
+  safeRun("set settings status", () =>
+    setSettingsStatus("设置页会自动保存内容生成配置；API 参数请在下方独立管理。")
+  );
+  safeRun("set api status", () => setApiConfigStatus("可保存多套 API 配置，并在下方一键切换。"));
+  safeRun("switch home tab", () => switchTab("home"));
+  safeRun("attach events", () => attachEvents());
+  window.__appBootstrap.ready = true;
 }
 
 init();

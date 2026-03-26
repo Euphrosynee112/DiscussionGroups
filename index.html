@@ -98,15 +98,63 @@
 
             <section class="timeline-card">
               <div class="timeline-card__header">
-                <div class="mini-tabs" aria-label="首页分类">
-                  <button class="mini-tab active" data-feed="hot" type="button">热点消息</button>
-                  <button class="mini-tab" data-feed="entertainment" type="button">文娱</button>
-                  <button class="mini-tab" data-feed="tags" type="button">热门标签</button>
+                <div class="mini-tabs-bar">
+                  <div class="mini-tabs" id="home-mini-tabs" aria-label="首页分类"></div>
+                  <button id="custom-tabs-manage-btn" class="ghost-chip" type="button">
+                    管理自定义页签
+                  </button>
                 </div>
                 <p id="home-status" class="inline-status">等待下一次刷新</p>
               </div>
 
               <div id="feed" class="feed" aria-live="polite"></div>
+            </section>
+
+            <section
+              id="custom-tabs-manager"
+              class="section-card hidden"
+              aria-label="自定义页签管理"
+            >
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">Custom tabs</p>
+                  <h2>自定义页签管理</h2>
+                </div>
+                <button id="custom-tabs-close-btn" class="ghost-chip" type="button">
+                  收起
+                </button>
+              </div>
+              <p class="tag-stat-meta">最多新增 4 个自定义页签，用于扩展首页讨论主题。</p>
+              <div id="custom-tabs-list" class="stack-list custom-tabs-list"></div>
+              <form id="custom-tab-form" class="settings-form" autocomplete="off">
+                <label>
+                  页签名称
+                  <input
+                    id="custom-tab-name-input"
+                    type="text"
+                    maxlength="10"
+                    placeholder="例如：出海、消费新变"
+                  />
+                </label>
+                <label>
+                  页签文本
+                  <textarea
+                    id="custom-tab-text-input"
+                    rows="4"
+                    placeholder="输入该页签要聚焦的主题、设定或提示。"
+                  ></textarea>
+                </label>
+                <div class="settings-actions">
+                  <button id="custom-tab-save-btn" class="solid-button" type="submit">
+                    保存页签
+                  </button>
+                  <button id="custom-tab-cancel-btn" class="ghost-button" type="button">
+                    取消
+                  </button>
+                </div>
+                <p id="custom-tab-form-status" class="status-text"></p>
+              </form>
+              <p id="custom-tabs-limit-hint" class="tag-stat-meta"></p>
             </section>
           </div>
         </section>
@@ -294,44 +342,13 @@
               <div class="section-card__head">
                 <div>
                   <p class="section-card__eyebrow">Settings</p>
-                  <h2>API 与内容生成配置</h2>
+                  <h2>内容生成配置</h2>
                 </div>
                 <span class="badge badge-live">本地持久化</span>
               </div>
 
               <form id="settings-form" class="settings-form">
                 <div class="form-grid">
-                  <label>
-                    接口类型
-                    <select id="api-mode">
-                      <option value="openai">DeepSeek / OpenAI 兼容接口</option>
-                      <option value="generic">通用 JSON 接口</option>
-                    </select>
-                  </label>
-
-                  <label>
-                    API 地址
-                    <input
-                      id="api-endpoint"
-                      type="url"
-                      placeholder="https://api.deepseek.com/chat/completions"
-                    />
-                  </label>
-
-                  <label>
-                    API Key / Bearer Token
-                    <input
-                      id="api-token"
-                      type="password"
-                      placeholder="输入用于请求的密钥"
-                    />
-                  </label>
-
-                  <label id="model-wrap">
-                    模型名称
-                    <input id="api-model" type="text" placeholder="deepseek-chat" />
-                  </label>
-
                   <label>
                     Temperature
                     <input
@@ -391,33 +408,6 @@
                   ></textarea>
                 </label>
 
-                <label>
-                  热点文本
-                  <textarea
-                    id="hot-topics-text"
-                    rows="6"
-                    placeholder="输入热点议题，建议一行一个，或用逗号分隔。"
-                  ></textarea>
-                </label>
-
-                <label>
-                  文娱文本
-                  <textarea
-                    id="entertainment-text"
-                    rows="6"
-                    placeholder="输入文娱相关主题，例如电影、综艺、明星、演出、游戏或二创热点。"
-                  ></textarea>
-                </label>
-
-                <label>
-                  自定义补充要求
-                  <textarea
-                    id="extra-instructions"
-                    rows="4"
-                    placeholder="例如：观点要有冲突感，但避免极端语言；保持中文互联网讨论氛围。"
-                  ></textarea>
-                </label>
-
                 <div class="settings-actions">
                   <button id="save-settings-btn" class="solid-button" type="submit">
                     保存配置
@@ -434,11 +424,62 @@
             <section class="section-card">
               <div class="section-card__head">
                 <div>
-                  <p class="section-card__eyebrow">Prompt Preview</p>
-                  <h2>首页刷新 Prompt 预览</h2>
+                  <p class="section-card__eyebrow">API Presets</p>
+                  <h2>API 配置缓存与一键切换</h2>
                 </div>
               </div>
-              <pre id="prompt-preview" class="prompt-preview"></pre>
+              <p class="tag-stat-meta">API 参数与内容配置已分离，可缓存多套并在设置页一键切换。</p>
+              <div class="form-grid">
+                <label>
+                  接口类型
+                  <select id="api-mode">
+                    <option value="openai">DeepSeek / OpenAI 兼容接口</option>
+                    <option value="gemini">Gemini API</option>
+                    <option value="generic">通用 JSON 接口</option>
+                  </select>
+                </label>
+
+                <label>
+                  API 地址
+                  <input
+                    id="api-endpoint"
+                    type="url"
+                    placeholder="https://api.deepseek.com/chat/completions"
+                  />
+                </label>
+
+                <label>
+                  API Key / Bearer Token
+                  <input
+                    id="api-token"
+                    type="password"
+                    placeholder="输入用于请求的密钥"
+                  />
+                </label>
+
+                <label id="model-wrap">
+                  模型名称
+                  <input id="api-model" type="text" placeholder="deepseek-chat" />
+                </label>
+              </div>
+              <div class="api-config-toolbar">
+                <label>
+                  配置名称（可选）
+                  <input
+                    id="api-config-name-input"
+                    type="text"
+                    maxlength="20"
+                    placeholder="例如：DeepSeek-主账号 / Gemini-测试"
+                  />
+                </label>
+                <div class="settings-actions">
+                  <button id="api-config-save-btn" class="solid-button" type="button">
+                    保存当前 API 配置
+                  </button>
+                </div>
+              </div>
+              <p id="api-config-status" class="status-text"></p>
+              <div id="api-config-list" class="api-config-list"></div>
             </section>
 
             <section class="section-card">
@@ -459,6 +500,20 @@
                 </div>
               </div>
               <pre id="reply-prompt-preview" class="prompt-preview"></pre>
+            </section>
+
+            <section class="section-card" id="custom-tabs-settings-section">
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">Custom tabs</p>
+                  <h2>自定义页签内容</h2>
+                </div>
+              </div>
+              <p class="tag-stat-meta">在这里调整自定义页签的文本，并查看对应 Prompt 预览。</p>
+              <div id="custom-tabs-settings-empty" class="empty-state">
+                还没有自定义页签，请先在首页创建。
+              </div>
+              <div id="custom-tabs-settings-list" class="custom-tabs-settings-list"></div>
             </section>
           </div>
         </section>
