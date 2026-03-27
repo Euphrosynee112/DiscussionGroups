@@ -11,6 +11,7 @@ const DEFAULT_POST_COUNT = 10;
 const DEFAULT_DM_COUNT = 4;
 const DEFAULT_REPLY_COUNT = 4;
 const MAX_FEED_ITEMS = 50;
+const MAX_POST_TEXT_LENGTH = 520;
 const DEFAULT_TEMPERATURE = 0.8;
 const PULL_THRESHOLD = 88;
 const DEFAULT_CONTENT_FEED = "entertainment";
@@ -23,6 +24,7 @@ const HOME_FEED_LABELS = {
   tags: "热门标签"
 };
 const NESTED_REPLY_COUNT = 3;
+const THREAD_MODAL_LOAD_COOLDOWN_MS = 420;
 let lastKnownContentFeed = DEFAULT_CONTENT_FEED;
 
 const DEFAULT_SETTINGS = {
@@ -38,7 +40,9 @@ const DEFAULT_SETTINGS = {
   temperature: DEFAULT_TEMPERATURE,
   customTabs: [],
   apiConfigs: [],
-  activeApiConfigId: ""
+  activeApiConfigId: "",
+  translationApiEnabled: false,
+  translationApiConfigId: ""
 };
 
 const DEFAULT_PROFILE = {
@@ -151,6 +155,12 @@ const homeScrollEl = document.querySelector("#home-scroll");
 const pullIndicatorEl = document.querySelector("#pull-indicator");
 const pullLabelEl = document.querySelector("#pull-label");
 const pullMetaEl = document.querySelector("#pull-meta");
+const threadModalEl = document.querySelector("#thread-modal");
+const threadModalCloseBtn = document.querySelector("#thread-modal-close-btn");
+const threadModalBodyEl = document.querySelector("#thread-modal-body");
+const threadModalRootEl = document.querySelector("#thread-modal-root");
+const threadModalRepliesEl = document.querySelector("#thread-modal-replies");
+const threadModalLoadHintEl = document.querySelector("#thread-modal-load-hint");
 const profileBannerEl = document.querySelector("#profile-banner");
 const profileAvatarEl = document.querySelector("#profile-avatar");
 const profileUsernameEl = document.querySelector("#profile-username");
@@ -188,6 +198,8 @@ const apiConfigNameInput = document.querySelector("#api-config-name-input");
 const apiConfigSaveBtn = document.querySelector("#api-config-save-btn");
 const apiConfigStatusEl = document.querySelector("#api-config-status");
 const apiConfigListEl = document.querySelector("#api-config-list");
+const translationApiEnabledEl = document.querySelector("#translation-api-enabled");
+const translationApiConfigSelectEl = document.querySelector("#translation-api-config-select");
 
 const state = {
   activeTab: "home",
@@ -217,7 +229,16 @@ const state = {
   feedTopAnchorAt: Date.now(),
   touchStartY: 0,
   touchTracking: false,
-  wheelReleaseTimer: null
+  wheelReleaseTimer: null,
+  threadModalOpen: false,
+  threadModalBucket: "",
+  threadModalPostId: "",
+  threadModalTouchTracking: false,
+  threadModalTouchStartY: 0,
+  threadModalLoadingMore: false,
+  threadModalLastLoadAt: 0,
+  translatingPosts: {},
+  translatingReplies: {}
 };
 
 state.customTabs = normalizeCustomTabs(state.settings.customTabs);
@@ -670,6 +691,10 @@ function hashText(value) {
 
 function getCurrentSettings() {
   const mode = normalizeApiMode(modeSelect.value);
+  const translationApiEnabled = Boolean(translationApiEnabledEl?.checked);
+  const translationApiConfigId = String(
+    translationApiConfigSelectEl?.value || state.settings.translationApiConfigId || ""
+  ).trim();
   return {
     mode,
     endpoint: endpointInput.value.trim(),
@@ -682,7 +707,9 @@ function getCurrentSettings() {
     worldview: worldviewInput.value.trim(),
     customTabs: [...state.customTabs],
     apiConfigs: normalizeApiConfigs(state.settings.apiConfigs),
-    activeApiConfigId: state.settings.activeApiConfigId || ""
+    activeApiConfigId: state.settings.activeApiConfigId || "",
+    translationApiEnabled: translationApiEnabled && Boolean(translationApiConfigId),
+    translationApiConfigId
   };
 }
 
@@ -713,7 +740,9 @@ function loadSettings() {
       ...DEFAULT_SETTINGS,
       customTabs: normalizeCustomTabs(DEFAULT_SETTINGS.customTabs),
       apiConfigs: normalizeApiConfigs(DEFAULT_SETTINGS.apiConfigs),
-      activeApiConfigId: ""
+      activeApiConfigId: "",
+      translationApiEnabled: false,
+      translationApiConfigId: ""
     };
   }
 
@@ -737,13 +766,19 @@ function loadSettings() {
     if (!merged.apiConfigs.some((item) => item.id === merged.activeApiConfigId)) {
       merged.activeApiConfigId = "";
     }
+    if (!merged.apiConfigs.some((item) => item.id === merged.translationApiConfigId)) {
+      merged.translationApiConfigId = "";
+      merged.translationApiEnabled = false;
+    }
     return merged;
   } catch (_error) {
     return {
       ...DEFAULT_SETTINGS,
       customTabs: normalizeCustomTabs(DEFAULT_SETTINGS.customTabs),
       apiConfigs: normalizeApiConfigs(DEFAULT_SETTINGS.apiConfigs),
-      activeApiConfigId: ""
+      activeApiConfigId: "",
+      translationApiEnabled: false,
+      translationApiConfigId: ""
     };
   }
 }
@@ -929,6 +964,9 @@ function applySettingsToForm(settings) {
   dmCountInput.value = String(settings.dmCount || DEFAULT_DM_COUNT);
   replyCountInput.value = String(settings.replyCount || DEFAULT_REPLY_COUNT);
   worldviewInput.value = settings.worldview || DEFAULT_SETTINGS.worldview;
+  if (translationApiEnabledEl) {
+    translationApiEnabledEl.checked = Boolean(settings.translationApiEnabled);
+  }
   updateModeUI();
   renderApiConfigList();
 }
@@ -1040,6 +1078,84 @@ function renderAvatarMarkup(label, className = "avatar", imageSrc = "") {
 
 function renderEditedNote(post) {
   return post.edited ? '<p class="post-edited-note">（已编辑）</p>' : "";
+}
+
+function renderTranslationBlock(translationText, translatedTags = []) {
+  const text = String(translationText || "").trim();
+  const tags = normalizeTags(translatedTags, 5);
+  if (!text && !tags.length) {
+    return "";
+  }
+  return `
+    <div class="translation-block">
+      <p class="translation-divider">————————————————</p>
+      ${text ? `<p class="translation-text">${escapeHtml(text)}</p>` : ""}
+      ${tags.length ? `<p class="translation-tags">${escapeHtml(tags.join(" "))}</p>` : ""}
+    </div>
+  `;
+}
+
+function getPostTranslationKey(postId, bucketName = state.activeFeed) {
+  return `${String(bucketName || "home")}::${String(postId || "")}`;
+}
+
+function getReplyTranslationKey(postId, replyId, bucketName = state.activeFeed) {
+  return `${String(bucketName || "home")}::${String(postId || "")}::${String(replyId || "")}`;
+}
+
+function isPostTranslating(postId, bucketName = state.activeFeed) {
+  return Boolean(state.translatingPosts[getPostTranslationKey(postId, bucketName)]);
+}
+
+function setPostTranslating(postId, bucketName = state.activeFeed, isLoading = false) {
+  const key = getPostTranslationKey(postId, bucketName);
+  if (isLoading) {
+    state.translatingPosts[key] = true;
+    return;
+  }
+  delete state.translatingPosts[key];
+}
+
+function isReplyTranslating(postId, replyId, bucketName = state.activeFeed) {
+  return Boolean(state.translatingReplies[getReplyTranslationKey(postId, replyId, bucketName)]);
+}
+
+function setReplyTranslating(postId, replyId, bucketName = state.activeFeed, isLoading = false) {
+  const key = getReplyTranslationKey(postId, replyId, bucketName);
+  if (isLoading) {
+    state.translatingReplies[key] = true;
+    return;
+  }
+  delete state.translatingReplies[key];
+}
+
+function updatePostAcrossBuckets(postId, updater) {
+  let hasUpdated = false;
+  state.profilePosts = state.profilePosts.map((post) => {
+    if (post.id !== postId) {
+      return post;
+    }
+    hasUpdated = true;
+    return updater({ ...post });
+  });
+
+  Object.keys(state.feeds).forEach((bucketName) => {
+    state.feeds[bucketName] = (state.feeds[bucketName] || []).map((post) => {
+      if (post.id !== postId) {
+        return post;
+      }
+      hasUpdated = true;
+      return updater({ ...post });
+    });
+  });
+
+  if (!hasUpdated) {
+    return false;
+  }
+
+  persistProfilePosts(state.profilePosts);
+  persistFeeds(state.feeds);
+  return true;
 }
 
 function syncPostAcrossViews(postId, updater) {
@@ -1311,6 +1427,88 @@ function setApiConfigStatus(message, tone = "") {
   }
 }
 
+function renderTranslationApiControls() {
+  if (!translationApiEnabledEl || !translationApiConfigSelectEl) {
+    return;
+  }
+
+  const configs = normalizeApiConfigs(state.settings.apiConfigs)
+    .slice()
+    .sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0));
+
+  if (
+    state.settings.translationApiConfigId &&
+    !configs.some((item) => item.id === state.settings.translationApiConfigId)
+  ) {
+    state.settings.translationApiConfigId = "";
+    state.settings.translationApiEnabled = false;
+  }
+
+  const hasConfigs = configs.length > 0;
+  if (!hasConfigs) {
+    state.settings.translationApiEnabled = false;
+    state.settings.translationApiConfigId = "";
+  }
+
+  translationApiEnabledEl.checked = Boolean(state.settings.translationApiEnabled && hasConfigs);
+  translationApiEnabledEl.disabled = !hasConfigs;
+  translationApiConfigSelectEl.disabled = !hasConfigs || !translationApiEnabledEl.checked;
+  translationApiConfigSelectEl.innerHTML = hasConfigs
+    ? [
+        '<option value="">请选择一套已缓存的 API 配置</option>',
+        ...configs.map(
+          (item) =>
+            `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} · ${escapeHtml(
+              getApiModeLabel(item.mode)
+            )}</option>`
+        )
+      ].join("")
+    : '<option value="">暂无缓存配置</option>';
+  translationApiConfigSelectEl.value = state.settings.translationApiConfigId || "";
+}
+
+function setTranslationApiConfig(configId) {
+  const config =
+    normalizeApiConfigs(state.settings.apiConfigs).find((item) => item.id === configId) || null;
+  if (!config) {
+    setApiConfigStatus("未找到可用于翻译的缓存 API 配置。", "error");
+    return;
+  }
+
+  state.settings.translationApiEnabled = true;
+  state.settings.translationApiConfigId = config.id;
+  if (translationApiEnabledEl) {
+    translationApiEnabledEl.checked = true;
+  }
+  if (translationApiConfigSelectEl) {
+    translationApiConfigSelectEl.value = config.id;
+  }
+  saveCurrentSettings();
+  setApiConfigStatus(`翻译专用 API 已切换到“${config.name}”。`, "success");
+}
+
+function getTranslationRequestSettings(settings = getCurrentSettings()) {
+  if (!settings.translationApiEnabled || !settings.translationApiConfigId) {
+    return settings;
+  }
+
+  const config =
+    normalizeApiConfigs(settings.apiConfigs || state.settings.apiConfigs).find(
+      (item) => item.id === settings.translationApiConfigId
+    ) || null;
+  if (!config) {
+    return settings;
+  }
+
+  return {
+    ...settings,
+    mode: config.mode,
+    endpoint: config.endpoint,
+    token: config.token,
+    model: config.model
+  };
+}
+
 function renderApiConfigList() {
   if (!apiConfigListEl) {
     return;
@@ -1323,10 +1521,18 @@ function renderApiConfigList() {
   ) {
     state.settings.activeApiConfigId = "";
   }
+  if (
+    state.settings.translationApiConfigId &&
+    !state.settings.apiConfigs.some((item) => item.id === state.settings.translationApiConfigId)
+  ) {
+    state.settings.translationApiConfigId = "";
+    state.settings.translationApiEnabled = false;
+  }
 
   if (!state.settings.apiConfigs.length) {
     apiConfigListEl.innerHTML =
       '<p class="empty-state">还没有缓存的 API 配置，可先填写参数后点击“保存当前 API 配置”。</p>';
+    renderTranslationApiControls();
     return;
   }
 
@@ -1335,13 +1541,18 @@ function renderApiConfigList() {
     .sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0))
     .map((item) => {
       const isActive = item.id === state.settings.activeApiConfigId;
+      const isTranslationSelected =
+        state.settings.translationApiEnabled && item.id === state.settings.translationApiConfigId;
       const modelText = item.model ? `模型：${item.model}` : "模型：无";
       const tokenText = item.token ? "密钥：已保存" : "密钥：未保存";
       return `
         <article class="api-config-item${isActive ? " active" : ""}">
           <div class="api-config-item__head">
             <strong>${escapeHtml(item.name)}</strong>
-            <span class="badge">${isActive ? "当前配置" : "已缓存"}</span>
+            <div class="api-config-item__badges">
+              <span class="badge">${isActive ? "当前配置" : "已缓存"}</span>
+              ${isTranslationSelected ? '<span class="badge">翻译专用</span>' : ""}
+            </div>
           </div>
           <p class="api-config-item__meta">
             类型：${escapeHtml(getApiModeLabel(item.mode))}
@@ -1354,6 +1565,11 @@ function renderApiConfigList() {
             )}">
               一键切换
             </button>
+            <button class="ghost-chip" type="button" data-action="set-translation-api-config" data-config-id="${escapeHtml(
+              item.id
+            )}" ${isTranslationSelected ? "disabled" : ""}>
+              ${isTranslationSelected ? "已用于翻译" : "设为翻译专用"}
+            </button>
             <button class="ghost-chip ghost-chip--danger" type="button" data-action="delete-api-config" data-config-id="${escapeHtml(
               item.id
             )}">
@@ -1364,6 +1580,7 @@ function renderApiConfigList() {
       `;
     })
     .join("");
+  renderTranslationApiControls();
 }
 
 function saveCurrentApiConfig() {
@@ -1448,6 +1665,10 @@ function deleteApiConfig(configId) {
   if (state.settings.activeApiConfigId === configId) {
     state.settings.activeApiConfigId = "";
   }
+  if (state.settings.translationApiConfigId === configId) {
+    state.settings.translationApiConfigId = "";
+    state.settings.translationApiEnabled = false;
+  }
   saveCurrentSettings();
   setApiConfigStatus(`API 配置“${target.name}”已删除。`, "success");
 }
@@ -1472,6 +1693,9 @@ function buildPrompt(
     "每个对象必须包含以下字段：displayName, handle, text, tags, replies, reposts, likes, views。",
     "输出必须是可以直接被 JSON.parse 解析的合法 JSON，所有字符串都必须使用双引号包裹。",
     "text 需要像 X 首页上的真实讨论帖，长度控制在 50 到 300 字之间，语气自然、有观点、有轻微冲突感。",
+    "不同帖子需要分别模拟来自中国、日本、韩国、美国社区的用户发言风格。",
+    "每一条帖子必须全文保持单一语言，只能四选一：中文、日文、韩文、英文。不要在同一条帖子里混用多种语言，也不要出现中文正文里夹几句英文或日文的情况。",
+    "text 要避免整段大段文字，尽量拆成短句；每条至少 2 段，可使用换行或空一行让版式更像真人发帖。",
     "tags 必须是数组，至少 2 个、最多 5 个标签；每个标签都必须以 # 开头，例如 #榜单、#行业洞察。",
     "这些标签必须根据该条内容本身提炼，不能空泛重复；text 字段里不要重复输出标签行，标签只放在 tags 数组中。",
     "严禁直接复制、引用或轻微改写世界观文本或页签文本里的原句。你需要先理解这些设定，再把它们转化成更口语化、更具体的讨论表达。",
@@ -1479,7 +1703,7 @@ function buildPrompt(
     settings.worldview || DEFAULT_SETTINGS.worldview,
     feedInstruction,
     resolvedSource,
-    `请保证 ${count} 条内容不重复，角度不同，并贴近中文互联网的实时讨论氛围。`
+    `请保证 ${count} 条内容不重复，角度不同。`
   ].join("\n\n");
 }
 
@@ -1585,6 +1809,9 @@ function buildReplyPrompt(
     `请生成 ${count} 条回复，每条都必须是不同用户的口吻。`,
     "每个对象必须包含以下字段：displayName, handle, text, likes, replies。",
     "回复语气要像真实网友跟帖，长度控制在 18 到 80 字之间，可以有赞同、反对、补充和追问。",
+    "不同回复可以分别模拟来自中国、日本、韩国、美国社区的用户发言风格。",
+    "每一条回复必须全文保持单一语言，只能四选一：中文、日文、韩文、英文。不要在同一条回复里混用多种语言。",
+    "避免整段灌水，优先短句，必要时用换行提升可读性。",
     "回复生成优先级：",
     "1. 首先直接回应当前帖子或上一层回复的具体内容，抓住文本里的观点、情绪、判断、细节或矛盾点。",
     "2. 识别当前发帖用户的人设，让回复看起来像是在对这样一个具体的人说话，而不是对匿名文本发言。",
@@ -1632,11 +1859,13 @@ function normalizeReply(item, index = 0, seed = "root") {
   const [fallbackName, fallbackHandle] =
     FEED_NAMES[(index + 3) % FEED_NAMES.length];
   const stableSeed = `${seed}-${item?.text || ""}-${item?.displayName || fallbackName}-${index}`;
+  const translationZh = String(item?.translationZh || item?.translatedText || "").trim();
   return {
     id: item?.id || `reply_${index}_${hashText(stableSeed)}`,
     displayName: truncate(item?.displayName || fallbackName, 24),
     handle: truncate(item?.handle || fallbackHandle, 24),
     text: truncate(item?.text || "这条回复还在生成中。", 120),
+    translationZh: truncate(translationZh, 600),
     likes: formatMetric(item?.likes, 12 + index * 5),
     replies: formatMetric(item?.replies, 2 + index),
     time: item?.time || `${index + 1}m`,
@@ -1668,16 +1897,28 @@ function setHomeStatus(message, tone = "") {
   }
 }
 
+function setFeedPullOffset(offset = 0) {
+  if (!feedEl) {
+    return;
+  }
+  feedEl.style.setProperty("--feed-offset", `${Math.max(0, Math.round(offset))}px`);
+}
+
 function setPullIndicator(distance = 0, mode = "idle") {
   if (!pullIndicatorEl || !pullLabelEl || !pullMetaEl) {
     return;
   }
 
   const progress = Math.max(0, Math.min(distance, 130));
+  const isLoading = mode === "loading";
+  const isVisible = progress > 0 || isLoading;
+  const feedOffset = isLoading ? 42 : Math.min(36, progress * 0.32);
   const scale = 1 + progress / 420;
   pullIndicatorEl.style.transform = `scale(${scale})`;
+  pullIndicatorEl.classList.toggle("visible", isVisible);
   pullIndicatorEl.classList.toggle("ready", mode === "ready");
   pullIndicatorEl.classList.toggle("loading", mode === "loading");
+  setFeedPullOffset(feedOffset);
 
   const homeCount = getCurrentSettings().homeCount || DEFAULT_POST_COUNT;
 
@@ -1716,6 +1957,13 @@ function saveCurrentSettings() {
   ) {
     state.settings.activeApiConfigId = "";
   }
+  if (
+    state.settings.translationApiConfigId &&
+    !state.settings.apiConfigs.some((item) => item.id === state.settings.translationApiConfigId)
+  ) {
+    state.settings.translationApiConfigId = "";
+    state.settings.translationApiEnabled = false;
+  }
   persistSettings(state.settings);
   updatePromptPreview();
   updateMessagePromptPreview();
@@ -1746,10 +1994,25 @@ function setHomeComposerOpen(isOpen) {
   }
 }
 
+function canRefreshCurrentHomeFeed() {
+  return state.activeTab === "home" && state.activeFeed !== "tags";
+}
+
+function updateHomeRefreshAvailability() {
+  if (!topRefreshBtn) {
+    return;
+  }
+  topRefreshBtn.disabled = state.isRefreshing || !canRefreshCurrentHomeFeed();
+}
+
 function switchHomeFeed(nextFeed) {
   if (nextFeed === "tags") {
     state.activeFeed = "tags";
+    state.activeTagFilter = "";
+    state.pullDistance = 0;
+    setPullIndicator(0, "idle");
     renderActiveFeed();
+    updateHomeRefreshAvailability();
     setHomeStatus("当前查看：热门标签", "");
     return;
   }
@@ -1766,10 +2029,14 @@ function switchHomeFeed(nextFeed) {
   updateMessagePromptPreview();
   updateReplyPromptPreview();
   updateInsightPanel();
+  updateHomeRefreshAvailability();
   setHomeStatus(`当前查看：${getFeedLabel(state.activeFeed)}`, "");
 }
 
 function switchTab(tabName) {
+  if (state.threadModalOpen && tabName !== state.activeTab) {
+    setThreadModalOpen(false);
+  }
   state.activeTab = tabName;
   Object.entries(pages).forEach(([name, page]) => {
     if (page) {
@@ -1790,6 +2057,7 @@ function switchTab(tabName) {
     topRefreshBtn.hidden = !isHomeTab;
     topRefreshBtn.style.display = isHomeTab ? "inline-flex" : "none";
   }
+  updateHomeRefreshAvailability();
   if (homeComposerToggleBtn) {
     homeComposerToggleBtn.hidden = !isHomeTab;
     homeComposerToggleBtn.style.display = isHomeTab ? "inline-flex" : "none";
@@ -1981,11 +2249,15 @@ function normalizePost(item, index = 0, fallbackFeedType = DEFAULT_CONTENT_FEED)
     resolvedFallbackFeedType === "hot" ? "entertainment" : resolvedFallbackFeedType;
   const resolvedFeedType = normalizedIncomingFeedType || normalizedFallbackFeedType;
   const resolvedTags = getRenderableTags(item, resolvedFeedType);
+  const translationZh = String(item?.translationZh || item?.translatedText || "").trim();
+  const translatedTags = normalizeTags(item?.translatedTags || item?.translationTags || [], 5);
   return {
     id: item?.id || `post_${index}_${hashText(stableSeed)}`,
     displayName: truncate(item?.displayName || fallbackName, 28),
     handle: truncate(item?.handle || fallbackHandle, 28),
-    text: truncate(item?.text || "讨论内容生成中。", 160),
+    text: truncate(item?.text || "讨论内容生成中。", MAX_POST_TEXT_LENGTH),
+    translationZh: truncate(translationZh, 1200),
+    translatedTags,
     tags: resolvedTags,
     replies: formatMetric(item?.replies, 8 + index * 3),
     reposts: formatMetric(item?.reposts, 6 + index * 4),
@@ -2008,10 +2280,16 @@ function renderFeedPost(post, bucketName = state.activeFeed) {
       )
     : renderAvatarMarkup(post.displayName.slice(0, 2).toUpperCase(), "avatar");
   const tagMarkup = renderPostTags(post, post.feedType || actualBucket);
+  const translationMarkup = renderTranslationBlock(post.translationZh, post.translatedTags);
+  const translateLabel = isPostTranslating(post.id, actualBucket)
+    ? "翻译中..."
+    : post.translationZh
+      ? "重新翻译"
+      : "翻译";
 
   return `
     <article class="post" data-post-id="${escapeHtml(post.id)}">
-      <div class="post-shell post-shell--interactive" data-action="toggle-post" data-bucket="${escapeHtml(
+      <div class="post-shell post-shell--interactive" data-action="open-thread-modal" data-bucket="${escapeHtml(
         actualBucket
       )}" data-post-id="${escapeHtml(post.id)}">
         ${avatarMarkup}
@@ -2023,12 +2301,20 @@ function renderFeedPost(post, bucketName = state.activeFeed) {
           </div>
           <p class="post-text">${escapeHtml(post.text)}</p>
           ${tagMarkup}
+          ${translationMarkup}
           ${renderEditedNote(post)}
           <div class="post-actions">
-            <button class="action-link" type="button" data-action="toggle-post" data-bucket="${escapeHtml(
+            <button class="action-link" type="button" data-action="open-thread-modal" data-bucket="${escapeHtml(
               actualBucket
             )}" data-post-id="${escapeHtml(post.id)}">
-              ${getPostThreadState(post.id, actualBucket)?.expanded ? "收起讨论" : "展开讨论"}
+              查看讨论
+            </button>
+            <button class="action-link" type="button" data-action="translate-post" data-bucket="${escapeHtml(
+              actualBucket
+            )}" data-post-id="${escapeHtml(post.id)}" ${
+              isPostTranslating(post.id, actualBucket) ? "disabled" : ""
+            }>
+              ${translateLabel}
             </button>
             <span>回复 ${post.replies}</span>
             <span>转发 ${post.reposts}</span>
@@ -2037,7 +2323,6 @@ function renderFeedPost(post, bucketName = state.activeFeed) {
           </div>
         </div>
       </div>
-      ${renderPostDiscussion(post, actualBucket)}
     </article>
   `;
 }
@@ -2227,6 +2512,370 @@ function renderReplyBranch(postId, replies, bucketName = state.activeFeed, depth
       `;
     })
     .join("");
+}
+
+function resolveThreadBucketName(bucketName, post) {
+  if (bucketName === "tags") {
+    return post?.feedType || getCurrentContentFeed();
+  }
+  if (bucketName === "profile" && post?.feedType && post.feedType !== "profile") {
+    return post.feedType;
+  }
+  return bucketName || state.activeFeed;
+}
+
+function renderThreadModalReplyCard(reply, bucketName, postId, depth = 1) {
+  const translationMarkup = renderTranslationBlock(reply.translationZh);
+  const isLoading = isReplyTranslating(postId, reply.id, bucketName);
+  const translateLabel = isLoading
+    ? "翻译中..."
+    : reply.translationZh
+      ? "重新翻译"
+      : "翻译";
+  const toggleLabel = reply.expanded ? "收起回复" : "展开回复";
+  const nestedBlock = reply.expanded
+    ? reply.loading
+      ? '<div class="reply-children"><p class="thread-loading">正在加载回复…</p></div>'
+      : reply.children?.length
+        ? `<div class="reply-children">${reply.children
+            .map((childReply) =>
+              renderThreadModalReplyCard(childReply, bucketName, postId, depth + 1)
+            )
+            .join("")}</div>`
+        : '<div class="reply-children"><p class="thread-empty">这层回复暂时还没有新内容。</p></div>'
+    : "";
+
+  return `
+    <article class="reply-card" data-reply-id="${escapeHtml(reply.id)}" data-depth="${depth}">
+      <div class="reply-shell">
+        <div class="reply-avatar">${escapeHtml(reply.displayName.slice(0, 2).toUpperCase())}</div>
+        <div>
+          <div class="post-head">
+            <strong>${escapeHtml(reply.displayName)}</strong>
+            <span class="post-handle">${escapeHtml(reply.handle)}</span>
+            <span class="post-time">· ${escapeHtml(reply.time)}</span>
+          </div>
+          <p class="reply-text">${escapeHtml(reply.text)}</p>
+          ${translationMarkup}
+          <div class="reply-actions">
+            <button class="action-link" type="button" data-action="toggle-reply" data-bucket="${escapeHtml(
+              bucketName
+            )}" data-post-id="${escapeHtml(postId)}" data-reply-id="${escapeHtml(reply.id)}">
+              ${toggleLabel}
+            </button>
+            <button class="action-link" type="button" data-action="translate-reply" data-bucket="${escapeHtml(
+              bucketName
+            )}" data-post-id="${escapeHtml(postId)}" data-reply-id="${escapeHtml(reply.id)}" ${
+              isLoading ? "disabled" : ""
+            }>
+              ${translateLabel}
+            </button>
+            <span>回复 ${reply.replies}</span>
+            <span>喜欢 ${reply.likes}</span>
+          </div>
+          ${nestedBlock}
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function renderThreadModalRootPost(post, bucketName) {
+  if (!threadModalRootEl) {
+    return;
+  }
+  const avatarMarkup = post.authorOwned
+    ? renderAvatarMarkup(
+        truncate(state.profile.avatar || DEFAULT_PROFILE.avatar, 2),
+        "avatar",
+        state.profile.avatarImage || ""
+      )
+    : renderAvatarMarkup(post.displayName.slice(0, 2).toUpperCase(), "avatar");
+  const tagMarkup = renderPostTags(post, post.feedType || bucketName);
+  const translationMarkup = renderTranslationBlock(post.translationZh, post.translatedTags);
+  const isLoading = isPostTranslating(post.id, bucketName);
+  const translateLabel = isLoading ? "翻译中..." : post.translationZh ? "重新翻译" : "翻译";
+  threadModalRootEl.innerHTML = `
+    <div class="post-shell">
+      ${avatarMarkup}
+      <div>
+        <div class="post-head">
+          <strong>${escapeHtml(post.displayName)}</strong>
+          <span class="post-handle">${escapeHtml(post.handle)}</span>
+          <span class="post-time">· ${escapeHtml(post.time)}</span>
+        </div>
+        <p class="post-text">${escapeHtml(post.text)}</p>
+        ${tagMarkup}
+        ${translationMarkup}
+        <div class="post-actions">
+          <button class="action-link" type="button" data-action="translate-post" data-bucket="${escapeHtml(
+            bucketName
+          )}" data-post-id="${escapeHtml(post.id)}" ${isLoading ? "disabled" : ""}>${translateLabel}</button>
+          <span>回复 ${post.replies}</span>
+          <span>转发 ${post.reposts}</span>
+          <span>喜欢 ${post.likes}</span>
+          <span>浏览 ${post.views}</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderThreadModal() {
+  if (
+    !threadModalEl ||
+    !threadModalRootEl ||
+    !threadModalRepliesEl ||
+    !threadModalLoadHintEl ||
+    !threadModalBodyEl
+  ) {
+    return;
+  }
+  if (!state.threadModalOpen) {
+    threadModalEl.classList.add("hidden");
+    threadModalEl.setAttribute("aria-hidden", "true");
+    document.body.style.overflow = "";
+    return;
+  }
+
+  const post = findPostById(state.threadModalPostId, state.threadModalBucket);
+  if (!post) {
+    threadModalRootEl.innerHTML = '<p class="thread-empty">未找到对应帖子。</p>';
+    threadModalRepliesEl.innerHTML = "";
+    threadModalLoadHintEl.textContent = "帖子不存在";
+    return;
+  }
+
+  const resolvedBucket = resolveThreadBucketName(state.threadModalBucket, post);
+  const threadState = getPostThreadState(post.id, resolvedBucket);
+  renderThreadModalRootPost(post, resolvedBucket);
+
+  if (!threadState?.replies?.length && !threadState?.loading) {
+    threadModalRepliesEl.innerHTML = '<p class="thread-empty">这条讨论暂时还没有回复。</p>';
+  } else if (!threadState?.replies?.length) {
+    threadModalRepliesEl.innerHTML = "";
+  } else {
+    threadModalRepliesEl.innerHTML = threadState.replies
+      .map((reply) => renderThreadModalReplyCard(reply, resolvedBucket, post.id))
+      .join("");
+  }
+
+  if (state.threadModalLoadingMore || threadState?.loading) {
+    threadModalLoadHintEl.textContent = "正在加载更多回复…";
+  } else {
+    threadModalLoadHintEl.textContent = "滚动到底后继续上滑可加载更多回复";
+  }
+
+  threadModalEl.classList.remove("hidden");
+  threadModalEl.setAttribute("aria-hidden", "false");
+  document.body.style.overflow = "hidden";
+}
+
+function setThreadModalOpen(isOpen) {
+  state.threadModalOpen = Boolean(isOpen);
+  if (!state.threadModalOpen) {
+    state.threadModalBucket = "";
+    state.threadModalPostId = "";
+    state.threadModalTouchTracking = false;
+    state.threadModalLoadingMore = false;
+    state.threadModalLastLoadAt = 0;
+  }
+  renderThreadModal();
+}
+
+function mergeRepliesWithUniqueIds(existingReplies, incomingReplies) {
+  const merged = [...(existingReplies || [])];
+  const idSet = new Set(merged.map((reply) => reply.id));
+  incomingReplies.forEach((reply, index) => {
+    let nextId = reply.id || `reply_batch_${Date.now()}_${index}`;
+    if (idSet.has(nextId)) {
+      nextId = `${nextId}_${Date.now()}_${index}`;
+    }
+    idSet.add(nextId);
+    merged.push({
+      ...reply,
+      id: nextId
+    });
+  });
+  return merged;
+}
+
+function syncDiscussionForAuthoredPost(post, bucketName, postId, threadState) {
+  if (!post?.authorOwned || !threadState) {
+    return;
+  }
+  if (bucketName !== "profile") {
+    state.discussions.profile[postId] = threadState;
+    return;
+  }
+  if (post.feedType) {
+    getDiscussionBucket(post.feedType)[postId] = threadState;
+  }
+}
+
+async function loadPostDiscussionReplies(postId, bucketName = state.activeFeed, append = false) {
+  const post = findPostById(postId, bucketName);
+  if (!post) {
+    return;
+  }
+
+  const resolvedBucket = resolveThreadBucketName(bucketName, post);
+  const feedState = getDiscussionBucket(resolvedBucket);
+  const currentThread = feedState[postId] || {
+    expanded: true,
+    loading: false,
+    replies: []
+  };
+  if (currentThread.loading) {
+    return;
+  }
+
+  const existingReplies = currentThread.replies || [];
+  feedState[postId] = {
+    ...currentThread,
+    expanded: true,
+    loading: true,
+    replies: existingReplies
+  };
+  renderThreadModal();
+
+  const settings = { ...getCurrentSettings() };
+  const profile = { ...getCurrentProfile() };
+  const replyCount = settings.replyCount || DEFAULT_REPLY_COUNT;
+
+  try {
+    let replies;
+    try {
+      replies = await requestGeneratedReplies(
+        settings,
+        profile,
+        post.feedType || resolvedBucket,
+        post,
+        null,
+        replyCount
+      );
+    } catch (_error) {
+      replies = buildLocalReplies(
+        settings,
+        profile,
+        post.feedType || resolvedBucket,
+        post,
+        null,
+        replyCount
+      );
+    }
+
+    const nextReplies = append
+      ? mergeRepliesWithUniqueIds(existingReplies, replies)
+      : replies;
+    feedState[postId] = {
+      expanded: true,
+      loading: false,
+      replies: nextReplies
+    };
+    syncDiscussionForAuthoredPost(post, bucketName, postId, feedState[postId]);
+    persistDiscussions();
+    renderThreadModal();
+  } catch (_error) {
+    feedState[postId] = {
+      expanded: true,
+      loading: false,
+      replies: existingReplies
+    };
+    persistDiscussions();
+    renderThreadModal();
+  }
+}
+
+async function openThreadModal(postId, bucketName = state.activeFeed) {
+  const post = findPostById(postId, bucketName);
+  if (!post) {
+    return;
+  }
+  state.threadModalPostId = postId;
+  state.threadModalBucket = resolveThreadBucketName(bucketName, post);
+  state.threadModalLoadingMore = false;
+  setThreadModalOpen(true);
+  if (threadModalBodyEl) {
+    threadModalBodyEl.scrollTop = 0;
+  }
+
+  const threadState = getPostThreadState(postId, state.threadModalBucket);
+  if (!threadState?.replies?.length) {
+    await loadPostDiscussionReplies(postId, state.threadModalBucket, false);
+  } else {
+    renderThreadModal();
+  }
+}
+
+async function loadMoreThreadModalReplies() {
+  if (
+    !state.threadModalOpen ||
+    !state.threadModalPostId ||
+    !state.threadModalBucket ||
+    state.threadModalLoadingMore
+  ) {
+    return;
+  }
+  const threadState = getPostThreadState(state.threadModalPostId, state.threadModalBucket);
+  if (threadState?.loading || !threadState?.replies?.length) {
+    return;
+  }
+  if (Date.now() - state.threadModalLastLoadAt < THREAD_MODAL_LOAD_COOLDOWN_MS) {
+    return;
+  }
+  state.threadModalLoadingMore = true;
+  state.threadModalLastLoadAt = Date.now();
+  renderThreadModal();
+  await loadPostDiscussionReplies(state.threadModalPostId, state.threadModalBucket, true);
+  state.threadModalLoadingMore = false;
+  renderThreadModal();
+}
+
+function isThreadModalScrolledToBottom() {
+  if (!threadModalBodyEl) {
+    return false;
+  }
+  return (
+    threadModalBodyEl.scrollHeight - threadModalBodyEl.scrollTop - threadModalBodyEl.clientHeight <=
+    8
+  );
+}
+
+function handleThreadModalWheel(event) {
+  if (!state.threadModalOpen || !threadModalBodyEl || state.threadModalLoadingMore) {
+    return;
+  }
+  if (!isThreadModalScrolledToBottom() || event.deltaY <= 0) {
+    return;
+  }
+  event.preventDefault();
+  loadMoreThreadModalReplies();
+}
+
+function handleThreadModalTouchStart(event) {
+  if (!state.threadModalOpen || !threadModalBodyEl) {
+    return;
+  }
+  state.threadModalTouchTracking = true;
+  state.threadModalTouchStartY = event.touches[0].clientY;
+}
+
+function handleThreadModalTouchMove(event) {
+  if (!state.threadModalOpen || !state.threadModalTouchTracking || !threadModalBodyEl) {
+    return;
+  }
+  const delta = event.touches[0].clientY - state.threadModalTouchStartY;
+  if (!isThreadModalScrolledToBottom() || delta >= -16 || state.threadModalLoadingMore) {
+    return;
+  }
+  event.preventDefault();
+  state.threadModalTouchTracking = false;
+  loadMoreThreadModalReplies();
+}
+
+function handleThreadModalTouchEnd() {
+  state.threadModalTouchTracking = false;
 }
 
 function renderHomeTabs() {
@@ -2770,7 +3419,7 @@ function renderProfilePage() {
           </div>
         `
         : `
-          <div class="post-content-trigger" data-action="toggle-post" data-bucket="profile" data-post-id="${escapeHtml(
+          <div class="post-content-trigger" data-action="open-thread-modal" data-bucket="profile" data-post-id="${escapeHtml(
             post.id
           )}">
             <p class="post-text">${escapeHtml(post.text || "")}</p>
@@ -2817,10 +3466,10 @@ function renderProfilePage() {
               ${editorBlock}
               ${tagMarkup}
               <div class="post-actions">
-                <button class="action-link" type="button" data-action="toggle-post" data-bucket="profile" data-post-id="${escapeHtml(
+                <button class="action-link" type="button" data-action="open-thread-modal" data-bucket="profile" data-post-id="${escapeHtml(
                   post.id
                 )}">
-                  ${getPostThreadState(post.id, "profile")?.expanded ? "收起讨论" : "展开讨论"}
+                  查看讨论
                 </button>
                 <span>回复 ${post.replies || 0}</span>
                 <span>转发 ${post.reposts || 0}</span>
@@ -2829,7 +3478,6 @@ function renderProfilePage() {
               </div>
             </div>
           </div>
-          ${renderPostDiscussion(post, "profile")}
         </article>
       `;
     })
@@ -3006,6 +3654,85 @@ function parseGeneratedReplies(rawText, count = DEFAULT_REPLY_COUNT, seed = "rep
     .map((item, index) => normalizeReply(item, index, `${seed}-${index}`));
 }
 
+function getFallbackLocaleProfile(index = 0) {
+  const profiles = [
+    {
+      country: "中国",
+      postTail: "评论区接下来一定会继续分层。",
+      replyTail: "这条线往下聊，评论区很容易继续分成两派。",
+      postText(topic, worldview, ending) {
+        return [
+          `如果只看${topic}的表面热度，很多人会误判这波讨论。`,
+          worldview,
+          ending
+        ].join("\n\n");
+      },
+      replyText(focus, topic, viewpoint, tail) {
+        return `${viewpoint}\n\n你提到“${focus}”这点很关键，放在“${topic}”这个语境里看，${tail}`;
+      }
+    },
+    {
+      country: "日本",
+      postTail: "この話題、まだしばらく伸びると思う。",
+      replyTail: "この一文、次の返信で空気が変わりそう。",
+      postText(_topic, _worldview, ending) {
+        return [
+          "この話題、表面の熱量だけで判断するとズレる。",
+          "本当の争点は好き嫌いじゃなくて、流れが変わったことを誰が先に読んだかだと思う。",
+          ending
+        ].join("\n\n");
+      },
+      replyText(_focus, _topic, _viewpoint, tail) {
+        return [
+          "その見方はわかるけど、まだ前提を分けて考えたい。",
+          "この流れだと、解釈の違いがそのまま温度差として出てくる。",
+          tail
+        ].join("\n\n");
+      }
+    },
+    {
+      country: "韩国",
+      postTail: "이 토론은 아직 더 커질 가능성이 높아요.",
+      replyTail: "이 문장은 다음 답글에서 분위기를 바꿀 수 있어요.",
+      postText(_topic, _worldview, ending) {
+        return [
+          "이 이슈는 겉으로 보이는 반응만 보면 방향을 잘못 읽기 쉽습니다.",
+          "핵심은 호불호가 아니라, 서사가 이미 바뀌었다는 걸 누가 먼저 감지했는가에 있어요.",
+          ending
+        ].join("\n\n");
+      },
+      replyText(_focus, _topic, _viewpoint, tail) {
+        return [
+          "이 포인트는 공감하지만, 아직 전제를 더 나눠서 볼 필요가 있어요.",
+          "지금은 문장 하나가 아니라 그 문장이 어떤 흐름을 만드는지가 더 중요해 보입니다.",
+          tail
+        ].join("\n\n");
+      }
+    },
+    {
+      country: "美国",
+      postTail: "This discussion still has room to grow.",
+      replyTail: "One more reply could shift the whole read of this thread.",
+      postText(_topic, _worldview, ending) {
+        return [
+          "If you only look at the surface heat, this topic is easy to misread.",
+          "The real split is not taste. It is about who noticed the narrative had already shifted.",
+          ending
+        ].join("\n\n");
+      },
+      replyText(_focus, _topic, _viewpoint, tail) {
+        return [
+          "I get the point, but I still think the premise needs to be separated first.",
+          "What matters here is not the sentence alone. It is the chain reaction the sentence creates.",
+          tail
+        ].join("\n\n");
+      }
+    }
+  ];
+
+  return profiles[index % profiles.length];
+}
+
 function buildLocalReplies(
   settings,
   profile,
@@ -3017,9 +3744,6 @@ function buildLocalReplies(
   const parentText = parentReply ? parentReply.text : rootPost.text;
   const topic = getRenderableTags(rootPost, feedType)[0] || getFeedLabel(feedType) || "当前讨论";
   const focus = truncate(parentText, 30);
-  const personaHint = profile?.personaPrompt
-    ? `像你这种“${truncate(profile.personaPrompt, 18)}”的人设说出这段话，`
-    : "按这个发帖者一贯的表达方式看，";
   const viewpoints = [
     "你这句切得很准，但我觉得争议点其实就在这里。",
     "我不完全同意，因为这段话默认的前提可能还得再拆开。",
@@ -3034,14 +3758,21 @@ function buildLocalReplies(
     "要继续聊下去，关键还是得回到更具体的场景。",
     "真正有意思的是，你这句其实还能继续往下拆。"
   ];
-
+  const localeOffset = Number.parseInt(hashText(rootPost.id || topic), 36) || 0;
   return Array.from({ length: count }, (_, index) => {
     const [displayName, handle] = FEED_NAMES[(index + 5) % FEED_NAMES.length];
+    const localeProfile = getFallbackLocaleProfile(index + localeOffset);
+    const tail = localeProfile.country === "中国"
+      ? followUps[index % followUps.length]
+      : localeProfile.replyTail;
+    const viewpoint = localeProfile.country === "中国"
+      ? viewpoints[index % viewpoints.length]
+      : "";
     return normalizeReply(
       {
         displayName,
         handle,
-        text: `${viewpoints[index % viewpoints.length]} ${personaHint}你提到“${focus}”，从“${topic}”这个语境里看，${followUps[index % followUps.length]}`,
+        text: localeProfile.replyText(focus, topic, viewpoint, tail),
         likes: 10 + index * 6,
         replies: 1 + (index % 3),
         time: `${index + 1}m`
@@ -3167,7 +3898,18 @@ function buildLocalPosts(settings, count = DEFAULT_POST_COUNT, feedType = DEFAUL
       index
     );
     const [displayName, handle] = FEED_NAMES[index % FEED_NAMES.length];
-    const text = `${openings[index % openings.length]}${topic}，而是它背后暴露出的结构变化。${worldview} ${endings[index % endings.length]}`;
+    const localeProfile = getFallbackLocaleProfile(index);
+    const tail = localeProfile.country === "中国"
+      ? endings[index % endings.length]
+      : localeProfile.postTail;
+    const chineseText = [
+      `${openings[index % openings.length]}${topic}，而是它背后暴露出的结构变化。`,
+      worldview,
+      tail
+    ].join("\n\n");
+    const text = localeProfile.country === "中国"
+      ? chineseText
+      : localeProfile.postText(topic, worldview, tail);
     const pool = tagPools[feedType] || tagPools.default;
     const tags = ensurePostTags(
       [topic, pool[index % pool.length], pool[(index + 2) % pool.length]],
@@ -3482,6 +4224,264 @@ function buildLocalConversationReply(profile, conversation, userMessage) {
   );
 }
 
+function buildTranslatePrompt(sourceText) {
+  return [
+    "请把下面内容翻译成中文，保留原意、语气和换行，不要添加解释。",
+    sourceText
+  ].join("\n\n");
+}
+
+function buildTranslatePostPrompt(post) {
+  return [
+    "请把下面帖子翻译成中文，保留原意、语气和换行。",
+    "请严格输出 JSON 数组，并且只包含 1 个对象。",
+    '对象必须包含字段：text, tags。',
+    "text 是翻译后的正文，tags 是翻译后的中文标签数组；每个标签都必须以 # 开头。",
+    "原文正文：",
+    post.text || "",
+    "原文标签：",
+    getRenderableTags(post, post.feedType || DEFAULT_CONTENT_FEED).join(" ")
+  ].join("\n\n");
+}
+
+function buildTranslateRequestBody(settings, prompt) {
+  const mode = normalizeApiMode(settings.mode);
+  if (mode === "openai") {
+    return {
+      model: settings.model || DEFAULT_SETTINGS.model,
+      temperature: 0.2,
+      messages: [
+        {
+          role: "user",
+          content: prompt
+        }
+      ],
+      stream: false
+    };
+  }
+
+  if (mode === "gemini") {
+    return {
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: prompt }]
+        }
+      ],
+      generationConfig: {
+        temperature: 0.2
+      }
+    };
+  }
+
+  return {
+    prompt,
+    intent: "translate_to_zh"
+  };
+}
+
+function normalizeTranslatedText(rawText, fallbackText = "") {
+  let resolvedText = String(rawText || "").trim();
+  const fenced = resolvedText.match(/```(?:json|text|markdown)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) {
+    resolvedText = fenced[1].trim();
+  }
+
+  const jsonText = extractJsonArray(resolvedText);
+  if (jsonText) {
+    try {
+      const parsed = parseJsonArrayWithRepair(jsonText, "翻译响应 JSON 解析失败。");
+      if (Array.isArray(parsed) && parsed.length) {
+        const first = parsed[0];
+        if (typeof first === "string") {
+          resolvedText = first.trim();
+        } else if (first && typeof first === "object") {
+          resolvedText = String(
+            first.translation ||
+              first.translatedText ||
+              first.text ||
+              first.output ||
+              resolvedText
+          ).trim();
+        }
+      }
+    } catch (_error) {
+      // ignore JSON parsing failures for translation responses
+    }
+  }
+
+  resolvedText = resolvedText
+    .replace(/^["'`“”]+/, "")
+    .replace(/["'`“”]+$/, "")
+    .trim();
+  return resolvedText || fallbackText;
+}
+
+async function requestTranslatedPostContent(settings, post) {
+  const requestEndpoint = resolveApiRequestEndpoint(settings);
+  settings.endpoint = requestEndpoint;
+  if (!requestEndpoint) {
+    throw new Error("未配置 API 地址，无法执行翻译。");
+  }
+  if (normalizeApiMode(settings.mode) === "openai" && !settings.model) {
+    throw new Error("DeepSeek / OpenAI 兼容模式需要填写模型名称。");
+  }
+  if (normalizeApiMode(settings.mode) === "gemini" && !settings.token) {
+    throw new Error("Gemini 模式需要填写 API Key。");
+  }
+
+  const response = await fetch(requestEndpoint, {
+    method: "POST",
+    headers: buildRequestHeaders(settings),
+    body: JSON.stringify(buildTranslateRequestBody(settings, buildTranslatePostPrompt(post)))
+  });
+  if (!response.ok) {
+    throw new Error(`翻译请求失败：HTTP ${response.status}`);
+  }
+
+  const rawResponse = await response.text();
+  let payload = rawResponse;
+  try {
+    payload = JSON.parse(rawResponse);
+  } catch (_error) {
+    payload = rawResponse;
+  }
+
+  const message = resolveMessage(payload);
+  if (!message) {
+    throw new Error("翻译请求成功，但响应为空。");
+  }
+
+  const jsonText = extractJsonArray(message);
+  if (!jsonText) {
+    throw new Error("翻译响应中没有可解析的 JSON 数组。");
+  }
+
+  const parsed = parseJsonArrayWithRepair(jsonText, "翻译标签 JSON 解析失败。");
+  const translatedPost = Array.isArray(parsed) && parsed.length ? parsed[0] : null;
+  if (!translatedPost || typeof translatedPost !== "object") {
+    throw new Error("翻译响应格式不正确。");
+  }
+
+  return {
+    text: normalizeTranslatedText(translatedPost.text || "", post.text || ""),
+    tags: normalizeTags(translatedPost.tags || [], 5)
+  };
+}
+
+async function requestTranslatedText(settings, sourceText) {
+  const originalText = String(sourceText || "").trim();
+  if (!originalText) {
+    return "";
+  }
+
+  const requestEndpoint = resolveApiRequestEndpoint(settings);
+  settings.endpoint = requestEndpoint;
+  if (!requestEndpoint) {
+    throw new Error("未配置 API 地址，无法执行翻译。");
+  }
+  if (normalizeApiMode(settings.mode) === "openai" && !settings.model) {
+    throw new Error("DeepSeek / OpenAI 兼容模式需要填写模型名称。");
+  }
+  if (normalizeApiMode(settings.mode) === "gemini" && !settings.token) {
+    throw new Error("Gemini 模式需要填写 API Key。");
+  }
+
+  const response = await fetch(requestEndpoint, {
+    method: "POST",
+    headers: buildRequestHeaders(settings),
+    body: JSON.stringify(buildTranslateRequestBody(settings, buildTranslatePrompt(originalText)))
+  });
+  if (!response.ok) {
+    throw new Error(`翻译请求失败：HTTP ${response.status}`);
+  }
+
+  const rawResponse = await response.text();
+  let payload = rawResponse;
+  try {
+    payload = JSON.parse(rawResponse);
+  } catch (_error) {
+    payload = rawResponse;
+  }
+
+  const message = resolveMessage(payload);
+  if (!message) {
+    throw new Error("翻译请求成功，但响应为空。");
+  }
+  return normalizeTranslatedText(message, originalText);
+}
+
+async function translatePostToChinese(postId, bucketName = state.activeFeed) {
+  const post = findPostById(postId, bucketName);
+  if (!post) {
+    return;
+  }
+  const resolvedBucket = resolveThreadBucketName(bucketName, post);
+  if (isPostTranslating(postId, resolvedBucket)) {
+    return;
+  }
+
+  setPostTranslating(postId, resolvedBucket, true);
+  renderActiveFeed();
+  renderProfilePage();
+  renderThreadModal();
+
+  try {
+    const translated = await requestTranslatedPostContent(
+      getTranslationRequestSettings({ ...getCurrentSettings() }),
+      post
+    );
+    updatePostAcrossBuckets(postId, (item) => ({
+      ...item,
+      translationZh: translated.text,
+      translatedTags: translated.tags
+    }));
+    setHomeStatus("已生成帖子中文翻译。", "success");
+  } catch (error) {
+    setHomeStatus(`帖子翻译失败：${error.message || "请求失败"}`, "error");
+  } finally {
+    setPostTranslating(postId, resolvedBucket, false);
+    renderActiveFeed();
+    renderProfilePage();
+    renderThreadModal();
+  }
+}
+
+async function translateReplyToChinese(postId, replyId, bucketName = state.activeFeed) {
+  const post = findPostById(postId, bucketName);
+  if (!post) {
+    return;
+  }
+  const resolvedBucket = resolveThreadBucketName(bucketName, post);
+  const threadState = getPostThreadState(postId, resolvedBucket);
+  const targetReply = findReplyNode(threadState?.replies || [], replyId);
+  if (!targetReply) {
+    return;
+  }
+  if (isReplyTranslating(postId, replyId, resolvedBucket)) {
+    return;
+  }
+
+  setReplyTranslating(postId, replyId, resolvedBucket, true);
+  renderThreadModal();
+
+  try {
+    const translatedText = await requestTranslatedText(
+      getTranslationRequestSettings({ ...getCurrentSettings() }),
+      targetReply.text || ""
+    );
+    targetReply.translationZh = translatedText;
+    syncDiscussionForAuthoredPost(post, resolvedBucket, postId, threadState);
+    persistDiscussions();
+    setHomeStatus("已生成回复中文翻译。", "success");
+  } catch (error) {
+    setHomeStatus(`回复翻译失败：${error.message || "请求失败"}`, "error");
+  } finally {
+    setReplyTranslating(postId, replyId, resolvedBucket, false);
+    renderThreadModal();
+  }
+}
+
 async function requestGeneratedReplies(
   settings,
   profile,
@@ -3648,6 +4648,7 @@ async function toggleNestedReply(postId, replyId, bucketName = state.activeFeed)
     persistDiscussions();
     renderActiveFeed();
     renderProfilePage();
+    renderThreadModal();
     return;
   }
 
@@ -3657,6 +4658,7 @@ async function toggleNestedReply(postId, replyId, bucketName = state.activeFeed)
     persistDiscussions();
     renderActiveFeed();
     renderProfilePage();
+    renderThreadModal();
     return;
   }
 
@@ -3664,6 +4666,7 @@ async function toggleNestedReply(postId, replyId, bucketName = state.activeFeed)
   targetReply.loading = true;
   renderActiveFeed();
   renderProfilePage();
+  renderThreadModal();
 
   const settings = { ...getCurrentSettings() };
   const profile = { ...getCurrentProfile() };
@@ -3700,12 +4703,14 @@ async function toggleNestedReply(postId, replyId, bucketName = state.activeFeed)
     persistDiscussions();
     renderActiveFeed();
     renderProfilePage();
+    renderThreadModal();
   } catch (_error) {
     targetReply.children = [];
     targetReply.loading = false;
     persistDiscussions();
     renderActiveFeed();
     renderProfilePage();
+    renderThreadModal();
   }
 }
 
@@ -3813,11 +4818,19 @@ async function refreshHomeFeed(trigger = "manual") {
   if (state.isRefreshing) {
     return;
   }
+  if (state.activeFeed === "tags") {
+    state.pullDistance = 0;
+    setPullIndicator(0, "idle");
+    updateHomeRefreshAvailability();
+    setHomeStatus("热门标签页不支持刷新，请切换到具体页签。", "error");
+    return;
+  }
 
   saveCurrentSettings();
   const targetFeed = getCurrentContentFeed(state.activeFeed);
   state.isRefreshing = true;
-  setPullIndicator(state.pullDistance, "loading");
+  updateHomeRefreshAvailability();
+  setPullIndicator(Math.max(state.pullDistance, PULL_THRESHOLD), "loading");
   setHomeStatus(`正在生成“${getFeedLabel(targetFeed)}”讨论流…`, "");
   setSettingsStatus("如果接口可用，将优先使用 API 返回的 10 条讨论。");
   topRefreshBtn.disabled = true;
@@ -3871,23 +4884,31 @@ async function refreshHomeFeed(trigger = "manual") {
     state.isRefreshing = false;
     state.pullDistance = 0;
     setPullIndicator(0, "idle");
-    topRefreshBtn.disabled = false;
+    updateHomeRefreshAvailability();
     settingsGenerateBtn.disabled = false;
   }
 }
 
 function releasePull() {
+  if (!canRefreshCurrentHomeFeed()) {
+    state.pullDistance = 0;
+    setPullIndicator(0, "idle");
+    return;
+  }
   const shouldRefresh = state.pullDistance >= PULL_THRESHOLD && !state.isRefreshing;
+  if (shouldRefresh) {
+    state.pullDistance = 0;
+    setPullIndicator(PULL_THRESHOLD, "loading");
+    refreshHomeFeed("pull");
+    return;
+  }
   state.pullDistance = 0;
   setPullIndicator(0, "idle");
-  if (shouldRefresh) {
-    refreshHomeFeed("pull");
-  }
 }
 
 function handleTouchStart(event) {
   const atTop = feedEl.scrollTop <= 1;
-  if (state.activeTab !== "home" || !atTop || state.isRefreshing) {
+  if (!canRefreshCurrentHomeFeed() || !atTop || state.isRefreshing) {
     return;
   }
   state.touchTracking = true;
@@ -3895,7 +4916,7 @@ function handleTouchStart(event) {
 }
 
 function handleTouchMove(event) {
-  if (!state.touchTracking || state.activeTab !== "home" || state.isRefreshing) {
+  if (!state.touchTracking || !canRefreshCurrentHomeFeed() || state.isRefreshing) {
     return;
   }
 
@@ -3924,7 +4945,7 @@ function handleWheel(event) {
   const atTop = feedEl.scrollTop <= 1;
   const topStableLongEnough = Date.now() - state.feedTopAnchorAt > 160;
   if (
-    state.activeTab !== "home" ||
+    !canRefreshCurrentHomeFeed() ||
     state.isRefreshing ||
     !atTop ||
     !topStableLongEnough ||
@@ -4197,9 +5218,35 @@ function attachEvents() {
       const { action } = actionEl.dataset;
       if (action === "switch-api-config") {
         switchApiConfig(configId);
+      } else if (action === "set-translation-api-config") {
+        setTranslationApiConfig(configId);
       } else if (action === "delete-api-config") {
         deleteApiConfig(configId);
       }
+    });
+  }
+
+  if (translationApiEnabledEl) {
+    translationApiEnabledEl.addEventListener("change", () => {
+      if (translationApiEnabledEl.checked && !state.settings.translationApiConfigId) {
+        const configs = normalizeApiConfigs(state.settings.apiConfigs);
+        state.settings.translationApiConfigId =
+          state.settings.activeApiConfigId || configs[0]?.id || "";
+      }
+      if (translationApiConfigSelectEl) {
+        translationApiConfigSelectEl.value = state.settings.translationApiConfigId || "";
+      }
+      saveCurrentSettings();
+    });
+  }
+
+  if (translationApiConfigSelectEl) {
+    translationApiConfigSelectEl.addEventListener("change", () => {
+      state.settings.translationApiConfigId = String(translationApiConfigSelectEl.value || "").trim();
+      state.settings.translationApiEnabled = Boolean(
+        translationApiEnabledEl?.checked && state.settings.translationApiConfigId
+      );
+      saveCurrentSettings();
     });
   }
 
@@ -4234,21 +5281,17 @@ function attachEvents() {
         return;
       }
 
-      if (action === "toggle-post" && actionEl.dataset.postId) {
-        await togglePostDiscussion(
+      if (action === "translate-post" && actionEl.dataset.postId) {
+        await translatePostToChinese(
           actionEl.dataset.postId,
           actionEl.dataset.bucket || state.activeFeed
         );
+        return;
       }
 
-      if (
-        action === "toggle-reply" &&
-        actionEl.dataset.postId &&
-        actionEl.dataset.replyId
-      ) {
-        await toggleNestedReply(
+      if (action === "open-thread-modal" && actionEl.dataset.postId) {
+        await openThreadModal(
           actionEl.dataset.postId,
-          actionEl.dataset.replyId,
           actionEl.dataset.bucket || state.activeFeed
         );
       }
@@ -4358,19 +5401,9 @@ function attachEvents() {
         return;
       }
 
-      if (actionEl.dataset.action === "toggle-post" && actionEl.dataset.postId) {
+      if (actionEl.dataset.action === "open-thread-modal" && actionEl.dataset.postId) {
         state.profilePostMenuId = null;
-        await togglePostDiscussion(actionEl.dataset.postId, "profile");
-        return;
-      }
-
-      if (
-        actionEl.dataset.action === "toggle-reply" &&
-        actionEl.dataset.postId &&
-        actionEl.dataset.replyId
-      ) {
-        state.profilePostMenuId = null;
-        await toggleNestedReply(actionEl.dataset.postId, actionEl.dataset.replyId, "profile");
+        await openThreadModal(actionEl.dataset.postId, "profile");
         return;
       }
     });
@@ -4386,6 +5419,76 @@ function attachEvents() {
       state.profilePostEditingDraft = target.value;
     });
   }
+
+  if (threadModalEl) {
+    threadModalEl.addEventListener("click", async (event) => {
+      const target = getEventHTMLElement(event);
+      if (!target) {
+        return;
+      }
+      const actionEl = target.closest("[data-action]");
+      if (!(actionEl instanceof HTMLElement)) {
+        return;
+      }
+      const action = actionEl.dataset.action;
+      if (!action) {
+        return;
+      }
+
+      if (action === "close-thread-modal") {
+        setThreadModalOpen(false);
+        return;
+      }
+
+      if (action === "translate-post" && actionEl.dataset.postId) {
+        await translatePostToChinese(
+          actionEl.dataset.postId,
+          actionEl.dataset.bucket || state.threadModalBucket || state.activeFeed
+        );
+        return;
+      }
+
+      if (action === "toggle-reply" && actionEl.dataset.postId && actionEl.dataset.replyId) {
+        await toggleNestedReply(
+          actionEl.dataset.postId,
+          actionEl.dataset.replyId,
+          actionEl.dataset.bucket || state.threadModalBucket || state.activeFeed
+        );
+        return;
+      }
+
+      if (action === "translate-reply" && actionEl.dataset.postId && actionEl.dataset.replyId) {
+        await translateReplyToChinese(
+          actionEl.dataset.postId,
+          actionEl.dataset.replyId,
+          actionEl.dataset.bucket || state.threadModalBucket || state.activeFeed
+        );
+      }
+    });
+  }
+
+  if (threadModalCloseBtn) {
+    threadModalCloseBtn.addEventListener("click", () => {
+      setThreadModalOpen(false);
+    });
+  }
+
+  if (threadModalBodyEl) {
+    threadModalBodyEl.addEventListener("wheel", handleThreadModalWheel, { passive: false });
+    threadModalBodyEl.addEventListener("touchstart", handleThreadModalTouchStart, {
+      passive: true
+    });
+    threadModalBodyEl.addEventListener("touchmove", handleThreadModalTouchMove, {
+      passive: false
+    });
+    threadModalBodyEl.addEventListener("touchend", handleThreadModalTouchEnd);
+  }
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.threadModalOpen) {
+      setThreadModalOpen(false);
+    }
+  });
 
   const apiFields = [modeSelect, endpointInput, tokenInput, modelInput];
   [modeSelect, endpointInput, tokenInput, modelInput, temperatureInput, homeCountInput, dmCountInput, replyCountInput, worldviewInput]
@@ -4474,6 +5577,7 @@ function init() {
   safeRun("apply profile", () => applyProfileToForm(state.profile));
   safeRun("profile editor", () => setProfileEditorOpen(false));
   safeRun("home composer", () => setHomeComposerOpen(false));
+  safeRun("thread modal", () => setThreadModalOpen(false));
   safeRun("pull indicator", () => setPullIndicator(0, "idle"));
   safeRun("render active feed", () => renderActiveFeed());
   safeRun("render following", () => renderFollowingPage());
