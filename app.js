@@ -3276,14 +3276,36 @@ function resetCustomTabForm(preserveStatus = false) {
   renderCustomTabsManager();
 }
 
+function updateCustomTabsManageButton() {
+  if (!customTabsManageBtn) {
+    return;
+  }
+  customTabsManageBtn.textContent = state.customTabEditorOpen ? "收起自定义页签" : "管理自定义页签";
+  customTabsManageBtn.setAttribute("aria-expanded", state.customTabEditorOpen ? "true" : "false");
+}
+
 function setCustomTabsPanelOpen(isOpen) {
   if (!customTabsPanel) {
     return;
   }
   state.customTabEditorOpen = Boolean(isOpen);
   customTabsPanel.classList.toggle("hidden", !state.customTabEditorOpen);
+  updateCustomTabsManageButton();
   if (state.customTabEditorOpen) {
     renderCustomTabsManager();
+    window.requestAnimationFrame(() => {
+      customTabsPanel.scrollIntoView({
+        block: "start",
+        behavior: "smooth"
+      });
+      if (customTabNameInput && !customTabNameInput.disabled) {
+        try {
+          customTabNameInput.focus({ preventScroll: true });
+        } catch (_error) {
+          customTabNameInput.focus();
+        }
+      }
+    });
   }
 }
 
@@ -5962,6 +5984,7 @@ function init() {
   safeRun("render messages", () => renderMessagesPage());
   safeRun("render profile", () => renderProfilePage());
   safeRun("render custom tabs manager", () => renderCustomTabsManager());
+  safeRun("custom tabs manage button", () => updateCustomTabsManageButton());
   safeRun("render custom tabs settings", () => renderCustomTabSettings());
   safeRun("render api config list", () => renderApiConfigList());
   safeRun("persist discussions", () => persistDiscussions());

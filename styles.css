@@ -143,6 +143,7 @@ button {
 .mini-tab,
 .pill-action,
 .solid-button {
+  touch-action: manipulation;
   transition:
     transform 180ms ease,
     background-color 180ms ease,
