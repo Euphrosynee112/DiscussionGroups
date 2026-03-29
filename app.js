@@ -7,12 +7,16 @@ const PROFILE_KEY = "x_style_generator_profile_v1";
 const PROFILE_POSTS_KEY = "x_style_generator_profile_posts_v1";
 const DIRECT_MESSAGES_KEY = "x_style_generator_direct_messages_v1";
 const DISCUSSIONS_KEY = "x_style_generator_discussions_v1";
+const CHAT_ROOM_KEY = "x_style_generator_chat_room_v1";
 const DEFAULT_POST_COUNT = 10;
 const DEFAULT_DM_COUNT = 4;
 const DEFAULT_REPLY_COUNT = 4;
+const DEFAULT_CHAT_REPLY_COUNT = 20;
+const CHAT_REPLY_APPEND_INTERVAL_MS = 3000;
 const MAX_FEED_ITEMS = 50;
-const MAX_POST_TEXT_LENGTH = 520;
-const MAX_REPLY_TEXT_LENGTH = 520;
+const MAX_POST_TEXT_LENGTH = 1400;
+const MAX_REPLY_TEXT_LENGTH = 1400;
+const MAX_CHAT_TEXT_LENGTH = 2000;
 const DEFAULT_TEMPERATURE = 0.8;
 const PULL_THRESHOLD = 88;
 const DEFAULT_CONTENT_FEED = "entertainment";
@@ -21,7 +25,7 @@ const API_CONFIG_LIMIT = 12;
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 const HOME_FEED_LABELS = {
-  entertainment: "默认话题",
+  entertainment: "系统内容",
   tags: "热门标签"
 };
 const NESTED_REPLY_COUNT = 3;
@@ -38,6 +42,8 @@ const DEFAULT_SETTINGS = {
   homeCount: DEFAULT_POST_COUNT,
   dmCount: DEFAULT_DM_COUNT,
   replyCount: DEFAULT_REPLY_COUNT,
+  chatReplyCount: DEFAULT_CHAT_REPLY_COUNT,
+  chatContextTabIds: [],
   temperature: DEFAULT_TEMPERATURE,
   customTabs: [],
   apiConfigs: [],
@@ -100,7 +106,7 @@ const MESSAGE_SENDERS = [
 
 const pageTitleMap = {
   home: "首页",
-  following: "关注",
+  following: "聊天",
   messages: "私信",
   profile: "个人主页",
   settings: "设置"
@@ -131,6 +137,8 @@ const homeComposerToggleBtn = document.querySelector("#home-composer-toggle-btn"
 const homeComposerForm = document.querySelector("#home-composer-form");
 const homeComposerInput = document.querySelector("#home-composer-input");
 const homeComposerTagsInput = document.querySelector("#home-composer-tags-input");
+const homeComposerImageInput = document.querySelector("#home-composer-image-input");
+const homeComposerImagePreviewEl = document.querySelector("#home-composer-image-preview");
 const homeComposerStatusEl = document.querySelector("#home-composer-status");
 const settingsStatusEl = document.querySelector("#settings-status");
 const promptPreviewEl = document.querySelector("#prompt-preview");
@@ -162,6 +170,13 @@ const threadModalBodyEl = document.querySelector("#thread-modal-body");
 const threadModalRootEl = document.querySelector("#thread-modal-root");
 const threadModalRepliesEl = document.querySelector("#thread-modal-replies");
 const threadModalLoadHintEl = document.querySelector("#thread-modal-load-hint");
+const chatContextTriggerBtnEl = document.querySelector("#chat-context-trigger-btn");
+const chatContextModalEl = document.querySelector("#chat-context-modal");
+const chatContextModalCloseBtnEl = document.querySelector("#chat-context-modal-close-btn");
+const chatContextModalCancelBtnEl = document.querySelector("#chat-context-modal-cancel-btn");
+const chatContextModalConfirmBtnEl = document.querySelector("#chat-context-modal-confirm-btn");
+const chatContextModalListEl = document.querySelector("#chat-context-modal-list");
+const chatContextModalEmptyEl = document.querySelector("#chat-context-modal-empty");
 const profileBannerEl = document.querySelector("#profile-banner");
 const profileAvatarEl = document.querySelector("#profile-avatar");
 const profileUsernameEl = document.querySelector("#profile-username");
@@ -194,6 +209,7 @@ const modelWrap = document.querySelector("#model-wrap");
 const homeCountInput = document.querySelector("#home-count");
 const dmCountInput = document.querySelector("#dm-count");
 const replyCountInput = document.querySelector("#reply-count");
+const chatReplyCountInput = document.querySelector("#chat-reply-count");
 const worldviewInput = document.querySelector("#worldview-text");
 const apiConfigNameInput = document.querySelector("#api-config-name-input");
 const apiConfigSaveBtn = document.querySelector("#api-config-save-btn");
@@ -201,12 +217,22 @@ const apiConfigStatusEl = document.querySelector("#api-config-status");
 const apiConfigListEl = document.querySelector("#api-config-list");
 const translationApiEnabledEl = document.querySelector("#translation-api-enabled");
 const translationApiConfigSelectEl = document.querySelector("#translation-api-config-select");
+const chatStatusEl = document.querySelector("#chat-status");
+const chatHistoryEl = document.querySelector("#chat-history");
+const chatComposeFormEl = document.querySelector("#chat-compose-form");
+const chatComposeInputEl = document.querySelector("#chat-compose-input");
+const chatComposeImageInputEl = document.querySelector("#chat-compose-image-input");
+const chatComposeImagePreviewEl = document.querySelector("#chat-compose-image-preview");
+const chatSendBtnEl = document.querySelector("#chat-send-btn");
+const chatGenerateBtnEl = document.querySelector("#chat-generate-btn");
+const chatClearBtnEl = document.querySelector("#chat-clear-btn");
 
 const state = {
   activeTab: "home",
   settings: loadSettings(),
   feeds: loadFeeds(),
   directMessages: loadDirectMessages(),
+  chatRoom: loadChatRoom(),
   profile: loadProfile(),
   profilePosts: loadProfilePosts(),
   discussions: loadDiscussions(),
@@ -214,6 +240,8 @@ const state = {
   customTabEditorOpen: false,
   customTabEditingId: "",
   draggingCustomTabId: "",
+  chatContextModalOpen: false,
+  chatContextDraftTabIds: [],
   activeFeed: DEFAULT_CONTENT_FEED,
   lastContentFeed: DEFAULT_CONTENT_FEED,
   activeTagFilter: "",
@@ -224,6 +252,7 @@ const state = {
   profilePostEditingId: null,
   profilePostEditingDraft: "",
   composerOpen: false,
+  homeComposerImageDataUrl: "",
   isRefreshing: false,
   lastRefreshAt: localStorage.getItem(REFRESH_KEY) || "",
   pullDistance: 0,
@@ -245,11 +274,18 @@ const state = {
   threadReplyStatusTone: "",
   threadReplySubmitting: false,
   translatingPosts: {},
-  translatingReplies: {}
+  translatingReplies: {},
+  translatingChatMessages: {},
+  chatReplying: false,
+  chatDraftImageDataUrl: ""
 };
 
 state.customTabs = normalizeCustomTabs(state.settings.customTabs);
 state.settings.customTabs = [...state.customTabs];
+state.settings.chatContextTabIds = normalizeChatContextTabIds(
+  state.settings.chatContextTabIds,
+  state.customTabs
+);
 state.settings.apiConfigs = normalizeApiConfigs(state.settings.apiConfigs);
 if (
   state.settings.activeApiConfigId &&
@@ -365,6 +401,25 @@ function normalizeCustomTabs(tabs = []) {
       name: String(tab.name || "自定义页签").trim().slice(0, 20) || "自定义页签",
       text: String(tab.text || "").trim()
     }));
+}
+
+function normalizeChatContextTabIds(ids = [], availableTabs = []) {
+  const validIds = new Set(
+    Array.isArray(availableTabs) ? availableTabs.map((tab) => String(tab?.id || "")) : []
+  );
+  if (!Array.isArray(ids)) {
+    return [];
+  }
+  const seen = new Set();
+  return ids
+    .map((item) => String(item || "").trim())
+    .filter((item) => {
+      if (!item || !validIds.has(item) || seen.has(item)) {
+        return false;
+      }
+      seen.add(item);
+      return true;
+    });
 }
 
 function normalizeApiMode(mode) {
@@ -502,6 +557,10 @@ function synchronizeCustomTabBuckets() {
 function commitCustomTabs(nextTabs) {
   state.customTabs = normalizeCustomTabs(nextTabs);
   state.settings.customTabs = [...state.customTabs];
+  state.settings.chatContextTabIds = normalizeChatContextTabIds(
+    state.settings.chatContextTabIds,
+    state.customTabs
+  );
   synchronizeCustomTabBuckets();
   persistSettings(state.settings);
   persistFeeds(state.feeds);
@@ -722,6 +781,14 @@ function getCurrentSettings() {
     homeCount: normalizePositiveInteger(homeCountInput.value, DEFAULT_POST_COUNT),
     dmCount: normalizePositiveInteger(dmCountInput.value, DEFAULT_DM_COUNT),
     replyCount: normalizePositiveInteger(replyCountInput.value, DEFAULT_REPLY_COUNT),
+    chatReplyCount: normalizePositiveInteger(
+      chatReplyCountInput?.value,
+      DEFAULT_CHAT_REPLY_COUNT
+    ),
+    chatContextTabIds: normalizeChatContextTabIds(
+      state.settings.chatContextTabIds,
+      state.customTabs
+    ),
     worldview: worldviewInput.value.trim(),
     customTabs: [...state.customTabs],
     apiConfigs: normalizeApiConfigs(state.settings.apiConfigs),
@@ -757,6 +824,7 @@ function loadSettings() {
     return {
       ...DEFAULT_SETTINGS,
       customTabs: normalizeCustomTabs(DEFAULT_SETTINGS.customTabs),
+      chatContextTabIds: [],
       apiConfigs: normalizeApiConfigs(DEFAULT_SETTINGS.apiConfigs),
       activeApiConfigId: "",
       translationApiEnabled: false,
@@ -778,6 +846,10 @@ function loadSettings() {
       parsed?.customTabList ||
       [];
     merged.customTabs = normalizeCustomTabs(legacyCustomTabs);
+    merged.chatContextTabIds = normalizeChatContextTabIds(
+      merged.chatContextTabIds || parsed?.chatContextTabIds || [],
+      merged.customTabs
+    );
     const legacyApiConfigs =
       merged.apiConfigs || parsed?.apiConfigs || parsed?.apiPresets || parsed?.apiProfiles || [];
     merged.apiConfigs = normalizeApiConfigs(legacyApiConfigs);
@@ -793,6 +865,7 @@ function loadSettings() {
     return {
       ...DEFAULT_SETTINGS,
       customTabs: normalizeCustomTabs(DEFAULT_SETTINGS.customTabs),
+      chatContextTabIds: [],
       apiConfigs: normalizeApiConfigs(DEFAULT_SETTINGS.apiConfigs),
       activeApiConfigId: "",
       translationApiEnabled: false,
@@ -873,6 +946,18 @@ function loadDirectMessages() {
 
 function normalizeChatMessage(item, senderFallback = "联系人", index = 0) {
   const role = item?.role === "user" ? "user" : "incoming";
+  const rawText =
+    typeof item?.text === "string"
+      ? item.text
+      : item?.text == null
+        ? ""
+        : String(item.text);
+  const rawImage =
+    typeof item?.imageDataUrl === "string"
+      ? item.imageDataUrl
+      : typeof item?.imageUrl === "string"
+        ? item.imageUrl
+        : "";
   return {
     id: item?.id || `chat_${index}_${hashText(`${item?.text || ""}-${role}`)}`,
     role,
@@ -880,9 +965,50 @@ function normalizeChatMessage(item, senderFallback = "联系人", index = 0) {
       role === "user"
         ? "你"
         : truncate(item?.sender || item?.displayName || senderFallback, 24),
-    text: truncate(item?.text || "一条新的消息正在生成。", 320),
-    time: item?.time || `${index + 1}m`
+    handle: truncate(
+      item?.handle ||
+        normalizeProfileUserId(
+          item?.userId,
+          item?.sender || item?.displayName || DEFAULT_PROFILE.username
+        ) ||
+        `@fan_${index + 1}`,
+      24
+    ),
+    text: truncate(rawText, MAX_CHAT_TEXT_LENGTH),
+    translationZh: truncate(String(item?.translationZh || item?.translatedText || "").trim(), 2400),
+    imageDataUrl: rawImage.trim(),
+    time: item?.time || `${index + 1}m`,
+    status: item?.status === "pending" ? "pending" : "sent"
   };
+}
+
+function loadChatRoom() {
+  const raw = localStorage.getItem(CHAT_ROOM_KEY);
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter((item) => item && typeof item === "object")
+      .map((item, index) =>
+        normalizeChatMessage(
+          item,
+          item?.sender || item?.displayName || `粉丝 ${index + 1}`,
+          index
+        )
+      );
+  } catch (_error) {
+    return [];
+  }
+}
+
+function persistChatRoom(messages = state.chatRoom) {
+  localStorage.setItem(CHAT_ROOM_KEY, JSON.stringify(messages || []));
 }
 
 function loadProfilePosts() {
@@ -982,6 +1108,9 @@ function applySettingsToForm(settings) {
   homeCountInput.value = String(settings.homeCount || DEFAULT_POST_COUNT);
   dmCountInput.value = String(settings.dmCount || DEFAULT_DM_COUNT);
   replyCountInput.value = String(settings.replyCount || DEFAULT_REPLY_COUNT);
+  if (chatReplyCountInput) {
+    chatReplyCountInput.value = String(settings.chatReplyCount || DEFAULT_CHAT_REPLY_COUNT);
+  }
   worldviewInput.value = settings.worldview || DEFAULT_SETTINGS.worldview;
   if (translationApiEnabledEl) {
     translationApiEnabledEl.checked = Boolean(settings.translationApiEnabled);
@@ -1072,6 +1201,7 @@ function saveCurrentProfile() {
   syncAuthoredPostIdentity(state.profile);
   persistProfile(state.profile);
   renderActiveFeed();
+  renderFollowingPage();
   renderProfilePage();
   renderThreadModal();
   updateMessagePromptPreview();
@@ -1101,6 +1231,85 @@ function renderEditedNote(post) {
   return post.edited ? '<p class="post-edited-note">（已编辑）</p>' : "";
 }
 
+function renderInlineMediaPreview(dataUrl, removeAction) {
+  const imageSrc = String(dataUrl || "").trim();
+  if (!imageSrc) {
+    return "";
+  }
+  const removeButtonMarkup = removeAction
+    ? `<button class="ghost-chip" type="button" data-action="${escapeHtml(removeAction)}">移除图片</button>`
+    : "";
+  return `
+    <div class="composer-media-preview__card">
+      <img class="composer-media-preview__image" src="${escapeHtml(imageSrc)}" alt="预览图片" />
+      <div class="composer-media-preview__actions">
+        ${removeButtonMarkup}
+      </div>
+    </div>
+  `;
+}
+
+function renderComposerMediaPreview(containerEl, dataUrl, removeAction) {
+  if (!containerEl) {
+    return;
+  }
+  const imageSrc = String(dataUrl || "").trim();
+  containerEl.classList.toggle("hidden", !imageSrc);
+  containerEl.innerHTML = imageSrc ? renderInlineMediaPreview(imageSrc, removeAction) : "";
+}
+
+function clearHomeComposerImage() {
+  state.homeComposerImageDataUrl = "";
+  if (homeComposerImageInput) {
+    homeComposerImageInput.value = "";
+  }
+  renderComposerMediaPreview(homeComposerImagePreviewEl, "", "remove-home-composer-image");
+}
+
+function clearChatComposeImage() {
+  state.chatDraftImageDataUrl = "";
+  if (chatComposeImageInputEl) {
+    chatComposeImageInputEl.value = "";
+  }
+  renderComposerMediaPreview(chatComposeImagePreviewEl, "", "remove-chat-compose-image");
+}
+
+function parseDataUrlParts(dataUrl) {
+  const source = String(dataUrl || "").trim();
+  const matched = source.match(/^data:([^;]+);base64,(.+)$/);
+  if (!matched) {
+    return null;
+  }
+  return {
+    mimeType: matched[1] || "image/png",
+    data: matched[2] || ""
+  };
+}
+
+function renderPostMedia(post) {
+  const imageSrc = String(post?.imageDataUrl || post?.imageUrl || "").trim();
+  if (!imageSrc) {
+    return "";
+  }
+  return `
+    <div class="post-media">
+      <img class="post-media__image" src="${escapeHtml(imageSrc)}" alt="帖子图片" />
+    </div>
+  `;
+}
+
+function renderChatMessageMedia(message) {
+  const imageSrc = String(message?.imageDataUrl || "").trim();
+  if (!imageSrc) {
+    return "";
+  }
+  return `
+    <div class="chat-media">
+      <img class="chat-media__image" src="${escapeHtml(imageSrc)}" alt="聊天图片" />
+    </div>
+  `;
+}
+
 function renderTranslationBlock(translationText, translatedTags = []) {
   const text = String(translationText || "").trim();
   const tags = normalizeTags(translatedTags, 5);
@@ -1122,6 +1331,10 @@ function getPostTranslationKey(postId, bucketName = state.activeFeed) {
 
 function getReplyTranslationKey(postId, replyId, bucketName = state.activeFeed) {
   return `${String(bucketName || "home")}::${String(postId || "")}::${String(replyId || "")}`;
+}
+
+function getChatMessageTranslationKey(messageId) {
+  return `chat::${String(messageId || "")}`;
 }
 
 function isPostTranslating(postId, bucketName = state.activeFeed) {
@@ -1148,6 +1361,19 @@ function setReplyTranslating(postId, replyId, bucketName = state.activeFeed, isL
     return;
   }
   delete state.translatingReplies[key];
+}
+
+function isChatMessageTranslating(messageId) {
+  return Boolean(state.translatingChatMessages[getChatMessageTranslationKey(messageId)]);
+}
+
+function setChatMessageTranslating(messageId, isLoading = false) {
+  const key = getChatMessageTranslationKey(messageId);
+  if (isLoading) {
+    state.translatingChatMessages[key] = true;
+    return;
+  }
+  delete state.translatingChatMessages[key];
 }
 
 function updatePostAcrossBuckets(postId, updater) {
@@ -1739,6 +1965,7 @@ function buildPrompt(
   const resolvedSource =
     feedSource ||
     "暂无页签文本，请结合世界观与实时讨论语境自行展开内容。";
+  const historyAvoidanceText = buildFeedHistoryAvoidanceText(resolvedFeedType, count);
 
   return [
     "你是一个负责生成 X 风格中文讨论流的内容助手。",
@@ -1757,7 +1984,8 @@ function buildPrompt(
     settings.worldview || DEFAULT_SETTINGS.worldview,
     feedInstruction,
     resolvedSource,
-    `请保证 ${count} 条内容不重复，角度不同。`
+    historyAvoidanceText || "如果没有历史缓存，可自由生成，但仍要让每条帖子讨论方向明显不同。",
+    `请保证 ${count} 条内容不重复，角度不同；即使围绕同一大主题，也要主动拆出不同争议点、不同立场、不同细节切口。`
   ].join("\n\n");
 }
 
@@ -1769,6 +1997,36 @@ function buildFeedSourceText(settings, feedType = state.activeFeed) {
   return "";
 }
 
+function buildFeedHistoryAvoidanceText(
+  feedType = state.activeFeed,
+  count = DEFAULT_POST_COUNT
+) {
+  const resolvedFeedType = getCurrentContentFeed(feedType);
+  const historyPosts = (state.feeds[resolvedFeedType] || [])
+    .filter((post) => !post?.authorOwned)
+    .slice(0, 8);
+  if (!historyPosts.length) {
+    return "";
+  }
+
+  const summaries = historyPosts.map((post, index) => {
+    const tags = normalizeTags(post.tags || [], 3).join(" ");
+    const baseSummary =
+      String(post.text || "").trim() || (post.imageDataUrl ? "带图帖子" : "已有历史讨论");
+    const summaryText = truncate(
+      baseSummary.replace(/\s+/g, " "),
+      90
+    );
+    return `${index + 1}. ${tags || "无标签"}｜${summaryText || "已有历史讨论"}`;
+  });
+
+  return [
+    "下面是当前页签最近已缓存、应尽量避开的讨论方向：",
+    ...summaries,
+    `新的 ${count} 条帖子请主动换争议点、换关注对象、换判断维度，不要沿着以上内容重复改写。`
+  ].join("\n");
+}
+
 function buildCustomTabsSummary(settings) {
   const tabs = normalizeCustomTabs(settings.customTabs || []);
   if (!tabs.length) {
@@ -1778,6 +2036,28 @@ function buildCustomTabsSummary(settings) {
     .map(
       (tab) =>
         `${tab.name || "自定义页签"}：${tab.text?.trim() || "尚未填写内容"}`
+    )
+    .join("\n");
+}
+
+function getSelectedChatContextTabs(settings = state.settings) {
+  const selectedIds = normalizeChatContextTabIds(
+    settings?.chatContextTabIds || [],
+    state.customTabs
+  );
+  const selectedIdSet = new Set(selectedIds);
+  return state.customTabs.filter((tab) => selectedIdSet.has(tab.id));
+}
+
+function buildChatContextSummary(settings = state.settings) {
+  const selectedTabs = getSelectedChatContextTabs(settings);
+  if (!selectedTabs.length) {
+    return "当前没有额外勾选的自定义页签参考资料。";
+  }
+  return selectedTabs
+    .map(
+      (tab, index) =>
+        `${index + 1}. ${tab.name || "自定义页签"}：${String(tab.text || "").trim() || "尚未填写内容"}`
     )
     .join("\n");
 }
@@ -1843,6 +2123,68 @@ function buildConversationReplyPrompt(settings, profile, conversation, userMessa
   ].join("\n\n");
 }
 
+function formatChatRoomPromptMessages(messages = []) {
+  if (!messages.length) {
+    return "暂无消息。";
+  }
+  return messages
+    .map((message, index) => {
+      const senderLabel =
+        message.role === "user"
+          ? "用户"
+          : `${message.sender || message.displayName || `粉丝${index + 1}`}`;
+      const imageHint = message.imageDataUrl ? "（附图）" : "";
+      const text = String(message.text || "").trim() || "【仅发送图片】";
+      return `${index + 1}. ${senderLabel}${imageHint}：${text}`;
+    })
+    .join("\n");
+}
+
+function buildChatRoomReplyPrompt(
+  settings,
+  profile,
+  chatRoom,
+  pendingMessages,
+  count = settings.chatReplyCount || DEFAULT_CHAT_REPLY_COUNT
+) {
+  const username = profile.username || DEFAULT_PROFILE.username;
+  const handle = normalizeProfileUserId(profile.userId, username);
+  const recentContext = (chatRoom || []).slice(-18);
+  const hasImages = pendingMessages.some((message) => message.imageDataUrl);
+  const chatContextSummary = buildChatContextSummary(settings);
+  const hasFreshMessages = pendingMessages.some((message) => message.status === "pending");
+
+  return [
+    "你正在生成一个 X 风格社交产品里的单一聊天房间回复流。",
+    `请严格输出 JSON 数组，并且包含 ${count} 个对象，不要输出额外解释。`,
+    "每个对象必须包含以下字段：displayName, handle, text, time。",
+    "这些回复都来自这个用户的订阅者、粉丝或支持者，默认立场是喜欢他、支持他、愿意捧场，但表达方式可以各不相同。",
+    "回复要像连续刷出来的聊天消息，单条一般不超过 30 个字符，优先短句，避免长段落。",
+    "不同回复可以分别模拟来自中国、日本、韩国、美国的粉丝发言风格。",
+    "每一条回复必须全文保持单一语言，只能四选一：中文、日文、韩文、英文。不要在同一条消息里混用语言。",
+    hasFreshMessages
+      ? "如果用户连续发送了多条新消息，请把这些消息合并理解后再回复，不要只盯住最后一句。"
+      : "当前没有新的用户消息，请围绕用户之前发过的内容继续往下聊，生成新的粉丝回复。",
+    hasImages
+      ? "这批用户消息里带有图片；如果模型能看到图片，请结合图片内容一起回复。"
+      : "这批用户消息没有附图。",
+    "当前被粉丝围绕的用户资料：",
+    `用户名：${username}`,
+    `主页标识：${handle}`,
+    `个人签名：${profile.signature || DEFAULT_PROFILE.signature}`,
+    `用户人设：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt}`,
+    "最近聊天上下文：",
+    formatChatRoomPromptMessages(recentContext),
+    "这一次需要集中回应的用户新消息：",
+    formatChatRoomPromptMessages(pendingMessages),
+    "以下是用户手动勾选的自定义首页页签参考资料，仅作为低优先级背景信息；如果与当前聊天消息不一致，请优先理解当前聊天消息本身：",
+    chatContextSummary,
+    "整体世界观：",
+    settings.worldview || DEFAULT_SETTINGS.worldview,
+    "请让不同回复的切入点、情绪词和措辞尽量错开，但保持支持用户的核心立场。"
+  ].join("\n\n");
+}
+
 function buildReplyPrompt(
   settings,
   profile,
@@ -1855,6 +2197,9 @@ function buildReplyPrompt(
   const targetText = parentReply ? parentReply.text : rootPost.text;
   const promptTitle = parentReply ? "楼中楼回复" : "主楼回复";
   const feedSourceText = buildFeedSourceText(settings, feedType);
+  const rootHasImage = Boolean(rootPost?.imageDataUrl);
+  const resolvedRootText = String(rootPost?.text || "").trim() || "这是一条仅包含图片的帖子。";
+  const resolvedTargetText = String(targetText || "").trim() || resolvedRootText;
 
   return [
     `你正在生成 X 风格中文讨论串中的${promptTitle}。`,
@@ -1876,10 +2221,13 @@ function buildReplyPrompt(
     settings.worldview || DEFAULT_SETTINGS.worldview,
     "当前页签参考文本：",
     feedSourceText || "尚未提供页签文本，请根据帖子语境自行补充。",
+    rootHasImage
+      ? "主楼附带了一张图片；如果模型能看到图片，请把图片内容也一起纳入理解和回复。"
+      : "主楼没有附图。",
     "主楼内容：",
-    rootPost.text,
+    resolvedRootText,
     parentReply ? "当前正在回复的上一层内容：" : "当前需要围绕主楼展开讨论的内容：",
-    targetText,
+    resolvedTargetText,
     "当前板块参考素材：",
     buildFeedSourceText(settings, feedType),
     "请避免重复句式，并保持楼中讨论的连贯性。"
@@ -1957,6 +2305,11 @@ function setFeedPullOffset(offset = 0) {
     return;
   }
   feedEl.style.setProperty("--feed-offset", `${Math.max(0, Math.round(offset))}px`);
+}
+
+function syncBodyScrollLock() {
+  document.body.style.overflow =
+    state.threadModalOpen || state.chatContextModalOpen ? "hidden" : "";
 }
 
 function setPullIndicator(distance = 0, mode = "idle") {
@@ -2040,6 +2393,11 @@ function setHomeComposerOpen(isOpen) {
     homeComposerToggleBtn.textContent = state.composerOpen ? "收起发帖" : "发布新帖子";
   }
   if (state.composerOpen) {
+    renderComposerMediaPreview(
+      homeComposerImagePreviewEl,
+      state.homeComposerImageDataUrl,
+      "remove-home-composer-image"
+    );
     if (homeComposerInput && !homeComposerInput.value.trim()) {
       setHomeComposerStatus("");
     }
@@ -2290,6 +2648,121 @@ function mergeFeedHistory(existingPosts, incomingPosts, limit = MAX_FEED_ITEMS) 
   ]).slice(0, limit);
 }
 
+function normalizeDirectionText(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[“”"'‘’`~!@#$%^&*()_+=|\\[\]{}:;,.<>/?，。！？、；：（）【】《》…—-]/g, " ")
+    .trim();
+}
+
+function extractDirectionKeywords(text) {
+  const source = normalizeDirectionText(text);
+  if (!source) {
+    return [];
+  }
+  const matches =
+    source.match(/[a-z]{3,}|[\u4e00-\u9fff]{2,}|[\u3040-\u30ff]{2,}|[\uac00-\ud7af]{2,}/g) || [];
+  return [...new Set(matches)].slice(0, 14);
+}
+
+function getPostDirectionSignature(post) {
+  const tags = normalizeTags(post?.tags || [], 5)
+    .map((tag) => tag.replace(/^#/, "").toLowerCase())
+    .filter(Boolean);
+  const textKeywords = extractDirectionKeywords(post?.text || "");
+  return [...new Set([...tags, ...textKeywords])].slice(0, 16);
+}
+
+function computeKeywordOverlap(leftKeywords, rightKeywords) {
+  const leftSet = new Set(leftKeywords || []);
+  const rightSet = new Set(rightKeywords || []);
+  if (!leftSet.size || !rightSet.size) {
+    return 0;
+  }
+  let matches = 0;
+  leftSet.forEach((item) => {
+    if (rightSet.has(item)) {
+      matches += 1;
+    }
+  });
+  return matches / Math.max(leftSet.size, rightSet.size);
+}
+
+function isPostDirectionTooSimilar(candidate, references = []) {
+  const candidateText = normalizeDirectionText(candidate?.text || "");
+  const candidatePrefix = candidateText.slice(0, 88);
+  const candidateKeywords = getPostDirectionSignature(candidate);
+  const candidatePrimaryTag = normalizeTags(candidate?.tags || [], 1)[0] || "";
+
+  return references.some((reference) => {
+    const referenceText = normalizeDirectionText(reference?.text || "");
+    const referencePrefix = referenceText.slice(0, 88);
+    if (candidatePrefix && referencePrefix && candidatePrefix === referencePrefix) {
+      return true;
+    }
+
+    const referenceKeywords = getPostDirectionSignature(reference);
+    const overlap = computeKeywordOverlap(candidateKeywords, referenceKeywords);
+    const referencePrimaryTag = normalizeTags(reference?.tags || [], 1)[0] || "";
+    if (candidatePrimaryTag && referencePrimaryTag && candidatePrimaryTag === referencePrimaryTag) {
+      return overlap >= 0.52;
+    }
+    return overlap >= 0.68;
+  });
+}
+
+function ensureDistinctGeneratedPosts(
+  incomingPosts,
+  existingPosts,
+  settings,
+  feedType,
+  count = DEFAULT_POST_COUNT
+) {
+  const historyRefs = (existingPosts || []).filter((post) => !post?.authorOwned).slice(0, 18);
+  const chosen = [];
+
+  (incomingPosts || []).forEach((post) => {
+    if (!post) {
+      return;
+    }
+    if (isPostDirectionTooSimilar(post, [...historyRefs, ...chosen])) {
+      return;
+    }
+    chosen.push(post);
+  });
+
+  if (chosen.length >= count) {
+    return chosen.slice(0, count);
+  }
+
+  const localCandidates = buildLocalPosts(settings, Math.max(count * 3, 12), feedType);
+  localCandidates.forEach((post) => {
+    if (chosen.length >= count) {
+      return;
+    }
+    if (isPostDirectionTooSimilar(post, [...historyRefs, ...chosen])) {
+      return;
+    }
+    chosen.push(post);
+  });
+
+  if (chosen.length >= count) {
+    return chosen.slice(0, count);
+  }
+
+  (incomingPosts || []).forEach((post) => {
+    if (chosen.length >= count) {
+      return;
+    }
+    if (!chosen.some((item) => item.id === post.id)) {
+      chosen.push(post);
+    }
+  });
+
+  return chosen.slice(0, count);
+}
+
 function normalizePost(item, index = 0, fallbackFeedType = DEFAULT_CONTENT_FEED) {
   const [fallbackName, fallbackHandle] = FEED_NAMES[index % FEED_NAMES.length];
   const stableSeed = `${item?.text || ""}-${item?.displayName || fallbackName}-${index}`;
@@ -2306,11 +2779,24 @@ function normalizePost(item, index = 0, fallbackFeedType = DEFAULT_CONTENT_FEED)
   const resolvedTags = getRenderableTags(item, resolvedFeedType);
   const translationZh = String(item?.translationZh || item?.translatedText || "").trim();
   const translatedTags = normalizeTags(item?.translatedTags || item?.translationTags || [], 5);
+  const rawText =
+    typeof item?.text === "string"
+      ? item.text
+      : item?.text == null
+        ? ""
+        : String(item.text);
+  const imageDataUrl = String(item?.imageDataUrl || item?.imageUrl || "").trim();
+  const normalizedText = rawText.trim()
+    ? truncate(rawText, MAX_POST_TEXT_LENGTH)
+    : imageDataUrl
+      ? ""
+      : "讨论内容生成中。";
   return {
     id: item?.id || `post_${index}_${hashText(stableSeed)}`,
     displayName: truncate(item?.displayName || fallbackName, 28),
     handle: truncate(item?.handle || fallbackHandle, 28),
-    text: truncate(item?.text || "讨论内容生成中。", MAX_POST_TEXT_LENGTH),
+    text: normalizedText,
+    imageDataUrl,
     translationZh: truncate(translationZh, 1200),
     translatedTags,
     tags: resolvedTags,
@@ -2336,6 +2822,7 @@ function renderFeedPost(post, bucketName = state.activeFeed) {
     : renderAvatarMarkup(post.displayName.slice(0, 2).toUpperCase(), "avatar");
   const tagMarkup = renderPostTags(post, post.feedType || actualBucket);
   const translationMarkup = renderTranslationBlock(post.translationZh, post.translatedTags);
+  const mediaMarkup = renderPostMedia(post);
   const translateLabel = isPostTranslating(post.id, actualBucket)
     ? "翻译中..."
     : post.translationZh
@@ -2354,7 +2841,8 @@ function renderFeedPost(post, bucketName = state.activeFeed) {
             <span class="post-handle">${escapeHtml(post.handle)}</span>
             <span class="post-time">· ${escapeHtml(post.time)}</span>
           </div>
-          <p class="post-text">${escapeHtml(post.text)}</p>
+          ${post.text ? `<p class="post-text">${escapeHtml(post.text)}</p>` : ""}
+          ${mediaMarkup}
           ${tagMarkup}
           ${translationMarkup}
           ${renderEditedNote(post)}
@@ -2397,16 +2885,9 @@ function renderFeed(posts) {
 }
 
 function getTagStatisticBuckets() {
-  const customBuckets = state.customTabs
-    .map((tab) => tab.id)
-    .filter((bucketName) => Array.isArray(state.feeds[bucketName]));
-  if (customBuckets.length) {
-    return customBuckets;
-  }
-  if (Array.isArray(state.feeds[DEFAULT_CONTENT_FEED])) {
-    return [DEFAULT_CONTENT_FEED];
-  }
-  return Object.keys(state.feeds).filter((key) => isTimelineFeed(key));
+  return Object.keys(state.feeds).filter(
+    (key) => isTimelineFeed(key) && Array.isArray(state.feeds[key])
+  );
 }
 
 function buildPopularTagStats() {
@@ -2907,6 +3388,7 @@ function renderThreadModalRootPost(post, bucketName, threadState = null) {
     : renderAvatarMarkup(post.displayName.slice(0, 2).toUpperCase(), "avatar");
   const tagMarkup = renderPostTags(post, post.feedType || bucketName);
   const translationMarkup = renderTranslationBlock(post.translationZh, post.translatedTags);
+  const mediaMarkup = renderPostMedia(post);
   const isLoading = isPostTranslating(post.id, bucketName);
   const translateLabel = isLoading ? "翻译中..." : post.translationZh ? "重新翻译" : "翻译";
   const canReply = Boolean(threadState) && !threadState.loading;
@@ -2921,7 +3403,8 @@ function renderThreadModalRootPost(post, bucketName, threadState = null) {
           <span class="post-handle">${escapeHtml(post.handle)}</span>
           <span class="post-time">· ${escapeHtml(post.time)}</span>
         </div>
-        <p class="post-text">${escapeHtml(post.text)}</p>
+        ${post.text ? `<p class="post-text">${escapeHtml(post.text)}</p>` : ""}
+        ${mediaMarkup}
         ${tagMarkup}
         ${translationMarkup}
         <div class="post-actions">
@@ -2957,7 +3440,7 @@ function renderThreadModal() {
   if (!state.threadModalOpen) {
     threadModalEl.classList.add("hidden");
     threadModalEl.setAttribute("aria-hidden", "true");
-    document.body.style.overflow = "";
+    syncBodyScrollLock();
     return;
   }
 
@@ -2991,7 +3474,7 @@ function renderThreadModal() {
 
   threadModalEl.classList.remove("hidden");
   threadModalEl.setAttribute("aria-hidden", "false");
-  document.body.style.overflow = "hidden";
+  syncBodyScrollLock();
 }
 
 function setThreadModalOpen(isOpen) {
@@ -3594,31 +4077,227 @@ function findPostById(postId, bucketName = state.activeFeed) {
   return profilePost;
 }
 
-function renderFollowingPage() {
-  if (!followingListEl) {
+function setChatStatus(message, tone = "") {
+  if (!chatStatusEl) {
     return;
   }
-  const settings = getCurrentSettings();
-  const customTopics = normalizeCustomTabs(settings.customTabs || []).flatMap((tab) =>
-    parseTopics(tab.text)
-  );
-  const worldviewTopics = parseWorldviewFragments(settings.worldview);
-  const topics = [...customTopics, ...worldviewTopics].filter(Boolean);
-  followingListEl.innerHTML = FOLLOWING_CARDS.map((item, index) => {
-    const relatedTopic = topics[index] || "世界观扩展";
-    return `
-      <article class="follow-card">
-        <div class="follow-card__head">
-          <div>
-            <strong class="follow-card__name">${escapeHtml(item.name)}</strong>
-            <div class="post-handle">${escapeHtml(item.handle)}</div>
+  chatStatusEl.textContent = message;
+  chatStatusEl.className = "status-text";
+  if (tone) {
+    chatStatusEl.classList.add(tone);
+  }
+}
+
+function scrollChatHistoryToBottom(behavior = "auto") {
+  if (!chatHistoryEl) {
+    return;
+  }
+  chatHistoryEl.scrollTo({
+    top: chatHistoryEl.scrollHeight,
+    behavior
+  });
+}
+
+function findChatMessageById(messageId) {
+  return state.chatRoom.find((message) => message.id === messageId) || null;
+}
+
+function updateChatMessage(messageId, updater) {
+  let updated = false;
+  state.chatRoom = state.chatRoom.map((message) => {
+    if (message.id !== messageId) {
+      return message;
+    }
+    updated = true;
+    return updater({ ...message });
+  });
+  if (updated) {
+    persistChatRoom(state.chatRoom);
+  }
+  return updated;
+}
+
+function renderChatRoomMessage(message, index = 0) {
+  const isUser = message.role === "user";
+  const senderLabel = isUser
+    ? state.profile.username || DEFAULT_PROFILE.username
+    : message.sender || `粉丝 ${index + 1}`;
+  const pendingLabel =
+    isUser && message.status === "pending"
+      ? '<span class="chat-bubble__pending">待统一回复</span>'
+      : "";
+  const showTranslate = Boolean(message.text);
+  const translationMarkup = renderTranslationBlock(message.translationZh);
+  const translateLabel = isChatMessageTranslating(message.id)
+    ? "翻译中..."
+    : message.translationZh
+      ? "重新翻译"
+      : "翻译";
+  return `
+    <article class="chat-bubble ${isUser ? "chat-bubble--user" : ""}">
+      <div class="chat-bubble__meta">
+        <strong class="chat-bubble__sender">${escapeHtml(senderLabel)}</strong>
+        ${pendingLabel}
+      </div>
+      ${message.text ? `<p>${escapeHtml(message.text)}</p>` : ""}
+      ${renderChatMessageMedia(message)}
+      ${translationMarkup}
+      ${
+        showTranslate
+          ? `<div class="chat-bubble__actions">
+              <button class="action-link" type="button" data-action="translate-chat-message" data-message-id="${escapeHtml(
+                message.id
+              )}" ${isChatMessageTranslating(message.id) ? "disabled" : ""}>
+                ${translateLabel}
+              </button>
+            </div>`
+          : ""
+      }
+      <span class="post-time">${escapeHtml(message.time || "刚刚")}</span>
+    </article>
+  `;
+}
+
+function updateChatActionState() {
+  if (chatGenerateBtnEl) {
+    const pendingCount = state.chatRoom.filter(
+      (message) => message.role === "user" && message.status === "pending"
+    ).length;
+    const hasUserMessages = state.chatRoom.some((message) => message.role === "user");
+    chatGenerateBtnEl.disabled = state.chatReplying || (!pendingCount && !hasUserMessages);
+  }
+  if (chatClearBtnEl) {
+    chatClearBtnEl.disabled = state.chatReplying || state.chatRoom.length === 0;
+  }
+  if (chatComposeInputEl) {
+    chatComposeInputEl.disabled = state.chatReplying;
+  }
+  if (chatComposeImageInputEl) {
+    chatComposeImageInputEl.disabled = state.chatReplying;
+  }
+  if (chatSendBtnEl) {
+    chatSendBtnEl.disabled = state.chatReplying;
+  }
+  if (chatContextTriggerBtnEl) {
+    const selectedCount = normalizeChatContextTabIds(
+      state.settings.chatContextTabIds,
+      state.customTabs
+    ).length;
+    chatContextTriggerBtnEl.textContent = selectedCount
+      ? `参考页签（${selectedCount}）`
+      : "参考页签";
+    chatContextTriggerBtnEl.disabled = false;
+  }
+}
+
+function renderChatContextOptions(containerEl, emptyEl, selectedIds = []) {
+  if (!containerEl || !emptyEl) {
+    return;
+  }
+
+  const selectedIdSet = new Set(normalizeChatContextTabIds(selectedIds, state.customTabs));
+
+  if (!state.customTabs.length) {
+    emptyEl.hidden = false;
+    emptyEl.textContent = "暂无可勾选的自定义首页页签。";
+    containerEl.innerHTML = "";
+    return;
+  }
+
+  emptyEl.hidden = true;
+  containerEl.innerHTML = state.customTabs
+    .map((tab) => {
+      const checked = selectedIdSet.has(tab.id);
+      return `
+        <label class="chat-context-option${checked ? " is-selected" : ""}">
+          <input
+            type="checkbox"
+            data-action="toggle-chat-context-draft-tab"
+            data-tab-id="${escapeHtml(tab.id)}"
+            ${checked ? "checked" : ""}
+          />
+          <div class="chat-context-option__body">
+            <strong>${escapeHtml(tab.name || "自定义页签")}</strong>
+            <span>${escapeHtml(truncate(tab.text || "尚未填写内容", 72))}</span>
           </div>
-          <span class="badge">${escapeHtml(relatedTopic)}</span>
-        </div>
-        <p>${escapeHtml(item.note)}</p>
-      </article>
-    `;
-  }).join("");
+        </label>
+      `;
+    })
+    .join("");
+}
+
+function renderChatContextModal() {
+  if (!chatContextModalEl || !chatContextModalListEl || !chatContextModalEmptyEl) {
+    return;
+  }
+  if (!state.chatContextModalOpen) {
+    chatContextModalEl.classList.add("hidden");
+    chatContextModalEl.setAttribute("aria-hidden", "true");
+    syncBodyScrollLock();
+    return;
+  }
+
+  renderChatContextOptions(
+    chatContextModalListEl,
+    chatContextModalEmptyEl,
+    state.chatContextDraftTabIds
+  );
+  chatContextModalEl.classList.remove("hidden");
+  chatContextModalEl.setAttribute("aria-hidden", "false");
+  syncBodyScrollLock();
+}
+
+function setChatContextModalOpen(isOpen) {
+  state.chatContextModalOpen = Boolean(isOpen);
+  if (state.chatContextModalOpen) {
+    state.chatContextDraftTabIds = normalizeChatContextTabIds(
+      state.settings.chatContextTabIds,
+      state.customTabs
+    );
+  } else {
+    state.chatContextDraftTabIds = [];
+  }
+  renderChatContextModal();
+}
+
+function toggleChatContextDraftTab(tabId, isChecked) {
+  const currentIds = normalizeChatContextTabIds(state.chatContextDraftTabIds, state.customTabs);
+  const nextIds = isChecked
+    ? [...currentIds, tabId]
+    : currentIds.filter((item) => item !== tabId);
+  state.chatContextDraftTabIds = normalizeChatContextTabIds(nextIds, state.customTabs);
+  renderChatContextModal();
+}
+
+function applyChatContextDraftSelection() {
+  state.settings.chatContextTabIds = normalizeChatContextTabIds(
+    state.chatContextDraftTabIds,
+    state.customTabs
+  );
+  persistSettings(state.settings);
+  setChatContextModalOpen(false);
+  renderFollowingPage();
+  setChatStatus("已更新聊天参考页签。", "success");
+}
+
+function renderFollowingPage() {
+  if (!chatHistoryEl) {
+    return;
+  }
+  if (!state.chatRoom.length) {
+    chatHistoryEl.innerHTML =
+      '<p class="empty-state">先发送几条消息，或发一张图片，再点击“获取回复”收粉丝回帖。</p>';
+  } else {
+    chatHistoryEl.innerHTML = state.chatRoom
+      .map((message, index) => renderChatRoomMessage(message, index))
+      .join("");
+  }
+  renderComposerMediaPreview(
+    chatComposeImagePreviewEl,
+    state.chatDraftImageDataUrl,
+    "remove-chat-compose-image"
+  );
+  updateChatActionState();
 }
 
 function renderMessagesPage() {
@@ -3777,7 +4456,8 @@ function renderProfilePage() {
           <div class="post-content-trigger" data-action="open-thread-modal" data-bucket="profile" data-post-id="${escapeHtml(
             post.id
           )}">
-            <p class="post-text">${escapeHtml(post.text || "")}</p>
+            ${post.text ? `<p class="post-text">${escapeHtml(post.text || "")}</p>` : ""}
+            ${renderPostMedia(post)}
             ${renderEditedNote(post)}
           </div>
         `;
@@ -3839,7 +4519,44 @@ function renderProfilePage() {
     .join("");
 }
 
-function buildRequestBody(settings, prompt, count = DEFAULT_POST_COUNT) {
+function buildOpenAICompatibleContent(prompt, images = []) {
+  const normalizedImages = Array.isArray(images)
+    ? images.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  if (!normalizedImages.length) {
+    return prompt;
+  }
+  return [
+    { type: "text", text: prompt },
+    ...normalizedImages.map((image) => ({
+      type: "image_url",
+      image_url: { url: image }
+    }))
+  ];
+}
+
+function buildGeminiParts(prompt, images = []) {
+  const normalizedImages = Array.isArray(images)
+    ? images.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const parts = [{ text: prompt }];
+  normalizedImages.forEach((image) => {
+    const parsed = parseDataUrlParts(image);
+    if (!parsed) {
+      return;
+    }
+    parts.push({
+      inlineData: {
+        mimeType: parsed.mimeType,
+        data: parsed.data
+      }
+    });
+  });
+  return parts;
+}
+
+function buildRequestBody(settings, prompt, count = DEFAULT_POST_COUNT, options = {}) {
+  const images = Array.isArray(options?.images) ? options.images : [];
   if (normalizeApiMode(settings.mode) === "openai") {
     return {
       model: settings.model || DEFAULT_SETTINGS.model,
@@ -3851,7 +4568,7 @@ function buildRequestBody(settings, prompt, count = DEFAULT_POST_COUNT) {
         },
         {
           role: "user",
-          content: prompt
+          content: buildOpenAICompatibleContent(prompt, images)
         }
       ],
       stream: false
@@ -3866,7 +4583,7 @@ function buildRequestBody(settings, prompt, count = DEFAULT_POST_COUNT) {
       contents: [
         {
           role: "user",
-          parts: [{ text: prompt }]
+          parts: buildGeminiParts(prompt, images)
         }
       ],
       generationConfig: {
@@ -3878,6 +4595,7 @@ function buildRequestBody(settings, prompt, count = DEFAULT_POST_COUNT) {
   return {
     prompt,
     count,
+    images,
     temperature: normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE),
     format: "json-array"
   };
@@ -4009,6 +4727,30 @@ function parseGeneratedReplies(rawText, count = DEFAULT_REPLY_COUNT, seed = "rep
     .map((item, index) => normalizeReply(item, index, `${seed}-${index}`));
 }
 
+function parseGeneratedChatReplies(rawText, count = DEFAULT_CHAT_REPLY_COUNT) {
+  const jsonText = extractJsonArray(rawText);
+  if (!jsonText) {
+    throw new Error("聊天回复中没有找到 JSON 数组。");
+  }
+
+  const parsed = parseJsonArrayWithRepair(jsonText, "聊天回复 JSON 解析失败。");
+  if (!Array.isArray(parsed) || !parsed.length) {
+    throw new Error("聊天回复不是有效数组。");
+  }
+
+  return parsed.slice(0, count).map((item, index) =>
+    normalizeChatMessage(
+      {
+        ...item,
+        role: "incoming",
+        sender: item?.sender || item?.displayName || `粉丝 ${index + 1}`
+      },
+      item?.sender || item?.displayName || `粉丝 ${index + 1}`,
+      index
+    )
+  );
+}
+
 function getFallbackLocaleProfile(index = 0) {
   const profiles = [
     {
@@ -4099,6 +4841,7 @@ function buildLocalReplies(
   const parentText = parentReply ? parentReply.text : rootPost.text;
   const topic = getRenderableTags(rootPost, feedType)[0] || getFeedLabel(feedType) || "当前讨论";
   const focus = truncate(parentText, 30);
+  const hasImage = Boolean(rootPost?.imageDataUrl);
   const viewpoints = [
     "你这句切得很准，但我觉得争议点其实就在这里。",
     "我不完全同意，因为这段话默认的前提可能还得再拆开。",
@@ -4111,7 +4854,7 @@ function buildLocalReplies(
     "所以我更想看有没有人能拿出反例。",
     "放在这个板块里，这种说法确实很容易带出连锁回复。",
     "要继续聊下去，关键还是得回到更具体的场景。",
-    "真正有意思的是，你这句其实还能继续往下拆。"
+    hasImage ? "而且附图把情绪又往前推了一层。" : "真正有意思的是，你这句其实还能继续往下拆。"
   ];
   const localeOffset = Number.parseInt(hashText(rootPost.id || topic), 36) || 0;
   return Array.from({ length: count }, (_, index) => {
@@ -4331,15 +5074,22 @@ function buildLocalDirectMessages(
   );
 }
 
-function createAuthoredPost(content, feedType = state.activeFeed, tagsInput = "") {
+function createAuthoredPost(
+  content,
+  feedType = state.activeFeed,
+  tagsInput = "",
+  imageDataUrl = ""
+) {
   const profile = getCurrentProfile();
   const tags = normalizeTags(tagsInput, 5);
+  const imageSeed = String(imageDataUrl || "").slice(0, 64);
   const post = normalizePost(
     {
-      id: `profile_post_${Date.now()}_${hashText(content)}`,
+      id: `profile_post_${Date.now()}_${hashText(`${content}-${imageSeed}`)}`,
       displayName: profile.username,
       handle: normalizeProfileUserId(profile.userId, profile.username),
       text: content,
+      imageDataUrl,
       tags,
       replies: 0,
       reposts: 0,
@@ -4347,7 +5097,8 @@ function createAuthoredPost(content, feedType = state.activeFeed, tagsInput = ""
       views: 1,
       time: "刚刚"
     },
-    0
+    0,
+    feedType
   );
 
   post.authorOwned = true;
@@ -4366,13 +5117,14 @@ function setHomeComposerStatus(message, tone = "") {
 function submitHomePost() {
   const content = homeComposerInput.value.trim();
   const tagsInput = homeComposerTagsInput?.value.trim() || "";
+  const imageDataUrl = state.homeComposerImageDataUrl || "";
   const targetFeed = getCurrentContentFeed(state.activeFeed);
-  if (!content) {
-    setHomeComposerStatus("请输入帖子内容后再发送。", "error");
+  if (!content && !imageDataUrl) {
+    setHomeComposerStatus("请输入帖子内容或添加图片后再发送。", "error");
     return;
   }
 
-  const post = createAuthoredPost(content, targetFeed, tagsInput);
+  const post = createAuthoredPost(content, targetFeed, tagsInput, imageDataUrl);
   state.profilePosts = [post, ...state.profilePosts];
   state.feeds[targetFeed] = [post, ...(state.feeds[targetFeed] || [])].slice(
     0,
@@ -4388,6 +5140,7 @@ function submitHomePost() {
   if (homeComposerTagsInput) {
     homeComposerTagsInput.value = "";
   }
+  clearHomeComposerImage();
   setHomeComposerOpen(false);
   setHomeComposerStatus("帖子已发送，并同步到个人主页。", "success");
 }
@@ -4577,6 +5330,135 @@ function buildLocalConversationReply(profile, conversation, userMessage) {
     conversation.sender,
     conversation.messages?.length || 0
   );
+}
+
+async function requestGeneratedChatReplies(
+  settings,
+  profile,
+  chatRoom,
+  pendingMessages,
+  count = settings.chatReplyCount || DEFAULT_CHAT_REPLY_COUNT
+) {
+  const requestEndpoint = resolveApiRequestEndpoint(settings);
+  settings.endpoint = requestEndpoint;
+
+  if (!requestEndpoint) {
+    throw new Error("未配置 API 地址，已切换为本地回退生成。");
+  }
+  if (normalizeApiMode(settings.mode) === "openai" && !settings.model) {
+    throw new Error("DeepSeek / OpenAI 兼容模式需要填写模型名称。");
+  }
+  if (normalizeApiMode(settings.mode) === "gemini" && !settings.token) {
+    throw new Error("Gemini 模式需要填写 API Key。");
+  }
+
+  const prompt = buildChatRoomReplyPrompt(settings, profile, chatRoom, pendingMessages, count);
+  const headers = buildRequestHeaders(settings);
+  const images = pendingMessages
+    .map((message) => String(message?.imageDataUrl || "").trim())
+    .filter(Boolean);
+
+  const response = await fetch(requestEndpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(buildRequestBody(settings, prompt, count, { images }))
+  });
+
+  if (!response.ok) {
+    throw new Error(`聊天回复请求失败：HTTP ${response.status}`);
+  }
+
+  const rawResponse = await response.text();
+  let payload = rawResponse;
+
+  try {
+    payload = JSON.parse(rawResponse);
+  } catch (_error) {
+    payload = rawResponse;
+  }
+
+  const message = resolveMessage(payload);
+  if (!message) {
+    throw new Error("聊天回复接口返回为空。");
+  }
+
+  return parseGeneratedChatReplies(message, count);
+}
+
+function buildLocalChatRoomReplies(
+  settings,
+  profile,
+  chatRoom,
+  pendingMessages,
+  count = settings.chatReplyCount || DEFAULT_CHAT_REPLY_COUNT
+) {
+  const username = profile.username || DEFAULT_PROFILE.username;
+  const selectedTabs = getSelectedChatContextTabs(settings);
+  const contextHint = selectedTabs[0]?.name || "";
+  const recentUserText = pendingMessages
+    .map((message) => String(message.text || "").trim())
+    .filter(Boolean)
+    .join(" / ");
+  const hasImage = pendingMessages.some((message) => message.imageDataUrl);
+  const focus = truncate(recentUserText || "这轮内容", 36);
+  const cnLines = [
+    `我超懂你这句，继续说！`,
+    `支持，这个点你拿得很稳。`,
+    `喜欢这个角度，继续发。`,
+    hasImage ? "这张图也太有感觉了。" : `这句真的很像你会说的。`,
+    `${username}这波表达很顶。`
+  ];
+  const jpLines = [
+    "この流れ、かなり好き。",
+    "その言い方、ちゃんと刺さる。",
+    "応援してる、続けてほしい。",
+    hasImage ? "写真の空気感もいい。" : "この一言、すごく良い。",
+    "あなたの視点、やっぱり好き。"
+  ];
+  const krLines = [
+    "이 흐름 정말 좋아요.",
+    "이 포인트 완전 응원해요.",
+    "계속 말해줘요, 듣고 싶어요.",
+    hasImage ? "사진 분위기도 너무 좋아요." : "이 한마디가 딱이에요.",
+    "역시 당신 말이라 더 믿겨요."
+  ];
+  const enLines = [
+    "Love this take, keep going.",
+    "Yep, I’m with you here.",
+    "This is exactly why I follow you.",
+    hasImage ? "That image really sells it." : "That line hits so well.",
+    "Still fully on your side."
+  ];
+  const localePools = [cnLines, jpLines, krLines, enLines];
+  const fanNames = [
+    ["热心粉丝", "@supportive_cn"],
+    ["推し勢", "@oshi_room"],
+    ["응원계정", "@cheer_k"],
+    ["Core Fan", "@corefan_us"]
+  ];
+  const roomOffset = Number.parseInt(hashText(focus || username), 36) || 0;
+
+  return Array.from({ length: count }, (_, index) => {
+    const localeIndex = (index + roomOffset) % localePools.length;
+    const [displayName, handle] = fanNames[localeIndex];
+    const linePool = localePools[localeIndex];
+    const baseText = linePool[index % linePool.length];
+    const withFocus =
+      localeIndex === 0 && index % 5 === 0
+        ? `${baseText}\n${truncate(contextHint || focus, 14)}`
+        : baseText;
+    return normalizeChatMessage(
+      {
+        role: "incoming",
+        sender: displayName,
+        handle,
+        text: withFocus,
+        time: `${index + 1}s`
+      },
+      displayName,
+      index + (chatRoom?.length || 0)
+    );
+  });
 }
 
 function buildTranslatePrompt(sourceText) {
@@ -4837,6 +5719,37 @@ async function translateReplyToChinese(postId, replyId, bucketName = state.activ
   }
 }
 
+async function translateChatMessageToChinese(messageId) {
+  const targetMessage = findChatMessageById(messageId);
+  if (!targetMessage?.text) {
+    setChatStatus("这条消息没有可翻译的文本。", "error");
+    return;
+  }
+  if (isChatMessageTranslating(messageId)) {
+    return;
+  }
+
+  setChatMessageTranslating(messageId, true);
+  renderFollowingPage();
+
+  try {
+    const translatedText = await requestTranslatedText(
+      getTranslationRequestSettings({ ...getCurrentSettings() }),
+      targetMessage.text || ""
+    );
+    updateChatMessage(messageId, (message) => ({
+      ...message,
+      translationZh: translatedText
+    }));
+    setChatStatus("已生成聊天消息中文翻译。", "success");
+  } catch (error) {
+    setChatStatus(`聊天翻译失败：${error.message || "请求失败"}`, "error");
+  } finally {
+    setChatMessageTranslating(messageId, false);
+    renderFollowingPage();
+  }
+}
+
 async function requestGeneratedReplies(
   settings,
   profile,
@@ -4861,7 +5774,11 @@ async function requestGeneratedReplies(
   const response = await fetch(requestEndpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify(buildRequestBody(settings, prompt, count))
+    body: JSON.stringify(
+      buildRequestBody(settings, prompt, count, {
+        images: [rootPost?.imageDataUrl].filter(Boolean)
+      })
+    )
   });
 
   if (!response.ok) {
@@ -5169,6 +6086,218 @@ async function sendConversationMessage(conversationId, userMessage) {
   }
 }
 
+function delay(ms = 0) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+async function handleImageSelection(file, target) {
+  if (!file) {
+    if (target === "home") {
+      clearHomeComposerImage();
+    } else if (target === "chat") {
+      clearChatComposeImage();
+    }
+    return;
+  }
+
+  try {
+    const dataUrl = await readFileAsDataUrl(file);
+    if (target === "home") {
+      state.homeComposerImageDataUrl = dataUrl;
+      renderComposerMediaPreview(
+        homeComposerImagePreviewEl,
+        dataUrl,
+        "remove-home-composer-image"
+      );
+      setHomeComposerStatus("帖子图片已添加。", "success");
+      return;
+    }
+
+    state.chatDraftImageDataUrl = dataUrl;
+    renderComposerMediaPreview(chatComposeImagePreviewEl, dataUrl, "remove-chat-compose-image");
+    setChatStatus("聊天图片已添加。", "success");
+  } catch (_error) {
+    if (target === "home") {
+      setHomeComposerStatus("帖子图片读取失败，请重试。", "error");
+    } else {
+      setChatStatus("聊天图片读取失败，请重试。", "error");
+    }
+  }
+}
+
+function buildChatUserMessage(text, imageDataUrl = "") {
+  const imageSeed = String(imageDataUrl || "").slice(0, 64);
+  return normalizeChatMessage(
+    {
+      id: `chat_room_user_${Date.now()}_${hashText(`${text}-${imageSeed}`)}`,
+      role: "user",
+      text,
+      imageDataUrl,
+      time: "刚刚",
+      status: "pending"
+    },
+    "你",
+    state.chatRoom.length
+  );
+}
+
+function appendChatMessages(messages = []) {
+  if (!Array.isArray(messages) || !messages.length) {
+    return;
+  }
+  state.chatRoom = [...state.chatRoom, ...messages];
+  persistChatRoom(state.chatRoom);
+}
+
+async function submitChatRoomMessage() {
+  if (state.chatReplying) {
+    return;
+  }
+  const text = String(chatComposeInputEl?.value || "").trim();
+  const imageDataUrl = state.chatDraftImageDataUrl || "";
+  if (!text && !imageDataUrl) {
+    setChatStatus("请输入消息或添加图片后再发送。", "error");
+    return;
+  }
+
+  const nextMessage = buildChatUserMessage(text, imageDataUrl);
+  appendChatMessages([nextMessage]);
+  if (chatComposeInputEl) {
+    chatComposeInputEl.value = "";
+  }
+  clearChatComposeImage();
+  renderFollowingPage();
+  setChatStatus("消息已加入待回复队列，可继续发送更多内容。", "success");
+  scrollChatHistoryToBottom("smooth");
+}
+
+function markPendingChatMessagesAsSent(messageIds = []) {
+  const idSet = new Set(messageIds);
+  state.chatRoom = state.chatRoom.map((message) =>
+    idSet.has(message.id)
+      ? {
+          ...message,
+          status: "sent"
+        }
+      : message
+  );
+  persistChatRoom(state.chatRoom);
+}
+
+function getChatReplyFocusMessages() {
+  const pendingMessages = state.chatRoom.filter(
+    (message) => message.role === "user" && message.status === "pending"
+  );
+  if (pendingMessages.length) {
+    return {
+      messages: pendingMessages,
+      hasFreshMessages: true
+    };
+  }
+
+  const historicalUserMessages = state.chatRoom
+    .filter((message) => message.role === "user")
+    .slice(-6);
+  return {
+    messages: historicalUserMessages,
+    hasFreshMessages: false
+  };
+}
+
+async function appendChatRepliesGradually(replies = []) {
+  for (let index = 0; index < replies.length; index += 1) {
+    const reply = replies[index];
+    appendChatMessages([reply]);
+    renderFollowingPage();
+    scrollChatHistoryToBottom("smooth");
+    if (index < replies.length - 1) {
+      await delay(CHAT_REPLY_APPEND_INTERVAL_MS);
+    }
+  }
+}
+
+async function generateChatRoomReplies() {
+  if (state.chatReplying) {
+    return;
+  }
+  const { messages: focusMessages, hasFreshMessages } = getChatReplyFocusMessages();
+  if (!focusMessages.length) {
+    setChatStatus("先发送至少一条用户消息，再获取回复。", "error");
+    renderFollowingPage();
+    return;
+  }
+
+  state.chatReplying = true;
+  renderFollowingPage();
+  const settings = { ...getCurrentSettings() };
+  const profile = { ...getCurrentProfile() };
+  const replyCount = settings.chatReplyCount || DEFAULT_CHAT_REPLY_COUNT;
+  setChatStatus(
+    hasFreshMessages
+      ? `正在获取 ${replyCount} 条粉丝回复…`
+      : `正在围绕之前的消息继续获取 ${replyCount} 条粉丝回复…`,
+    ""
+  );
+
+  try {
+    let replies;
+    let usedFallback = false;
+    try {
+      replies = await requestGeneratedChatReplies(
+        settings,
+        profile,
+        state.chatRoom,
+        focusMessages,
+        replyCount
+      );
+    } catch (_error) {
+      usedFallback = true;
+      replies = buildLocalChatRoomReplies(
+        settings,
+        profile,
+        state.chatRoom,
+        focusMessages,
+        replyCount
+      );
+    }
+
+    if (hasFreshMessages) {
+      markPendingChatMessagesAsSent(focusMessages.map((message) => message.id));
+    }
+    renderFollowingPage();
+    await appendChatRepliesGradually(replies);
+    setChatStatus(
+      usedFallback
+        ? `接口不可用，已本地生成 ${replies.length} 条粉丝回复。`
+        : `已收到 ${replies.length} 条粉丝回复。`,
+      usedFallback ? "error" : "success"
+    );
+  } finally {
+    state.chatReplying = false;
+    renderFollowingPage();
+  }
+}
+
+function clearChatRoom() {
+  if (!state.chatRoom.length) {
+    return;
+  }
+  const confirmed = window.confirm("确定清空当前聊天记录吗？");
+  if (!confirmed) {
+    return;
+  }
+  state.chatRoom = [];
+  persistChatRoom(state.chatRoom);
+  if (chatComposeInputEl) {
+    chatComposeInputEl.value = "";
+  }
+  clearChatComposeImage();
+  renderFollowingPage();
+  setChatStatus("聊天记录已清空。", "success");
+}
+
 async function refreshHomeFeed(trigger = "manual") {
   if (state.isRefreshing) {
     return;
@@ -5210,8 +6339,12 @@ async function refreshHomeFeed(trigger = "manual") {
 
     syncAuthoredPostIdentity(profile);
     refreshAuthoredPostsEngagement(profile);
-    const normalizedIncomingPosts = posts.map((item, index) =>
-      normalizePost(item, index, targetFeed)
+    const normalizedIncomingPosts = ensureDistinctGeneratedPosts(
+      posts.map((item, index) => normalizePost(item, index, targetFeed)),
+      state.feeds[targetFeed] || [],
+      settings,
+      targetFeed,
+      homeCount
     );
     state.feeds[targetFeed] = mergeFeedHistory(
       state.feeds[targetFeed] || [],
@@ -5364,6 +6497,30 @@ function attachEvents() {
     });
   }
 
+  if (homeComposerImageInput) {
+    homeComposerImageInput.addEventListener("change", async () => {
+      const [file] = homeComposerImageInput.files || [];
+      await handleImageSelection(file, "home");
+    });
+  }
+
+  if (homeComposerImagePreviewEl) {
+    homeComposerImagePreviewEl.addEventListener("click", (event) => {
+      const target = getEventHTMLElement(event);
+      if (!target) {
+        return;
+      }
+      const actionEl = target.closest("[data-action]");
+      if (!(actionEl instanceof HTMLElement)) {
+        return;
+      }
+      if (actionEl.dataset.action === "remove-home-composer-image") {
+        clearHomeComposerImage();
+        setHomeComposerStatus("已移除帖子图片。", "");
+      }
+    });
+  }
+
   if (settingsGenerateBtn) {
     settingsGenerateBtn.addEventListener("click", () => {
       saveCurrentSettings();
@@ -5404,6 +6561,122 @@ function attachEvents() {
     profileCancelBtn.addEventListener("click", () => {
       applyProfileToForm(state.profile);
       setProfileEditorOpen(false);
+    });
+  }
+
+  if (chatComposeFormEl) {
+    chatComposeFormEl.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await submitChatRoomMessage();
+    });
+  }
+
+  if (chatComposeImageInputEl) {
+    chatComposeImageInputEl.addEventListener("change", async () => {
+      const [file] = chatComposeImageInputEl.files || [];
+      await handleImageSelection(file, "chat");
+    });
+  }
+
+  if (chatComposeImagePreviewEl) {
+    chatComposeImagePreviewEl.addEventListener("click", (event) => {
+      const target = getEventHTMLElement(event);
+      if (!target) {
+        return;
+      }
+      const actionEl = target.closest("[data-action]");
+      if (!(actionEl instanceof HTMLElement)) {
+        return;
+      }
+      if (actionEl.dataset.action === "remove-chat-compose-image") {
+        clearChatComposeImage();
+        setChatStatus("已移除聊天图片。", "");
+      }
+    });
+  }
+
+  if (chatGenerateBtnEl) {
+    chatGenerateBtnEl.addEventListener("click", async () => {
+      await generateChatRoomReplies();
+    });
+  }
+
+  if (chatClearBtnEl) {
+    chatClearBtnEl.addEventListener("click", () => {
+      clearChatRoom();
+    });
+  }
+
+  if (chatContextTriggerBtnEl) {
+    chatContextTriggerBtnEl.addEventListener("click", () => {
+      setChatContextModalOpen(true);
+    });
+  }
+
+  if (chatHistoryEl) {
+    chatHistoryEl.addEventListener("click", async (event) => {
+      const target = getEventHTMLElement(event);
+      if (!target) {
+        return;
+      }
+      const actionEl = target.closest("[data-action]");
+      if (!(actionEl instanceof HTMLElement)) {
+        return;
+      }
+      if (
+        actionEl.dataset.action === "translate-chat-message" &&
+        actionEl.dataset.messageId
+      ) {
+        await translateChatMessageToChinese(actionEl.dataset.messageId);
+      }
+    });
+  }
+
+  if (chatContextModalListEl) {
+    chatContextModalListEl.addEventListener("change", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement) || target.type !== "checkbox") {
+        return;
+      }
+      const tabId = target.dataset.tabId || "";
+      if (!tabId) {
+        return;
+      }
+      toggleChatContextDraftTab(tabId, target.checked);
+    });
+  }
+
+  if (chatContextModalEl) {
+    chatContextModalEl.addEventListener("click", (event) => {
+      const target = getEventHTMLElement(event);
+      if (!target) {
+        return;
+      }
+      const actionEl = target.closest("[data-action]");
+      if (!(actionEl instanceof HTMLElement)) {
+        return;
+      }
+      if (actionEl.dataset.action === "close-chat-context-modal") {
+        setChatContextModalOpen(false);
+      }
+    });
+  }
+
+  if (chatContextModalCloseBtnEl) {
+    chatContextModalCloseBtnEl.addEventListener("click", () => {
+      setChatContextModalOpen(false);
+    });
+  }
+
+  if (chatContextModalCancelBtnEl) {
+    chatContextModalCancelBtnEl.addEventListener("click", () => {
+      setChatContextModalOpen(false);
+    });
+  }
+
+  if (chatContextModalConfirmBtnEl) {
+    chatContextModalConfirmBtnEl.addEventListener("click", () => {
+      applyChatContextDraftSelection();
     });
   }
 
@@ -5885,13 +7158,17 @@ function attachEvents() {
   }
 
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.chatContextModalOpen) {
+      setChatContextModalOpen(false);
+      return;
+    }
     if (event.key === "Escape" && state.threadModalOpen) {
       setThreadModalOpen(false);
     }
   });
 
   const apiFields = [modeSelect, endpointInput, tokenInput, modelInput];
-  [modeSelect, endpointInput, tokenInput, modelInput, temperatureInput, homeCountInput, dmCountInput, replyCountInput, worldviewInput]
+  [modeSelect, endpointInput, tokenInput, modelInput, temperatureInput, homeCountInput, dmCountInput, replyCountInput, chatReplyCountInput, worldviewInput]
     .filter(Boolean)
     .forEach(
     (field) => {
@@ -5919,6 +7196,7 @@ function attachEvents() {
     (field) => {
       field.addEventListener("input", () => {
         state.profile = getCurrentProfile();
+        renderFollowingPage();
         renderProfilePage();
         updateMessagePromptPreview();
         updateReplyPromptPreview();
@@ -5978,6 +7256,7 @@ function init() {
   safeRun("profile editor", () => setProfileEditorOpen(false));
   safeRun("home composer", () => setHomeComposerOpen(false));
   safeRun("thread modal", () => setThreadModalOpen(false));
+  safeRun("chat context modal", () => setChatContextModalOpen(false));
   safeRun("pull indicator", () => setPullIndicator(0, "idle"));
   safeRun("render active feed", () => renderActiveFeed());
   safeRun("render following", () => renderFollowingPage());

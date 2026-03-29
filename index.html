@@ -23,8 +23,8 @@
             <span>首页</span>
           </button>
           <button class="nav-item" data-tab="following" type="button">
-            <span class="nav-icon">◎</span>
-            <span>关注</span>
+            <span class="nav-icon">☰</span>
+            <span>聊天</span>
           </button>
           <button class="nav-item" data-tab="messages" type="button">
             <span class="nav-icon">✉</span>
@@ -87,6 +87,15 @@
                     placeholder="例如：#榜单 #行业洞察，不填则留空"
                   />
                 </label>
+                <label>
+                  帖子图片（可选）
+                  <input
+                    id="home-composer-image-input"
+                    type="file"
+                    accept="image/*"
+                  />
+                </label>
+                <div id="home-composer-image-preview" class="composer-media-preview hidden"></div>
                 <div class="settings-actions">
                   <button id="home-composer-submit" class="solid-button" type="submit">
                     发送帖子
@@ -165,17 +174,41 @@
           </div>
         </section>
 
-        <section id="following-page" class="page-section" aria-label="关注">
+        <section id="following-page" class="page-section" aria-label="聊天">
           <div class="page-scroll">
             <section class="section-card">
               <div class="section-card__head">
                 <div>
-                  <p class="section-card__eyebrow">Following</p>
-                  <h2>关注账号流</h2>
+                  <p class="section-card__eyebrow">Chat Room</p>
+                  <h2>聊天</h2>
                 </div>
-                <span class="badge">精选关注</span>
+                <div class="settings-actions">
+                  <button id="chat-context-trigger-btn" class="ghost-chip" type="button">参考页签</button>
+                  <button id="chat-clear-btn" class="ghost-chip" type="button">清空聊天</button>
+                </div>
               </div>
-              <div id="following-list" class="stack-list"></div>
+              <p id="chat-status" class="status-text">你可以连续发送多条消息，再统一获取粉丝回复。</p>
+              <div id="chat-history" class="chat-history chat-history--room"></div>
+              <form id="chat-compose-form" class="chat-input-form" autocomplete="off">
+                <textarea
+                  id="chat-compose-input"
+                  class="chat-textarea"
+                  rows="3"
+                  placeholder="输入你想发送的消息，支持连续发送后统一获取回复。"
+                ></textarea>
+                <div class="chat-compose-toolbar">
+                  <label class="ghost-chip" for="chat-compose-image-input">添加图片</label>
+                  <input
+                    id="chat-compose-image-input"
+                    type="file"
+                    accept="image/*"
+                    hidden
+                  />
+                  <button id="chat-send-btn" class="solid-button" type="submit">发送消息</button>
+                  <button id="chat-generate-btn" class="ghost-chip" type="button">获取回复</button>
+                </div>
+                <div id="chat-compose-image-preview" class="composer-media-preview hidden"></div>
+              </form>
             </section>
           </div>
         </section>
@@ -403,6 +436,18 @@
                       placeholder="4"
                     />
                   </label>
+
+                  <label>
+                    聊天回复数量
+                    <input
+                      id="chat-reply-count"
+                      type="number"
+                      min="1"
+                      max="50"
+                      step="1"
+                      placeholder="20"
+                    />
+                  </label>
                 </div>
 
                 <label>
@@ -554,6 +599,28 @@
           <div id="thread-modal-replies" class="thread-modal__replies"></div>
         </div>
         <p id="thread-modal-load-hint" class="thread-modal__load-hint">滚动到底后继续上滑可加载更多回复</p>
+      </div>
+    </section>
+
+    <section id="chat-context-modal" class="thread-modal hidden" aria-hidden="true">
+      <div class="thread-modal__backdrop" data-action="close-chat-context-modal"></div>
+      <div class="thread-modal__panel chat-context-modal__panel" role="dialog" aria-modal="true" aria-label="聊天参考页签">
+        <div class="thread-modal__head">
+          <div>
+            <p class="section-card__eyebrow">Chat Context</p>
+            <h2>参考页签</h2>
+          </div>
+          <button id="chat-context-modal-close-btn" class="ghost-chip" type="button">关闭</button>
+        </div>
+        <div class="thread-modal__body chat-context-modal__body">
+          <p class="tag-stat-meta">勾选后，这些自定义首页页签文本会作为聊天回复的低优先级背景资料。默认不勾选。</p>
+          <div id="chat-context-modal-empty" class="tag-stat-meta">暂无可勾选的自定义首页页签。</div>
+          <div id="chat-context-modal-list" class="chat-context-list"></div>
+        </div>
+        <div class="chat-context-modal__actions">
+          <button id="chat-context-modal-cancel-btn" class="ghost-button" type="button">取消</button>
+          <button id="chat-context-modal-confirm-btn" class="solid-button" type="button">确认</button>
+        </div>
       </div>
     </section>
 
