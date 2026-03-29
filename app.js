@@ -12,6 +12,7 @@ const DEFAULT_DM_COUNT = 4;
 const DEFAULT_REPLY_COUNT = 4;
 const MAX_FEED_ITEMS = 50;
 const MAX_POST_TEXT_LENGTH = 520;
+const MAX_REPLY_TEXT_LENGTH = 520;
 const DEFAULT_TEMPERATURE = 0.8;
 const PULL_THRESHOLD = 88;
 const DEFAULT_CONTENT_FEED = "entertainment";
@@ -237,6 +238,12 @@ const state = {
   threadModalTouchStartY: 0,
   threadModalLoadingMore: false,
   threadModalLastLoadAt: 0,
+  threadReplyTargetType: "",
+  threadReplyTargetId: "",
+  threadReplyDraft: "",
+  threadReplyStatus: "",
+  threadReplyStatusTone: "",
+  threadReplySubmitting: false,
   translatingPosts: {},
   translatingReplies: {}
 };
@@ -287,6 +294,17 @@ function truncate(text, length = 120) {
     return normalized;
   }
   return `${normalized.slice(0, length - 1)}…`;
+}
+
+function normalizePersistedFeedType(feedType, fallback = DEFAULT_CONTENT_FEED) {
+  const normalized = String(feedType || "").trim();
+  if (!normalized || normalized === "profile" || normalized === "tags") {
+    return fallback;
+  }
+  if (normalized === "hot") {
+    return "entertainment";
+  }
+  return normalized;
 }
 
 function parseTopics(source) {
@@ -877,9 +895,10 @@ function loadProfilePosts() {
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed)
       ? parsed.map((item, index) => {
-          const post = normalizePost(item, index);
+          const resolvedFeedType = normalizePersistedFeedType(item?.feedType);
+          const post = normalizePost(item, index, resolvedFeedType);
           post.authorOwned = true;
-          post.feedType = item.feedType || DEFAULT_CONTENT_FEED;
+          post.feedType = normalizePersistedFeedType(item?.feedType, post.feedType);
           return post;
         })
       : [];
@@ -1052,7 +1071,9 @@ function saveCurrentProfile() {
   state.profile = getCurrentProfile();
   syncAuthoredPostIdentity(state.profile);
   persistProfile(state.profile);
+  renderActiveFeed();
   renderProfilePage();
+  renderThreadModal();
   updateMessagePromptPreview();
   updateReplyPromptPreview();
 }
@@ -1183,6 +1204,20 @@ function syncPostAcrossViews(postId, updater) {
   persistDiscussions();
 }
 
+function mapReplyTree(replies, updater) {
+  if (!Array.isArray(replies)) {
+    return [];
+  }
+
+  return replies.map((reply) => {
+    const updatedReply = updater(reply);
+    return {
+      ...updatedReply,
+      children: mapReplyTree(updatedReply.children || [], updater)
+    };
+  });
+}
+
 function syncAuthoredPostIdentity(profile) {
   const resolvedName = profile.username || DEFAULT_PROFILE.username;
   const resolvedHandle = normalizeProfileUserId(profile.userId, resolvedName);
@@ -1207,6 +1242,25 @@ function syncAuthoredPostIdentity(profile) {
           }
         : post
     );
+  });
+
+  Object.keys(state.discussions).forEach((bucketName) => {
+    const bucket = state.discussions[bucketName] || {};
+    Object.keys(bucket).forEach((postId) => {
+      const threadState = bucket[postId];
+      if (!threadState?.replies?.length) {
+        return;
+      }
+      threadState.replies = mapReplyTree(threadState.replies, (reply) =>
+        reply.authorOwned
+          ? {
+              ...reply,
+              displayName: resolvedName,
+              handle: resolvedHandle
+            }
+          : reply
+      );
+    });
   });
 
   persistProfilePosts(state.profilePosts);
@@ -1864,11 +1918,12 @@ function normalizeReply(item, index = 0, seed = "root") {
     id: item?.id || `reply_${index}_${hashText(stableSeed)}`,
     displayName: truncate(item?.displayName || fallbackName, 24),
     handle: truncate(item?.handle || fallbackHandle, 24),
-    text: truncate(item?.text || "这条回复还在生成中。", 120),
+    text: truncate(item?.text || "这条回复还在生成中。", MAX_REPLY_TEXT_LENGTH),
     translationZh: truncate(translationZh, 600),
     likes: formatMetric(item?.likes, 12 + index * 5),
     replies: formatMetric(item?.replies, 2 + index),
     time: item?.time || `${index + 1}m`,
+    authorOwned: Boolean(item?.authorOwned),
     children: Array.isArray(item?.children) ? item.children : [],
     expanded: Boolean(item?.expanded),
     loading: Boolean(item?.loading)
@@ -2439,7 +2494,26 @@ function getDiscussionBucket(bucketName = state.activeFeed) {
 }
 
 function getPostThreadState(postId, bucketName = state.activeFeed) {
-  return getDiscussionBucket(bucketName)[postId] || null;
+  const directThreadState = getDiscussionBucket(bucketName)[postId] || null;
+  if (directThreadState) {
+    return directThreadState;
+  }
+
+  const post = findPostById(postId, bucketName);
+  if (!post?.authorOwned) {
+    return null;
+  }
+
+  if (bucketName !== "profile") {
+    return getDiscussionBucket("profile")[postId] || null;
+  }
+
+  const resolvedFeedType = normalizePersistedFeedType(post.feedType, DEFAULT_CONTENT_FEED);
+  if (resolvedFeedType && resolvedFeedType !== "profile") {
+    return getDiscussionBucket(resolvedFeedType)[postId] || null;
+  }
+
+  return null;
 }
 
 function renderPostDiscussion(post, bucketName = state.activeFeed) {
@@ -2515,13 +2589,245 @@ function renderReplyBranch(postId, replies, bucketName = state.activeFeed, depth
 }
 
 function resolveThreadBucketName(bucketName, post) {
+  const normalizedPostFeed = normalizePersistedFeedType(
+    post?.feedType,
+    getCurrentContentFeed()
+  );
   if (bucketName === "tags") {
-    return post?.feedType || getCurrentContentFeed();
+    return normalizedPostFeed;
   }
-  if (bucketName === "profile" && post?.feedType && post.feedType !== "profile") {
-    return post.feedType;
+  if (bucketName === "profile" && post?.feedType && normalizedPostFeed !== "profile") {
+    return normalizedPostFeed;
+  }
+  if (bucketName === "hot") {
+    return "entertainment";
   }
   return bucketName || state.activeFeed;
+}
+
+function resetThreadReplyComposer() {
+  state.threadReplyTargetType = "";
+  state.threadReplyTargetId = "";
+  state.threadReplyDraft = "";
+  state.threadReplyStatus = "";
+  state.threadReplyStatusTone = "";
+  state.threadReplySubmitting = false;
+}
+
+function setThreadReplyStatus(message, tone = "") {
+  state.threadReplyStatus = String(message || "");
+  state.threadReplyStatusTone = tone;
+}
+
+function isThreadReplyComposerActive(targetType, targetId) {
+  return (
+    state.threadReplyTargetType === targetType &&
+    state.threadReplyTargetId === String(targetId || "")
+  );
+}
+
+function focusThreadReplyComposer() {
+  if (!threadModalEl) {
+    return;
+  }
+  window.setTimeout(() => {
+    const activeComposer = threadModalEl.querySelector(".reply-composer textarea");
+    if (activeComposer instanceof HTMLTextAreaElement) {
+      activeComposer.focus();
+      activeComposer.setSelectionRange(activeComposer.value.length, activeComposer.value.length);
+    }
+  }, 0);
+}
+
+function toggleThreadReplyComposer(targetType, targetId) {
+  if (state.threadReplySubmitting) {
+    return;
+  }
+
+  const resolvedTargetId = String(targetId || "");
+  const shouldClose = isThreadReplyComposerActive(targetType, resolvedTargetId);
+  if (shouldClose) {
+    resetThreadReplyComposer();
+    renderThreadModal();
+    return;
+  }
+
+  state.threadReplyTargetType = targetType;
+  state.threadReplyTargetId = resolvedTargetId;
+  state.threadReplyDraft = "";
+  setThreadReplyStatus("");
+  renderThreadModal();
+  focusThreadReplyComposer();
+}
+
+function renderReplyAvatarMarkup(reply) {
+  if (reply?.authorOwned) {
+    return renderAvatarMarkup(
+      truncate(state.profile.avatar || DEFAULT_PROFILE.avatar, 2),
+      "reply-avatar",
+      state.profile.avatarImage || ""
+    );
+  }
+  return `<div class="reply-avatar">${escapeHtml(
+    String(reply?.displayName || "回复").slice(0, 2).toUpperCase()
+  )}</div>`;
+}
+
+function createAuthoredReply(content, seed = "") {
+  const profile = getCurrentProfile();
+  const reply = normalizeReply(
+    {
+      id: `reply_self_${Date.now()}_${hashText(`${seed}-${content}`)}`,
+      displayName: profile.username,
+      handle: normalizeProfileUserId(profile.userId, profile.username),
+      text: content,
+      likes: 0,
+      replies: 0,
+      time: "刚刚",
+      children: []
+    },
+    0,
+    `self_${seed}`
+  );
+  reply.authorOwned = true;
+  reply.children = [];
+  reply.expanded = false;
+  reply.loading = false;
+  return reply;
+}
+
+function renderThreadReplyComposer(postId, bucketName, parentReply = null) {
+  const targetType = parentReply ? "reply" : "post";
+  const targetId = parentReply ? parentReply.id : postId;
+  if (!isThreadReplyComposerActive(targetType, targetId)) {
+    return "";
+  }
+
+  const profile = getCurrentProfile();
+  const resolvedName = profile.username || DEFAULT_PROFILE.username;
+  const resolvedHandle = normalizeProfileUserId(profile.userId, resolvedName);
+  const targetLabel = parentReply
+    ? `回复 ${parentReply.displayName}${parentReply.handle ? ` ${parentReply.handle}` : ""}`
+    : "回复这条帖子";
+  const personaHint = truncate(profile.personaPrompt || DEFAULT_PROFILE.personaPrompt, 42);
+
+  return `
+    <form
+      class="reply-composer"
+      data-post-id="${escapeHtml(postId)}"
+      data-bucket="${escapeHtml(bucketName)}"
+      data-target-type="${escapeHtml(targetType)}"
+      data-target-id="${escapeHtml(targetId)}"
+      ${parentReply ? `data-parent-reply-id="${escapeHtml(parentReply.id)}"` : ""}
+    >
+      <div class="reply-composer__head">
+        ${renderAvatarMarkup(
+          truncate(profile.avatar || DEFAULT_PROFILE.avatar, 2),
+          "reply-avatar",
+          profile.avatarImage || ""
+        )}
+        <div class="reply-composer__identity">
+          <strong>${escapeHtml(resolvedName)}</strong>
+          <span class="post-handle">${escapeHtml(resolvedHandle)}</span>
+        </div>
+      </div>
+      <p class="reply-composer__meta">
+        ${escapeHtml(targetLabel)} · 将沿用个人主页的人设风格：${escapeHtml(personaHint)}
+      </p>
+      <textarea
+        data-thread-reply-input="true"
+        rows="4"
+        maxlength="600"
+        placeholder="${escapeHtml(targetLabel)}…"
+        ${state.threadReplySubmitting ? "disabled" : ""}
+      >${escapeHtml(state.threadReplyDraft)}</textarea>
+      ${
+        state.threadReplyStatus
+          ? `<p class="status-text${state.threadReplyStatusTone ? ` ${escapeHtml(
+              state.threadReplyStatusTone
+            )}` : ""}">${escapeHtml(state.threadReplyStatus)}</p>`
+          : ""
+      }
+      <div class="reply-composer__actions">
+        <button class="ghost-chip" type="button" data-action="cancel-thread-reply" ${
+          state.threadReplySubmitting ? "disabled" : ""
+        }>
+          取消
+        </button>
+        <button class="solid-button reply-composer__submit" type="submit" ${
+          state.threadReplySubmitting ? "disabled" : ""
+        }>
+          ${state.threadReplySubmitting ? "发送中..." : "发送回复"}
+        </button>
+      </div>
+    </form>
+  `;
+}
+
+function submitThreadReply(postId, bucketName, parentReplyId = "") {
+  const content = state.threadReplyDraft.trim();
+  if (!content) {
+    setThreadReplyStatus("请输入回复内容后再发送。", "error");
+    renderThreadModal();
+    focusThreadReplyComposer();
+    return;
+  }
+
+  const post = findPostById(postId, bucketName);
+  if (!post) {
+    setHomeStatus("未找到要回复的帖子。", "error");
+    return;
+  }
+
+  const resolvedBucket = resolveThreadBucketName(bucketName, post);
+  const bucket = getDiscussionBucket(resolvedBucket);
+  const threadState = bucket[postId]
+    ? bucket[postId]
+    : {
+        ...(getPostThreadState(postId, bucketName) || {
+          expanded: true,
+          loading: false,
+          replies: []
+        })
+      };
+  bucket[postId] = threadState;
+
+  state.threadReplySubmitting = true;
+  renderThreadModal();
+
+  const newReply = createAuthoredReply(content, `${postId}-${parentReplyId || "root"}`);
+
+  if (parentReplyId) {
+    const parentReply = findReplyNode(threadState.replies || [], parentReplyId);
+    if (!parentReply) {
+      state.threadReplySubmitting = false;
+      setThreadReplyStatus("未找到要回复的楼层，请重试。", "error");
+      renderThreadModal();
+      focusThreadReplyComposer();
+      return;
+    }
+    parentReply.children = [newReply, ...(parentReply.children || [])];
+    parentReply.expanded = true;
+    parentReply.loading = false;
+    parentReply.replies = Math.max(0, Number(parentReply.replies) || 0) + 1;
+  } else {
+    threadState.replies = [newReply, ...(threadState.replies || [])];
+  }
+
+  threadState.expanded = true;
+  threadState.loading = false;
+  updatePostAcrossBuckets(postId, (currentPost) => ({
+    ...currentPost,
+    replies: Math.max(0, Number(currentPost.replies) || 0) + 1
+  }));
+  syncDiscussionForAuthoredPost(post, resolvedBucket, postId, threadState);
+  persistDiscussions();
+
+  resetThreadReplyComposer();
+  setHomeStatus("回复已发送。", "success");
+  renderActiveFeed();
+  renderProfilePage();
+  renderThreadModal();
 }
 
 function renderThreadModalReplyCard(reply, bucketName, postId, depth = 1) {
@@ -2533,6 +2839,8 @@ function renderThreadModalReplyCard(reply, bucketName, postId, depth = 1) {
       ? "重新翻译"
       : "翻译";
   const toggleLabel = reply.expanded ? "收起回复" : "展开回复";
+  const replyComposerMarkup = renderThreadReplyComposer(postId, bucketName, reply);
+  const replyComposerLabel = isThreadReplyComposerActive("reply", reply.id) ? "取消回复" : "回复";
   const nestedBlock = reply.expanded
     ? reply.loading
       ? '<div class="reply-children"><p class="thread-loading">正在加载回复…</p></div>'
@@ -2548,7 +2856,7 @@ function renderThreadModalReplyCard(reply, bucketName, postId, depth = 1) {
   return `
     <article class="reply-card" data-reply-id="${escapeHtml(reply.id)}" data-depth="${depth}">
       <div class="reply-shell">
-        <div class="reply-avatar">${escapeHtml(reply.displayName.slice(0, 2).toUpperCase())}</div>
+        ${renderReplyAvatarMarkup(reply)}
         <div>
           <div class="post-head">
             <strong>${escapeHtml(reply.displayName)}</strong>
@@ -2558,6 +2866,11 @@ function renderThreadModalReplyCard(reply, bucketName, postId, depth = 1) {
           <p class="reply-text">${escapeHtml(reply.text)}</p>
           ${translationMarkup}
           <div class="reply-actions">
+            <button class="action-link" type="button" data-action="toggle-thread-reply-composer" data-target-type="reply" data-target-id="${escapeHtml(
+              reply.id
+            )}" ${reply.loading ? "disabled" : ""}>
+              ${replyComposerLabel}
+            </button>
             <button class="action-link" type="button" data-action="toggle-reply" data-bucket="${escapeHtml(
               bucketName
             )}" data-post-id="${escapeHtml(postId)}" data-reply-id="${escapeHtml(reply.id)}">
@@ -2573,6 +2886,7 @@ function renderThreadModalReplyCard(reply, bucketName, postId, depth = 1) {
             <span>回复 ${reply.replies}</span>
             <span>喜欢 ${reply.likes}</span>
           </div>
+          ${replyComposerMarkup}
           ${nestedBlock}
         </div>
       </div>
@@ -2580,7 +2894,7 @@ function renderThreadModalReplyCard(reply, bucketName, postId, depth = 1) {
   `;
 }
 
-function renderThreadModalRootPost(post, bucketName) {
+function renderThreadModalRootPost(post, bucketName, threadState = null) {
   if (!threadModalRootEl) {
     return;
   }
@@ -2595,6 +2909,9 @@ function renderThreadModalRootPost(post, bucketName) {
   const translationMarkup = renderTranslationBlock(post.translationZh, post.translatedTags);
   const isLoading = isPostTranslating(post.id, bucketName);
   const translateLabel = isLoading ? "翻译中..." : post.translationZh ? "重新翻译" : "翻译";
+  const canReply = Boolean(threadState) && !threadState.loading;
+  const replyComposerMarkup = renderThreadReplyComposer(post.id, bucketName);
+  const replyComposerLabel = isThreadReplyComposerActive("post", post.id) ? "取消回复" : "回复";
   threadModalRootEl.innerHTML = `
     <div class="post-shell">
       ${avatarMarkup}
@@ -2608,6 +2925,11 @@ function renderThreadModalRootPost(post, bucketName) {
         ${tagMarkup}
         ${translationMarkup}
         <div class="post-actions">
+          <button class="action-link" type="button" data-action="toggle-thread-reply-composer" data-target-type="post" data-target-id="${escapeHtml(
+            post.id
+          )}" ${canReply ? "" : "disabled"}>
+            ${replyComposerLabel}
+          </button>
           <button class="action-link" type="button" data-action="translate-post" data-bucket="${escapeHtml(
             bucketName
           )}" data-post-id="${escapeHtml(post.id)}" ${isLoading ? "disabled" : ""}>${translateLabel}</button>
@@ -2616,6 +2938,7 @@ function renderThreadModalRootPost(post, bucketName) {
           <span>喜欢 ${post.likes}</span>
           <span>浏览 ${post.views}</span>
         </div>
+        ${replyComposerMarkup}
       </div>
     </div>
   `;
@@ -2648,7 +2971,7 @@ function renderThreadModal() {
 
   const resolvedBucket = resolveThreadBucketName(state.threadModalBucket, post);
   const threadState = getPostThreadState(post.id, resolvedBucket);
-  renderThreadModalRootPost(post, resolvedBucket);
+  renderThreadModalRootPost(post, resolvedBucket, threadState);
 
   if (!threadState?.replies?.length && !threadState?.loading) {
     threadModalRepliesEl.innerHTML = '<p class="thread-empty">这条讨论暂时还没有回复。</p>';
@@ -2679,6 +3002,7 @@ function setThreadModalOpen(isOpen) {
     state.threadModalTouchTracking = false;
     state.threadModalLoadingMore = false;
     state.threadModalLastLoadAt = 0;
+    resetThreadReplyComposer();
   }
   renderThreadModal();
 }
@@ -2721,11 +3045,15 @@ async function loadPostDiscussionReplies(postId, bucketName = state.activeFeed, 
 
   const resolvedBucket = resolveThreadBucketName(bucketName, post);
   const feedState = getDiscussionBucket(resolvedBucket);
-  const currentThread = feedState[postId] || {
-    expanded: true,
-    loading: false,
-    replies: []
-  };
+  const currentThread = feedState[postId]
+    ? feedState[postId]
+    : {
+        ...(getPostThreadState(postId, bucketName) || {
+          expanded: true,
+          loading: false,
+          replies: []
+        })
+      };
   if (currentThread.loading) {
     return;
   }
@@ -2792,6 +3120,7 @@ async function openThreadModal(postId, bucketName = state.activeFeed) {
   if (!post) {
     return;
   }
+  resetThreadReplyComposer();
   state.threadModalPostId = postId;
   state.threadModalBucket = resolveThreadBucketName(bucketName, post);
   state.threadModalLoadingMore = false;
@@ -3223,6 +3552,10 @@ function getTagFilteredPosts(tag) {
 function findPostById(postId, bucketName = state.activeFeed) {
   const preferredBucket =
     bucketName === "tags" ? getCurrentContentFeed() : bucketName;
+  const profilePost = state.profilePosts.find((item) => item.id === postId) || null;
+  if (preferredBucket === "profile" && profilePost) {
+    return profilePost;
+  }
   const bucketPost = (state.feeds[preferredBucket] || []).find((item) => item.id === postId);
   if (bucketPost) {
     return bucketPost;
@@ -3236,7 +3569,7 @@ function findPostById(postId, bucketName = state.activeFeed) {
     return allFeedPost;
   }
 
-  return state.profilePosts.find((item) => item.id === postId) || null;
+  return profilePost;
 }
 
 function renderFollowingPage() {
@@ -5440,6 +5773,20 @@ function attachEvents() {
         return;
       }
 
+      if (action === "toggle-thread-reply-composer") {
+        toggleThreadReplyComposer(
+          actionEl.dataset.targetType || "post",
+          actionEl.dataset.targetId || actionEl.dataset.postId || ""
+        );
+        return;
+      }
+
+      if (action === "cancel-thread-reply") {
+        resetThreadReplyComposer();
+        renderThreadModal();
+        return;
+      }
+
       if (action === "translate-post" && actionEl.dataset.postId) {
         await translatePostToChinese(
           actionEl.dataset.postId,
@@ -5463,7 +5810,38 @@ function attachEvents() {
           actionEl.dataset.replyId,
           actionEl.dataset.bucket || state.threadModalBucket || state.activeFeed
         );
+        return;
       }
+    });
+
+    threadModalEl.addEventListener("input", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLTextAreaElement)) {
+        return;
+      }
+      if (!("threadReplyInput" in target.dataset)) {
+        return;
+      }
+      state.threadReplyDraft = target.value;
+      if (state.threadReplyStatus) {
+        setThreadReplyStatus("");
+      }
+    });
+
+    threadModalEl.addEventListener("submit", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLFormElement)) {
+        return;
+      }
+      if (!target.classList.contains("reply-composer")) {
+        return;
+      }
+      event.preventDefault();
+      submitThreadReply(
+        target.dataset.postId || state.threadModalPostId,
+        target.dataset.bucket || state.threadModalBucket || state.activeFeed,
+        target.dataset.parentReplyId || ""
+      );
     });
   }
 
