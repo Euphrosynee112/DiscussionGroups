@@ -23,14 +23,6 @@
             <span class="nav-icon">⌂</span>
             <span>首页</span>
           </button>
-          <button class="nav-item" data-tab="following" type="button">
-            <span class="nav-icon">☰</span>
-            <span>聊天</span>
-          </button>
-          <button class="nav-item" data-tab="messages" type="button">
-            <span class="nav-icon">✉</span>
-            <span>私信</span>
-          </button>
           <button class="nav-item" data-tab="profile" type="button">
             <span class="nav-icon">◐</span>
             <span>个人主页</span>
@@ -126,107 +118,6 @@
               <div id="feed" class="feed" aria-live="polite"></div>
             </section>
 
-            <section
-              id="custom-tabs-manager"
-              class="section-card hidden"
-              aria-label="自定义页签管理"
-            >
-              <div class="section-card__head">
-                <div>
-                  <p class="section-card__eyebrow">Custom tabs</p>
-                  <h2>自定义页签管理</h2>
-                </div>
-                <button id="custom-tabs-close-btn" class="ghost-chip" type="button">
-                  收起
-                </button>
-              </div>
-              <p class="tag-stat-meta">最多新增 4 个自定义页签，用于扩展首页讨论主题。</p>
-              <div id="custom-tabs-list" class="stack-list custom-tabs-list"></div>
-              <form id="custom-tab-form" class="settings-form" autocomplete="off">
-                <label>
-                  页签名称
-                  <input
-                    id="custom-tab-name-input"
-                    type="text"
-                    maxlength="10"
-                    placeholder="例如：出海、消费新变"
-                  />
-                </label>
-                <label>
-                  页签文本
-                  <textarea
-                    id="custom-tab-text-input"
-                    rows="4"
-                    placeholder="输入该页签要聚焦的主题、设定或提示。"
-                  ></textarea>
-                </label>
-                <div class="settings-actions">
-                  <button id="custom-tab-save-btn" class="solid-button" type="submit">
-                    保存页签
-                  </button>
-                  <button id="custom-tab-cancel-btn" class="ghost-button" type="button">
-                    取消
-                  </button>
-                </div>
-                <p id="custom-tab-form-status" class="status-text"></p>
-              </form>
-              <p id="custom-tabs-limit-hint" class="tag-stat-meta"></p>
-            </section>
-          </div>
-        </section>
-
-        <section id="following-page" class="page-section" aria-label="聊天">
-          <div class="page-scroll">
-            <section class="section-card">
-              <div class="section-card__head">
-                <div>
-                  <p class="section-card__eyebrow">Chat Room</p>
-                  <h2>聊天</h2>
-                </div>
-                <div class="settings-actions">
-                  <button id="chat-context-trigger-btn" class="ghost-chip" type="button">参考页签</button>
-                  <button id="chat-clear-btn" class="ghost-chip" type="button">清空聊天</button>
-                </div>
-              </div>
-              <p id="chat-status" class="status-text">你可以连续发送多条消息，再统一获取粉丝回复。</p>
-              <div id="chat-history" class="chat-history chat-history--room"></div>
-              <form id="chat-compose-form" class="chat-input-form" autocomplete="off">
-                <textarea
-                  id="chat-compose-input"
-                  class="chat-textarea"
-                  rows="3"
-                  placeholder="输入你想发送的消息，支持连续发送后统一获取回复。"
-                ></textarea>
-                <div class="chat-compose-toolbar">
-                  <label class="ghost-chip" for="chat-compose-image-input">添加图片</label>
-                  <input
-                    id="chat-compose-image-input"
-                    type="file"
-                    accept="image/*"
-                    hidden
-                  />
-                  <button id="chat-send-btn" class="solid-button" type="submit">发送消息</button>
-                  <button id="chat-generate-btn" class="ghost-chip" type="button">获取回复</button>
-                </div>
-                <div id="chat-compose-image-preview" class="composer-media-preview hidden"></div>
-              </form>
-            </section>
-          </div>
-        </section>
-
-        <section id="messages-page" class="page-section" aria-label="私信">
-          <div class="page-scroll">
-            <section class="section-card">
-                <div class="section-card__head">
-                  <div>
-                    <p class="section-card__eyebrow">Messages</p>
-                    <h2>私信会话</h2>
-                  </div>
-                <button id="messages-generate-btn" class="ghost-chip" type="button">新建消息</button>
-              </div>
-              <p id="messages-status" class="status-text">点击“新建消息”生成与当前设定相关的私信内容。</p>
-              <div id="messages-list" class="conversation-list"></div>
-            </section>
           </div>
         </section>
 
@@ -415,18 +306,6 @@
                   </label>
 
                   <label>
-                    私信生成数量
-                    <input
-                      id="dm-count"
-                      type="number"
-                      min="1"
-                      max="20"
-                      step="1"
-                      placeholder="4"
-                    />
-                  </label>
-
-                  <label>
                     展开讨论回复数量
                     <input
                       id="reply-count"
@@ -438,17 +317,6 @@
                     />
                   </label>
 
-                  <label>
-                    聊天回复数量
-                    <input
-                      id="chat-reply-count"
-                      type="number"
-                      min="1"
-                      max="50"
-                      step="1"
-                      placeholder="20"
-                    />
-                  </label>
                 </div>
 
                 <label>
@@ -476,95 +344,11 @@
             <section class="section-card">
               <div class="section-card__head">
                 <div>
-                  <p class="section-card__eyebrow">API Presets</p>
-                  <h2>API 配置缓存与一键切换</h2>
-                </div>
-              </div>
-              <p class="tag-stat-meta">API 参数与内容配置已分离，可缓存多套并在设置页一键切换。</p>
-              <div class="form-grid">
-                <label>
-                  接口类型
-                  <select id="api-mode">
-                    <option value="openai">DeepSeek / OpenAI 兼容接口</option>
-                    <option value="gemini">Gemini API</option>
-                    <option value="generic">通用 JSON 接口</option>
-                  </select>
-                </label>
-
-                <label>
-                  API 地址
-                  <input
-                    id="api-endpoint"
-                    type="url"
-                    placeholder="https://api.deepseek.com/chat/completions"
-                  />
-                </label>
-
-                <label>
-                  API Key / Bearer Token
-                  <input
-                    id="api-token"
-                    type="password"
-                    placeholder="输入用于请求的密钥"
-                  />
-                </label>
-
-                <label id="model-wrap">
-                  模型名称
-                  <input id="api-model" type="text" placeholder="deepseek-chat" />
-                </label>
-              </div>
-              <div class="api-config-toolbar">
-                <label>
-                  配置名称（可选）
-                  <input
-                    id="api-config-name-input"
-                    type="text"
-                    maxlength="20"
-                    placeholder="例如：DeepSeek-主账号 / Gemini-测试"
-                  />
-                </label>
-                <div class="settings-actions">
-                  <button id="api-config-save-btn" class="solid-button" type="button">
-                    保存当前 API 配置
-                  </button>
-                </div>
-              </div>
-              <p id="api-config-status" class="status-text"></p>
-              <div id="api-config-list" class="api-config-list"></div>
-              <div class="translation-api-settings">
-                <label class="checkbox-row">
-                  <input id="translation-api-enabled" type="checkbox" />
-                  <span>启用翻译专用 API</span>
-                </label>
-                <label>
-                  翻译专用配置
-                  <select id="translation-api-config-select"></select>
-                  <span class="field-hint">
-                    启用后，帖子与回复翻译会优先使用这里选中的已缓存 API 配置；关闭后沿用当前内容生成配置。
-                  </span>
-                </label>
-              </div>
-            </section>
-
-            <section class="section-card">
-              <div class="section-card__head">
-                <div>
                   <p class="section-card__eyebrow">Home Prompt Preview</p>
                   <h2>首页生成 Prompt 预览</h2>
                 </div>
               </div>
               <pre id="prompt-preview" class="prompt-preview"></pre>
-            </section>
-
-            <section class="section-card">
-              <div class="section-card__head">
-                <div>
-                  <p class="section-card__eyebrow">DM Prompt Preview</p>
-                  <h2>私信生成 Prompt 预览</h2>
-                </div>
-              </div>
-              <pre id="message-prompt-preview" class="prompt-preview"></pre>
             </section>
 
             <section class="section-card">
@@ -613,24 +397,48 @@
       </div>
     </section>
 
-    <section id="chat-context-modal" class="thread-modal hidden" aria-hidden="true">
-      <div class="thread-modal__backdrop" data-action="close-chat-context-modal"></div>
-      <div class="thread-modal__panel chat-context-modal__panel" role="dialog" aria-modal="true" aria-label="聊天参考页签">
+    <section id="custom-tabs-manager" class="thread-modal hidden" aria-hidden="true">
+      <div class="thread-modal__backdrop" data-action="close-custom-tabs-modal"></div>
+      <div class="thread-modal__panel custom-tabs-modal__panel" role="dialog" aria-modal="true" aria-label="自定义页签管理">
         <div class="thread-modal__head">
           <div>
-            <p class="section-card__eyebrow">Chat Context</p>
-            <h2>参考页签</h2>
+            <p class="section-card__eyebrow">Custom tabs</p>
+            <h2>自定义页签管理</h2>
           </div>
-          <button id="chat-context-modal-close-btn" class="ghost-chip" type="button">关闭</button>
+          <button id="custom-tabs-close-btn" class="ghost-chip" type="button">关闭</button>
         </div>
-        <div class="thread-modal__body chat-context-modal__body">
-          <p class="tag-stat-meta">勾选后，这些自定义首页页签文本会作为聊天回复的低优先级背景资料。默认不勾选。</p>
-          <div id="chat-context-modal-empty" class="tag-stat-meta">暂无可勾选的自定义首页页签。</div>
-          <div id="chat-context-modal-list" class="chat-context-list"></div>
-        </div>
-        <div class="chat-context-modal__actions">
-          <button id="chat-context-modal-cancel-btn" class="ghost-button" type="button">取消</button>
-          <button id="chat-context-modal-confirm-btn" class="solid-button" type="button">确认</button>
+        <div class="thread-modal__body custom-tabs-modal__body">
+          <p class="tag-stat-meta">最多新增 4 个自定义页签，用于扩展首页讨论主题。</p>
+          <div id="custom-tabs-list" class="stack-list custom-tabs-list"></div>
+          <form id="custom-tab-form" class="settings-form" autocomplete="off">
+            <label>
+              页签名称
+              <input
+                id="custom-tab-name-input"
+                type="text"
+                maxlength="10"
+                placeholder="例如：出海、消费新变"
+              />
+            </label>
+            <label>
+              页签文本
+              <textarea
+                id="custom-tab-text-input"
+                rows="4"
+                placeholder="输入该页签要聚焦的主题、设定或提示。"
+              ></textarea>
+            </label>
+            <div class="settings-actions">
+              <button id="custom-tab-save-btn" class="solid-button" type="submit">
+                保存页签
+              </button>
+              <button id="custom-tab-cancel-btn" class="ghost-button" type="button">
+                取消
+              </button>
+            </div>
+            <p id="custom-tab-form-status" class="status-text"></p>
+          </form>
+          <p id="custom-tabs-limit-hint" class="tag-stat-meta"></p>
         </div>
       </div>
     </section>

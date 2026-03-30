@@ -24,6 +24,12 @@ const homeTranslationApiEnabledEl = document.querySelector("#home-translation-ap
 const homeTranslationApiConfigSelectEl = document.querySelector(
   "#home-translation-api-config-select"
 );
+const homeAppTriggers = [...document.querySelectorAll("[data-open-app]")];
+const homeBrowserModalEl = document.querySelector("#home-browser-modal");
+const homeBrowserFrameEl = document.querySelector("#home-browser-frame");
+const homeBrowserKickerEl = document.querySelector("#home-browser-kicker");
+const homeBrowserTitleEl = document.querySelector("#home-browser-title");
+const homeBrowserCloseBtn = document.querySelector("#home-browser-close-btn");
 
 const weekdayLabels = [
   "星期日",
@@ -50,8 +56,29 @@ const DEFAULT_SETTINGS = {
 
 const homeState = {
   settings: loadSettings(),
-  modalOpen: false
+  modalOpen: false,
+  browserOpen: false,
+  activeAppUrl: "",
+  activeAppTab: "home"
 };
+
+function showHomeLayer(element, displayValue = "block") {
+  if (!element) {
+    return;
+  }
+  element.hidden = false;
+  element.setAttribute("aria-hidden", "false");
+  element.style.display = displayValue;
+}
+
+function hideHomeLayer(element) {
+  if (!element) {
+    return;
+  }
+  element.hidden = true;
+  element.setAttribute("aria-hidden", "true");
+  element.style.display = "none";
+}
 
 function safeGetItem(key) {
   try {
@@ -627,9 +654,8 @@ function setHomeSettingsModalOpen(isOpen) {
   if (homeState.modalOpen) {
     homeState.settings = loadSettings();
     applySettingsToHomeForm(homeState.settings);
-    homeSettingsModalEl.hidden = false;
-    homeSettingsModalEl.setAttribute("aria-hidden", "false");
-    document.body.classList.add("modal-open");
+    showHomeLayer(homeSettingsModalEl, "grid");
+    refreshBodyModalState();
     window.setTimeout(() => {
       homeApiEndpointInput?.focus();
     }, 0);
@@ -637,12 +663,83 @@ function setHomeSettingsModalOpen(isOpen) {
   }
 
   saveCurrentHomeSettings({ silent: true });
-  homeSettingsModalEl.hidden = true;
-  homeSettingsModalEl.setAttribute("aria-hidden", "true");
-  document.body.classList.remove("modal-open");
+  hideHomeLayer(homeSettingsModalEl);
+  refreshBodyModalState();
+}
+
+function getHomeAppMeta(tabName = "home") {
+  if (tabName === "messages") {
+    return {
+      tab: "messages",
+      kicker: "Messages",
+      title: "Chat"
+    };
+  }
+  return {
+    tab: "home",
+    kicker: "Discussion",
+    title: "X"
+  };
+}
+
+function refreshBodyModalState() {
+  document.body.classList.toggle("modal-open", homeState.modalOpen || homeState.browserOpen);
+}
+
+function setHomeBrowserModalOpen(
+  isOpen,
+  url = homeState.activeAppUrl,
+  appMeta = getHomeAppMeta(homeState.activeAppTab)
+) {
+  homeState.browserOpen = Boolean(isOpen);
+  if (!homeBrowserModalEl || !homeBrowserFrameEl) {
+    return;
+  }
+
+  if (homeState.browserOpen) {
+    if (homeState.modalOpen) {
+      setHomeSettingsModalOpen(false);
+    }
+    const resolvedAppMeta = appMeta || getHomeAppMeta(homeState.activeAppTab);
+    homeState.activeAppUrl = url || homeState.activeAppUrl || "./discussion.html?tab=home";
+    homeState.activeAppTab = resolvedAppMeta.tab;
+    showHomeLayer(homeBrowserModalEl, "grid");
+    homeBrowserFrameEl.src = homeState.activeAppUrl;
+    if (homeBrowserKickerEl) {
+      homeBrowserKickerEl.textContent = resolvedAppMeta.kicker;
+    }
+    if (homeBrowserTitleEl) {
+      homeBrowserTitleEl.textContent = resolvedAppMeta.title;
+    }
+    refreshBodyModalState();
+    return;
+  }
+
+  hideHomeLayer(homeBrowserModalEl);
+  homeBrowserFrameEl.src = "about:blank";
+  homeState.activeAppUrl = "";
+  homeState.activeAppTab = "home";
+  refreshBodyModalState();
+}
+
+function openHomeApp(tabName) {
+  if (tabName === "messages") {
+    setHomeBrowserModalOpen(true, "./messages.html?embed=1", getHomeAppMeta("messages"));
+    return;
+  }
+
+  const targetUrl = "./discussion.html?tab=home&embed=1";
+  setHomeBrowserModalOpen(true, targetUrl, getHomeAppMeta("home"));
 }
 
 function attachHomeSettingsEvents() {
+  homeAppTriggers.forEach((trigger) => {
+    trigger.addEventListener("click", () => {
+      const targetTab = trigger.dataset.openApp || "home";
+      openHomeApp(targetTab);
+    });
+  });
+
   if (homeSettingsTriggerBtn) {
     homeSettingsTriggerBtn.addEventListener("click", () => {
       setHomeSettingsModalOpen(true);
@@ -664,6 +761,24 @@ function attachHomeSettingsEvents() {
       if (target.hasAttribute("data-close-home-settings")) {
         setHomeSettingsModalOpen(false);
       }
+    });
+  }
+
+  if (homeBrowserModalEl) {
+    homeBrowserModalEl.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      if (target.hasAttribute("data-close-home-browser")) {
+        setHomeBrowserModalOpen(false);
+      }
+    });
+  }
+
+  if (homeBrowserCloseBtn) {
+    homeBrowserCloseBtn.addEventListener("click", () => {
+      setHomeBrowserModalOpen(false);
     });
   }
 
@@ -746,11 +861,17 @@ function attachHomeSettingsEvents() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && homeState.modalOpen) {
       setHomeSettingsModalOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && homeState.browserOpen) {
+      setHomeBrowserModalOpen(false);
     }
   });
 }
 
 function initHome() {
+  hideHomeLayer(homeSettingsModalEl);
+  hideHomeLayer(homeBrowserModalEl);
   updateLocalClock();
   setInterval(updateLocalClock, 1000);
   attachHomeSettingsEvents();

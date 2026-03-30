@@ -39,10 +39,11 @@
             </div>
           </div>
 
-          <a
+          <button
             class="app-shortcut desk-item-chat"
-            href="./discussion.html?tab=following"
-            aria-label="打开 Chat 聊天页"
+            type="button"
+            data-open-app="messages"
+            aria-label="打开 Chat 私信页"
           >
             <span class="app-shortcut__icon">
               <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -56,7 +57,7 @@
               </svg>
             </span>
             <span class="app-shortcut__label">Chat</span>
-          </a>
+          </button>
 
           <div class="app-shortcut app-shortcut--muted desk-item-now" aria-hidden="true">
             <span class="app-shortcut__icon">
@@ -73,20 +74,21 @@
             <span class="app-shortcut__label">纪念日</span>
           </div>
 
-          <a
+          <button
             class="app-shortcut desk-item-x"
-            href="./discussion.html?tab=home"
+            type="button"
+            data-open-app="home"
             aria-label="打开 X 讨论页"
           >
             <span class="app-shortcut__icon app-shortcut__icon--x">X</span>
             <span class="app-shortcut__label">X</span>
-          </a>
+          </button>
 
           <div class="desk-card desk-card--note">
             <div class="desk-card__symbol desk-card__symbol--heart">♡</div>
             <div>
               <p class="desk-card__title">今日提醒</p>
-              <p class="desk-card__text">点击 X 进入讨论页，点击 Chat 直达聊天页。</p>
+              <p class="desk-card__text">点击 X 进入讨论页，点击 Chat 查看私信页。</p>
             </div>
           </div>
         </section>
@@ -96,7 +98,12 @@
             <span class="dock-app__icon">✉</span>
             <span class="dock-app__label">短信</span>
           </button>
-          <button class="dock-app" type="button" aria-label="设置">
+          <button
+            id="home-settings-trigger"
+            class="dock-app"
+            type="button"
+            aria-label="设置"
+          >
             <span class="dock-app__icon">⚙</span>
             <span class="dock-app__label">设置</span>
           </button>
@@ -107,6 +114,145 @@
         </footer>
       </section>
     </main>
+
+    <section
+      id="home-settings-modal"
+      class="home-settings-modal"
+      aria-hidden="true"
+      hidden
+      style="display: none"
+    >
+      <div class="home-settings-modal__backdrop" data-close-home-settings></div>
+      <div
+        class="home-settings-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="API 配置缓存与一键切换"
+      >
+        <div class="home-settings-modal__head">
+          <div>
+            <p class="home-settings-kicker">API Presets</p>
+            <h2 class="home-settings-title">API 配置缓存与一键切换</h2>
+          </div>
+          <button
+            id="home-settings-close-btn"
+            class="home-settings-close"
+            type="button"
+            aria-label="关闭设置"
+          >
+            ×
+          </button>
+        </div>
+
+        <div class="home-settings-modal__body">
+          <p class="home-settings-tip">
+            这里的 API 预设会和讨论页共用同一份本地缓存；切换后，进入“X”或“Chat”会直接使用当前配置。
+          </p>
+          <p id="home-active-config-summary" class="home-settings-summary"></p>
+
+          <div class="home-api-form-grid">
+            <label class="home-field">
+              <span>接口类型</span>
+              <select id="home-api-mode">
+                <option value="openai">DeepSeek / OpenAI 兼容接口</option>
+                <option value="gemini">Gemini API</option>
+                <option value="generic">通用 JSON 接口</option>
+              </select>
+            </label>
+
+            <label class="home-field">
+              <span>模型名称</span>
+              <input id="home-api-model" type="text" placeholder="deepseek-chat" />
+            </label>
+
+            <label class="home-field home-field--full">
+              <span>API 地址</span>
+              <input
+                id="home-api-endpoint"
+                type="url"
+                placeholder="https://api.deepseek.com/chat/completions"
+              />
+            </label>
+
+            <label class="home-field home-field--full">
+              <span>API Key / Bearer Token</span>
+              <input
+                id="home-api-token"
+                type="password"
+                placeholder="输入用于请求的密钥"
+              />
+            </label>
+          </div>
+
+          <div class="home-api-toolbar">
+            <label class="home-field home-field--grow">
+              <span>配置名称（可选）</span>
+              <input
+                id="home-api-config-name-input"
+                type="text"
+                maxlength="20"
+                placeholder="例如：DeepSeek-主账号 / Gemini-测试"
+              />
+            </label>
+            <button id="home-api-config-save-btn" class="home-primary-button" type="button">
+              保存当前 API 配置
+            </button>
+          </div>
+
+          <p id="home-api-config-status" class="home-settings-status" aria-live="polite"></p>
+          <div id="home-api-config-list" class="home-api-config-list"></div>
+
+          <div class="home-translation-api-settings">
+            <label class="home-checkbox-row">
+              <input id="home-translation-api-enabled" type="checkbox" />
+              <span>启用翻译专用 API</span>
+            </label>
+            <label class="home-field home-field--full">
+              <span>翻译专用配置</span>
+              <select id="home-translation-api-config-select"></select>
+              <span class="home-field-hint">
+                启用后，帖子与回复翻译会优先使用这里选中的已缓存 API 配置；关闭后沿用当前内容生成配置。
+              </span>
+            </label>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section
+      id="home-browser-modal"
+      class="home-browser-modal"
+      aria-hidden="true"
+      hidden
+      style="display: none"
+    >
+      <div class="home-browser-modal__backdrop" data-close-home-browser></div>
+      <div class="home-browser-modal__panel" role="dialog" aria-modal="true" aria-label="应用弹窗">
+        <div class="home-browser-modal__head">
+          <div>
+            <p id="home-browser-kicker" class="home-browser-kicker">Pulse App</p>
+            <h2 id="home-browser-title" class="home-browser-title">讨论页</h2>
+          </div>
+          <button
+            id="home-browser-close-btn"
+            class="home-settings-close"
+            type="button"
+            aria-label="关闭弹窗"
+          >
+            ×
+          </button>
+        </div>
+
+        <div class="home-browser-modal__viewport">
+          <iframe
+            id="home-browser-frame"
+            class="home-browser-modal__frame"
+            title="应用内容"
+            loading="eager"
+          ></iframe>
+        </div>
+      </div>
+    </section>
 
     <script src="./home.js"></script>
   </body>

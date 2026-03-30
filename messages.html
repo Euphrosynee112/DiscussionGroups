@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pulse Generator · Chat</title>
+    <link rel="stylesheet" href="./messages.css" />
+  </head>
+  <body>
+    <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
+
+    <main class="messages-app">
+      <section class="messages-card" aria-label="私信页">
+        <header class="messages-card__head">
+          <div>
+            <p class="messages-kicker">Messages</p>
+            <h1>私信会话</h1>
+          </div>
+          <button id="messages-generate-btn" class="ghost-button" type="button">新建消息</button>
+        </header>
+
+        <p id="messages-status" class="messages-status">
+          这里是独立的 Chat 页；消息仅保存在当前浏览器。
+        </p>
+
+        <div id="messages-list" class="messages-list" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <script src="./messages.js"></script>
+  </body>
+</html>

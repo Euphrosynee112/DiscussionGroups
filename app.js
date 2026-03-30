@@ -5,18 +5,12 @@ const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
 const PROFILE_KEY = "x_style_generator_profile_v1";
 const PROFILE_POSTS_KEY = "x_style_generator_profile_posts_v1";
-const DIRECT_MESSAGES_KEY = "x_style_generator_direct_messages_v1";
 const DISCUSSIONS_KEY = "x_style_generator_discussions_v1";
-const CHAT_ROOM_KEY = "x_style_generator_chat_room_v1";
 const DEFAULT_POST_COUNT = 10;
-const DEFAULT_DM_COUNT = 4;
 const DEFAULT_REPLY_COUNT = 4;
-const DEFAULT_CHAT_REPLY_COUNT = 20;
-const CHAT_REPLY_APPEND_INTERVAL_MS = 3000;
 const MAX_FEED_ITEMS = 50;
 const MAX_POST_TEXT_LENGTH = 1400;
 const MAX_REPLY_TEXT_LENGTH = 1400;
-const MAX_CHAT_TEXT_LENGTH = 2000;
 const DEFAULT_TEMPERATURE = 0.8;
 const PULL_THRESHOLD = 88;
 const DEFAULT_CONTENT_FEED = "entertainment";
@@ -31,6 +25,7 @@ const HOME_FEED_LABELS = {
 const NESTED_REPLY_COUNT = 3;
 const THREAD_MODAL_LOAD_COOLDOWN_MS = 420;
 let lastKnownContentFeed = DEFAULT_CONTENT_FEED;
+const memoryStorage = {};
 
 const DEFAULT_SETTINGS = {
   mode: "openai",
@@ -40,10 +35,7 @@ const DEFAULT_SETTINGS = {
   worldview:
     "这是一个强调长期主义、产品洞察和公共讨论质量的中文社交世界。用户习惯像在 X 上一样快速表达观点，但会天然追问效率、增长、AI 和平台变迁。整体语气要真实、犀利、能引发跟帖，不要写成官方通稿。",
   homeCount: DEFAULT_POST_COUNT,
-  dmCount: DEFAULT_DM_COUNT,
   replyCount: DEFAULT_REPLY_COUNT,
-  chatReplyCount: DEFAULT_CHAT_REPLY_COUNT,
-  chatContextTabIds: [],
   temperature: DEFAULT_TEMPERATURE,
   customTabs: [],
   apiConfigs: [],
@@ -80,42 +72,14 @@ const FEED_NAMES = [
   ["Pixel Harbor", "@pixelharbor"]
 ];
 
-const FOLLOWING_CARDS = [
-  {
-    name: "Open Product Journal",
-    handle: "@openproduct",
-    note: "每天拆解产品增长、内容节奏和用户决策逻辑。"
-  },
-  {
-    name: "Agent Protocol",
-    handle: "@agentproto",
-    note: "跟踪 AI Agent 工作流、自动化协作和前沿工具链。"
-  },
-  {
-    name: "Indie Ledger",
-    handle: "@indieledger",
-    note: "关注独立开发者收入结构、冷启动与复利模型。"
-  }
-];
-
-const MESSAGE_SENDERS = [
-  ["内容策略组", "下一个热点最好做成对立观点串联，我觉得会更像 X 的讨论氛围。"],
-  ["产品同路人", "首页刷新逻辑不错，可以把模型返回固定成 JSON 数组，后续接后端会更稳。"],
-  ["运营雷达", "今天的热点里 AI Agent 和独立开发收入很适合放在同一轮讨论里。"]
-];
-
 const pageTitleMap = {
   home: "首页",
-  following: "聊天",
-  messages: "私信",
   profile: "个人主页",
   settings: "设置"
 };
 
 const pages = {
   home: document.querySelector("#home-page"),
-  following: document.querySelector("#following-page"),
-  messages: document.querySelector("#messages-page"),
   profile: document.querySelector("#profile-page"),
   settings: document.querySelector("#settings-page")
 };
@@ -125,10 +89,6 @@ const jumpLinks = [...document.querySelectorAll("[data-jump-tab]")];
 const homeMiniTabsContainer = document.querySelector("#home-mini-tabs");
 const pageTitleEl = document.querySelector("#page-title");
 const feedEl = document.querySelector("#feed");
-const followingListEl = document.querySelector("#following-list");
-const messagesListEl = document.querySelector("#messages-list");
-const messagesGenerateBtn = document.querySelector("#messages-generate-btn");
-const messagesStatusEl = document.querySelector("#messages-status");
 const profilePostsEl = document.querySelector("#profile-posts");
 const profileScrollEl = document.querySelector("#profile-page .page-scroll");
 const homeStatusEl = document.querySelector("#home-status");
@@ -142,7 +102,6 @@ const homeComposerImagePreviewEl = document.querySelector("#home-composer-image-
 const homeComposerStatusEl = document.querySelector("#home-composer-status");
 const settingsStatusEl = document.querySelector("#settings-status");
 const promptPreviewEl = document.querySelector("#prompt-preview");
-const messagePromptPreviewEl = document.querySelector("#message-prompt-preview");
 const replyPromptPreviewEl = document.querySelector("#reply-prompt-preview");
 const topRefreshBtn = document.querySelector("#top-refresh-btn");
 const settingsGenerateBtn = document.querySelector("#settings-generate-btn");
@@ -200,9 +159,7 @@ const modelInput = document.querySelector("#api-model");
 const temperatureInput = document.querySelector("#api-temperature");
 const modelWrap = document.querySelector("#model-wrap");
 const homeCountInput = document.querySelector("#home-count");
-const dmCountInput = document.querySelector("#dm-count");
 const replyCountInput = document.querySelector("#reply-count");
-const chatReplyCountInput = document.querySelector("#chat-reply-count");
 const worldviewInput = document.querySelector("#worldview-text");
 const apiConfigNameInput = document.querySelector("#api-config-name-input");
 const apiConfigSaveBtn = document.querySelector("#api-config-save-btn");
@@ -210,24 +167,11 @@ const apiConfigStatusEl = document.querySelector("#api-config-status");
 const apiConfigListEl = document.querySelector("#api-config-list");
 const translationApiEnabledEl = document.querySelector("#translation-api-enabled");
 const translationApiConfigSelectEl = document.querySelector("#translation-api-config-select");
-const chatStatusEl = document.querySelector("#chat-status");
-const chatContextTabsEl = document.querySelector("#chat-context-tabs");
-const chatContextEmptyEl = document.querySelector("#chat-context-empty");
-const chatHistoryEl = document.querySelector("#chat-history");
-const chatComposeFormEl = document.querySelector("#chat-compose-form");
-const chatComposeInputEl = document.querySelector("#chat-compose-input");
-const chatComposeImageInputEl = document.querySelector("#chat-compose-image-input");
-const chatComposeImagePreviewEl = document.querySelector("#chat-compose-image-preview");
-const chatSendBtnEl = document.querySelector("#chat-send-btn");
-const chatGenerateBtnEl = document.querySelector("#chat-generate-btn");
-const chatClearBtnEl = document.querySelector("#chat-clear-btn");
 
 const state = {
   activeTab: "home",
   settings: loadSettings(),
   feeds: loadFeeds(),
-  directMessages: loadDirectMessages(),
-  chatRoom: loadChatRoom(),
   profile: loadProfile(),
   profilePosts: loadProfilePosts(),
   discussions: loadDiscussions(),
@@ -238,8 +182,6 @@ const state = {
   activeFeed: DEFAULT_CONTENT_FEED,
   lastContentFeed: DEFAULT_CONTENT_FEED,
   activeTagFilter: "",
-  activeConversationId: null,
-  replyingConversationId: null,
   profileEditorOpen: false,
   profilePostMenuId: null,
   profilePostEditingId: null,
@@ -247,7 +189,7 @@ const state = {
   composerOpen: false,
   homeComposerImageDataUrl: "",
   isRefreshing: false,
-  lastRefreshAt: localStorage.getItem(REFRESH_KEY) || "",
+  lastRefreshAt: safeGetItem(REFRESH_KEY) || "",
   pullDistance: 0,
   feedTopAnchorAt: Date.now(),
   touchStartY: 0,
@@ -267,18 +209,27 @@ const state = {
   threadReplyStatusTone: "",
   threadReplySubmitting: false,
   translatingPosts: {},
-  translatingReplies: {},
-  translatingChatMessages: {},
-  chatReplying: false,
-  chatDraftImageDataUrl: ""
+  translatingReplies: {}
 };
+
+function safeGetItem(key) {
+  try {
+    return window.localStorage.getItem(key);
+  } catch (_error) {
+    return Object.prototype.hasOwnProperty.call(memoryStorage, key) ? memoryStorage[key] : null;
+  }
+}
+
+function safeSetItem(key, value) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch (_error) {
+    memoryStorage[key] = value;
+  }
+}
 
 state.customTabs = normalizeCustomTabs(state.settings.customTabs);
 state.settings.customTabs = [...state.customTabs];
-state.settings.chatContextTabIds = normalizeChatContextTabIds(
-  state.settings.chatContextTabIds,
-  state.customTabs
-);
 state.settings.apiConfigs = normalizeApiConfigs(state.settings.apiConfigs);
 if (
   state.settings.activeApiConfigId &&
@@ -288,10 +239,19 @@ if (
 }
 synchronizeCustomTabBuckets();
 
+function isEmbeddedView() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("embed") === "1";
+  } catch (_error) {
+    return false;
+  }
+}
+
 function normalizeTabName(tabName) {
   const normalized = String(tabName || "").trim();
-  if (normalized === "chat") {
-    return "following";
+  if (normalized === "chat" || normalized === "following" || normalized === "messages") {
+    return "home";
   }
   if (normalized === "x") {
     return "home";
@@ -432,25 +392,6 @@ function normalizeCustomTabs(tabs = []) {
     }));
 }
 
-function normalizeChatContextTabIds(ids = [], availableTabs = []) {
-  const validIds = new Set(
-    Array.isArray(availableTabs) ? availableTabs.map((tab) => String(tab?.id || "")) : []
-  );
-  if (!Array.isArray(ids)) {
-    return [];
-  }
-  const seen = new Set();
-  return ids
-    .map((item) => String(item || "").trim())
-    .filter((item) => {
-      if (!item || !validIds.has(item) || seen.has(item)) {
-        return false;
-      }
-      seen.add(item);
-      return true;
-    });
-}
-
 function normalizeApiMode(mode) {
   if (mode === "gemini" || mode === "generic") {
     return mode;
@@ -586,10 +527,6 @@ function synchronizeCustomTabBuckets() {
 function commitCustomTabs(nextTabs) {
   state.customTabs = normalizeCustomTabs(nextTabs);
   state.settings.customTabs = [...state.customTabs];
-  state.settings.chatContextTabIds = normalizeChatContextTabIds(
-    state.settings.chatContextTabIds,
-    state.customTabs
-  );
   synchronizeCustomTabBuckets();
   persistSettings(state.settings);
   persistFeeds(state.feeds);
@@ -599,7 +536,6 @@ function commitCustomTabs(nextTabs) {
   renderCustomTabSettings();
   renderActiveFeed();
   updatePromptPreview();
-  updateMessagePromptPreview();
   updateReplyPromptPreview();
   updateInsightPanel();
 }
@@ -742,7 +678,7 @@ function normalizeDiscussionBucket(bucket = {}) {
 }
 
 function loadDiscussions() {
-  const raw = localStorage.getItem(DISCUSSIONS_KEY);
+  const raw = safeGetItem(DISCUSSIONS_KEY);
   if (!raw) {
     return createDiscussionState();
   }
@@ -783,7 +719,7 @@ function trimDiscussionBucketsByFeed() {
 
 function persistDiscussions() {
   trimDiscussionBucketsByFeed();
-  localStorage.setItem(DISCUSSIONS_KEY, JSON.stringify(state.discussions));
+  safeSetItem(DISCUSSIONS_KEY, JSON.stringify(state.discussions));
 }
 
 function hashText(value) {
@@ -796,28 +732,21 @@ function hashText(value) {
 }
 
 function getCurrentSettings() {
-  const mode = normalizeApiMode(modeSelect.value);
-  const translationApiEnabled = Boolean(translationApiEnabledEl?.checked);
+  const mode = normalizeApiMode(modeSelect?.value || state.settings.mode);
+  const translationApiEnabled = translationApiEnabledEl
+    ? Boolean(translationApiEnabledEl.checked)
+    : Boolean(state.settings.translationApiEnabled);
   const translationApiConfigId = String(
     translationApiConfigSelectEl?.value || state.settings.translationApiConfigId || ""
   ).trim();
   return {
     mode,
-    endpoint: endpointInput.value.trim(),
-    token: tokenInput.value.trim(),
-    model: modelInput.value.trim(),
+    endpoint: String(endpointInput?.value || state.settings.endpoint || "").trim(),
+    token: String(tokenInput?.value || state.settings.token || "").trim(),
+    model: String(modelInput?.value || state.settings.model || "").trim(),
     temperature: normalizeTemperature(temperatureInput.value, DEFAULT_TEMPERATURE),
     homeCount: normalizePositiveInteger(homeCountInput.value, DEFAULT_POST_COUNT),
-    dmCount: normalizePositiveInteger(dmCountInput.value, DEFAULT_DM_COUNT),
     replyCount: normalizePositiveInteger(replyCountInput.value, DEFAULT_REPLY_COUNT),
-    chatReplyCount: normalizePositiveInteger(
-      chatReplyCountInput?.value,
-      DEFAULT_CHAT_REPLY_COUNT
-    ),
-    chatContextTabIds: normalizeChatContextTabIds(
-      state.settings.chatContextTabIds,
-      state.customTabs
-    ),
     worldview: worldviewInput.value.trim(),
     customTabs: [...state.customTabs],
     apiConfigs: normalizeApiConfigs(state.settings.apiConfigs),
@@ -844,16 +773,15 @@ function normalizeTemperature(value, fallback = DEFAULT_TEMPERATURE) {
 }
 
 function persistSettings(nextSettings) {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(nextSettings));
+  safeSetItem(SETTINGS_KEY, JSON.stringify(nextSettings));
 }
 
 function loadSettings() {
-  const raw = localStorage.getItem(SETTINGS_KEY);
+  const raw = safeGetItem(SETTINGS_KEY);
   if (!raw) {
     return {
       ...DEFAULT_SETTINGS,
       customTabs: normalizeCustomTabs(DEFAULT_SETTINGS.customTabs),
-      chatContextTabIds: [],
       apiConfigs: normalizeApiConfigs(DEFAULT_SETTINGS.apiConfigs),
       activeApiConfigId: "",
       translationApiEnabled: false,
@@ -875,10 +803,6 @@ function loadSettings() {
       parsed?.customTabList ||
       [];
     merged.customTabs = normalizeCustomTabs(legacyCustomTabs);
-    merged.chatContextTabIds = normalizeChatContextTabIds(
-      merged.chatContextTabIds || parsed?.chatContextTabIds || [],
-      merged.customTabs
-    );
     const legacyApiConfigs =
       merged.apiConfigs || parsed?.apiConfigs || parsed?.apiPresets || parsed?.apiProfiles || [];
     merged.apiConfigs = normalizeApiConfigs(legacyApiConfigs);
@@ -894,7 +818,6 @@ function loadSettings() {
     return {
       ...DEFAULT_SETTINGS,
       customTabs: normalizeCustomTabs(DEFAULT_SETTINGS.customTabs),
-      chatContextTabIds: [],
       apiConfigs: normalizeApiConfigs(DEFAULT_SETTINGS.apiConfigs),
       activeApiConfigId: "",
       translationApiEnabled: false,
@@ -904,11 +827,11 @@ function loadSettings() {
 }
 
 function persistFeeds(feeds) {
-  localStorage.setItem(POSTS_KEY, JSON.stringify(feeds));
+  safeSetItem(POSTS_KEY, JSON.stringify(feeds));
 }
 
 function loadProfile() {
-  const raw = localStorage.getItem(PROFILE_KEY);
+  const raw = safeGetItem(PROFILE_KEY);
   if (!raw) {
     return { ...DEFAULT_PROFILE };
   }
@@ -925,7 +848,7 @@ function loadProfile() {
 }
 
 function persistProfile(profile) {
-  localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+  safeSetItem(PROFILE_KEY, JSON.stringify(profile));
 }
 
 function readFileAsDataUrl(file) {
@@ -937,111 +860,8 @@ function readFileAsDataUrl(file) {
   });
 }
 
-function createDefaultDirectMessages() {
-  return MESSAGE_SENDERS.map((item, index) => ({
-    id: `dm_${index}_${hashText(item[0])}`,
-    sender: item[0],
-    handle: `@dm_${index + 1}`,
-    messages: [
-      {
-        role: "incoming",
-        sender: item[0],
-        text: item[1],
-        time: `${index + 1}h`
-      }
-    ],
-    context: index === 0 ? "热点跟进" : index === 1 ? "内容协作" : "灵感交换",
-    time: `${index + 1}h`
-  }));
-}
-
-function persistDirectMessages(messages) {
-  localStorage.setItem(DIRECT_MESSAGES_KEY, JSON.stringify(messages));
-}
-
-function loadDirectMessages() {
-  const raw = localStorage.getItem(DIRECT_MESSAGES_KEY);
-  if (!raw) {
-    return createDefaultDirectMessages();
-  }
-
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : createDefaultDirectMessages();
-  } catch (_error) {
-    return createDefaultDirectMessages();
-  }
-}
-
-function normalizeChatMessage(item, senderFallback = "联系人", index = 0) {
-  const role = item?.role === "user" ? "user" : "incoming";
-  const rawText =
-    typeof item?.text === "string"
-      ? item.text
-      : item?.text == null
-        ? ""
-        : String(item.text);
-  const rawImage =
-    typeof item?.imageDataUrl === "string"
-      ? item.imageDataUrl
-      : typeof item?.imageUrl === "string"
-        ? item.imageUrl
-        : "";
-  return {
-    id: item?.id || `chat_${index}_${hashText(`${item?.text || ""}-${role}`)}`,
-    role,
-    sender:
-      role === "user"
-        ? "你"
-        : truncate(item?.sender || item?.displayName || senderFallback, 24),
-    handle: truncate(
-      item?.handle ||
-        normalizeProfileUserId(
-          item?.userId,
-          item?.sender || item?.displayName || DEFAULT_PROFILE.username
-        ) ||
-        `@fan_${index + 1}`,
-      24
-    ),
-    text: truncate(rawText, MAX_CHAT_TEXT_LENGTH),
-    translationZh: truncate(String(item?.translationZh || item?.translatedText || "").trim(), 2400),
-    imageDataUrl: rawImage.trim(),
-    time: item?.time || `${index + 1}m`,
-    status: item?.status === "pending" ? "pending" : "sent"
-  };
-}
-
-function loadChatRoom() {
-  const raw = localStorage.getItem(CHAT_ROOM_KEY);
-  if (!raw) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return parsed
-      .filter((item) => item && typeof item === "object")
-      .map((item, index) =>
-        normalizeChatMessage(
-          item,
-          item?.sender || item?.displayName || `粉丝 ${index + 1}`,
-          index
-        )
-      );
-  } catch (_error) {
-    return [];
-  }
-}
-
-function persistChatRoom(messages = state.chatRoom) {
-  localStorage.setItem(CHAT_ROOM_KEY, JSON.stringify(messages || []));
-}
-
 function loadProfilePosts() {
-  const raw = localStorage.getItem(PROFILE_POSTS_KEY);
+  const raw = safeGetItem(PROFILE_POSTS_KEY);
   if (!raw) {
     return [];
   }
@@ -1063,7 +883,7 @@ function loadProfilePosts() {
 }
 
 function persistProfilePosts(posts) {
-  localStorage.setItem(PROFILE_POSTS_KEY, JSON.stringify(posts));
+  safeSetItem(PROFILE_POSTS_KEY, JSON.stringify(posts));
 }
 
 function createDefaultFeeds() {
@@ -1073,7 +893,7 @@ function createDefaultFeeds() {
 }
 
 function loadFeeds() {
-  const raw = localStorage.getItem(POSTS_KEY);
+  const raw = safeGetItem(POSTS_KEY);
   if (!raw) {
     return createDefaultFeeds();
   }
@@ -1126,20 +946,24 @@ function loadFeeds() {
 
 function applySettingsToForm(settings) {
   const resolvedMode = normalizeApiMode(settings.mode);
-  modeSelect.value = resolvedMode;
-  endpointInput.value = normalizeSettingsEndpointByMode(
-    resolvedMode,
-    settings.endpoint || ""
-  );
-  tokenInput.value = settings.token || "";
-  modelInput.value = settings.model || getDefaultModelByMode(resolvedMode);
+  if (modeSelect) {
+    modeSelect.value = resolvedMode;
+  }
+  if (endpointInput) {
+    endpointInput.value = normalizeSettingsEndpointByMode(
+      resolvedMode,
+      settings.endpoint || ""
+    );
+  }
+  if (tokenInput) {
+    tokenInput.value = settings.token || "";
+  }
+  if (modelInput) {
+    modelInput.value = settings.model || getDefaultModelByMode(resolvedMode);
+  }
   temperatureInput.value = String(normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE));
   homeCountInput.value = String(settings.homeCount || DEFAULT_POST_COUNT);
-  dmCountInput.value = String(settings.dmCount || DEFAULT_DM_COUNT);
   replyCountInput.value = String(settings.replyCount || DEFAULT_REPLY_COUNT);
-  if (chatReplyCountInput) {
-    chatReplyCountInput.value = String(settings.chatReplyCount || DEFAULT_CHAT_REPLY_COUNT);
-  }
   worldviewInput.value = settings.worldview || DEFAULT_SETTINGS.worldview;
   if (translationApiEnabledEl) {
     translationApiEnabledEl.checked = Boolean(settings.translationApiEnabled);
@@ -1162,6 +986,9 @@ function applyProfileToForm(profile) {
 }
 
 function updateModeUI() {
+  if (!modeSelect || !endpointInput || !modelInput || !modelWrap) {
+    return;
+  }
   const mode = normalizeApiMode(modeSelect.value);
   const needsModel = mode === "openai" || mode === "gemini";
   modelWrap.style.display = needsModel ? "grid" : "none";
@@ -1230,10 +1057,8 @@ function saveCurrentProfile() {
   syncAuthoredPostIdentity(state.profile);
   persistProfile(state.profile);
   renderActiveFeed();
-  renderFollowingPage();
   renderProfilePage();
   renderThreadModal();
-  updateMessagePromptPreview();
   updateReplyPromptPreview();
 }
 
@@ -1295,14 +1120,6 @@ function clearHomeComposerImage() {
   renderComposerMediaPreview(homeComposerImagePreviewEl, "", "remove-home-composer-image");
 }
 
-function clearChatComposeImage() {
-  state.chatDraftImageDataUrl = "";
-  if (chatComposeImageInputEl) {
-    chatComposeImageInputEl.value = "";
-  }
-  renderComposerMediaPreview(chatComposeImagePreviewEl, "", "remove-chat-compose-image");
-}
-
 function parseDataUrlParts(dataUrl) {
   const source = String(dataUrl || "").trim();
   const matched = source.match(/^data:([^;]+);base64,(.+)$/);
@@ -1323,18 +1140,6 @@ function renderPostMedia(post) {
   return `
     <div class="post-media">
       <img class="post-media__image" src="${escapeHtml(imageSrc)}" alt="帖子图片" />
-    </div>
-  `;
-}
-
-function renderChatMessageMedia(message) {
-  const imageSrc = String(message?.imageDataUrl || "").trim();
-  if (!imageSrc) {
-    return "";
-  }
-  return `
-    <div class="chat-media">
-      <img class="chat-media__image" src="${escapeHtml(imageSrc)}" alt="聊天图片" />
     </div>
   `;
 }
@@ -1362,10 +1167,6 @@ function getReplyTranslationKey(postId, replyId, bucketName = state.activeFeed) 
   return `${String(bucketName || "home")}::${String(postId || "")}::${String(replyId || "")}`;
 }
 
-function getChatMessageTranslationKey(messageId) {
-  return `chat::${String(messageId || "")}`;
-}
-
 function isPostTranslating(postId, bucketName = state.activeFeed) {
   return Boolean(state.translatingPosts[getPostTranslationKey(postId, bucketName)]);
 }
@@ -1390,19 +1191,6 @@ function setReplyTranslating(postId, replyId, bucketName = state.activeFeed, isL
     return;
   }
   delete state.translatingReplies[key];
-}
-
-function isChatMessageTranslating(messageId) {
-  return Boolean(state.translatingChatMessages[getChatMessageTranslationKey(messageId)]);
-}
-
-function setChatMessageTranslating(messageId, isLoading = false) {
-  const key = getChatMessageTranslationKey(messageId);
-  if (isLoading) {
-    state.translatingChatMessages[key] = true;
-    return;
-  }
-  delete state.translatingChatMessages[key];
 }
 
 function updatePostAcrossBuckets(postId, updater) {
@@ -1606,7 +1394,6 @@ async function handleProfileImageUpload(file, targetKey, successMessage) {
     };
     persistProfile(state.profile);
     renderProfilePage();
-    updateMessagePromptPreview();
     updateReplyPromptPreview();
     setProfileStatus(successMessage, "success");
   } catch (_error) {
@@ -1711,16 +1498,20 @@ function buildRequestHeaders(settings) {
 }
 
 function buildApiConfigSnapshot() {
-  const mode = normalizeApiMode(modeSelect.value);
-  const endpoint = normalizeSettingsEndpointByMode(mode, endpointInput.value);
+  const mode = normalizeApiMode(modeSelect?.value || state.settings.mode);
+  const endpoint = normalizeSettingsEndpointByMode(
+    mode,
+    endpointInput?.value || state.settings.endpoint
+  );
   const model =
     mode === "generic"
       ? ""
-      : String(modelInput.value || "").trim() || getDefaultModelByMode(mode);
+      : String(modelInput?.value || state.settings.model || "").trim() ||
+        getDefaultModelByMode(mode);
   return {
     mode,
     endpoint,
-    token: normalizeApiConfigToken(tokenInput.value),
+    token: normalizeApiConfigToken(tokenInput?.value || state.settings.token),
     model
   };
 }
@@ -1819,10 +1610,6 @@ function getTranslationRequestSettings(settings = getCurrentSettings()) {
 }
 
 function renderApiConfigList() {
-  if (!apiConfigListEl) {
-    return;
-  }
-
   state.settings.apiConfigs = normalizeApiConfigs(state.settings.apiConfigs);
   if (
     state.settings.activeApiConfigId &&
@@ -1836,6 +1623,10 @@ function renderApiConfigList() {
   ) {
     state.settings.translationApiConfigId = "";
     state.settings.translationApiEnabled = false;
+  }
+
+  if (!apiConfigListEl) {
+    return;
   }
 
   if (!state.settings.apiConfigs.length) {
@@ -1949,10 +1740,22 @@ function switchApiConfig(configId) {
     return;
   }
 
-  modeSelect.value = normalizeApiMode(config.mode);
-  endpointInput.value = normalizeSettingsEndpointByMode(config.mode, config.endpoint);
-  tokenInput.value = config.token || "";
-  modelInput.value = config.model || getDefaultModelByMode(config.mode);
+  state.settings.mode = normalizeApiMode(config.mode);
+  state.settings.endpoint = normalizeSettingsEndpointByMode(config.mode, config.endpoint);
+  state.settings.token = config.token || "";
+  state.settings.model = config.model || getDefaultModelByMode(config.mode);
+  if (modeSelect) {
+    modeSelect.value = state.settings.mode;
+  }
+  if (endpointInput) {
+    endpointInput.value = state.settings.endpoint;
+  }
+  if (tokenInput) {
+    tokenInput.value = state.settings.token;
+  }
+  if (modelInput) {
+    modelInput.value = state.settings.model;
+  }
   state.settings.activeApiConfigId = config.id;
   updateModeUI();
   saveCurrentSettings();
@@ -2067,148 +1870,6 @@ function buildCustomTabsSummary(settings) {
         `${tab.name || "自定义页签"}：${tab.text?.trim() || "尚未填写内容"}`
     )
     .join("\n");
-}
-
-function getSelectedChatContextTabs(settings = state.settings) {
-  const selectedIds = normalizeChatContextTabIds(
-    settings?.chatContextTabIds || [],
-    state.customTabs
-  );
-  const selectedIdSet = new Set(selectedIds);
-  return state.customTabs.filter((tab) => selectedIdSet.has(tab.id));
-}
-
-function buildChatContextSummary(settings = state.settings) {
-  const selectedTabs = getSelectedChatContextTabs(settings);
-  if (!selectedTabs.length) {
-    return "当前没有额外勾选的自定义页签参考资料。";
-  }
-  return selectedTabs
-    .map(
-      (tab, index) =>
-        `${index + 1}. ${tab.name || "自定义页签"}：${String(tab.text || "").trim() || "尚未填写内容"}`
-    )
-    .join("\n");
-}
-
-function buildMessagesPrompt(
-  settings,
-  profile,
-  count = settings.dmCount || DEFAULT_DM_COUNT
-) {
-  const username = profile.username || DEFAULT_PROFILE.username;
-  const handle = normalizeProfileUserId(profile.userId, username);
-  const signature = profile.signature || DEFAULT_PROFILE.signature;
-  return [
-    "你正在生成一个 X 风格社交产品中的私信列表。",
-    `请严格输出 JSON 数组，并且包含 ${count} 个对象，不要输出额外解释。`,
-    "每个对象必须包含以下字段：sender, handle, text, context, time。",
-    "这些消息应该像别人主动发给该用户的私信，语气比公开讨论更直接、更私密，但仍然要自然可信。",
-    "当前私信收件人资料：",
-    `用户名：${username}`,
-    `主页标识：${handle}`,
-    `个人签名：${signature}`,
-    "私信内容必须让人看得出发件人知道自己是在联系这个具体用户，而不是在对一个模糊的第三方发消息。可以自然提到对方的公开表达风格、身份气质、近期发言方向或适合合作的原因。",
-    "世界观文本：",
-    settings.worldview || DEFAULT_SETTINGS.worldview,
-    "自定义页签文本：",
-    buildCustomTabsSummary(settings),
-    "用户人设：",
-    profile.personaPrompt || DEFAULT_PROFILE.personaPrompt,
-    "请让不同私信发件人的动机不同，例如约稿、交流观点、递送情报、邀请合作或追问某条公开讨论。"
-  ].join("\n\n");
-}
-
-function buildConversationReplyPrompt(settings, profile, conversation, userMessage) {
-  const username = profile.username || DEFAULT_PROFILE.username;
-  const handle = normalizeProfileUserId(profile.userId, username);
-  const history = (conversation.messages || [])
-    .slice(-6)
-    .map((message) =>
-      `${message.role === "user" ? "用户" : conversation.sender}：${message.text}`
-    )
-    .join("\n");
-
-  return [
-    "你正在生成一个 X 风格社交产品里的单条私信回复。",
-    "请严格输出 JSON 数组，并且只包含 1 个对象，不要输出额外解释。",
-    "对象必须包含以下字段：text, time。",
-    `当前聊天对象：${conversation.sender} ${conversation.handle || ""}`.trim(),
-    `当前会话主题：${conversation.context || "私信互动"}`,
-    "你回复的对象不是陌生第三方，而是这个具体用户：",
-    `用户名：${username}`,
-    `主页标识：${handle}`,
-    `个人签名：${profile.signature || DEFAULT_PROFILE.signature}`,
-    `用户人设：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt}`,
-    "最近聊天记录：",
-    history || "暂无历史消息",
-    "用户刚刚发送的新消息：",
-    userMessage,
-    "世界观文本：",
-    settings.worldview || DEFAULT_SETTINGS.worldview,
-    "自定义页签文本：",
-    buildCustomTabsSummary(settings),
-    "回复要像真实私聊，长度控制在 18 到 90 字之间，要直接回应用户刚发的内容，也要体现聊天对象知道用户是谁。"
-  ].join("\n\n");
-}
-
-function formatChatRoomPromptMessages(messages = []) {
-  if (!messages.length) {
-    return "暂无消息。";
-  }
-  return messages
-    .map((message, index) => {
-      const senderLabel =
-        message.role === "user"
-          ? "用户"
-          : `${message.sender || message.displayName || `粉丝${index + 1}`}`;
-      const imageHint = message.imageDataUrl ? "（附图）" : "";
-      const text = String(message.text || "").trim() || "【仅发送图片】";
-      return `${index + 1}. ${senderLabel}${imageHint}：${text}`;
-    })
-    .join("\n");
-}
-
-function buildChatRoomReplyPrompt(
-  settings,
-  profile,
-  chatRoom,
-  pendingMessages,
-  count = settings.chatReplyCount || DEFAULT_CHAT_REPLY_COUNT
-) {
-  const username = profile.username || DEFAULT_PROFILE.username;
-  const handle = normalizeProfileUserId(profile.userId, username);
-  const recentContext = (chatRoom || []).slice(-18);
-  const hasImages = pendingMessages.some((message) => message.imageDataUrl);
-  const chatContextSummary = buildChatContextSummary(settings);
-
-  return [
-    "你正在生成一个 X 风格社交产品里的单一聊天房间回复流。",
-    `请严格输出 JSON 数组，并且包含 ${count} 个对象，不要输出额外解释。`,
-    "每个对象必须包含以下字段：displayName, handle, text, time。",
-    "这些回复都来自这个用户的订阅者、粉丝或支持者，默认立场是喜欢他、支持他、愿意捧场，但表达方式可以各不相同。",
-    "回复要像连续刷出来的聊天消息，单条一般不超过 30 个字符，优先短句，避免长段落。",
-    "不同回复可以分别模拟来自中国、日本、韩国、美国的粉丝发言风格。",
-    "每一条回复必须全文保持单一语言，只能四选一：中文、日文、韩文、英文。不要在同一条消息里混用语言。",
-    "如果用户连续发送了多条消息，请把这些消息合并理解后再回复，不要只盯住最后一句。",
-    hasImages
-      ? "这批用户消息里带有图片；如果模型能看到图片，请结合图片内容一起回复。"
-      : "这批用户消息没有附图。",
-    "当前被粉丝围绕的用户资料：",
-    `用户名：${username}`,
-    `主页标识：${handle}`,
-    `个人签名：${profile.signature || DEFAULT_PROFILE.signature}`,
-    `用户人设：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt}`,
-    "最近聊天上下文：",
-    formatChatRoomPromptMessages(recentContext),
-    "这一次需要集中回应的用户新消息：",
-    formatChatRoomPromptMessages(pendingMessages),
-    "以下是用户手动勾选的自定义首页页签参考资料，仅作为低优先级背景信息；如果与当前聊天消息不一致，请优先理解当前聊天消息本身：",
-    chatContextSummary,
-    "整体世界观：",
-    settings.worldview || DEFAULT_SETTINGS.worldview,
-    "请让不同回复的切入点、情绪词和措辞尽量错开，但保持支持用户的核心立场。"
-  ].join("\n\n");
 }
 
 function buildReplyPrompt(
@@ -2376,9 +2037,13 @@ function saveCurrentSettings() {
   );
   if (state.settings.mode === "openai" || state.settings.mode === "gemini") {
     state.settings.model = state.settings.model || getDefaultModelByMode(state.settings.mode);
-    modelInput.value = state.settings.model;
+    if (modelInput) {
+      modelInput.value = state.settings.model;
+    }
   }
-  endpointInput.value = state.settings.endpoint;
+  if (endpointInput) {
+    endpointInput.value = state.settings.endpoint;
+  }
   state.settings.apiConfigs = normalizeApiConfigs(state.settings.apiConfigs);
   if (
     state.settings.activeApiConfigId &&
@@ -2395,11 +2060,8 @@ function saveCurrentSettings() {
   }
   persistSettings(state.settings);
   updatePromptPreview();
-  updateMessagePromptPreview();
   updateReplyPromptPreview();
   updateInsightPanel();
-  renderFollowingPage();
-  renderMessagesPage();
   renderProfilePage();
   renderCustomTabSettings();
   renderApiConfigList();
@@ -2439,6 +2101,10 @@ function updateHomeRefreshAvailability() {
   topRefreshBtn.disabled = state.isRefreshing || !canRefreshCurrentHomeFeed();
 }
 
+function getHomeScrollTarget() {
+  return homeScrollEl || feedEl || null;
+}
+
 function switchHomeFeed(nextFeed) {
   if (nextFeed === "tags") {
     state.activeFeed = "tags";
@@ -2460,7 +2126,6 @@ function switchHomeFeed(nextFeed) {
   state.activeTagFilter = "";
   renderActiveFeed();
   updatePromptPreview();
-  updateMessagePromptPreview();
   updateReplyPromptPreview();
   updateInsightPanel();
   updateHomeRefreshAvailability();
@@ -2472,6 +2137,9 @@ function switchTab(tabName) {
 
   if (state.threadModalOpen && nextTab !== state.activeTab) {
     setThreadModalOpen(false);
+  }
+  if (state.customTabEditorOpen && nextTab !== state.activeTab) {
+    setCustomTabsPanelOpen(false);
   }
   state.activeTab = nextTab;
   Object.entries(pages).forEach(([name, page]) => {
@@ -2515,17 +2183,6 @@ function updatePromptPreview() {
     return;
   }
   promptPreviewEl.textContent = buildPrompt(getCurrentSettings(), getCurrentContentFeed());
-}
-
-function updateMessagePromptPreview() {
-  if (!messagePromptPreviewEl) {
-    return;
-  }
-  messagePromptPreviewEl.textContent = buildMessagesPrompt(
-    getCurrentSettings(),
-    getCurrentProfile(),
-    getCurrentSettings().dmCount || DEFAULT_DM_COUNT
-  );
 }
 
 function updateReplyPromptPreview() {
@@ -3788,7 +3445,7 @@ function updateCustomTabsManageButton() {
   if (!customTabsManageBtn) {
     return;
   }
-  customTabsManageBtn.textContent = state.customTabEditorOpen ? "收起自定义页签" : "管理自定义页签";
+  customTabsManageBtn.textContent = "管理自定义页签";
   customTabsManageBtn.setAttribute("aria-expanded", state.customTabEditorOpen ? "true" : "false");
 }
 
@@ -3798,14 +3455,12 @@ function setCustomTabsPanelOpen(isOpen) {
   }
   state.customTabEditorOpen = Boolean(isOpen);
   customTabsPanel.classList.toggle("hidden", !state.customTabEditorOpen);
+  customTabsPanel.setAttribute("aria-hidden", state.customTabEditorOpen ? "false" : "true");
   updateCustomTabsManageButton();
   if (state.customTabEditorOpen) {
+    document.body.style.overflow = "hidden";
     renderCustomTabsManager();
     window.requestAnimationFrame(() => {
-      customTabsPanel.scrollIntoView({
-        block: "start",
-        behavior: "smooth"
-      });
       if (customTabNameInput && !customTabNameInput.disabled) {
         try {
           customTabNameInput.focus({ preventScroll: true });
@@ -3814,7 +3469,10 @@ function setCustomTabsPanelOpen(isOpen) {
         }
       }
     });
+    return;
   }
+
+  document.body.style.overflow = state.threadModalOpen ? "hidden" : "";
 }
 
 function startCustomTabEdit(tabId) {
@@ -4100,249 +3758,6 @@ function findPostById(postId, bucketName = state.activeFeed) {
   }
 
   return profilePost;
-}
-
-function setChatStatus(message, tone = "") {
-  if (!chatStatusEl) {
-    return;
-  }
-  chatStatusEl.textContent = message;
-  chatStatusEl.className = "status-text";
-  if (tone) {
-    chatStatusEl.classList.add(tone);
-  }
-}
-
-function scrollChatHistoryToBottom(behavior = "auto") {
-  if (!chatHistoryEl) {
-    return;
-  }
-  chatHistoryEl.scrollTo({
-    top: chatHistoryEl.scrollHeight,
-    behavior
-  });
-}
-
-function findChatMessageById(messageId) {
-  return state.chatRoom.find((message) => message.id === messageId) || null;
-}
-
-function updateChatMessage(messageId, updater) {
-  let updated = false;
-  state.chatRoom = state.chatRoom.map((message) => {
-    if (message.id !== messageId) {
-      return message;
-    }
-    updated = true;
-    return updater({ ...message });
-  });
-  if (updated) {
-    persistChatRoom(state.chatRoom);
-  }
-  return updated;
-}
-
-function renderChatRoomMessage(message, index = 0) {
-  const isUser = message.role === "user";
-  const senderLabel = isUser
-    ? state.profile.username || DEFAULT_PROFILE.username
-    : message.sender || `粉丝 ${index + 1}`;
-  const pendingLabel =
-    isUser && message.status === "pending"
-      ? '<span class="chat-bubble__pending">待统一回复</span>'
-      : "";
-  const showTranslate = Boolean(message.text);
-  const translationMarkup = renderTranslationBlock(message.translationZh);
-  const translateLabel = isChatMessageTranslating(message.id)
-    ? "翻译中..."
-    : message.translationZh
-      ? "重新翻译"
-      : "翻译";
-  return `
-    <article class="chat-bubble ${isUser ? "chat-bubble--user" : ""}">
-      <div class="chat-bubble__meta">
-        <strong class="chat-bubble__sender">${escapeHtml(senderLabel)}</strong>
-        ${pendingLabel}
-      </div>
-      ${message.text ? `<p>${escapeHtml(message.text)}</p>` : ""}
-      ${renderChatMessageMedia(message)}
-      ${translationMarkup}
-      ${
-        showTranslate
-          ? `<div class="chat-bubble__actions">
-              <button class="action-link" type="button" data-action="translate-chat-message" data-message-id="${escapeHtml(
-                message.id
-              )}" ${isChatMessageTranslating(message.id) ? "disabled" : ""}>
-                ${translateLabel}
-              </button>
-            </div>`
-          : ""
-      }
-      <span class="post-time">${escapeHtml(message.time || "刚刚")}</span>
-    </article>
-  `;
-}
-
-function updateChatActionState() {
-  if (chatGenerateBtnEl) {
-    const pendingCount = state.chatRoom.filter(
-      (message) => message.role === "user" && message.status === "pending"
-    ).length;
-    chatGenerateBtnEl.disabled = state.chatReplying || pendingCount === 0;
-  }
-  if (chatClearBtnEl) {
-    chatClearBtnEl.disabled = state.chatReplying || state.chatRoom.length === 0;
-  }
-  if (chatComposeInputEl) {
-    chatComposeInputEl.disabled = state.chatReplying;
-  }
-  if (chatComposeImageInputEl) {
-    chatComposeImageInputEl.disabled = state.chatReplying;
-  }
-  if (chatSendBtnEl) {
-    chatSendBtnEl.disabled = state.chatReplying;
-  }
-}
-
-function renderChatContextTabs() {
-  if (!chatContextTabsEl || !chatContextEmptyEl) {
-    return;
-  }
-
-  const selectedIds = new Set(
-    normalizeChatContextTabIds(state.settings.chatContextTabIds, state.customTabs)
-  );
-
-  if (!state.customTabs.length) {
-    chatContextEmptyEl.hidden = false;
-    chatContextEmptyEl.textContent = "暂无可勾选的自定义首页页签。";
-    chatContextTabsEl.innerHTML = "";
-    return;
-  }
-
-  chatContextEmptyEl.hidden = true;
-  chatContextTabsEl.innerHTML = state.customTabs
-    .map((tab) => {
-      const checked = selectedIds.has(tab.id);
-      return `
-        <label class="chat-context-option${checked ? " is-selected" : ""}">
-          <input
-            type="checkbox"
-            data-action="toggle-chat-context-tab"
-            data-tab-id="${escapeHtml(tab.id)}"
-            ${checked ? "checked" : ""}
-          />
-          <div class="chat-context-option__body">
-            <strong>${escapeHtml(tab.name || "自定义页签")}</strong>
-            <span>${escapeHtml(truncate(tab.text || "尚未填写内容", 72))}</span>
-          </div>
-        </label>
-      `;
-    })
-    .join("");
-}
-
-function renderFollowingPage() {
-  if (!chatHistoryEl) {
-    return;
-  }
-  renderChatContextTabs();
-  if (!state.chatRoom.length) {
-    chatHistoryEl.innerHTML =
-      '<p class="empty-state">先发送几条消息，或发一张图片，再点击“获取回复”收粉丝回帖。</p>';
-  } else {
-    chatHistoryEl.innerHTML = state.chatRoom
-      .map((message, index) => renderChatRoomMessage(message, index))
-      .join("");
-  }
-  renderComposerMediaPreview(
-    chatComposeImagePreviewEl,
-    state.chatDraftImageDataUrl,
-    "remove-chat-compose-image"
-  );
-  updateChatActionState();
-}
-
-function renderMessagesPage() {
-  if (!messagesListEl) {
-    return;
-  }
-  if (!state.directMessages.length) {
-    state.activeConversationId = null;
-    messagesListEl.innerHTML =
-      '<p class="empty-state">还没有私信内容，点击“新建消息”生成新的私信会话。</p>';
-    return;
-  }
-
-  const activeConversation = state.directMessages.find(
-    (item) => item.id === state.activeConversationId
-  );
-
-  if (!activeConversation) {
-    messagesListEl.innerHTML = state.directMessages
-      .map((item) => `
-        <article class="conversation-card conversation-card--interactive" data-action="open-conversation" data-conversation-id="${escapeHtml(
-          item.id
-        )}">
-          <div class="conversation-card__head">
-            <div>
-              <strong>${escapeHtml(item.sender)}</strong>
-              <div class="post-handle">${escapeHtml(item.handle || "@unknown")}</div>
-            </div>
-            <span class="post-time">${escapeHtml(item.time || "刚刚")}</span>
-          </div>
-          <p>${escapeHtml(item.text)}</p>
-          <div class="reply-actions">
-            <span>${escapeHtml(item.context || "相关私信")}</span>
-            <span>${escapeHtml(String(item.messages?.length || 1))} 条消息</span>
-          </div>
-        </article>
-      `)
-      .join("");
-    return;
-  }
-
-  messagesListEl.innerHTML = `
-    <section class="chat-shell">
-      <div class="chat-shell__head">
-        <button class="ghost-chip" type="button" data-action="close-conversation">返回会话列表</button>
-        <div>
-          <strong>${escapeHtml(activeConversation.sender)}</strong>
-          <div class="post-handle">${escapeHtml(activeConversation.handle || "@unknown")}</div>
-        </div>
-      </div>
-      <p class="tag-stat-meta">${escapeHtml(activeConversation.context || "相关私信")}</p>
-      <div class="chat-history">
-        ${activeConversation.messages
-          .map(
-            (message) => `
-              <article class="chat-bubble ${message.role === "user" ? "chat-bubble--user" : ""}">
-                <p>${escapeHtml(message.text)}</p>
-                <span class="post-time">${escapeHtml(message.time || "刚刚")}</span>
-              </article>
-            `
-          )
-          .join("")}
-        ${
-          state.replyingConversationId === activeConversation.id
-            ? '<article class="chat-bubble"><p>正在生成回复…</p></article>'
-            : ""
-        }
-      </div>
-      <form class="chat-input-form" data-action="send-conversation-message" data-conversation-id="${escapeHtml(
-        activeConversation.id
-      )}">
-        <textarea name="message" class="chat-textarea" rows="3" placeholder="输入你要回复的内容"></textarea>
-        <div class="settings-actions">
-          <button class="solid-button" type="submit" ${
-            state.replyingConversationId === activeConversation.id ? "disabled" : ""
-          }>
-            发送消息
-          </button>
-        </div>
-      </form>
-    </section>
-  `;
 }
 
 function renderProfilePage() {
@@ -4690,30 +4105,6 @@ function parseGeneratedReplies(rawText, count = DEFAULT_REPLY_COUNT, seed = "rep
     .map((item, index) => normalizeReply(item, index, `${seed}-${index}`));
 }
 
-function parseGeneratedChatReplies(rawText, count = DEFAULT_CHAT_REPLY_COUNT) {
-  const jsonText = extractJsonArray(rawText);
-  if (!jsonText) {
-    throw new Error("聊天回复中没有找到 JSON 数组。");
-  }
-
-  const parsed = parseJsonArrayWithRepair(jsonText, "聊天回复 JSON 解析失败。");
-  if (!Array.isArray(parsed) || !parsed.length) {
-    throw new Error("聊天回复不是有效数组。");
-  }
-
-  return parsed.slice(0, count).map((item, index) =>
-    normalizeChatMessage(
-      {
-        ...item,
-        role: "incoming",
-        sender: item?.sender || item?.displayName || `粉丝 ${index + 1}`
-      },
-      item?.sender || item?.displayName || `粉丝 ${index + 1}`,
-      index
-    )
-  );
-}
-
 function getFallbackLocaleProfile(index = 0) {
   const profiles = [
     {
@@ -4890,36 +4281,6 @@ function findReplyNode(replies, replyId) {
   return null;
 }
 
-function normalizeDirectMessage(item, index = 0) {
-  const sender = truncate(item?.sender || item?.displayName || `联系人 ${index + 1}`, 24);
-  const messages = Array.isArray(item?.messages) && item.messages.length
-    ? item.messages.map((message, messageIndex) =>
-        normalizeChatMessage(message, sender, messageIndex)
-      )
-    : [
-        normalizeChatMessage(
-          {
-            role: "incoming",
-            sender,
-            text: item?.text || "一条新的私信正在生成。",
-            time: item?.time || `${index + 1}m`
-          },
-          sender,
-          0
-        )
-      ];
-  const latestMessage = messages[messages.length - 1];
-  return {
-    id: item?.id || `dm_${index}_${hashText(item?.text || item?.sender || "")}`,
-    sender,
-    handle: truncate(item?.handle || `@contact_${index + 1}`, 24),
-    text: latestMessage.text,
-    context: truncate(item?.context || "私信互动", 24),
-    time: latestMessage.time || item?.time || `${index + 1}m`,
-    messages
-  };
-}
-
 function buildLocalPosts(settings, count = DEFAULT_POST_COUNT, feedType = DEFAULT_CONTENT_FEED) {
   const sourceText = buildFeedSourceText(settings, feedType);
   const topics = parseTopics(sourceText);
@@ -4995,46 +4356,6 @@ function buildLocalPosts(settings, count = DEFAULT_POST_COUNT, feedType = DEFAUL
       feedType
     );
   });
-}
-
-function buildLocalDirectMessages(
-  settings,
-  profile,
-  count = settings.dmCount || DEFAULT_DM_COUNT
-) {
-  const customTabTopics = normalizeCustomTabs(settings.customTabs || []).flatMap((tab) =>
-    parseTopics(tab.text).map((topic) => `${tab.name || "自定义页签"} · ${topic}`)
-  );
-  const worldviewTopics = parseWorldviewFragments(settings.worldview);
-  const allTopics = [...customTabTopics, ...worldviewTopics].filter(Boolean);
-  const topics = allTopics.length ? allTopics : ["当前讨论"];
-  const senders = [
-    "内容合作者",
-    "同圈观察者",
-    "运营搭子",
-    "匿名情报员",
-    "文娱编辑",
-    "品牌联络人"
-  ];
-  const openers = [
-    "刚看到你最近的讨论，我觉得这个角度很适合继续深聊。",
-    "想私下问一句，你对这件事的判断是不是已经比公开发言更靠前了？",
-    "这两天这个话题在圈内发酵得很快，你的人设会很适合切进去。",
-    "如果你愿意，我们可以把这条线索展开成一轮更完整的内容。"
-  ];
-
-  return Array.from({ length: count }, (_, index) =>
-    normalizeDirectMessage(
-      {
-        sender: senders[index % senders.length],
-        handle: `@dm_${index + 1}`,
-        text: `${openers[index % openers.length]} 围绕“${topics[index % topics.length]}”，我第一反应就是这事挺适合直接来找${profile.username || DEFAULT_PROFILE.username}聊，你公开表达的那种判断方式和这个话题很贴。`,
-        context: `${topics[index % topics.length]} · 私信`,
-        time: `${index + 1}m`
-      },
-      index
-    )
-  );
 }
 
 function createAuthoredPost(
@@ -5162,266 +4483,6 @@ async function requestGeneratedPosts(
   }
 
   return parseGeneratedPosts(message, count, resolvedFeedType);
-}
-
-async function requestGeneratedDirectMessages(
-  settings,
-  profile,
-  count = settings.dmCount || DEFAULT_DM_COUNT
-) {
-  const requestEndpoint = resolveApiRequestEndpoint(settings);
-  settings.endpoint = requestEndpoint;
-
-  if (!requestEndpoint) {
-    throw new Error("未配置 API 地址，已切换为本地回退生成。");
-  }
-  if (normalizeApiMode(settings.mode) === "gemini" && !settings.token) {
-    throw new Error("Gemini 模式需要填写 API Key。");
-  }
-
-  const prompt = buildMessagesPrompt(settings, profile, count);
-  const headers = buildRequestHeaders(settings);
-
-  const response = await fetch(requestEndpoint, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(buildRequestBody(settings, prompt, count))
-  });
-
-  if (!response.ok) {
-    throw new Error(`私信请求失败：HTTP ${response.status}`);
-  }
-
-  const rawResponse = await response.text();
-  let payload = rawResponse;
-
-  try {
-    payload = JSON.parse(rawResponse);
-  } catch (_error) {
-    payload = rawResponse;
-  }
-
-  const message = resolveMessage(payload);
-  if (!message) {
-    throw new Error("接口返回成功，但没有可解析的私信内容。");
-  }
-
-  const jsonText = extractJsonArray(message);
-  if (!jsonText) {
-    throw new Error("私信接口返回内容中没有 JSON 数组。");
-  }
-
-  const parsed = parseJsonArrayWithRepair(jsonText, "私信接口返回的 JSON 解析失败。");
-  if (!Array.isArray(parsed) || !parsed.length) {
-    throw new Error("接口返回的私信数据不是有效数组。");
-  }
-
-  return parsed.slice(0, count).map((item, index) => normalizeDirectMessage(item, index));
-}
-
-async function requestGeneratedConversationReply(settings, profile, conversation, userMessage) {
-  const requestEndpoint = resolveApiRequestEndpoint(settings);
-  settings.endpoint = requestEndpoint;
-
-  if (!requestEndpoint) {
-    throw new Error("未配置 API 地址，已切换为本地回退生成。");
-  }
-  if (normalizeApiMode(settings.mode) === "gemini" && !settings.token) {
-    throw new Error("Gemini 模式需要填写 API Key。");
-  }
-
-  const prompt = buildConversationReplyPrompt(settings, profile, conversation, userMessage);
-  const headers = buildRequestHeaders(settings);
-
-  const response = await fetch(requestEndpoint, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(buildRequestBody(settings, prompt, 1))
-  });
-
-  if (!response.ok) {
-    throw new Error(`私信回复请求失败：HTTP ${response.status}`);
-  }
-
-  const rawResponse = await response.text();
-  let payload = rawResponse;
-
-  try {
-    payload = JSON.parse(rawResponse);
-  } catch (_error) {
-    payload = rawResponse;
-  }
-
-  const message = resolveMessage(payload);
-  if (!message) {
-    throw new Error("接口返回成功，但没有可解析的私信回复。");
-  }
-
-  const jsonText = extractJsonArray(message);
-  if (!jsonText) {
-    throw new Error("私信回复接口返回内容中没有 JSON 数组。");
-  }
-
-  const parsed = parseJsonArrayWithRepair(jsonText, "私信回复接口返回的 JSON 解析失败。");
-  if (!Array.isArray(parsed) || !parsed.length) {
-    throw new Error("接口返回的私信回复不是有效数组。");
-  }
-
-  return normalizeChatMessage(
-    {
-      role: "incoming",
-      sender: conversation.sender,
-      text: parsed[0]?.text || "收到，我接着跟你聊。",
-      time: parsed[0]?.time || "刚刚"
-    },
-    conversation.sender,
-    conversation.messages?.length || 0
-  );
-}
-
-function buildLocalConversationReply(profile, conversation, userMessage) {
-  const username = profile.username || DEFAULT_PROFILE.username;
-  const persona = truncate(profile.personaPrompt || DEFAULT_PROFILE.personaPrompt, 18);
-  const context = conversation.context || "当前讨论";
-  return normalizeChatMessage(
-    {
-      role: "incoming",
-      sender: conversation.sender,
-      text: `你刚刚这句我收到了。围绕“${context}”继续聊的话，我会觉得这很像${username}一贯那种“${persona}”的判断方式，所以我更在意你想把这个观点往哪一步推进。`,
-      time: "刚刚"
-    },
-    conversation.sender,
-    conversation.messages?.length || 0
-  );
-}
-
-async function requestGeneratedChatReplies(
-  settings,
-  profile,
-  chatRoom,
-  pendingMessages,
-  count = settings.chatReplyCount || DEFAULT_CHAT_REPLY_COUNT
-) {
-  const requestEndpoint = resolveApiRequestEndpoint(settings);
-  settings.endpoint = requestEndpoint;
-
-  if (!requestEndpoint) {
-    throw new Error("未配置 API 地址，已切换为本地回退生成。");
-  }
-  if (normalizeApiMode(settings.mode) === "openai" && !settings.model) {
-    throw new Error("DeepSeek / OpenAI 兼容模式需要填写模型名称。");
-  }
-  if (normalizeApiMode(settings.mode) === "gemini" && !settings.token) {
-    throw new Error("Gemini 模式需要填写 API Key。");
-  }
-
-  const prompt = buildChatRoomReplyPrompt(settings, profile, chatRoom, pendingMessages, count);
-  const headers = buildRequestHeaders(settings);
-  const images = pendingMessages
-    .map((message) => String(message?.imageDataUrl || "").trim())
-    .filter(Boolean);
-
-  const response = await fetch(requestEndpoint, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(buildRequestBody(settings, prompt, count, { images }))
-  });
-
-  if (!response.ok) {
-    throw new Error(`聊天回复请求失败：HTTP ${response.status}`);
-  }
-
-  const rawResponse = await response.text();
-  let payload = rawResponse;
-
-  try {
-    payload = JSON.parse(rawResponse);
-  } catch (_error) {
-    payload = rawResponse;
-  }
-
-  const message = resolveMessage(payload);
-  if (!message) {
-    throw new Error("聊天回复接口返回为空。");
-  }
-
-  return parseGeneratedChatReplies(message, count);
-}
-
-function buildLocalChatRoomReplies(
-  settings,
-  profile,
-  chatRoom,
-  pendingMessages,
-  count = settings.chatReplyCount || DEFAULT_CHAT_REPLY_COUNT
-) {
-  const username = profile.username || DEFAULT_PROFILE.username;
-  const selectedTabs = getSelectedChatContextTabs(settings);
-  const contextHint = selectedTabs[0]?.name || "";
-  const recentUserText = pendingMessages
-    .map((message) => String(message.text || "").trim())
-    .filter(Boolean)
-    .join(" / ");
-  const hasImage = pendingMessages.some((message) => message.imageDataUrl);
-  const focus = truncate(recentUserText || "这轮内容", 36);
-  const cnLines = [
-    `我超懂你这句，继续说！`,
-    `支持，这个点你拿得很稳。`,
-    `喜欢这个角度，继续发。`,
-    hasImage ? "这张图也太有感觉了。" : `这句真的很像你会说的。`,
-    `${username}这波表达很顶。`
-  ];
-  const jpLines = [
-    "この流れ、かなり好き。",
-    "その言い方、ちゃんと刺さる。",
-    "応援してる、続けてほしい。",
-    hasImage ? "写真の空気感もいい。" : "この一言、すごく良い。",
-    "あなたの視点、やっぱり好き。"
-  ];
-  const krLines = [
-    "이 흐름 정말 좋아요.",
-    "이 포인트 완전 응원해요.",
-    "계속 말해줘요, 듣고 싶어요.",
-    hasImage ? "사진 분위기도 너무 좋아요." : "이 한마디가 딱이에요.",
-    "역시 당신 말이라 더 믿겨요."
-  ];
-  const enLines = [
-    "Love this take, keep going.",
-    "Yep, I’m with you here.",
-    "This is exactly why I follow you.",
-    hasImage ? "That image really sells it." : "That line hits so well.",
-    "Still fully on your side."
-  ];
-  const localePools = [cnLines, jpLines, krLines, enLines];
-  const fanNames = [
-    ["热心粉丝", "@supportive_cn"],
-    ["推し勢", "@oshi_room"],
-    ["응원계정", "@cheer_k"],
-    ["Core Fan", "@corefan_us"]
-  ];
-  const roomOffset = Number.parseInt(hashText(focus || username), 36) || 0;
-
-  return Array.from({ length: count }, (_, index) => {
-    const localeIndex = (index + roomOffset) % localePools.length;
-    const [displayName, handle] = fanNames[localeIndex];
-    const linePool = localePools[localeIndex];
-    const baseText = linePool[index % linePool.length];
-    const withFocus =
-      localeIndex === 0 && index % 5 === 0
-        ? `${baseText}\n${truncate(contextHint || focus, 14)}`
-        : baseText;
-    return normalizeChatMessage(
-      {
-        role: "incoming",
-        sender: displayName,
-        handle,
-        text: withFocus,
-        time: `${index + 1}s`
-      },
-      displayName,
-      index + (chatRoom?.length || 0)
-    );
-  });
 }
 
 function buildTranslatePrompt(sourceText) {
@@ -5682,37 +4743,6 @@ async function translateReplyToChinese(postId, replyId, bucketName = state.activ
   }
 }
 
-async function translateChatMessageToChinese(messageId) {
-  const targetMessage = findChatMessageById(messageId);
-  if (!targetMessage?.text) {
-    setChatStatus("这条消息没有可翻译的文本。", "error");
-    return;
-  }
-  if (isChatMessageTranslating(messageId)) {
-    return;
-  }
-
-  setChatMessageTranslating(messageId, true);
-  renderFollowingPage();
-
-  try {
-    const translatedText = await requestTranslatedText(
-      getTranslationRequestSettings({ ...getCurrentSettings() }),
-      targetMessage.text || ""
-    );
-    updateChatMessage(messageId, (message) => ({
-      ...message,
-      translationZh: translatedText
-    }));
-    setChatStatus("已生成聊天消息中文翻译。", "success");
-  } catch (error) {
-    setChatStatus(`聊天翻译失败：${error.message || "请求失败"}`, "error");
-  } finally {
-    setChatMessageTranslating(messageId, false);
-    renderFollowingPage();
-  }
-}
-
 async function requestGeneratedReplies(
   settings,
   profile,
@@ -5949,118 +4979,10 @@ async function toggleNestedReply(postId, replyId, bucketName = state.activeFeed)
   }
 }
 
-async function generateDirectMessages() {
-  const settings = { ...getCurrentSettings() };
-  const profile = { ...getCurrentProfile() };
-  const dmCount = settings.dmCount || DEFAULT_DM_COUNT;
-  messagesGenerateBtn.disabled = true;
-  messagesStatusEl.textContent = "正在根据当前设定生成新的私信内容…";
-  messagesStatusEl.className = "status-text";
-
-  try {
-    let messages;
-    let sourceLabel = "API";
-
-    try {
-      messages = await requestGeneratedDirectMessages(settings, profile, dmCount);
-    } catch (error) {
-      sourceLabel = "本地回退";
-      messages = buildLocalDirectMessages(settings, profile, dmCount);
-      messagesStatusEl.textContent = `${error.message || "请求失败"} 已自动使用本地模板生成私信。`;
-      messagesStatusEl.classList.add("error");
-    }
-
-    state.directMessages = messages;
-    state.activeConversationId = null;
-    state.replyingConversationId = null;
-    persistDirectMessages(state.directMessages);
-    renderMessagesPage();
-    if (sourceLabel === "API") {
-      messagesStatusEl.textContent = "已使用 API 生成新的私信内容。";
-      messagesStatusEl.classList.add("success");
-    }
-  } finally {
-    messagesGenerateBtn.disabled = false;
-  }
-}
-
-async function sendConversationMessage(conversationId, userMessage) {
-  const trimmedMessage = String(userMessage || "").trim();
-  if (!trimmedMessage) {
-    messagesStatusEl.textContent = "请输入消息内容后再发送。";
-    messagesStatusEl.className = "status-text error";
-    return;
-  }
-
-  const conversation = state.directMessages.find((item) => item.id === conversationId);
-  if (!conversation) {
-    return;
-  }
-
-  const userEntry = normalizeChatMessage(
-    {
-      role: "user",
-      text: trimmedMessage,
-      time: "刚刚"
-    },
-    "你",
-    conversation.messages?.length || 0
-  );
-
-  conversation.messages = [...(conversation.messages || []), userEntry];
-  conversation.text = userEntry.text;
-  conversation.time = userEntry.time;
-  state.activeConversationId = conversationId;
-  state.replyingConversationId = conversationId;
-  persistDirectMessages(state.directMessages);
-  renderMessagesPage();
-  messagesStatusEl.textContent = "已发送，正在生成对方回复…";
-  messagesStatusEl.className = "status-text";
-
-  const settings = { ...getCurrentSettings() };
-  const profile = { ...getCurrentProfile() };
-
-  try {
-    let replyMessage;
-    try {
-      replyMessage = await requestGeneratedConversationReply(
-        settings,
-        profile,
-        conversation,
-        trimmedMessage
-      );
-    } catch (_error) {
-      replyMessage = buildLocalConversationReply(profile, conversation, trimmedMessage);
-      messagesStatusEl.textContent = "接口不可用，已自动使用本地回复继续会话。";
-      messagesStatusEl.className = "status-text error";
-    }
-
-    conversation.messages = [...conversation.messages, replyMessage];
-    conversation.text = replyMessage.text;
-    conversation.time = replyMessage.time;
-    persistDirectMessages(state.directMessages);
-    if (!messagesStatusEl.classList.contains("error")) {
-      messagesStatusEl.textContent = "对方已回复。";
-      messagesStatusEl.className = "status-text success";
-    }
-  } finally {
-    state.replyingConversationId = null;
-    renderMessagesPage();
-  }
-}
-
-function delay(ms = 0) {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
-}
-
 async function handleImageSelection(file, target) {
   if (!file) {
     if (target === "home") {
       clearHomeComposerImage();
-    } else if (target === "chat") {
-      clearChatComposeImage();
     }
     return;
   }
@@ -6075,175 +4997,12 @@ async function handleImageSelection(file, target) {
         "remove-home-composer-image"
       );
       setHomeComposerStatus("帖子图片已添加。", "success");
-      return;
     }
-
-    state.chatDraftImageDataUrl = dataUrl;
-    renderComposerMediaPreview(chatComposeImagePreviewEl, dataUrl, "remove-chat-compose-image");
-    setChatStatus("聊天图片已添加。", "success");
   } catch (_error) {
     if (target === "home") {
       setHomeComposerStatus("帖子图片读取失败，请重试。", "error");
-    } else {
-      setChatStatus("聊天图片读取失败，请重试。", "error");
     }
   }
-}
-
-function buildChatUserMessage(text, imageDataUrl = "") {
-  const imageSeed = String(imageDataUrl || "").slice(0, 64);
-  return normalizeChatMessage(
-    {
-      id: `chat_room_user_${Date.now()}_${hashText(`${text}-${imageSeed}`)}`,
-      role: "user",
-      text,
-      imageDataUrl,
-      time: "刚刚",
-      status: "pending"
-    },
-    "你",
-    state.chatRoom.length
-  );
-}
-
-function appendChatMessages(messages = []) {
-  if (!Array.isArray(messages) || !messages.length) {
-    return;
-  }
-  state.chatRoom = [...state.chatRoom, ...messages];
-  persistChatRoom(state.chatRoom);
-}
-
-async function submitChatRoomMessage() {
-  if (state.chatReplying) {
-    return;
-  }
-  const text = String(chatComposeInputEl?.value || "").trim();
-  const imageDataUrl = state.chatDraftImageDataUrl || "";
-  if (!text && !imageDataUrl) {
-    setChatStatus("请输入消息或添加图片后再发送。", "error");
-    return;
-  }
-
-  const nextMessage = buildChatUserMessage(text, imageDataUrl);
-  appendChatMessages([nextMessage]);
-  if (chatComposeInputEl) {
-    chatComposeInputEl.value = "";
-  }
-  clearChatComposeImage();
-  renderFollowingPage();
-  setChatStatus("消息已加入待回复队列，可继续发送更多内容。", "success");
-  scrollChatHistoryToBottom("smooth");
-}
-
-function markPendingChatMessagesAsSent(messageIds = []) {
-  const idSet = new Set(messageIds);
-  state.chatRoom = state.chatRoom.map((message) =>
-    idSet.has(message.id)
-      ? {
-          ...message,
-          status: "sent"
-        }
-      : message
-  );
-  persistChatRoom(state.chatRoom);
-}
-
-async function appendChatRepliesGradually(replies = []) {
-  for (let index = 0; index < replies.length; index += 1) {
-    const reply = replies[index];
-    appendChatMessages([reply]);
-    renderFollowingPage();
-    scrollChatHistoryToBottom("smooth");
-    if (index < replies.length - 1) {
-      await delay(CHAT_REPLY_APPEND_INTERVAL_MS);
-    }
-  }
-}
-
-async function generateChatRoomReplies() {
-  if (state.chatReplying) {
-    return;
-  }
-  const pendingMessages = state.chatRoom.filter(
-    (message) => message.role === "user" && message.status === "pending"
-  );
-  if (!pendingMessages.length) {
-    setChatStatus("先发送至少一条新消息，再获取回复。", "error");
-    renderFollowingPage();
-    return;
-  }
-
-  state.chatReplying = true;
-  renderFollowingPage();
-  const settings = { ...getCurrentSettings() };
-  const profile = { ...getCurrentProfile() };
-  const replyCount = settings.chatReplyCount || DEFAULT_CHAT_REPLY_COUNT;
-  setChatStatus(`正在获取 ${replyCount} 条粉丝回复…`, "");
-
-  try {
-    let replies;
-    let usedFallback = false;
-    try {
-      replies = await requestGeneratedChatReplies(
-        settings,
-        profile,
-        state.chatRoom,
-        pendingMessages,
-        replyCount
-      );
-    } catch (_error) {
-      usedFallback = true;
-      replies = buildLocalChatRoomReplies(
-        settings,
-        profile,
-        state.chatRoom,
-        pendingMessages,
-        replyCount
-      );
-    }
-
-    markPendingChatMessagesAsSent(pendingMessages.map((message) => message.id));
-    renderFollowingPage();
-    await appendChatRepliesGradually(replies);
-    setChatStatus(
-      usedFallback
-        ? `接口不可用，已本地生成 ${replies.length} 条粉丝回复。`
-        : `已收到 ${replies.length} 条粉丝回复。`,
-      usedFallback ? "error" : "success"
-    );
-  } finally {
-    state.chatReplying = false;
-    renderFollowingPage();
-  }
-}
-
-function clearChatRoom() {
-  if (!state.chatRoom.length) {
-    return;
-  }
-  const confirmed = window.confirm("确定清空当前聊天记录吗？");
-  if (!confirmed) {
-    return;
-  }
-  state.chatRoom = [];
-  persistChatRoom(state.chatRoom);
-  if (chatComposeInputEl) {
-    chatComposeInputEl.value = "";
-  }
-  clearChatComposeImage();
-  renderFollowingPage();
-  setChatStatus("聊天记录已清空。", "success");
-}
-
-function toggleChatContextTab(tabId, isChecked) {
-  const currentIds = normalizeChatContextTabIds(state.settings.chatContextTabIds, state.customTabs);
-  const nextIds = isChecked
-    ? [...currentIds, tabId]
-    : currentIds.filter((item) => item !== tabId);
-  state.settings.chatContextTabIds = normalizeChatContextTabIds(nextIds, state.customTabs);
-  persistSettings(state.settings);
-  renderFollowingPage();
 }
 
 async function refreshHomeFeed(trigger = "manual") {
@@ -6303,7 +5062,7 @@ async function refreshHomeFeed(trigger = "manual") {
     persistFeeds(state.feeds);
     persistDiscussions();
     state.lastRefreshAt = `${formatDateTime()} · ${sourceLabel}`;
-    localStorage.setItem(REFRESH_KEY, state.lastRefreshAt);
+    safeSetItem(REFRESH_KEY, state.lastRefreshAt);
     renderActiveFeed();
     renderProfilePage();
     updateInsightPanel();
@@ -6343,7 +5102,8 @@ function releasePull() {
 }
 
 function handleTouchStart(event) {
-  const atTop = feedEl.scrollTop <= 1;
+  const scrollTarget = getHomeScrollTarget();
+  const atTop = !scrollTarget || scrollTarget.scrollTop <= 1;
   if (!canRefreshCurrentHomeFeed() || !atTop || state.isRefreshing) {
     return;
   }
@@ -6352,12 +5112,13 @@ function handleTouchStart(event) {
 }
 
 function handleTouchMove(event) {
+  const scrollTarget = getHomeScrollTarget();
   if (!state.touchTracking || !canRefreshCurrentHomeFeed() || state.isRefreshing) {
     return;
   }
 
   const delta = event.touches[0].clientY - state.touchStartY;
-  if (delta <= 0 || feedEl.scrollTop > 1) {
+  if (delta <= 0 || (scrollTarget && scrollTarget.scrollTop > 1)) {
     return;
   }
 
@@ -6378,7 +5139,8 @@ function handleTouchEnd() {
 }
 
 function handleWheel(event) {
-  const atTop = feedEl.scrollTop <= 1;
+  const scrollTarget = getHomeScrollTarget();
+  const atTop = !scrollTarget || scrollTarget.scrollTop <= 1;
   const topStableLongEnough = Date.now() - state.feedTopAnchorAt > 160;
   if (
     !canRefreshCurrentHomeFeed() ||
@@ -6429,12 +5191,6 @@ function attachEvents() {
   if (homeComposerToggleBtn) {
     homeComposerToggleBtn.addEventListener("click", () => {
       setHomeComposerOpen(!state.composerOpen);
-    });
-  }
-
-  if (messagesGenerateBtn) {
-    messagesGenerateBtn.addEventListener("click", () => {
-      generateDirectMessages();
     });
   }
 
@@ -6512,82 +5268,6 @@ function attachEvents() {
     });
   }
 
-  if (chatComposeFormEl) {
-    chatComposeFormEl.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      await submitChatRoomMessage();
-    });
-  }
-
-  if (chatComposeImageInputEl) {
-    chatComposeImageInputEl.addEventListener("change", async () => {
-      const [file] = chatComposeImageInputEl.files || [];
-      await handleImageSelection(file, "chat");
-    });
-  }
-
-  if (chatComposeImagePreviewEl) {
-    chatComposeImagePreviewEl.addEventListener("click", (event) => {
-      const target = getEventHTMLElement(event);
-      if (!target) {
-        return;
-      }
-      const actionEl = target.closest("[data-action]");
-      if (!(actionEl instanceof HTMLElement)) {
-        return;
-      }
-      if (actionEl.dataset.action === "remove-chat-compose-image") {
-        clearChatComposeImage();
-        setChatStatus("已移除聊天图片。", "");
-      }
-    });
-  }
-
-  if (chatGenerateBtnEl) {
-    chatGenerateBtnEl.addEventListener("click", async () => {
-      await generateChatRoomReplies();
-    });
-  }
-
-  if (chatClearBtnEl) {
-    chatClearBtnEl.addEventListener("click", () => {
-      clearChatRoom();
-    });
-  }
-
-  if (chatHistoryEl) {
-    chatHistoryEl.addEventListener("click", async (event) => {
-      const target = getEventHTMLElement(event);
-      if (!target) {
-        return;
-      }
-      const actionEl = target.closest("[data-action]");
-      if (!(actionEl instanceof HTMLElement)) {
-        return;
-      }
-      if (
-        actionEl.dataset.action === "translate-chat-message" &&
-        actionEl.dataset.messageId
-      ) {
-        await translateChatMessageToChinese(actionEl.dataset.messageId);
-      }
-    });
-  }
-
-  if (chatContextTabsEl) {
-    chatContextTabsEl.addEventListener("change", (event) => {
-      const target = event.target;
-      if (!(target instanceof HTMLInputElement) || target.type !== "checkbox") {
-        return;
-      }
-      const tabId = target.dataset.tabId || "";
-      if (!tabId) {
-        return;
-      }
-      toggleChatContextTab(tabId, target.checked);
-    });
-  }
-
   if (homeMiniTabsContainer) {
     homeMiniTabsContainer.addEventListener("click", (event) => {
       const target = getEventHTMLElement(event);
@@ -6604,11 +5284,8 @@ function attachEvents() {
 
   if (customTabsManageBtn) {
     customTabsManageBtn.addEventListener("click", () => {
-      const nextOpen = !state.customTabEditorOpen;
-      setCustomTabsPanelOpen(nextOpen);
-      if (nextOpen) {
-        resetCustomTabForm();
-      }
+      setCustomTabsPanelOpen(true);
+      resetCustomTabForm();
     });
   }
 
@@ -6628,6 +5305,22 @@ function attachEvents() {
     customTabForm.addEventListener("submit", (event) => {
       event.preventDefault();
       handleCustomTabFormSubmit();
+    });
+  }
+
+  if (customTabsPanel) {
+    customTabsPanel.addEventListener("click", (event) => {
+      const target = getEventHTMLElement(event);
+      if (!target) {
+        return;
+      }
+      const actionEl = target.closest("[data-action]");
+      if (!(actionEl instanceof HTMLElement)) {
+        return;
+      }
+      if (actionEl.dataset.action === "close-custom-tabs-modal") {
+        setCustomTabsPanelOpen(false);
+      }
     });
   }
 
@@ -6833,67 +5526,23 @@ function attachEvents() {
       }
     });
 
-    feedEl.addEventListener("scroll", () => {
-      if (feedEl.scrollTop <= 1) {
-        if (!state.feedTopAnchorAt) {
-          state.feedTopAnchorAt = Date.now();
+    const homeScrollTarget = getHomeScrollTarget();
+    if (homeScrollTarget) {
+      homeScrollTarget.addEventListener("scroll", () => {
+        if (homeScrollTarget.scrollTop <= 1) {
+          if (!state.feedTopAnchorAt) {
+            state.feedTopAnchorAt = Date.now();
+          }
+          return;
         }
-        return;
-      }
 
-      state.feedTopAnchorAt = 0;
-      if (state.pullDistance > 0 && !state.isRefreshing) {
-        state.pullDistance = 0;
-        setPullIndicator(0, "idle");
-      }
-    });
-  }
-
-  if (messagesListEl) {
-    messagesListEl.addEventListener("click", (event) => {
-      const target = getEventHTMLElement(event);
-      if (!target) {
-        return;
-      }
-
-      const actionEl = target.closest("[data-action]");
-      if (!(actionEl instanceof HTMLElement)) {
-        return;
-      }
-
-      if (actionEl.dataset.action === "open-conversation" && actionEl.dataset.conversationId) {
-        state.activeConversationId = actionEl.dataset.conversationId;
-        renderMessagesPage();
-        return;
-      }
-
-      if (actionEl.dataset.action === "close-conversation") {
-        state.activeConversationId = null;
-        renderMessagesPage();
-      }
-    });
-
-    messagesListEl.addEventListener("submit", async (event) => {
-      const target = event.target;
-      if (!(target instanceof HTMLFormElement)) {
-        return;
-      }
-
-      if (target.dataset.action !== "send-conversation-message") {
-        return;
-      }
-
-      event.preventDefault();
-      const formData = new FormData(target);
-      const message = String(formData.get("message") || "");
-      const conversationId = target.dataset.conversationId;
-      if (!conversationId) {
-        return;
-      }
-
-      target.reset();
-      await sendConversationMessage(conversationId, message);
-    });
+        state.feedTopAnchorAt = 0;
+        if (state.pullDistance > 0 && !state.isRefreshing) {
+          state.pullDistance = 0;
+          setPullIndicator(0, "idle");
+        }
+      });
+    }
   }
 
   if (profilePostsEl) {
@@ -7066,13 +5715,17 @@ function attachEvents() {
   }
 
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.customTabEditorOpen) {
+      setCustomTabsPanelOpen(false);
+      return;
+    }
     if (event.key === "Escape" && state.threadModalOpen) {
       setThreadModalOpen(false);
     }
   });
 
   const apiFields = [modeSelect, endpointInput, tokenInput, modelInput];
-  [modeSelect, endpointInput, tokenInput, modelInput, temperatureInput, homeCountInput, dmCountInput, replyCountInput, chatReplyCountInput, worldviewInput]
+  [modeSelect, endpointInput, tokenInput, modelInput, temperatureInput, homeCountInput, replyCountInput, worldviewInput]
     .filter(Boolean)
     .forEach(
     (field) => {
@@ -7083,7 +5736,6 @@ function attachEvents() {
         }
         updateModeUI();
         updatePromptPreview();
-        updateMessagePromptPreview();
         updateReplyPromptPreview();
         updateInsightPanel();
       });
@@ -7100,9 +5752,7 @@ function attachEvents() {
     (field) => {
       field.addEventListener("input", () => {
         state.profile = getCurrentProfile();
-        renderFollowingPage();
         renderProfilePage();
-        updateMessagePromptPreview();
         updateReplyPromptPreview();
       });
 
@@ -7126,15 +5776,19 @@ function attachEvents() {
     });
   }
 
-  if (feedEl) {
-    feedEl.addEventListener("touchstart", handleTouchStart, { passive: true });
-    feedEl.addEventListener("touchmove", handleTouchMove, { passive: false });
-    feedEl.addEventListener("touchend", handleTouchEnd);
-    feedEl.addEventListener("wheel", handleWheel, { passive: false });
+  const homeScrollTarget = getHomeScrollTarget();
+  if (homeScrollTarget) {
+    homeScrollTarget.addEventListener("touchstart", handleTouchStart, { passive: true });
+    homeScrollTarget.addEventListener("touchmove", handleTouchMove, { passive: false });
+    homeScrollTarget.addEventListener("touchend", handleTouchEnd);
+    homeScrollTarget.addEventListener("wheel", handleWheel, { passive: false });
   }
 }
 
 function init() {
+  if (document.body) {
+    document.body.classList.toggle("embedded", isEmbeddedView());
+  }
   window.__appBootstrap = {
     ready: false,
     errors: []
@@ -7162,8 +5816,6 @@ function init() {
   safeRun("thread modal", () => setThreadModalOpen(false));
   safeRun("pull indicator", () => setPullIndicator(0, "idle"));
   safeRun("render active feed", () => renderActiveFeed());
-  safeRun("render following", () => renderFollowingPage());
-  safeRun("render messages", () => renderMessagesPage());
   safeRun("render profile", () => renderProfilePage());
   safeRun("render custom tabs manager", () => renderCustomTabsManager());
   safeRun("custom tabs manage button", () => updateCustomTabsManageButton());
@@ -7171,7 +5823,6 @@ function init() {
   safeRun("render api config list", () => renderApiConfigList());
   safeRun("persist discussions", () => persistDiscussions());
   safeRun("update prompt preview", () => updatePromptPreview());
-  safeRun("update dm prompt preview", () => updateMessagePromptPreview());
   safeRun("update reply prompt preview", () => updateReplyPromptPreview());
   safeRun("update insight panel", () => updateInsightPanel());
   safeRun("set home status", () =>
