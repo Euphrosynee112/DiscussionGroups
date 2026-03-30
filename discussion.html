@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pulse Generator · 讨论页</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand-lockup">
+          <div class="brand-mark">𝕏</div>
+          <div>
+            <p class="brand-overline">Social Console</p>
+            <strong class="brand-name">Pulse Generator</strong>
+          </div>
+        </div>
+
+        <nav class="primary-nav" aria-label="主导航">
+          <button class="nav-item active" data-tab="home" type="button">
+            <span class="nav-icon">⌂</span>
+            <span>首页</span>
+          </button>
+          <button class="nav-item" data-tab="following" type="button">
+            <span class="nav-icon">☰</span>
+            <span>聊天</span>
+          </button>
+          <button class="nav-item" data-tab="messages" type="button">
+            <span class="nav-icon">✉</span>
+            <span>私信</span>
+          </button>
+          <button class="nav-item" data-tab="profile" type="button">
+            <span class="nav-icon">◐</span>
+            <span>个人主页</span>
+          </button>
+          <button class="nav-item" data-tab="settings" type="button">
+            <span class="nav-icon">⋯</span>
+            <span>设置</span>
+          </button>
+        </nav>
+
+      </aside>
+
+      <main class="main-column">
+        <header class="main-header">
+          <div>
+            <p class="header-kicker">X 风格原型</p>
+            <h1 id="page-title">首页</h1>
+          </div>
+          <div class="header-actions">
+            <button id="top-refresh-btn" class="ghost-button" type="button">
+              刷新时间线
+            </button>
+            <button id="profile-header-edit-btn" class="ghost-button" type="button" hidden>
+              编辑资料
+            </button>
+            <button id="home-composer-toggle-btn" class="ghost-button" type="button">
+              发布新帖子
+            </button>
+          </div>
+        </header>
+
+        <section id="home-page" class="page-section active" aria-label="首页">
+          <div id="home-scroll" class="page-scroll">
+            <section id="home-composer-card" class="section-card hidden">
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">Composer</p>
+                  <h2>新帖子</h2>
+                </div>
+              </div>
+              <form id="home-composer-form" class="settings-form">
+                <label>
+                  帖子内容
+                  <textarea
+                    id="home-composer-input"
+                    rows="4"
+                    placeholder="输入你想发送的新帖子内容，它会出现在个人主页，并可继续展开回复。"
+                  ></textarea>
+                </label>
+                <label>
+                  Tag（可选）
+                  <input
+                    id="home-composer-tags-input"
+                    type="text"
+                    placeholder="例如：#榜单 #行业洞察，不填则留空"
+                  />
+                </label>
+                <label>
+                  帖子图片（可选）
+                  <input
+                    id="home-composer-image-input"
+                    type="file"
+                    accept="image/*"
+                  />
+                </label>
+                <div id="home-composer-image-preview" class="composer-media-preview hidden"></div>
+                <div class="settings-actions">
+                  <button id="home-composer-submit" class="solid-button" type="submit">
+                    发送帖子
+                  </button>
+                </div>
+                <p id="home-composer-status" class="status-text"></p>
+              </form>
+            </section>
+
+            <section class="timeline-card">
+              <div class="timeline-card__header">
+                <div class="mini-tabs-bar">
+                  <div class="mini-tabs" id="home-mini-tabs" aria-label="首页分类"></div>
+                  <button id="custom-tabs-manage-btn" class="ghost-chip" type="button">
+                    管理自定义页签
+                  </button>
+                </div>
+                <p id="home-status" class="inline-status">等待下一次刷新</p>
+              </div>
+
+              <section id="pull-indicator" class="pull-indicator" aria-live="polite">
+                <span class="pull-spinner" aria-hidden="true"></span>
+                <strong id="pull-label">向下滑动以刷新</strong>
+                <span id="pull-meta">默认生成 10 条讨论信息</span>
+              </section>
+
+              <div id="feed" class="feed" aria-live="polite"></div>
+            </section>
+
+            <section
+              id="custom-tabs-manager"
+              class="section-card hidden"
+              aria-label="自定义页签管理"
+            >
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">Custom tabs</p>
+                  <h2>自定义页签管理</h2>
+                </div>
+                <button id="custom-tabs-close-btn" class="ghost-chip" type="button">
+                  收起
+                </button>
+              </div>
+              <p class="tag-stat-meta">最多新增 4 个自定义页签，用于扩展首页讨论主题。</p>
+              <div id="custom-tabs-list" class="stack-list custom-tabs-list"></div>
+              <form id="custom-tab-form" class="settings-form" autocomplete="off">
+                <label>
+                  页签名称
+                  <input
+                    id="custom-tab-name-input"
+                    type="text"
+                    maxlength="10"
+                    placeholder="例如：出海、消费新变"
+                  />
+                </label>
+                <label>
+                  页签文本
+                  <textarea
+                    id="custom-tab-text-input"
+                    rows="4"
+                    placeholder="输入该页签要聚焦的主题、设定或提示。"
+                  ></textarea>
+                </label>
+                <div class="settings-actions">
+                  <button id="custom-tab-save-btn" class="solid-button" type="submit">
+                    保存页签
+                  </button>
+                  <button id="custom-tab-cancel-btn" class="ghost-button" type="button">
+                    取消
+                  </button>
+                </div>
+                <p id="custom-tab-form-status" class="status-text"></p>
+              </form>
+              <p id="custom-tabs-limit-hint" class="tag-stat-meta"></p>
+            </section>
+          </div>
+        </section>
+
+        <section id="following-page" class="page-section" aria-label="聊天">
+          <div class="page-scroll">
+            <section class="section-card">
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">Chat Room</p>
+                  <h2>聊天</h2>
+                </div>
+                <div class="settings-actions">
+                  <button id="chat-context-trigger-btn" class="ghost-chip" type="button">参考页签</button>
+                  <button id="chat-clear-btn" class="ghost-chip" type="button">清空聊天</button>
+                </div>
+              </div>
+              <p id="chat-status" class="status-text">你可以连续发送多条消息，再统一获取粉丝回复。</p>
+              <div id="chat-history" class="chat-history chat-history--room"></div>
+              <form id="chat-compose-form" class="chat-input-form" autocomplete="off">
+                <textarea
+                  id="chat-compose-input"
+                  class="chat-textarea"
+                  rows="3"
+                  placeholder="输入你想发送的消息，支持连续发送后统一获取回复。"
+                ></textarea>
+                <div class="chat-compose-toolbar">
+                  <label class="ghost-chip" for="chat-compose-image-input">添加图片</label>
+                  <input
+                    id="chat-compose-image-input"
+                    type="file"
+                    accept="image/*"
+                    hidden
+                  />
+                  <button id="chat-send-btn" class="solid-button" type="submit">发送消息</button>
+                  <button id="chat-generate-btn" class="ghost-chip" type="button">获取回复</button>
+                </div>
+                <div id="chat-compose-image-preview" class="composer-media-preview hidden"></div>
+              </form>
+            </section>
+          </div>
+        </section>
+
+        <section id="messages-page" class="page-section" aria-label="私信">
+          <div class="page-scroll">
+            <section class="section-card">
+                <div class="section-card__head">
+                  <div>
+                    <p class="section-card__eyebrow">Messages</p>
+                    <h2>私信会话</h2>
+                  </div>
+                <button id="messages-generate-btn" class="ghost-chip" type="button">新建消息</button>
+              </div>
+              <p id="messages-status" class="status-text">点击“新建消息”生成与当前设定相关的私信内容。</p>
+              <div id="messages-list" class="conversation-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="profile-page" class="page-section" aria-label="个人主页">
+          <div class="page-scroll">
+            <section class="profile-hero">
+              <div id="profile-banner" class="profile-banner"></div>
+              <div class="profile-body">
+                <div id="profile-avatar" class="profile-avatar">WG</div>
+                <div class="profile-summary">
+                  <div class="profile-summary__identity">
+                    <h2 id="profile-username">Worldview Generator</h2>
+                    <p id="profile-handle" class="profile-handle">@worldview_lab</p>
+                  </div>
+                </div>
+                <div class="profile-detail-grid">
+                  <div class="profile-detail-card">
+                    <span class="profile-detail-label">个性签名</span>
+                    <p id="profile-bio" class="profile-bio"></p>
+                  </div>
+                </div>
+                <div class="profile-stats">
+                  <span class="profile-stat"><strong id="profile-following">128</strong><em>正在关注</em></span>
+                  <span class="profile-stat"><strong id="profile-followers">8.6K</strong><em>关注者</em></span>
+                  <span class="profile-stat"><strong id="profile-post-count">0</strong><em>帖子</em></span>
+                </div>
+              </div>
+            </section>
+
+            <section id="profile-editor-card" class="section-card hidden">
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">Profile editor</p>
+                  <h2>个人资料编辑</h2>
+                </div>
+                <button id="profile-editor-close-btn" class="ghost-chip" type="button">
+                  收起
+                </button>
+              </div>
+              <form id="profile-form" class="profile-editor">
+                <div class="form-grid">
+                  <label>
+                    头像文字 / Emoji
+                    <input
+                      id="profile-avatar-input"
+                      type="text"
+                      maxlength="4"
+                      placeholder="例如 WG 或 😎"
+                    />
+                  </label>
+
+                  <label>
+                    头像图片
+                    <input
+                      id="profile-avatar-file-input"
+                      type="file"
+                      accept="image/*"
+                    />
+                  </label>
+
+                  <label>
+                    用户名
+                    <input
+                      id="profile-username-input"
+                      type="text"
+                      placeholder="输入展示用户名"
+                    />
+                  </label>
+
+                  <label>
+                    用户 ID
+                    <input
+                      id="profile-userid-input"
+                      type="text"
+                      placeholder="@worldview_lab"
+                    />
+                  </label>
+
+                  <label>
+                    关注人数
+                    <input
+                      id="profile-following-input"
+                      type="text"
+                      placeholder="例如 128"
+                    />
+                  </label>
+
+                  <label>
+                    粉丝人数
+                    <input
+                      id="profile-followers-input"
+                      type="text"
+                      placeholder="例如 8.6K"
+                    />
+                  </label>
+
+                  <label>
+                    主页背景图片
+                    <input
+                      id="profile-banner-file-input"
+                      type="file"
+                      accept="image/*"
+                    />
+                  </label>
+                </div>
+
+                <label>
+                  个人签名
+                  <textarea
+                    id="profile-signature-input"
+                    rows="4"
+                    placeholder="输入个人签名或简介"
+                  ></textarea>
+                </label>
+
+                <label>
+                  用户人设 Prompt（仅存储，不展示）
+                  <textarea
+                    id="profile-persona-input"
+                    rows="5"
+                    placeholder="记录这个用户的人设、偏好、说话方式、经历背景等，用于私信和互动生成。"
+                  ></textarea>
+                </label>
+
+                <div class="settings-actions">
+                  <button id="profile-save-btn" class="solid-button" type="submit">
+                    保存个人资料
+                  </button>
+                  <button id="profile-cancel-btn" class="ghost-button" type="button">
+                    关闭编辑
+                  </button>
+                </div>
+
+                <p id="profile-status" class="status-text" aria-live="polite"></p>
+              </form>
+            </section>
+
+            <section class="section-card">
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">Profile timeline</p>
+                  <h2>用户发言</h2>
+                </div>
+              </div>
+              <div id="profile-posts" class="feed"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="settings-page" class="page-section" aria-label="设置">
+          <div class="page-scroll">
+            <section class="section-card">
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">Settings</p>
+                  <h2>内容生成配置</h2>
+                </div>
+                <span class="badge badge-live">本地持久化</span>
+              </div>
+
+              <form id="settings-form" class="settings-form">
+                <div class="form-grid">
+                  <label>
+                    接口类型
+                    <select id="api-mode">
+                      <option value="openai">DeepSeek / OpenAI 兼容接口</option>
+                      <option value="gemini">Gemini API</option>
+                      <option value="generic">通用 JSON 接口</option>
+                    </select>
+                  </label>
+
+                  <label id="model-wrap">
+                    模型名称
+                    <input id="api-model" type="text" placeholder="deepseek-chat" />
+                  </label>
+
+                  <label>
+                    API 地址
+                    <input
+                      id="api-endpoint"
+                      type="url"
+                      placeholder="https://api.deepseek.com/chat/completions"
+                    />
+                  </label>
+
+                  <label>
+                    API Key / Bearer Token
+                    <input
+                      id="api-token"
+                      type="password"
+                      placeholder="输入用于请求的密钥"
+                    />
+                  </label>
+
+                  <label>
+                    Temperature
+                    <input
+                      id="api-temperature"
+                      type="number"
+                      min="0"
+                      max="2"
+                      step="0.1"
+                      placeholder="0.8"
+                    />
+                    <span class="field-hint">输入范围 0 到 2，数值越低越稳定，越高越发散。</span>
+                  </label>
+
+                  <label>
+                    首页生成数量
+                    <input
+                      id="home-count"
+                      type="number"
+                      min="1"
+                      max="50"
+                      step="1"
+                      placeholder="10"
+                    />
+                  </label>
+
+                  <label>
+                    私信生成数量
+                    <input
+                      id="dm-count"
+                      type="number"
+                      min="1"
+                      max="20"
+                      step="1"
+                      placeholder="4"
+                    />
+                  </label>
+
+                  <label>
+                    展开讨论回复数量
+                    <input
+                      id="reply-count"
+                      type="number"
+                      min="1"
+                      max="20"
+                      step="1"
+                      placeholder="4"
+                    />
+                  </label>
+
+                  <label>
+                    聊天回复数量
+                    <input
+                      id="chat-reply-count"
+                      type="number"
+                      min="1"
+                      max="50"
+                      step="1"
+                      placeholder="20"
+                    />
+                  </label>
+                </div>
+
+                <label>
+                  世界观文本
+                  <textarea
+                    id="worldview-text"
+                    rows="7"
+                    placeholder="输入世界观设定，例如人物立场、叙事风格、价值观、禁忌和语气。"
+                  ></textarea>
+                </label>
+
+                <div class="settings-actions">
+                  <button id="save-settings-btn" class="solid-button" type="submit">
+                    保存配置
+                  </button>
+                  <button id="settings-generate-btn" class="ghost-button" type="button">
+                    保存并刷新首页
+                  </button>
+                </div>
+
+                <p id="settings-status" class="status-text" aria-live="polite"></p>
+                <p class="tag-stat-meta">
+                  API 配置缓存、一键切换与翻译专用配置已移到首页底部“设置”中；这里保留当前生效 API 参数编辑。
+                </p>
+              </form>
+            </section>
+
+            <section class="section-card">
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">API Presets</p>
+                  <h2>API 预设已移至首页设置</h2>
+                </div>
+              </div>
+              <p class="tag-stat-meta">
+                请回到手机首页，点击底部“设置”管理 API 配置缓存、翻译专用配置与一键切换。
+              </p>
+              <div class="settings-actions">
+                <a class="ghost-button" href="./index.html">返回首页</a>
+              </div>
+            </section>
+
+            <section class="section-card">
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">DM Prompt Preview</p>
+                  <h2>私信生成 Prompt 预览</h2>
+                </div>
+              </div>
+              <pre id="message-prompt-preview" class="prompt-preview"></pre>
+            </section>
+
+            <section class="section-card">
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">Reply Prompt Preview</p>
+                  <h2>回复生成 Prompt 预览</h2>
+                </div>
+              </div>
+              <pre id="reply-prompt-preview" class="prompt-preview"></pre>
+            </section>
+
+            <section class="section-card" id="custom-tabs-settings-section">
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">Custom tabs</p>
+                  <h2>自定义页签内容</h2>
+                </div>
+              </div>
+              <p class="tag-stat-meta">在这里调整自定义页签的文本，并查看对应 Prompt 预览。</p>
+              <div id="custom-tabs-settings-empty" class="empty-state">
+                还没有自定义页签，请先在首页创建。
+              </div>
+              <div id="custom-tabs-settings-list" class="custom-tabs-settings-list"></div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <section id="thread-modal" class="thread-modal hidden" aria-hidden="true">
+      <div class="thread-modal__backdrop" data-action="close-thread-modal"></div>
+      <div class="thread-modal__panel" role="dialog" aria-modal="true" aria-label="帖子讨论详情">
+        <div class="thread-modal__head">
+          <div>
+            <p class="section-card__eyebrow">Discussion</p>
+            <h2>帖子讨论详情</h2>
+          </div>
+          <button id="thread-modal-close-btn" class="ghost-chip" type="button">关闭</button>
+        </div>
+        <div id="thread-modal-body" class="thread-modal__body">
+          <div id="thread-modal-root" class="thread-modal__root"></div>
+          <div id="thread-modal-replies" class="thread-modal__replies"></div>
+        </div>
+        <p id="thread-modal-load-hint" class="thread-modal__load-hint">滚动到底后继续上滑可加载更多回复</p>
+      </div>
+    </section>
+
+    <section id="chat-context-modal" class="thread-modal hidden" aria-hidden="true">
+      <div class="thread-modal__backdrop" data-action="close-chat-context-modal"></div>
+      <div class="thread-modal__panel chat-context-modal__panel" role="dialog" aria-modal="true" aria-label="聊天参考页签">
+        <div class="thread-modal__head">
+          <div>
+            <p class="section-card__eyebrow">Chat Context</p>
+            <h2>参考页签</h2>
+          </div>
+          <button id="chat-context-modal-close-btn" class="ghost-chip" type="button">关闭</button>
+        </div>
+        <div class="thread-modal__body chat-context-modal__body">
+          <p class="tag-stat-meta">勾选后，这些自定义首页页签文本会作为聊天回复的低优先级背景资料。默认不勾选。</p>
+          <div id="chat-context-modal-empty" class="tag-stat-meta">暂无可勾选的自定义首页页签。</div>
+          <div id="chat-context-modal-list" class="chat-context-list"></div>
+        </div>
+        <div class="chat-context-modal__actions">
+          <button id="chat-context-modal-cancel-btn" class="ghost-button" type="button">取消</button>
+          <button id="chat-context-modal-confirm-btn" class="solid-button" type="button">确认</button>
+        </div>
+      </div>
+    </section>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
