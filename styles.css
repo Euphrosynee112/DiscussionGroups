@@ -1,5 +1,4 @@
 :root {
-<<<<<<< HEAD
   --bg: #f7f9fc;
   --panel: #ffffff;
   --panel-soft: #f3f6fa;
@@ -13,21 +12,6 @@
   --success: #14804a;
   --danger: #c62828;
   --shadow: 0 18px 44px rgba(15, 23, 42, 0.08);
-=======
-  --bg: #000000;
-  --panel: #0d1117;
-  --panel-soft: #161b22;
-  --panel-elevated: #11161d;
-  --line: rgba(255, 255, 255, 0.1);
-  --line-strong: rgba(255, 255, 255, 0.18);
-  --text: #e7e9ea;
-  --muted: #88919b;
-  --brand: #1d9bf0;
-  --brand-soft: rgba(29, 155, 240, 0.16);
-  --success: #4fd18b;
-  --danger: #ff6b6b;
-  --shadow: 0 18px 44px rgba(0, 0, 0, 0.28);
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   --radius-xl: 26px;
   --radius-lg: 20px;
   --radius-md: 16px;
@@ -42,23 +26,13 @@ html,
 body {
   margin: 0;
   min-height: 100%;
-<<<<<<< HEAD
-=======
-  overflow: hidden;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 }
 
 body {
   background:
-<<<<<<< HEAD
     radial-gradient(circle at top left, rgba(29, 155, 240, 0.14), transparent 26%),
     radial-gradient(circle at top right, rgba(125, 211, 252, 0.16), transparent 24%),
     linear-gradient(180deg, #ffffff 0%, #f6f9fd 100%);
-=======
-    radial-gradient(circle at top left, rgba(29, 155, 240, 0.18), transparent 26%),
-    radial-gradient(circle at top right, rgba(255, 255, 255, 0.06), transparent 22%),
-    linear-gradient(180deg, #020406 0%, #000000 100%);
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   color: var(--text);
   font-family: "Avenir Next", "SF Pro Display", "PingFang SC", "Noto Sans SC",
     sans-serif;
@@ -86,12 +60,8 @@ button {
 
 .sidebar,
 .main-column {
-<<<<<<< HEAD
   min-height: 0;
   height: 100vh;
-=======
-  min-height: 100vh;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 }
 
 .sidebar {
@@ -103,12 +73,7 @@ button {
   position: sticky;
   top: 0;
   align-self: start;
-<<<<<<< HEAD
   min-height: 100vh;
-=======
-  height: 100vh;
-  overflow: hidden;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 }
 
 .main-column {
@@ -125,11 +90,7 @@ button {
 .timeline-card,
 .profile-hero {
   border: 1px solid var(--line);
-<<<<<<< HEAD
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(244, 247, 251, 0.92));
-=======
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.02));
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   box-shadow: var(--shadow);
 }
 
@@ -182,10 +143,7 @@ button {
 .mini-tab,
 .pill-action,
 .solid-button {
-<<<<<<< HEAD
   touch-action: manipulation;
-=======
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   transition:
     transform 180ms ease,
     background-color 180ms ease,
@@ -208,22 +166,14 @@ button {
 
 .nav-item:hover,
 .nav-item.active {
-<<<<<<< HEAD
   background: rgba(29, 155, 240, 0.08);
-=======
-  background: rgba(255, 255, 255, 0.06);
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   transform: translateX(3px);
 }
 
 .nav-icon {
   width: 22px;
   text-align: center;
-<<<<<<< HEAD
   color: #5b6472;
-=======
-  color: #c7d0d9;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 }
 
 .solid-button {
@@ -255,18 +205,11 @@ button {
 .profile-bio {
   margin-bottom: 0;
   line-height: 1.65;
-<<<<<<< HEAD
   color: #475467;
 }
 
 .main-header {
   flex-shrink: 0;
-=======
-  color: #c2cad3;
-}
-
-.main-header {
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   position: sticky;
   top: 0;
   z-index: 20;
@@ -276,11 +219,7 @@ button {
   justify-content: space-between;
   gap: 16px;
   backdrop-filter: blur(20px);
-<<<<<<< HEAD
   background: rgba(255, 255, 255, 0.82);
-=======
-  background: rgba(0, 0, 0, 0.75);
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   border-bottom: 1px solid var(--line);
 }
 
@@ -290,15 +229,12 @@ button {
   line-height: 1;
 }
 
-<<<<<<< HEAD
 .header-actions {
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
-=======
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 .ghost-button,
 .ghost-chip {
   display: inline-flex;
@@ -329,7 +265,6 @@ button {
 
 .ghost-button:hover,
 .ghost-chip:hover {
-<<<<<<< HEAD
   background: rgba(29, 155, 240, 0.08);
 }
 
@@ -340,39 +275,23 @@ button {
 
 .ghost-chip--danger:hover {
   background: rgba(198, 40, 40, 0.08);
-=======
-  background: rgba(255, 255, 255, 0.06);
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 }
 
 .page-section {
   display: none;
-<<<<<<< HEAD
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
-=======
-  min-height: 0;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 }
 
 .page-section.active {
   display: flex;
-<<<<<<< HEAD
   flex-direction: column;
-=======
-  flex: 1;
-  min-height: 0;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   animation: page-fade 280ms ease;
 }
 
 .page-scroll {
-<<<<<<< HEAD
   flex: 1 1 auto;
-=======
-  flex: 1;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   min-height: 0;
   overflow-y: auto;
   padding: 18px 20px 28px;
@@ -381,7 +300,6 @@ button {
   overscroll-behavior: contain;
 }
 
-<<<<<<< HEAD
 #home-scroll.page-scroll {
   overflow-y: auto;
   display: flex;
@@ -394,34 +312,23 @@ button {
   overflow: hidden;
   min-height: 0;
   margin: 0 16px;
-=======
-.pull-indicator {
-  min-height: 74px;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   border: 1px dashed rgba(29, 155, 240, 0.4);
   border-radius: 22px;
   display: grid;
   place-items: center;
   text-align: center;
   background: rgba(29, 155, 240, 0.08);
-<<<<<<< HEAD
   color: #165a8d;
   transform-origin: top center;
   transition:
     max-height 200ms ease,
     margin 200ms ease,
-=======
-  color: #c8e8fb;
-  transform-origin: top center;
-  transition:
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
     transform 180ms ease,
     opacity 180ms ease,
     background-color 180ms ease,
     border-color 180ms ease;
 }
 
-<<<<<<< HEAD
 .pull-indicator.visible {
   max-height: 88px;
   min-height: 74px;
@@ -429,8 +336,6 @@ button {
   opacity: 1;
 }
 
-=======
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 .pull-indicator strong {
   font-size: 16px;
 }
@@ -441,7 +346,6 @@ button {
   color: var(--muted);
 }
 
-<<<<<<< HEAD
 .pull-spinner {
   width: 18px;
   height: 18px;
@@ -454,8 +358,6 @@ button {
   transition: opacity 160ms ease, transform 160ms ease;
 }
 
-=======
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 .pull-indicator.ready {
   background: rgba(29, 155, 240, 0.16);
   border-color: rgba(29, 155, 240, 0.75);
@@ -466,7 +368,6 @@ button {
   border-color: rgba(79, 209, 139, 0.65);
 }
 
-<<<<<<< HEAD
 .pull-indicator.loading .pull-spinner {
   opacity: 1;
   transform: scale(1);
@@ -487,9 +388,6 @@ button {
   min-height: 0;
   display: flex;
   flex-direction: column;
-=======
-.timeline-card {
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   overflow: hidden;
 }
 
@@ -502,15 +400,11 @@ button {
 }
 
 .timeline-card__header {
-<<<<<<< HEAD
   flex-shrink: 0;
-=======
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   padding: 16px 18px;
   border-bottom: 1px solid var(--line);
 }
 
-<<<<<<< HEAD
 .mini-tabs-bar {
   display: flex;
   align-items: center;
@@ -518,17 +412,11 @@ button {
   flex-wrap: wrap;
 }
 
-=======
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 .mini-tabs {
   display: inline-flex;
   padding: 4px;
   border-radius: 999px;
-<<<<<<< HEAD
   background: rgba(15, 23, 42, 0.04);
-=======
-  background: rgba(255, 255, 255, 0.04);
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 }
 
 .mini-tab {
@@ -540,11 +428,7 @@ button {
 }
 
 .mini-tab.active {
-<<<<<<< HEAD
   background: rgba(255, 255, 255, 0.98);
-=======
-  background: rgba(255, 255, 255, 0.08);
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   color: var(--text);
 }
 
@@ -559,7 +443,6 @@ button {
   display: grid;
 }
 
-<<<<<<< HEAD
 #custom-tabs-manager .settings-form {
   margin-top: 16px;
 }
@@ -654,14 +537,6 @@ button {
   animation: rise-in 300ms ease;
 }
 
-=======
-.post {
-  padding: 18px;
-  border-bottom: 1px solid var(--line);
-  animation: rise-in 300ms ease;
-}
-
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 .post:last-child {
   border-bottom: 0;
 }
@@ -692,7 +567,6 @@ button {
   color: white;
 }
 
-<<<<<<< HEAD
 .avatar img,
 .profile-avatar img,
 .reply-avatar img {
@@ -703,8 +577,6 @@ button {
   display: block;
 }
 
-=======
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 .post-head {
   display: flex;
   align-items: center;
@@ -714,25 +586,11 @@ button {
 
 .post-handle,
 .post-time,
-<<<<<<< HEAD
-=======
-.post-topic,
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 .profile-handle {
   color: var(--muted);
   font-size: 14px;
 }
 
-<<<<<<< HEAD
-=======
-.post-topic {
-  padding: 3px 8px;
-  border-radius: 999px;
-  background: rgba(29, 155, 240, 0.11);
-  color: #9dd8ff;
-}
-
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 .post-text {
   margin: 10px 0 0;
   line-height: 1.68;
@@ -740,7 +598,6 @@ button {
   word-break: break-word;
 }
 
-<<<<<<< HEAD
 .post-media,
 .chat-media {
   margin-top: 12px;
@@ -817,8 +674,6 @@ button {
   margin-left: 10px;
 }
 
-=======
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 .post-actions {
   margin-top: 12px;
   display: flex;
@@ -832,16 +687,11 @@ button {
   padding: 0;
   border: 0;
   background: transparent;
-<<<<<<< HEAD
   color: #16639c;
-=======
-  color: #9dd8ff;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   cursor: pointer;
 }
 
 .action-link:hover {
-<<<<<<< HEAD
   color: #0f4d7a;
 }
 
@@ -1019,20 +869,6 @@ button {
   text-align: center;
 }
 
-=======
-  color: #d5eeff;
-}
-
-.thread-panel {
-  margin-top: 16px;
-  margin-left: 62px;
-  border-left: 1px solid var(--line);
-  padding-left: 16px;
-  display: grid;
-  gap: 12px;
-}
-
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 .thread-loading,
 .thread-empty {
   color: var(--muted);
@@ -1041,7 +877,6 @@ button {
 }
 
 .reply-card {
-<<<<<<< HEAD
   padding: 18px 0;
   border: 0;
   border-radius: 0;
@@ -1050,12 +885,6 @@ button {
 
 .reply-card + .reply-card {
   border-top: 1px solid rgba(15, 23, 42, 0.06);
-=======
-  padding: 14px 14px 14px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.025);
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 }
 
 .reply-shell {
@@ -1071,23 +900,14 @@ button {
   display: grid;
   place-items: center;
   font-weight: 800;
-<<<<<<< HEAD
   background: rgba(29, 155, 240, 0.14);
   color: #155a8f;
-=======
-  background: rgba(29, 155, 240, 0.16);
-  color: #d8efff;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 }
 
 .reply-text {
   margin: 8px 0 0;
   line-height: 1.65;
-<<<<<<< HEAD
   color: #1f2937;
-=======
-  color: #dce4ed;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   white-space: pre-wrap;
 }
 
@@ -1100,7 +920,6 @@ button {
   font-size: 13px;
 }
 
-<<<<<<< HEAD
 .reply-composer {
   margin-top: 12px;
   padding: 12px;
@@ -1164,15 +983,6 @@ button {
 
 .reply-children > .reply-card:first-child {
   padding-top: 12px;
-=======
-.reply-children {
-  margin-top: 12px;
-  margin-left: 18px;
-  padding-left: 14px;
-  border-left: 1px solid rgba(255, 255, 255, 0.08);
-  display: grid;
-  gap: 10px;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 }
 
 .section-card {
@@ -1182,13 +992,8 @@ button {
 .badge {
   padding: 7px 10px;
   border-radius: 999px;
-<<<<<<< HEAD
   border: 1px solid rgba(15, 23, 42, 0.12);
   color: #475467;
-=======
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  color: #cbd3dc;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   font-size: 12px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1212,7 +1017,6 @@ button {
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
-<<<<<<< HEAD
   background: rgba(248, 250, 252, 0.92);
 }
 
@@ -1267,9 +1071,6 @@ button {
   margin: 10px 0 0;
   color: var(--muted);
   line-height: 1.6;
-=======
-  background: rgba(255, 255, 255, 0.025);
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 }
 
 .follow-card__head,
@@ -1288,7 +1089,6 @@ button {
 .follow-card p,
 .conversation-card p {
   margin: 10px 0 0;
-<<<<<<< HEAD
   color: #475467;
   line-height: 1.6;
 }
@@ -1369,24 +1169,6 @@ button {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.55;
-}
-
-.chat-context-modal__panel {
-  width: min(680px, calc(100vw - 24px));
-  max-height: min(78vh, 760px);
-}
-
-.chat-context-modal__body {
-  padding: 18px 20px;
-  gap: 14px;
-  align-content: start;
-}
-
-.chat-context-modal__actions {
-  display: flex;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 10px;
 }
 
 .chat-bubble {
@@ -1478,20 +1260,11 @@ button {
 
 .profile-hero {
   overflow: visible;
-=======
-  color: #c2cad3;
-  line-height: 1.6;
-}
-
-.profile-hero {
-  overflow: hidden;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 }
 
 .profile-banner {
   height: 170px;
   background:
-<<<<<<< HEAD
     radial-gradient(circle at left top, rgba(29, 155, 240, 0.32), transparent 30%),
     linear-gradient(135deg, #f3f8ff, #d8ebfb 55%, #eef6ff);
   background-position: center;
@@ -1504,20 +1277,11 @@ button {
   gap: 14px;
   padding: 0 24px 24px;
   margin-top: -46px;
-=======
-    radial-gradient(circle at left top, rgba(29, 155, 240, 0.45), transparent 30%),
-    linear-gradient(135deg, #0a1016, #183247 55%, #08111c);
-}
-
-.profile-body {
-  padding: 0 24px 24px;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 }
 
 .profile-avatar {
   width: 92px;
   height: 92px;
-<<<<<<< HEAD
   border: 4px solid #ffffff;
   background: linear-gradient(135deg, #ffffff, #77d1ff);
   color: #000;
@@ -1530,20 +1294,6 @@ button {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-=======
-  margin-top: -46px;
-  border: 4px solid #000;
-  background: linear-gradient(135deg, #ffffff, #77d1ff);
-  color: #000;
-  font-size: 26px;
-}
-
-.profile-summary {
-  margin-top: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   gap: 16px;
 }
 
@@ -1551,7 +1301,6 @@ button {
   min-width: 0;
 }
 
-<<<<<<< HEAD
 .profile-summary__identity h2 {
   margin: 0;
 }
@@ -1595,10 +1344,6 @@ button {
   margin: 0;
   color: #475467;
   line-height: 1.65;
-=======
-.profile-bio {
-  margin-top: 14px;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 }
 
 .profile-stats {
@@ -1614,11 +1359,7 @@ button {
   padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
-<<<<<<< HEAD
   background: rgba(248, 250, 252, 0.96);
-=======
-  background: rgba(255, 255, 255, 0.03);
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   display: grid;
   gap: 4px;
 }
@@ -1659,7 +1400,6 @@ button {
 label {
   display: grid;
   gap: 8px;
-<<<<<<< HEAD
   color: #344054;
   font-size: 14px;
 }
@@ -1670,12 +1410,6 @@ label {
   line-height: 1.5;
 }
 
-=======
-  color: #cbd3dc;
-  font-size: 14px;
-}
-
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 input,
 select,
 textarea {
@@ -1684,11 +1418,7 @@ textarea {
   border-radius: 16px;
   padding: 14px 15px;
   color: var(--text);
-<<<<<<< HEAD
   background: rgba(255, 255, 255, 0.98);
-=======
-  background: rgba(255, 255, 255, 0.03);
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   outline: none;
 }
 
@@ -1710,7 +1440,6 @@ textarea {
   gap: 12px;
 }
 
-<<<<<<< HEAD
 .api-config-toolbar {
   display: grid;
   gap: 12px;
@@ -1777,8 +1506,6 @@ textarea {
   word-break: break-word;
 }
 
-=======
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
 .prompt-preview {
   margin: 20px 0 0;
   padding: 18px;
@@ -1786,13 +1513,8 @@ textarea {
   word-break: break-word;
   border-radius: var(--radius-md);
   border: 1px solid var(--line);
-<<<<<<< HEAD
   background: rgba(248, 250, 252, 0.96);
   color: #334155;
-=======
-  background: rgba(255, 255, 255, 0.03);
-  color: #c9d3dd;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   line-height: 1.65;
 }
 
@@ -1842,7 +1564,6 @@ textarea {
 }
 
 @media (max-width: 860px) {
-<<<<<<< HEAD
   body {
     overflow: auto;
   }
@@ -1851,27 +1572,17 @@ textarea {
     grid-template-columns: 1fr;
     height: auto;
     min-height: 100vh;
-=======
-  .app-shell {
-    grid-template-columns: 1fr;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   }
 
   .sidebar {
     position: static;
-<<<<<<< HEAD
     height: auto;
     min-height: auto;
     padding: 12px 12px 0;
-=======
-    min-height: auto;
-    padding: 18px 18px 0;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }
 
-<<<<<<< HEAD
   .brand-lockup {
     padding: 12px 14px;
     gap: 10px;
@@ -1894,26 +1605,15 @@ textarea {
     grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 6px;
     margin-top: 14px;
-=======
-  .primary-nav {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   }
 
   .nav-item {
     justify-content: center;
     flex-direction: column;
-<<<<<<< HEAD
     gap: 6px;
     padding: 10px 6px;
     border-radius: 16px;
     font-size: 12px;
-=======
-    gap: 8px;
-    padding: 12px 8px;
-    border-radius: 18px;
-    font-size: 13px;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   }
 
   .pill-action {
@@ -1922,7 +1622,6 @@ textarea {
 
   .main-column {
     border-right: 0;
-<<<<<<< HEAD
     height: auto;
     min-height: 0;
   }
@@ -1952,21 +1651,6 @@ textarea {
     min-height: calc(100vh - 182px);
     padding: 10px 12px 16px;
     gap: 10px;
-=======
-  }
-
-  .main-header {
-    padding: 18px;
-  }
-
-  .main-header h1 {
-    font-size: 28px;
-  }
-
-  .page-scroll {
-    min-height: calc(100vh - 225px);
-    padding: 16px;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   }
 
   .section-card__head,
@@ -1976,7 +1660,6 @@ textarea {
     align-items: flex-start;
   }
 
-<<<<<<< HEAD
   .section-card,
   .timeline-card,
   .profile-hero {
@@ -2107,16 +1790,6 @@ textarea {
     padding: 10px 12px;
   }
 
-  .chat-context-modal__panel {
-    width: calc(100vw - 12px);
-    max-height: 88vh;
-  }
-
-  .chat-context-modal__body {
-    padding: 14px;
-    gap: 12px;
-  }
-
   .chat-bubble {
     max-width: 92%;
     padding: 12px 14px;
@@ -2141,10 +1814,6 @@ textarea {
 
   .thread-modal__head h2 {
     font-size: 18px;
-=======
-  .form-grid {
-    grid-template-columns: 1fr;
->>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
   }
 
   .thread-modal__root {
