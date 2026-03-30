@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pulse Generator · Bubble</title>
+    <link rel="stylesheet" href="./bubble.css?v=20260330g" />
+  </head>
+  <body>
+    <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
+
+    <main class="bubble-app">
+      <section class="bubble-shell" aria-label="Bubble 最近聊天室">
+        <header class="bubble-header">
+          <h1>BUBBLE</h1>
+          <div class="bubble-header__actions">
+            <button
+              id="bubble-search-btn"
+              class="bubble-icon-button"
+              type="button"
+              aria-label="搜索最近聊天室"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2" />
+                <path d="M16 16l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+              </svg>
+            </button>
+            <button
+              id="bubble-clear-btn"
+              class="bubble-icon-button"
+              type="button"
+              aria-label="重置最近聊天室"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M8 7h8m-7 0 .5 11h5L15 7m-5 0 1-2h2l1 2M6 7h12"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <button
+              id="bubble-embedded-close-btn"
+              class="bubble-icon-button bubble-embedded-close"
+              type="button"
+              aria-label="关闭 Bubble"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M7 7l10 10M17 7 7 17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <section
+          id="bubble-search-wrap"
+          class="bubble-search-wrap"
+          hidden
+          aria-label="Bubble 搜索"
+        >
+          <label class="bubble-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2" />
+              <path d="M16 16l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+            </svg>
+            <input
+              id="bubble-search-input"
+              type="search"
+              placeholder="搜索名字或最近动态"
+              autocomplete="off"
+            />
+          </label>
+        </section>
+
+        <section class="bubble-section">
+          <p class="bubble-section__title">最近的聊天室</p>
+          <p id="bubble-status" class="bubble-status" aria-live="polite"></p>
+          <div id="bubble-list" class="bubble-list" aria-live="polite"></div>
+        </section>
+
+        <section
+          id="bubble-chat-modal"
+          class="bubble-chat-modal"
+          aria-hidden="true"
+          hidden
+        >
+          <div
+            class="bubble-chat-modal__panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Bubble 聊天页面"
+          >
+            <header class="bubble-chat-header">
+              <button
+                id="bubble-chat-back-btn"
+                class="bubble-chat-header__button"
+                type="button"
+                aria-label="返回 Bubble 首页"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M15 6l-6 6 6 6"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
+              <div class="bubble-chat-header__title">
+                <strong id="bubble-chat-room-name">聊天室</strong>
+              </div>
+              <button
+                id="bubble-chat-more-btn"
+                class="bubble-chat-header__button"
+                type="button"
+                aria-label="更多操作"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="5" r="1.8" fill="currentColor" />
+                  <circle cx="12" cy="12" r="1.8" fill="currentColor" />
+                  <circle cx="12" cy="19" r="1.8" fill="currentColor" />
+                </svg>
+              </button>
+            </header>
+
+            <section id="bubble-chat-history" class="bubble-chat-history" aria-live="polite"></section>
+
+            <div id="bubble-fan-action-wrap" class="bubble-fan-action-wrap" hidden>
+              <button id="bubble-accept-fan-btn" class="bubble-fan-action" type="button">
+                ↓ 接收粉丝回复
+              </button>
+            </div>
+
+            <form id="bubble-chat-form" class="bubble-chat-composer">
+              <button
+                id="bubble-chat-plus-btn"
+                class="bubble-chat-composer__icon"
+                type="button"
+                aria-label="更多本地操作"
+              >
+                +
+              </button>
+              <input
+                id="bubble-chat-input"
+                class="bubble-chat-input"
+                name="message"
+                type="text"
+                maxlength="240"
+                placeholder="输入消息，随后可接收粉丝回复"
+                autocomplete="off"
+              />
+              <button
+                id="bubble-chat-send-btn"
+                class="bubble-chat-send"
+                type="submit"
+                aria-label="发送消息"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M6 12h12m-6-6 6 6-6 6"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
+            </form>
+          </div>
+        </section>
+
+        <section
+          id="bubble-fan-detail-modal"
+          class="bubble-fan-detail-modal"
+          aria-hidden="true"
+          hidden
+        >
+          <div
+            class="bubble-fan-detail-modal__panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label="粉丝回复详情"
+          >
+            <header class="bubble-fan-detail-header">
+              <button
+                id="bubble-fan-detail-close-btn"
+                class="bubble-fan-detail-header__button"
+                type="button"
+                aria-label="关闭粉丝回复详情"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M6.5 6.5l11 11m0-11-11 11"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                  />
+                </svg>
+              </button>
+              <div class="bubble-fan-detail-header__title">
+                <strong>粉丝回复</strong>
+              </div>
+              <button
+                id="bubble-fan-detail-more-btn"
+                class="bubble-fan-detail-header__button"
+                type="button"
+                aria-label="更多详情操作"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="5" r="1.8" fill="currentColor" />
+                  <circle cx="12" cy="12" r="1.8" fill="currentColor" />
+                  <circle cx="12" cy="19" r="1.8" fill="currentColor" />
+                </svg>
+              </button>
+            </header>
+
+            <p id="bubble-fan-detail-status" class="bubble-fan-detail-status" aria-live="polite"></p>
+            <section
+              id="bubble-fan-detail-list"
+              class="bubble-fan-detail-list"
+              aria-live="polite"
+            ></section>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="./bubble.js?v=20260330g"></script>
+  </body>
+</html>

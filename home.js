@@ -2,7 +2,7 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260330d";
+const APP_BUILD_VERSION = "20260330g";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -869,6 +869,13 @@ function getHomeAppMeta(tabName = "home") {
       title: "Chat"
     };
   }
+  if (tabName === "bubble") {
+    return {
+      tab: "bubble",
+      kicker: "Bubble",
+      title: "Bubble"
+    };
+  }
   return {
     tab: "home",
     kicker: "Discussion",
@@ -922,6 +929,15 @@ function openHomeApp(tabName) {
       true,
       `./messages.html?embed=1&v=${APP_BUILD_VERSION}`,
       getHomeAppMeta("messages")
+    );
+    return;
+  }
+
+  if (tabName === "bubble") {
+    setHomeBrowserModalOpen(
+      true,
+      `./bubble.html?embed=1&v=${APP_BUILD_VERSION}`,
+      getHomeAppMeta("bubble")
     );
     return;
   }

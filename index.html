@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pulse Generator v2.0</title>
-    <link rel="stylesheet" href="./home.css?v=20260330d" />
+    <link rel="stylesheet" href="./home.css?v=20260330g" />
   </head>
   <body>
     <main class="home-scene">
@@ -30,47 +30,52 @@
           <h1 id="phone-clock" class="phone-clock">10:00</h1>
         </section>
 
-        <section class="desk-grid" aria-label="桌面卡片和图标">
-          <div class="desk-card desk-card--photo">
-            <div class="desk-card__symbol">✦</div>
-            <div>
-              <p class="desk-card__title">今日灵感</p>
-              <p class="desk-card__text">把 v2.0 首页改成更像手机桌面的轻拟物风格。</p>
-            </div>
-          </div>
-
+        <section class="desk-grid" aria-label="桌面图标">
           <button
             class="app-shortcut desk-item-chat"
             type="button"
             data-open-app="messages"
             aria-label="打开 Chat 私信页"
           >
-            <span class="app-shortcut__icon">
+            <span class="app-shortcut__icon app-shortcut__icon--chat">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path
                   d="M12 4C7.03 4 3 7.36 3 11.5c0 2.05.99 3.91 2.6 5.26-.08.81-.36 1.83-1.15 2.75 1.56-.18 2.97-.73 4.13-1.57A10.7 10.7 0 0 0 12 19c4.97 0 9-3.36 9-7.5S16.97 4 12 4Z"
                   fill="currentColor"
                 />
-                <circle cx="9" cy="11.5" r="1" fill="#f5f8fc" />
-                <circle cx="12" cy="11.5" r="1" fill="#f5f8fc" />
-                <circle cx="15" cy="11.5" r="1" fill="#f5f8fc" />
+                <circle cx="9" cy="11.5" r="1" fill="rgba(255,255,255,0.92)" />
+                <circle cx="12" cy="11.5" r="1" fill="rgba(255,255,255,0.92)" />
+                <circle cx="15" cy="11.5" r="1" fill="rgba(255,255,255,0.92)" />
               </svg>
             </span>
             <span class="app-shortcut__label">Chat</span>
           </button>
 
-          <div class="app-shortcut app-shortcut--muted desk-item-now" aria-hidden="true">
-            <span class="app-shortcut__icon">
+          <button
+            class="app-shortcut desk-item-now"
+            type="button"
+            data-open-app="bubble"
+            aria-label="打开 Bubble 聊天室"
+          >
+            <span class="app-shortcut__icon app-shortcut__icon--bubble">
               <svg viewBox="0 0 24 24" aria-hidden="true">
-                <circle cx="12" cy="12" r="8" fill="currentColor" />
-                <path d="M12 8v4l3 2" stroke="#f5f8fc" stroke-width="2" stroke-linecap="round" />
+                <path
+                  d="M12.2 4.2c4.53 0 8.2 2.82 8.2 6.3 0 1.66-.84 3.17-2.22 4.3.16 1.03.62 2.18 1.56 3.16-1.67-.06-3.14-.55-4.35-1.35-.95.26-1.96.4-3.02.4-4.53 0-8.2-2.82-8.2-6.3 0-3.48 3.67-6.51 8.03-6.51Z"
+                  fill="currentColor"
+                />
+                <path
+                  d="M16.7 10.8c0 2.45-2.38 4.43-5.3 4.43-.53 0-1.05-.07-1.54-.2-.74.48-1.64.78-2.7.82.55-.57.81-1.23.9-1.86-.84-.71-1.36-1.66-1.36-2.73 0-2.45 2.38-4.43 5.3-4.43 2.93 0 4.7 1.52 4.7 3.97Z"
+                  fill="rgba(255,255,255,0.22)"
+                />
               </svg>
             </span>
-            <span class="app-shortcut__label">Now</span>
-          </div>
+            <span class="app-shortcut__label">Bubble</span>
+          </button>
 
           <div class="app-shortcut app-shortcut--muted desk-item-memory" aria-hidden="true">
-            <span class="app-shortcut__icon app-shortcut__icon--heart">♥</span>
+            <span class="app-shortcut__icon app-shortcut__icon--memory app-shortcut__icon--heart">
+              ♥
+            </span>
             <span class="app-shortcut__label">纪念日</span>
           </div>
 
@@ -83,31 +88,23 @@
             <span class="app-shortcut__icon app-shortcut__icon--x">X</span>
             <span class="app-shortcut__label">X</span>
           </button>
-
-          <div class="desk-card desk-card--note">
-            <div class="desk-card__symbol desk-card__symbol--heart">♡</div>
-            <div>
-              <p class="desk-card__title">今日提醒</p>
-              <p class="desk-card__text">点击 X 进入讨论页，点击 Chat 查看私信页。</p>
-            </div>
-          </div>
         </section>
 
         <footer class="dock" aria-label="底部快捷入口">
-          <button class="dock-app" type="button" aria-label="短信">
+          <button class="dock-app dock-app--mail" type="button" aria-label="短信">
             <span class="dock-app__icon">✉</span>
             <span class="dock-app__label">短信</span>
           </button>
           <button
             id="home-settings-trigger"
-            class="dock-app"
+            class="dock-app dock-app--settings"
             type="button"
             aria-label="设置"
           >
             <span class="dock-app__icon">⚙</span>
             <span class="dock-app__label">设置</span>
           </button>
-          <button class="dock-app" type="button" aria-label="记忆">
+          <button class="dock-app dock-app--memory" type="button" aria-label="记忆">
             <span class="dock-app__icon">◐</span>
             <span class="dock-app__label">记忆</span>
           </button>
@@ -264,6 +261,6 @@
       </div>
     </section>
 
-    <script src="./home.js?v=20260330d"></script>
+    <script src="./home.js?v=20260330g"></script>
   </body>
 </html>
