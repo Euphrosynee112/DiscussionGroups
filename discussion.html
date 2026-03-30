@@ -3,10 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>X 风格社交界面 Demo</title>
+    <title>Pulse Generator · 讨论页</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand-lockup">
@@ -544,6 +545,16 @@
                   </span>
                 </label>
               </div>
+            </section>
+
+            <section class="section-card">
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">Home Prompt Preview</p>
+                  <h2>首页生成 Prompt 预览</h2>
+                </div>
+              </div>
+              <pre id="prompt-preview" class="prompt-preview"></pre>
             </section>
 
             <section class="section-card">

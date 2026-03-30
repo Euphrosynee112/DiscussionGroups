@@ -288,6 +288,42 @@ if (
 }
 synchronizeCustomTabBuckets();
 
+function normalizeTabName(tabName) {
+  const normalized = String(tabName || "").trim();
+  if (normalized === "chat") {
+    return "following";
+  }
+  if (normalized === "x") {
+    return "home";
+  }
+  if (Object.prototype.hasOwnProperty.call(pages, normalized)) {
+    return normalized;
+  }
+  return "home";
+}
+
+function getInitialTabFromLocation() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return normalizeTabName(params.get("tab"));
+  } catch (_error) {
+    return "home";
+  }
+}
+
+function syncTabToLocation(tabName) {
+  if (!window.history || typeof window.history.replaceState !== "function") {
+    return;
+  }
+
+  try {
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.set("tab", normalizeTabName(tabName));
+    window.history.replaceState({}, "", nextUrl.toString());
+  } catch (_error) {
+  }
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -2432,25 +2468,27 @@ function switchHomeFeed(nextFeed) {
 }
 
 function switchTab(tabName) {
-  if (state.threadModalOpen && tabName !== state.activeTab) {
+  const nextTab = normalizeTabName(tabName);
+
+  if (state.threadModalOpen && nextTab !== state.activeTab) {
     setThreadModalOpen(false);
   }
-  state.activeTab = tabName;
+  state.activeTab = nextTab;
   Object.entries(pages).forEach(([name, page]) => {
     if (page) {
-      page.classList.toggle("active", name === tabName);
+      page.classList.toggle("active", name === nextTab);
     }
   });
 
   navItems.forEach((item) => {
-    item.classList.toggle("active", item.dataset.tab === tabName);
+    item.classList.toggle("active", item.dataset.tab === nextTab);
   });
 
   if (pageTitleEl) {
-    pageTitleEl.textContent = pageTitleMap[tabName] || "首页";
+    pageTitleEl.textContent = pageTitleMap[nextTab] || "首页";
   }
-  const isHomeTab = tabName === "home";
-  const isProfileTab = tabName === "profile";
+  const isHomeTab = nextTab === "home";
+  const isProfileTab = nextTab === "profile";
   if (topRefreshBtn) {
     topRefreshBtn.hidden = !isHomeTab;
     topRefreshBtn.style.display = isHomeTab ? "inline-flex" : "none";
@@ -2465,9 +2503,11 @@ function switchTab(tabName) {
     profileEditToggleBtn.style.display = isProfileTab ? "inline-flex" : "none";
   }
 
-  if (tabName === "profile" && profileScrollEl) {
+  if (nextTab === "profile" && profileScrollEl) {
     profileScrollEl.scrollTop = 0;
   }
+
+  syncTabToLocation(nextTab);
 }
 
 function updatePromptPreview() {
@@ -7144,7 +7184,7 @@ function init() {
     setSettingsStatus("设置页会自动保存内容生成配置；API 参数请在下方独立管理。")
   );
   safeRun("set api status", () => setApiConfigStatus("可保存多套 API 配置，并在下方一键切换。"));
-  safeRun("switch home tab", () => switchTab("home"));
+  safeRun("switch initial tab", () => switchTab(getInitialTabFromLocation()));
   safeRun("attach events", () => attachEvents());
   window.__appBootstrap.ready = true;
 }
