@@ -23,8 +23,13 @@
             <span>首页</span>
           </button>
           <button class="nav-item" data-tab="following" type="button">
+<<<<<<< HEAD
             <span class="nav-icon">☰</span>
             <span>聊天</span>
+=======
+            <span class="nav-icon">◎</span>
+            <span>关注</span>
+>>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
           </button>
           <button class="nav-item" data-tab="messages" type="button">
             <span class="nav-icon">✉</span>
@@ -48,6 +53,7 @@
             <p class="header-kicker">X 风格原型</p>
             <h1 id="page-title">首页</h1>
           </div>
+<<<<<<< HEAD
           <div class="header-actions">
             <button id="top-refresh-btn" class="ghost-button" type="button">
               刷新时间线
@@ -59,10 +65,16 @@
               发布新帖子
             </button>
           </div>
+=======
+          <button id="top-refresh-btn" class="ghost-button" type="button">
+            刷新时间线
+          </button>
+>>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
         </header>
 
         <section id="home-page" class="page-section active" aria-label="首页">
           <div id="home-scroll" class="page-scroll">
+<<<<<<< HEAD
             <section id="home-composer-card" class="section-card hidden">
               <div class="section-card__head">
                 <div>
@@ -112,10 +124,23 @@
                   <button id="custom-tabs-manage-btn" class="ghost-chip" type="button">
                     管理自定义页签
                   </button>
+=======
+            <div id="pull-indicator" class="pull-indicator" aria-live="polite">
+              <strong id="pull-label">向下滑动以刷新</strong>
+              <span id="pull-meta">默认生成 10 条讨论信息</span>
+            </div>
+
+            <section class="timeline-card">
+              <div class="timeline-card__header">
+                <div class="mini-tabs" aria-label="首页分类">
+                  <button class="mini-tab active" data-feed="hot" type="button">热点消息</button>
+                  <button class="mini-tab" data-feed="entertainment" type="button">文娱</button>
+>>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
                 </div>
                 <p id="home-status" class="inline-status">等待下一次刷新</p>
               </div>
 
+<<<<<<< HEAD
               <section id="pull-indicator" class="pull-indicator" aria-live="polite">
                 <span class="pull-spinner" aria-hidden="true"></span>
                 <strong id="pull-label">向下滑动以刷新</strong>
@@ -175,10 +200,19 @@
         </section>
 
         <section id="following-page" class="page-section" aria-label="聊天">
+=======
+              <div id="feed" class="feed" aria-live="polite"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="following-page" class="page-section" aria-label="关注">
+>>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
           <div class="page-scroll">
             <section class="section-card">
               <div class="section-card__head">
                 <div>
+<<<<<<< HEAD
                   <p class="section-card__eyebrow">Chat Room</p>
                   <h2>聊天</h2>
                 </div>
@@ -304,6 +338,89 @@
                     />
                   </label>
 
+=======
+                  <p class="section-card__eyebrow">Following</p>
+                  <h2>关注账号流</h2>
+                </div>
+                <span class="badge">精选关注</span>
+              </div>
+              <div id="following-list" class="stack-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="messages-page" class="page-section" aria-label="私信">
+          <div class="page-scroll">
+            <section class="section-card">
+                <div class="section-card__head">
+                  <div>
+                    <p class="section-card__eyebrow">Messages</p>
+                    <h2>私信会话</h2>
+                  </div>
+                <button id="messages-generate-btn" class="ghost-chip" type="button">新建消息</button>
+              </div>
+              <p id="messages-status" class="status-text">点击“新建消息”生成与当前设定相关的私信内容。</p>
+              <div id="messages-list" class="conversation-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="profile-page" class="page-section" aria-label="个人主页">
+          <div class="page-scroll">
+            <section class="profile-hero">
+              <div class="profile-banner"></div>
+              <div class="profile-body">
+                <div id="profile-avatar" class="profile-avatar">WG</div>
+                <div class="profile-summary">
+                  <div class="profile-summary__identity">
+                    <h2 id="profile-username">Worldview Generator</h2>
+                    <p id="profile-handle" class="profile-handle">@worldview_lab</p>
+                  </div>
+                  <button id="profile-edit-toggle-btn" class="ghost-button ghost-button--small" type="button">
+                    编辑资料
+                  </button>
+                </div>
+                <p id="profile-bio" class="profile-bio"></p>
+                <div class="profile-stats">
+                  <span class="profile-stat"><strong id="profile-following">128</strong><em>正在关注</em></span>
+                  <span class="profile-stat"><strong id="profile-followers">8.6K</strong><em>关注者</em></span>
+                  <span class="profile-stat"><strong id="profile-post-count">0</strong><em>帖子</em></span>
+                </div>
+              </div>
+            </section>
+
+            <section id="profile-editor-card" class="section-card hidden">
+              <div class="section-card__head">
+                <div>
+                  <p class="section-card__eyebrow">Profile editor</p>
+                  <h2>个人资料编辑</h2>
+                </div>
+                <button id="profile-editor-close-btn" class="ghost-chip" type="button">
+                  收起
+                </button>
+              </div>
+              <form id="profile-form" class="profile-editor">
+                <div class="form-grid">
+                  <label>
+                    头像文字 / Emoji
+                    <input
+                      id="profile-avatar-input"
+                      type="text"
+                      maxlength="4"
+                      placeholder="例如 WG 或 😎"
+                    />
+                  </label>
+
+                  <label>
+                    用户名
+                    <input
+                      id="profile-username-input"
+                      type="text"
+                      placeholder="输入展示用户名"
+                    />
+                  </label>
+
+>>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
                   <label>
                     关注人数
                     <input
@@ -321,6 +438,7 @@
                       placeholder="例如 8.6K"
                     />
                   </label>
+<<<<<<< HEAD
 
                   <label>
                     主页背景图片
@@ -330,6 +448,8 @@
                       accept="image/*"
                     />
                   </label>
+=======
+>>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
                 </div>
 
                 <label>
@@ -381,7 +501,11 @@
               <div class="section-card__head">
                 <div>
                   <p class="section-card__eyebrow">Settings</p>
+<<<<<<< HEAD
                   <h2>内容生成配置</h2>
+=======
+                  <h2>API 与内容生成配置</h2>
+>>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
                 </div>
                 <span class="badge badge-live">本地持久化</span>
               </div>
@@ -389,6 +513,7 @@
               <form id="settings-form" class="settings-form">
                 <div class="form-grid">
                   <label>
+<<<<<<< HEAD
                     Temperature
                     <input
                       id="api-temperature"
@@ -410,10 +535,26 @@
                       max="50"
                       step="1"
                       placeholder="10"
+=======
+                    接口类型
+                    <select id="api-mode">
+                      <option value="openai">DeepSeek / OpenAI 兼容接口</option>
+                      <option value="generic">通用 JSON 接口</option>
+                    </select>
+                  </label>
+
+                  <label>
+                    API 地址
+                    <input
+                      id="api-endpoint"
+                      type="url"
+                      placeholder="https://api.deepseek.com/chat/completions"
+>>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
                     />
                   </label>
 
                   <label>
+<<<<<<< HEAD
                     私信生成数量
                     <input
                       id="dm-count"
@@ -447,6 +588,19 @@
                       step="1"
                       placeholder="20"
                     />
+=======
+                    API Key / Bearer Token
+                    <input
+                      id="api-token"
+                      type="password"
+                      placeholder="输入用于请求的密钥"
+                    />
+                  </label>
+
+                  <label id="model-wrap">
+                    模型名称
+                    <input id="api-model" type="text" placeholder="deepseek-chat" />
+>>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
                   </label>
                 </div>
 
@@ -459,6 +613,36 @@
                   ></textarea>
                 </label>
 
+<<<<<<< HEAD
+=======
+                <label>
+                  热点文本
+                  <textarea
+                    id="hot-topics-text"
+                    rows="6"
+                    placeholder="输入热点议题，建议一行一个，或用逗号分隔。"
+                  ></textarea>
+                </label>
+
+                <label>
+                  文娱文本
+                  <textarea
+                    id="entertainment-text"
+                    rows="6"
+                    placeholder="输入文娱相关主题，例如电影、综艺、明星、演出、游戏或二创热点。"
+                  ></textarea>
+                </label>
+
+                <label>
+                  自定义补充要求
+                  <textarea
+                    id="extra-instructions"
+                    rows="4"
+                    placeholder="例如：观点要有冲突感，但避免极端语言；保持中文互联网讨论氛围。"
+                  ></textarea>
+                </label>
+
+>>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
                 <div class="settings-actions">
                   <button id="save-settings-btn" class="solid-button" type="submit">
                     保存配置
@@ -475,6 +659,7 @@
             <section class="section-card">
               <div class="section-card__head">
                 <div>
+<<<<<<< HEAD
                   <p class="section-card__eyebrow">API Presets</p>
                   <h2>API 配置缓存与一键切换</h2>
                 </div>
@@ -544,6 +729,13 @@
                   </span>
                 </label>
               </div>
+=======
+                  <p class="section-card__eyebrow">Prompt Preview</p>
+                  <h2>首页刷新 Prompt 预览</h2>
+                </div>
+              </div>
+              <pre id="prompt-preview" class="prompt-preview"></pre>
+>>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
             </section>
 
             <section class="section-card">
@@ -555,6 +747,7 @@
               </div>
               <pre id="message-prompt-preview" class="prompt-preview"></pre>
             </section>
+<<<<<<< HEAD
 
             <section class="section-card">
               <div class="section-card__head">
@@ -579,6 +772,8 @@
               </div>
               <div id="custom-tabs-settings-list" class="custom-tabs-settings-list"></div>
             </section>
+=======
+>>>>>>> 6c1d053 (Refine home feed interactions and add generated DM support)
           </div>
         </section>
       </main>
