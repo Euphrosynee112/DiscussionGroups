@@ -3,7 +3,13 @@ const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1bet
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
+const POSTS_KEY = "x_style_generator_posts_v2";
+const REFRESH_KEY = "x_style_generator_refresh_v2";
+const PROFILE_KEY = "x_style_generator_profile_v1";
+const PROFILE_POSTS_KEY = "x_style_generator_profile_posts_v1";
+const DISCUSSIONS_KEY = "x_style_generator_discussions_v1";
 const API_CONFIG_LIMIT = 12;
+const CONFIG_EXPORT_SCHEMA = "pulse-generator-config";
 
 const phoneDateEl = document.querySelector("#phone-date");
 const phoneClockEl = document.querySelector("#phone-clock");
@@ -24,6 +30,10 @@ const homeTranslationApiEnabledEl = document.querySelector("#home-translation-ap
 const homeTranslationApiConfigSelectEl = document.querySelector(
   "#home-translation-api-config-select"
 );
+const homeConfigExportBtn = document.querySelector("#home-config-export-btn");
+const homeConfigImportBtn = document.querySelector("#home-config-import-btn");
+const homeConfigImportInput = document.querySelector("#home-config-import-input");
+const homeConfigTransferStatusEl = document.querySelector("#home-config-transfer-status");
 const homeAppTriggers = [...document.querySelectorAll("[data-open-app]")];
 const homeBrowserModalEl = document.querySelector("#home-browser-modal");
 const homeBrowserFrameEl = document.querySelector("#home-browser-frame");
@@ -297,6 +307,163 @@ function setHomeApiConfigStatus(message, tone = "") {
   homeApiConfigStatusEl.className = "home-settings-status";
   if (tone) {
     homeApiConfigStatusEl.classList.add(tone);
+  }
+}
+
+function setHomeTransferStatus(message, tone = "") {
+  if (!homeConfigTransferStatusEl) {
+    return;
+  }
+  homeConfigTransferStatusEl.textContent = message;
+  homeConfigTransferStatusEl.className = "home-settings-status";
+  if (tone) {
+    homeConfigTransferStatusEl.classList.add(tone);
+  }
+}
+
+function readStoredJson(key, fallback = null) {
+  const raw = safeGetItem(key);
+  if (!raw) {
+    return fallback;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+function downloadJsonFile(filename, payload) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: "application/json"
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 0);
+}
+
+function buildHomeConfigExportPayload() {
+  saveCurrentHomeSettings({ silent: true });
+  return {
+    schema: CONFIG_EXPORT_SCHEMA,
+    version: 2,
+    exportedAt: new Date().toISOString(),
+    settings: readStoredJson(SETTINGS_KEY, { ...homeState.settings }),
+    feeds: readStoredJson(POSTS_KEY, {}),
+    profile: readStoredJson(PROFILE_KEY, {}),
+    profilePosts: readStoredJson(PROFILE_POSTS_KEY, []),
+    discussions: readStoredJson(DISCUSSIONS_KEY, {}),
+    lastRefreshAt: safeGetItem(REFRESH_KEY) || ""
+  };
+}
+
+function exportHomeConfig() {
+  const exportedAt = new Date();
+  const payload = buildHomeConfigExportPayload();
+  const filename = `pulse-generator-config-${exportedAt
+    .toISOString()
+    .replaceAll(":", "-")}.json`;
+  downloadJsonFile(filename, payload);
+  setHomeTransferStatus("已导出 API 与论坛配置 JSON。", "success");
+}
+
+function resolveImportedConfigPayload(parsed) {
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("导入文件不是有效的 JSON 对象。");
+  }
+
+  const source =
+    parsed.schema === CONFIG_EXPORT_SCHEMA && parsed.data && typeof parsed.data === "object"
+      ? parsed.data
+      : parsed;
+  const forumSource =
+    source.forum && typeof source.forum === "object" ? source.forum : source;
+
+  if (
+    !(
+      source.settings ||
+      forumSource.feeds ||
+      forumSource.profile ||
+      forumSource.profilePosts ||
+      forumSource.discussions ||
+      Object.prototype.hasOwnProperty.call(source, "lastRefreshAt") ||
+      Object.prototype.hasOwnProperty.call(forumSource, "lastRefreshAt")
+    )
+  ) {
+    throw new Error("导入文件中没有识别到可恢复的配置内容。");
+  }
+
+  return {
+    settings: source.settings,
+    feeds: forumSource.feeds,
+    profile: forumSource.profile,
+    profilePosts: forumSource.profilePosts,
+    discussions: forumSource.discussions,
+    hasLastRefreshAt:
+      Object.prototype.hasOwnProperty.call(source, "lastRefreshAt") ||
+      Object.prototype.hasOwnProperty.call(forumSource, "lastRefreshAt") ||
+      Object.prototype.hasOwnProperty.call(source, "refresh") ||
+      Object.prototype.hasOwnProperty.call(forumSource, "refresh"),
+    lastRefreshAt:
+      source.lastRefreshAt ??
+      forumSource.lastRefreshAt ??
+      source.refresh ??
+      forumSource.refresh ??
+      ""
+  };
+}
+
+function applyImportedConfig(payload) {
+  const imported = resolveImportedConfigPayload(payload);
+  if (imported.settings && typeof imported.settings === "object") {
+    safeSetItem(SETTINGS_KEY, JSON.stringify(imported.settings));
+  }
+  if (typeof imported.feeds !== "undefined") {
+    safeSetItem(POSTS_KEY, JSON.stringify(imported.feeds));
+  }
+  if (typeof imported.profile !== "undefined") {
+    safeSetItem(PROFILE_KEY, JSON.stringify(imported.profile));
+  }
+  if (typeof imported.profilePosts !== "undefined") {
+    safeSetItem(PROFILE_POSTS_KEY, JSON.stringify(imported.profilePosts));
+  }
+  if (typeof imported.discussions !== "undefined") {
+    safeSetItem(DISCUSSIONS_KEY, JSON.stringify(imported.discussions));
+  }
+  if (imported.hasLastRefreshAt) {
+    safeSetItem(REFRESH_KEY, String(imported.lastRefreshAt || ""));
+  }
+
+  homeState.settings = loadSettings();
+  applySettingsToHomeForm(homeState.settings);
+  syncHomeActiveConfigSummary();
+}
+
+async function handleHomeConfigImport(file) {
+  if (!file) {
+    return;
+  }
+
+  const confirmed = window.confirm("导入将覆盖当前浏览器中的 API 与论坛配置，是否继续？");
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    applyImportedConfig(parsed);
+    setHomeTransferStatus("配置已导入，本地 API 密钥与论坛数据已恢复。", "success");
+  } catch (error) {
+    setHomeTransferStatus(`导入失败：${error?.message || "无法解析该 JSON 文件。"}`, "error");
   }
 }
 
@@ -776,11 +943,11 @@ function attachHomeSettingsEvents() {
     });
   }
 
-  if (homeBrowserCloseBtn) {
-    homeBrowserCloseBtn.addEventListener("click", () => {
+  window.addEventListener("message", (event) => {
+    if (event.data?.type === "pulse-generator-close-app") {
       setHomeBrowserModalOpen(false);
-    });
-  }
+    }
+  });
 
   [homeApiModeSelect, homeApiEndpointInput, homeApiTokenInput, homeApiModelInput]
     .filter(Boolean)
@@ -855,6 +1022,26 @@ function attachHomeSettingsEvents() {
       );
       persistSettings(homeState.settings);
       renderHomeApiConfigList();
+    });
+  }
+
+  if (homeConfigExportBtn) {
+    homeConfigExportBtn.addEventListener("click", () => {
+      exportHomeConfig();
+    });
+  }
+
+  if (homeConfigImportBtn && homeConfigImportInput) {
+    homeConfigImportBtn.addEventListener("click", () => {
+      homeConfigImportInput.click();
+    });
+  }
+
+  if (homeConfigImportInput) {
+    homeConfigImportInput.addEventListener("change", async () => {
+      const [file] = homeConfigImportInput.files || [];
+      await handleHomeConfigImport(file);
+      homeConfigImportInput.value = "";
     });
   }
 

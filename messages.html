@@ -16,7 +16,17 @@
             <p class="messages-kicker">Messages</p>
             <h1>私信会话</h1>
           </div>
-          <button id="messages-generate-btn" class="ghost-button" type="button">新建消息</button>
+          <div class="messages-card__actions">
+            <button id="messages-generate-btn" class="ghost-button" type="button">新建消息</button>
+            <button
+              id="messages-embedded-close-btn"
+              class="messages-embedded-close ghost-button"
+              type="button"
+              aria-label="关闭私信页"
+            >
+              关闭
+            </button>
+          </div>
         </header>
 
         <p id="messages-status" class="messages-status">

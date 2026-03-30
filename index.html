@@ -215,6 +215,31 @@
               </span>
             </label>
           </div>
+
+          <div class="home-config-transfer">
+            <div>
+              <p class="home-settings-kicker">Config Transfer</p>
+              <h3 class="home-config-transfer__title">导入 / 导出 API 与论坛配置</h3>
+            </div>
+            <p class="home-field-hint">
+              导出内容为 JSON，包含当前 API 配置、已缓存的 API 密钥、论坛设置、帖子、讨论与个人资料。导入后会直接覆盖本地同类配置。
+            </p>
+            <div class="home-config-transfer__actions">
+              <button id="home-config-export-btn" class="home-primary-button" type="button">
+                导出 JSON
+              </button>
+              <button id="home-config-import-btn" class="home-chip" type="button">
+                导入 JSON
+              </button>
+              <input
+                id="home-config-import-input"
+                type="file"
+                accept="application/json,.json"
+                hidden
+              />
+            </div>
+            <p id="home-config-transfer-status" class="home-settings-status" aria-live="polite"></p>
+          </div>
         </div>
       </div>
     </section>
@@ -228,21 +253,6 @@
     >
       <div class="home-browser-modal__backdrop" data-close-home-browser></div>
       <div class="home-browser-modal__panel" role="dialog" aria-modal="true" aria-label="应用弹窗">
-        <div class="home-browser-modal__head">
-          <div>
-            <p id="home-browser-kicker" class="home-browser-kicker">Pulse App</p>
-            <h2 id="home-browser-title" class="home-browser-title">讨论页</h2>
-          </div>
-          <button
-            id="home-browser-close-btn"
-            class="home-settings-close"
-            type="button"
-            aria-label="关闭弹窗"
-          >
-            ×
-          </button>
-        </div>
-
         <div class="home-browser-modal__viewport">
           <iframe
             id="home-browser-frame"

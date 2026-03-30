@@ -129,6 +129,7 @@ const threadModalBodyEl = document.querySelector("#thread-modal-body");
 const threadModalRootEl = document.querySelector("#thread-modal-root");
 const threadModalRepliesEl = document.querySelector("#thread-modal-replies");
 const threadModalLoadHintEl = document.querySelector("#thread-modal-load-hint");
+const embeddedCloseBtn = document.querySelector("#embedded-close-btn");
 const profileBannerEl = document.querySelector("#profile-banner");
 const profileAvatarEl = document.querySelector("#profile-avatar");
 const profileUsernameEl = document.querySelector("#profile-username");
@@ -280,6 +281,17 @@ function syncTabToLocation(tabName) {
     const nextUrl = new URL(window.location.href);
     nextUrl.searchParams.set("tab", normalizeTabName(tabName));
     window.history.replaceState({}, "", nextUrl.toString());
+  } catch (_error) {
+  }
+}
+
+function requestEmbeddedClose() {
+  if (!isEmbeddedView()) {
+    return;
+  }
+
+  try {
+    window.parent?.postMessage({ type: "pulse-generator-close-app" }, "*");
   } catch (_error) {
   }
 }
@@ -5421,6 +5433,12 @@ function attachEvents() {
   if (customTabSettingsListEl) {
     customTabSettingsListEl.addEventListener("input", (event) => {
       handleCustomTabSettingsInput(event);
+    });
+  }
+
+  if (embeddedCloseBtn) {
+    embeddedCloseBtn.addEventListener("click", () => {
+      requestEmbeddedClose();
     });
   }
 

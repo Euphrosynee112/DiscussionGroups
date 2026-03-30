@@ -43,6 +43,12 @@ body.embedded .desktop-entry {
   display: none;
 }
 
+body.embedded .app-shell {
+  width: 100vw;
+  max-width: none;
+  margin: 0;
+}
+
 button,
 input,
 select,
@@ -101,9 +107,26 @@ button {
 .brand-lockup {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 14px;
   padding: 18px 18px 16px;
   border-radius: var(--radius-lg);
+}
+
+.brand-lockup__group {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.embedded-close-btn {
+  display: none;
+  flex-shrink: 0;
+}
+
+body.embedded .embedded-close-btn {
+  display: inline-flex;
 }
 
 .brand-mark {

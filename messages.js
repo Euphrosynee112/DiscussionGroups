@@ -12,6 +12,7 @@ const DEFAULT_PROFILE = {
 const messagesListEl = document.querySelector("#messages-list");
 const messagesStatusEl = document.querySelector("#messages-status");
 const messagesGenerateBtn = document.querySelector("#messages-generate-btn");
+const messagesEmbeddedCloseBtn = document.querySelector("#messages-embedded-close-btn");
 
 const memoryStorage = {};
 
@@ -28,6 +29,17 @@ function isEmbeddedView() {
     return params.get("embed") === "1";
   } catch (_error) {
     return false;
+  }
+}
+
+function requestEmbeddedClose() {
+  if (!isEmbeddedView()) {
+    return;
+  }
+
+  try {
+    window.parent?.postMessage({ type: "pulse-generator-close-app" }, "*");
+  } catch (_error) {
   }
 }
 
@@ -331,6 +343,12 @@ function attachEvents() {
   if (messagesGenerateBtn) {
     messagesGenerateBtn.addEventListener("click", () => {
       regenerateConversations();
+    });
+  }
+
+  if (messagesEmbeddedCloseBtn) {
+    messagesEmbeddedCloseBtn.addEventListener("click", () => {
+      requestEmbeddedClose();
     });
   }
 

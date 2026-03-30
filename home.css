@@ -650,6 +650,27 @@ button {
   gap: 12px;
 }
 
+.home-config-transfer {
+  padding: 16px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.56);
+  border: 1px solid rgba(255, 255, 255, 0.48);
+  display: grid;
+  gap: 12px;
+}
+
+.home-config-transfer__title {
+  margin: 8px 0 0;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.home-config-transfer__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .home-checkbox-row {
   display: inline-flex;
   align-items: center;
@@ -672,55 +693,29 @@ button {
 
 .home-browser-modal {
   display: grid;
-  place-items: center;
-  padding: 18px;
+  place-items: stretch;
+  padding: 0;
 }
 
 .home-browser-modal__panel {
   position: relative;
-  width: min(560px, 100%);
-  height: min(86vh, 820px);
-  max-height: min(86vh, 820px);
-  padding: 22px;
-  border-radius: 32px;
-  border: 1px solid rgba(255, 255, 255, 0.7);
-  background:
-    linear-gradient(180deg, rgba(247, 251, 255, 0.97), rgba(233, 241, 249, 0.95)),
-    rgba(255, 255, 255, 0.7);
-  box-shadow: 0 34px 80px rgba(87, 111, 140, 0.24);
-  display: grid;
-  grid-template-rows: auto 1fr;
-  gap: 16px;
-}
-
-.home-browser-modal__head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.home-browser-kicker {
-  margin: 0;
-  font-size: 12px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.home-browser-title {
-  margin: 8px 0 0;
-  font-size: 28px;
-  line-height: 1.15;
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+  border: 0;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: none;
+  overflow: hidden;
 }
 
 .home-browser-modal__viewport {
-  min-height: 0;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
-  border-radius: 28px;
-  border: 1px solid rgba(255, 255, 255, 0.76);
-  background: rgba(255, 255, 255, 0.82);
-  box-shadow: var(--shadow-lg);
+  border-radius: 0;
+  border: 0;
+  background: #ffffff;
+  box-shadow: none;
 }
 
 .home-browser-modal__frame {
@@ -779,20 +774,8 @@ button {
     align-items: stretch;
   }
 
-  .home-browser-modal {
-    padding: 12px;
-  }
-
   .home-browser-modal__panel {
     width: 100%;
-    height: min(90vh, 820px);
-    max-height: 90vh;
-    padding: 18px 16px;
-    border-radius: 26px;
-    gap: 14px;
-  }
-
-  .home-browser-title {
-    font-size: 24px;
+    height: 100vh;
   }
 }

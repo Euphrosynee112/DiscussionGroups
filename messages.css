@@ -67,6 +67,10 @@ button {
   place-items: center;
 }
 
+body.embedded .messages-app {
+  padding: 0;
+}
+
 .messages-card {
   width: min(760px, 100%);
   min-height: min(780px, calc(100vh - 64px));
@@ -79,6 +83,14 @@ button {
   overflow: hidden;
 }
 
+body.embedded .messages-card {
+  width: 100vw;
+  min-height: 100vh;
+  border-radius: 0;
+  border: 0;
+  box-shadow: none;
+}
+
 .messages-card__head {
   padding: 24px 24px 18px;
   border-bottom: 1px solid var(--line);
@@ -86,6 +98,20 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+}
+
+.messages-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.messages-embedded-close {
+  display: none;
+}
+
+body.embedded .messages-embedded-close {
+  display: inline-flex;
 }
 
 .messages-kicker {
