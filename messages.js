@@ -928,19 +928,33 @@ function buildHotTopicsContext(settings, promptSettings) {
 
   const feeds = readStoredJson(POSTS_KEY, {});
   const bucket = Array.isArray(feeds?.[selectedTab.id]) ? feeds[selectedTab.id] : [];
-  const items = extractRecentEventItems(bucket, 4);
-  if (items.length) {
-    return `近期热点来自论坛自定义页签「${selectedTab.name}」：\n${items
-      .map((item, index) => `${index + 1}. ${item}`)
-      .join("\n")}`;
-  }
-
   const tabIntro = String(selectedTab.text || "").trim();
+  const items = extractRecentEventItems(bucket, 3).map((item) =>
+    truncate(String(item || "").replace(/\s+/g, " "), 72)
+  );
+  const sections = [];
+
   if (tabIntro) {
-    return `论坛热点挂载页签：${selectedTab.name}。该页签当前设定为：${truncate(tabIntro, 180)}`;
+    sections.push(`页签设定：${truncate(tabIntro.replace(/\s+/g, " "), 120)}`);
   }
 
-  return "";
+  if (items.length) {
+    sections.push(`近期讨论：\n${items.map((item, index) => `${index + 1}. ${item}`).join("\n")}`);
+  }
+
+  if (!sections.length) {
+    return "";
+  }
+
+  return `论坛热点挂载页签「${selectedTab.name}」：\n${sections.join("\n\n")}`;
+}
+
+function stripHotTopicsPromptSettings(promptSettings = {}) {
+  return normalizeMessagePromptSettings({
+    ...promptSettings,
+    hotTopicsEnabled: false,
+    hotTopicsTabId: ""
+  });
 }
 
 function buildForumPostFocusContext(promptSettings) {
@@ -1165,103 +1179,123 @@ function splitReplyIntoMessageLines(text) {
 }
 
 async function requestChatReplyText(settings, profile, contact, history = [], promptSettings = {}) {
-  const requestEndpoint = validateApiSettings(settings, "对话回复");
   const normalizedPromptSettings = normalizeMessagePromptSettings(promptSettings);
-  const systemPrompt = buildConversationSystemPrompt(
-    profile,
-    contact,
-    settings,
-    normalizedPromptSettings
-  );
-  const requestBody = buildChatRequestBody(settings, systemPrompt, history);
-  const logBase = buildMessageApiLogBase(
-    "chat_reply",
-    settings,
-    requestEndpoint,
-    systemPrompt,
-    requestBody,
-    `联系人：${contact.name} · 历史消息 ${history.length} 条`
-  );
-  let logged = false;
+  const requestEndpoint = validateApiSettings(settings, "对话回复");
+
+  async function executeChatRequest(resolvedPromptSettings, summarySuffix = "") {
+    const systemPrompt = buildConversationSystemPrompt(
+      profile,
+      contact,
+      settings,
+      resolvedPromptSettings
+    );
+    const requestBody = buildChatRequestBody(settings, systemPrompt, history);
+    const logBase = buildMessageApiLogBase(
+      "chat_reply",
+      settings,
+      requestEndpoint,
+      systemPrompt,
+      requestBody,
+      `联系人：${contact.name} · 历史消息 ${history.length} 条${summarySuffix}`
+    );
+    let logged = false;
+
+    try {
+      const response = await fetch(requestEndpoint, {
+        method: "POST",
+        headers: buildRequestHeaders(settings),
+        body: JSON.stringify(requestBody)
+      });
+      const rawResponse = await response.text();
+      let payload = rawResponse;
+      try {
+        payload = JSON.parse(rawResponse);
+      } catch (_error) {
+        payload = rawResponse;
+      }
+
+      if (response.status === 404 && requestEndpoint.includes("api.deepseek.com")) {
+        appendApiLog({
+          ...logBase,
+          status: "error",
+          statusCode: response.status,
+          responseText: rawResponse,
+          responseBody: payload,
+          errorMessage:
+            "DeepSeek 接口返回 404。请确认地址为 https://api.deepseek.com/chat/completions。"
+        });
+        logged = true;
+        throw new Error(
+          "DeepSeek 接口返回 404。请确认地址为 https://api.deepseek.com/chat/completions。"
+        );
+      }
+
+      if (!response.ok) {
+        appendApiLog({
+          ...logBase,
+          status: "error",
+          statusCode: response.status,
+          responseText: rawResponse,
+          responseBody: payload,
+          errorMessage: `接口请求失败：HTTP ${response.status}`
+        });
+        logged = true;
+        throw new Error(`接口请求失败：HTTP ${response.status}`);
+      }
+
+      const message = resolveMessage(payload)
+        .replace(/^(?:联系人|对方|assistant|AI)[:：]\s*/i, "")
+        .trim();
+      if (!message) {
+        appendApiLog({
+          ...logBase,
+          status: "error",
+          statusCode: response.status,
+          responseText: rawResponse,
+          responseBody: payload,
+          errorMessage: "接口请求成功，但响应中没有可解析的文本。"
+        });
+        logged = true;
+        throw new Error("接口请求成功，但响应中没有可解析的文本。");
+      }
+
+      appendApiLog({
+        ...logBase,
+        status: "success",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        summary: `联系人：${contact.name} · 已生成 ${splitReplyIntoMessageLines(message).length || 1} 条分句${summarySuffix}`
+      });
+      logged = true;
+      return message;
+    } catch (error) {
+      if (!logged) {
+        appendApiLog({
+          ...logBase,
+          status: "error",
+          errorMessage: error?.message || "请求失败"
+        });
+      }
+      throw error;
+    }
+  }
 
   try {
-    const response = await fetch(requestEndpoint, {
-      method: "POST",
-      headers: buildRequestHeaders(settings),
-      body: JSON.stringify(requestBody)
-    });
-    const rawResponse = await response.text();
-    let payload = rawResponse;
-    try {
-      payload = JSON.parse(rawResponse);
-    } catch (_error) {
-      payload = rawResponse;
-    }
-
-    if (response.status === 404 && requestEndpoint.includes("api.deepseek.com")) {
-      appendApiLog({
-        ...logBase,
-        status: "error",
-        statusCode: response.status,
-        responseText: rawResponse,
-        responseBody: payload,
-        errorMessage:
-          "DeepSeek 接口返回 404。请确认地址为 https://api.deepseek.com/chat/completions。"
-      });
-      logged = true;
-      throw new Error(
-        "DeepSeek 接口返回 404。请确认地址为 https://api.deepseek.com/chat/completions。"
-      );
-    }
-
-    if (!response.ok) {
-      appendApiLog({
-        ...logBase,
-        status: "error",
-        statusCode: response.status,
-        responseText: rawResponse,
-        responseBody: payload,
-        errorMessage: `接口请求失败：HTTP ${response.status}`
-      });
-      logged = true;
-      throw new Error(`接口请求失败：HTTP ${response.status}`);
-    }
-
-    const message = resolveMessage(payload)
-      .replace(/^(?:联系人|对方|assistant|AI)[:：]\s*/i, "")
-      .trim();
-    if (!message) {
-      appendApiLog({
-        ...logBase,
-        status: "error",
-        statusCode: response.status,
-        responseText: rawResponse,
-        responseBody: payload,
-        errorMessage: "接口请求成功，但响应中没有可解析的文本。"
-      });
-      logged = true;
-      throw new Error("接口请求成功，但响应中没有可解析的文本。");
-    }
-
-    appendApiLog({
-      ...logBase,
-      status: "success",
-      statusCode: response.status,
-      responseText: rawResponse,
-      responseBody: payload,
-      summary: `联系人：${contact.name} · 已生成 ${splitReplyIntoMessageLines(message).length || 1} 条分句`
-    });
-    logged = true;
-    return message;
+    return await executeChatRequest(normalizedPromptSettings);
   } catch (error) {
-    if (!logged) {
-      appendApiLog({
-        ...logBase,
-        status: "error",
-        errorMessage: error?.message || "请求失败"
-      });
+    const shouldRetryWithoutHotTopics =
+      normalizedPromptSettings.hotTopicsEnabled &&
+      /没有可解析的文本|HTTP 400|HTTP 413/.test(String(error?.message || ""));
+
+    if (!shouldRetryWithoutHotTopics) {
+      throw error;
     }
-    throw error;
+
+    return executeChatRequest(
+      stripHotTopicsPromptSettings(normalizedPromptSettings),
+      " · 热点挂载自动回退"
+    );
   }
 }
 
@@ -1491,7 +1525,7 @@ function renderConversationDetail() {
             ? conversation.messages
                 .map(
                   (message) => `
-                    <article class="messages-bubble ${message.role === "user" ? "messages-bubble--user" : ""}">
+                    <article class="messages-bubble ${message.role === "user" ? "messages-bubble--user" : "messages-bubble--assistant"}">
                       <p>${escapeHtml(message.text)}</p>
                       <span class="messages-bubble__time">${escapeHtml(message.time)}</span>
                     </article>
