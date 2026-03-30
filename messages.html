@@ -4,39 +4,443 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pulse Generator · Chat</title>
-    <link rel="stylesheet" href="./messages.css?v=20260330d" />
+    <link rel="stylesheet" href="./messages.css?v=20260330r" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
 
     <main class="messages-app">
-      <section class="messages-card" aria-label="私信页">
-        <header class="messages-card__head">
-          <div>
-            <p class="messages-kicker">Messages</p>
-            <h1>私信会话</h1>
-          </div>
-          <div class="messages-card__actions">
-            <button id="messages-generate-btn" class="ghost-button" type="button">新建消息</button>
+      <section class="messages-shell" aria-label="Chat 首页">
+        <header class="messages-topbar">
+          <button
+            id="messages-nav-btn"
+            class="messages-topbar__icon"
+            type="button"
+            aria-label="返回"
+            hidden
+          ></button>
+          <h1 id="messages-page-title" class="messages-topbar__title">微信</h1>
+          <div class="messages-topbar__actions">
             <button
-              id="messages-embedded-close-btn"
-              class="messages-embedded-close ghost-button"
+              id="messages-chat-settings-btn"
+              class="messages-topbar__icon"
               type="button"
-              aria-label="关闭私信页"
+              aria-label="对话设置"
+              hidden
             >
-              关闭
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 4.8 13.6 3l1.8 1.7 2.5.1.2 2.5L20 9l-1.8 1.8.1 2.5-2.5.2-1.8 1.8-1.8-1.8-2.5-.2.1-2.5L4 9l1.8-1.7.2-2.5 2.5-.1L10.4 3Z"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linejoin="round"
+                />
+                <circle cx="12" cy="9.1" r="2.35" fill="none" stroke="currentColor" stroke-width="1.6" />
+              </svg>
+            </button>
+            <button
+              id="messages-search-btn"
+              class="messages-topbar__icon"
+              type="button"
+              aria-label="搜索"
+              hidden
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2" />
+                <path
+                  d="M16 16l4 4"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+            <button
+              id="messages-add-btn"
+              class="messages-topbar__icon"
+              type="button"
+              aria-label="更多操作"
+              hidden
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 5v14M5 12h14"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                />
+              </svg>
             </button>
           </div>
         </header>
 
-        <p id="messages-status" class="messages-status">
-          这里是独立的 Chat 页；消息仅保存在当前浏览器。
-        </p>
+        <p id="messages-status" class="messages-status" aria-live="polite" hidden></p>
 
-        <div id="messages-list" class="messages-list" aria-live="polite"></div>
+        <section id="messages-search-section" class="messages-search-section" hidden>
+          <label class="messages-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2" />
+              <path
+                d="M16 16l4 4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+            <input
+              id="messages-search-input"
+              type="search"
+              placeholder="搜索"
+              autocomplete="off"
+            />
+          </label>
+        </section>
+
+        <section id="messages-content" class="messages-content" aria-live="polite"></section>
+
+        <nav id="messages-tabbar" class="messages-tabbar" aria-label="底部功能页签">
+          <button class="messages-tabbar__item is-active" type="button" data-tab="chat">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M5.5 7.5A3.5 3.5 0 0 1 9 4h6a3.5 3.5 0 0 1 3.5 3.5V12A3.5 3.5 0 0 1 15 15.5H11l-3.8 3.1c-.5.4-1.2 0-1.2-.7v-2.5A3.5 3.5 0 0 1 5.5 12Z"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span>聊天</span>
+          </button>
+          <button class="messages-tabbar__item" type="button" data-tab="contacts">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="8" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8" />
+              <path
+                d="M6 18.2c1.2-2.7 3.3-4.1 6-4.1s4.8 1.4 6 4.1"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+              />
+            </svg>
+            <span>通讯录</span>
+          </button>
+          <button class="messages-tabbar__item" type="button" data-tab="me">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="8" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8" />
+              <path
+                d="M7 18.5c1.1-2.5 2.8-3.8 5-3.8s3.9 1.3 5 3.8"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+              />
+            </svg>
+            <span>我</span>
+          </button>
+        </nav>
       </section>
     </main>
 
-    <script src="./messages.js?v=20260330d"></script>
+    <section id="messages-profile-modal" class="messages-sheet-modal" hidden aria-hidden="true">
+      <div class="messages-sheet-modal__panel" role="dialog" aria-modal="true" aria-label="编辑个人资料">
+        <header class="messages-sheet-modal__header">
+          <button
+            id="messages-profile-modal-close-btn"
+            class="messages-sheet-modal__button"
+            type="button"
+            aria-label="关闭资料编辑"
+          >
+            取消
+          </button>
+          <strong>编辑资料</strong>
+          <button
+            id="messages-profile-save-btn"
+            class="messages-sheet-modal__button messages-sheet-modal__button--primary"
+            type="submit"
+            form="messages-profile-form"
+          >
+            保存
+          </button>
+        </header>
+
+        <form id="messages-profile-form" class="messages-editor-form">
+          <section class="messages-avatar-editor">
+            <div id="messages-profile-avatar-preview" class="messages-avatar-editor__preview">WG</div>
+            <div class="messages-avatar-editor__content">
+              <strong>头像</strong>
+              <p>支持上传头像图片；未上传时默认使用昵称首字。</p>
+              <div class="messages-avatar-editor__actions">
+                <label class="messages-upload-button">
+                  上传头像
+                  <input
+                    id="messages-profile-avatar-file-input"
+                    type="file"
+                    accept="image/*"
+                    hidden
+                  />
+                </label>
+                <button
+                  id="messages-profile-avatar-reset-btn"
+                  class="messages-text-button"
+                  type="button"
+                >
+                  使用默认
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <label class="messages-form-field">
+            <span>用户名</span>
+            <input
+              id="messages-profile-username-input"
+              type="text"
+              maxlength="32"
+              placeholder="输入用户名"
+              autocomplete="off"
+            />
+          </label>
+
+          <label class="messages-form-field">
+            <span>微信号</span>
+            <input
+              id="messages-profile-userid-input"
+              type="text"
+              maxlength="48"
+              placeholder="输入微信号"
+              autocomplete="off"
+            />
+          </label>
+
+          <label class="messages-form-field messages-form-field--textarea">
+            <span>用户人设</span>
+            <textarea
+              id="messages-profile-persona-input"
+              rows="6"
+              maxlength="1200"
+              placeholder="这个内容不会在页面直接展示，但会被论坛、Bubble 和对话 prompt 调用。"
+            ></textarea>
+          </label>
+
+          <p id="messages-profile-editor-status" class="messages-editor-status" aria-live="polite"></p>
+        </form>
+      </div>
+    </section>
+
+    <section id="messages-contact-modal" class="messages-sheet-modal" hidden aria-hidden="true">
+      <div class="messages-sheet-modal__panel" role="dialog" aria-modal="true" aria-label="编辑联系人">
+        <header class="messages-sheet-modal__header">
+          <button
+            id="messages-contact-modal-close-btn"
+            class="messages-sheet-modal__button"
+            type="button"
+            aria-label="关闭联系人编辑"
+          >
+            取消
+          </button>
+          <strong id="messages-contact-modal-title">新建联系人</strong>
+          <button
+            id="messages-contact-save-btn"
+            class="messages-sheet-modal__button messages-sheet-modal__button--primary"
+            type="submit"
+            form="messages-contact-form"
+          >
+            保存
+          </button>
+        </header>
+
+        <form id="messages-contact-form" class="messages-editor-form">
+          <section class="messages-avatar-editor">
+            <div id="messages-contact-avatar-preview" class="messages-avatar-editor__preview">联</div>
+            <div class="messages-avatar-editor__content">
+              <strong>头像</strong>
+              <p>支持上传头像图片；未上传时默认使用姓名首字。</p>
+              <div class="messages-avatar-editor__actions">
+                <label class="messages-upload-button">
+                  上传头像
+                  <input
+                    id="messages-contact-avatar-file-input"
+                    type="file"
+                    accept="image/*"
+                    hidden
+                  />
+                </label>
+                <button
+                  id="messages-contact-avatar-reset-btn"
+                  class="messages-text-button"
+                  type="button"
+                >
+                  使用默认
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <label class="messages-form-field">
+            <span>姓名</span>
+            <input
+              id="messages-contact-name-input"
+              type="text"
+              maxlength="32"
+              placeholder="输入联系人姓名"
+              autocomplete="off"
+            />
+          </label>
+
+          <label class="messages-form-field messages-form-field--textarea">
+            <span>人物人设</span>
+            <textarea
+              id="messages-contact-persona-input"
+              rows="6"
+              maxlength="1200"
+              placeholder="记录这个联系人在对话中的身份、性格、说话方式和背景。"
+            ></textarea>
+          </label>
+
+          <p id="messages-contact-editor-status" class="messages-editor-status" aria-live="polite"></p>
+        </form>
+      </div>
+    </section>
+
+    <section
+      id="messages-picker-modal"
+      class="messages-sheet-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div class="messages-sheet-modal__panel messages-sheet-modal__panel--picker" role="dialog" aria-modal="true" aria-label="发起会话">
+        <header class="messages-sheet-modal__header">
+          <button
+            id="messages-picker-close-btn"
+            class="messages-sheet-modal__button"
+            type="button"
+            aria-label="关闭会话选择"
+          >
+            取消
+          </button>
+          <strong>发起会话</strong>
+          <span class="messages-sheet-modal__button"></span>
+        </header>
+
+        <section id="messages-picker-list" class="messages-picker-list" aria-live="polite"></section>
+      </div>
+    </section>
+
+    <section
+      id="messages-chat-settings-modal"
+      class="messages-sheet-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div
+        class="messages-sheet-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="对话回复设置"
+      >
+        <header class="messages-sheet-modal__header">
+          <button
+            id="messages-chat-settings-close-btn"
+            class="messages-sheet-modal__button"
+            type="button"
+            aria-label="关闭对话设置"
+          >
+            取消
+          </button>
+          <strong>对话设置</strong>
+          <button
+            id="messages-chat-settings-save-btn"
+            class="messages-sheet-modal__button messages-sheet-modal__button--primary"
+            type="submit"
+            form="messages-chat-settings-form"
+          >
+            保存
+          </button>
+        </header>
+
+        <form id="messages-chat-settings-form" class="messages-editor-form">
+          <label class="messages-form-field">
+            <span>历史聊天轮数</span>
+            <input
+              id="messages-chat-history-rounds-input"
+              type="number"
+              min="1"
+              max="20"
+              inputmode="numeric"
+              placeholder="输入保留轮数"
+              autocomplete="off"
+            />
+            <small class="messages-form-field__hint">
+              仅会把最近 N 轮聊天带给 API；数值越大，上下文越完整。
+            </small>
+          </label>
+
+          <label class="messages-toggle-field">
+            <div class="messages-toggle-field__body">
+              <strong>时间感知</strong>
+              <p>开启后，会把当前本地日期、星期与时间一并带给 AI。</p>
+            </div>
+            <span class="messages-switch">
+              <input id="messages-chat-time-awareness-input" type="checkbox" />
+              <span class="messages-switch__slider"></span>
+            </span>
+          </label>
+
+          <label class="messages-toggle-field">
+            <div class="messages-toggle-field__body">
+              <strong>近期热点</strong>
+              <p>开启后，可从论坛某个自定义页签挂载近期热点内容给 AI。</p>
+            </div>
+            <span class="messages-switch">
+              <input id="messages-chat-hot-topics-input" type="checkbox" />
+              <span class="messages-switch__slider"></span>
+            </span>
+          </label>
+
+          <label class="messages-form-field">
+            <span>热点挂载页签</span>
+            <select id="messages-chat-hot-topics-tab-select"></select>
+            <small class="messages-form-field__hint">
+              请选择论坛中的一个自定义页签，作为“近期热点”来源。
+            </small>
+          </label>
+
+          <label class="messages-toggle-field">
+            <div class="messages-toggle-field__body">
+              <strong>用户 INS 关注</strong>
+              <p>开启后，会附带用户最近一条主动发送的论坛帖子主题。</p>
+            </div>
+            <span class="messages-switch">
+              <input id="messages-chat-profile-post-focus-input" type="checkbox" />
+              <span class="messages-switch__slider"></span>
+            </span>
+          </label>
+
+          <label class="messages-toggle-field">
+            <div class="messages-toggle-field__body">
+              <strong>用户 Bubble 关注</strong>
+              <p>开启后，会附带用户最近一轮 Bubble 发言，按粉丝回复分段切分。</p>
+            </div>
+            <span class="messages-switch">
+              <input id="messages-chat-bubble-focus-input" type="checkbox" />
+              <span class="messages-switch__slider"></span>
+            </span>
+          </label>
+
+          <p
+            id="messages-chat-settings-status"
+            class="messages-editor-status"
+            aria-live="polite"
+          ></p>
+        </form>
+      </div>
+    </section>
+
+    <script src="./api-log.js?v=20260330r"></script>
+    <script src="./messages.js?v=20260330r"></script>
   </body>
 </html>

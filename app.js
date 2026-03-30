@@ -326,6 +326,34 @@ function formatDateTime(value = new Date()) {
   }).format(value);
 }
 
+function formatForumTimestamp(value = Date.now()) {
+  return formatDateTime(value instanceof Date ? value : new Date(Number(value) || Date.now())).replaceAll(
+    "/",
+    "-"
+  );
+}
+
+function appendApiLog(entry) {
+  try {
+    window.PulseApiLog?.append?.(entry);
+  } catch (_error) {
+  }
+}
+
+function buildDiscussionApiLogBase(action, settings, endpoint, prompt, requestBody, summary = "") {
+  const mode = normalizeApiMode(settings.mode);
+  return {
+    source: "discussion",
+    action,
+    summary,
+    endpoint,
+    mode,
+    model: mode === "generic" ? "" : settings.model || getDefaultModelByMode(mode),
+    prompt,
+    requestBody
+  };
+}
+
 function truncate(text, length = 120) {
   const normalized = String(text || "").trim();
   if (normalized.length <= length) {
@@ -753,6 +781,7 @@ function getCurrentSettings() {
     translationApiConfigSelectEl?.value || state.settings.translationApiConfigId || ""
   ).trim();
   return {
+    ...state.settings,
     mode,
     endpoint: String(endpointInput?.value || state.settings.endpoint || "").trim(),
     token: String(tokenInput?.value || state.settings.token || "").trim(),
@@ -1011,7 +1040,9 @@ function applyProfileToForm(profile) {
   profileFollowingInput.value = profile.following || DEFAULT_PROFILE.following;
   profileFollowersInput.value = profile.followers || DEFAULT_PROFILE.followers;
   profileSignatureInput.value = profile.signature || DEFAULT_PROFILE.signature;
-  profilePersonaInput.value = profile.personaPrompt || DEFAULT_PROFILE.personaPrompt;
+  if (profilePersonaInput) {
+    profilePersonaInput.value = profile.personaPrompt || DEFAULT_PROFILE.personaPrompt;
+  }
 }
 
 function updateModeUI() {
@@ -1050,7 +1081,8 @@ function getCurrentProfile() {
     following: profileFollowingInput.value.trim() || DEFAULT_PROFILE.following,
     followers: profileFollowersInput.value.trim() || DEFAULT_PROFILE.followers,
     signature: profileSignatureInput.value.trim() || DEFAULT_PROFILE.signature,
-    personaPrompt: profilePersonaInput.value.trim() || DEFAULT_PROFILE.personaPrompt
+    personaPrompt:
+      String(state.profile.personaPrompt || "").trim() || DEFAULT_PROFILE.personaPrompt
   };
 }
 
@@ -1978,6 +2010,12 @@ function normalizeReply(item, index = 0, seed = "root") {
     FEED_NAMES[(index + 3) % FEED_NAMES.length];
   const stableSeed = `${seed}-${item?.text || ""}-${item?.displayName || fallbackName}-${index}`;
   const translationZh = String(item?.translationZh || item?.translatedText || "").trim();
+  const createdAt = Number(item?.createdAt) || Date.now() + index;
+  const rawTime = String(item?.time || "").trim();
+  const time =
+    Boolean(item?.authorOwned) && createdAt && (!rawTime || rawTime === "刚刚")
+      ? formatForumTimestamp(createdAt)
+      : rawTime || `${index + 1}m`;
   return {
     id: item?.id || `reply_${index}_${hashText(stableSeed)}`,
     displayName: truncate(item?.displayName || fallbackName, 24),
@@ -1986,7 +2024,8 @@ function normalizeReply(item, index = 0, seed = "root") {
     translationZh: truncate(translationZh, 600),
     likes: formatMetric(item?.likes, 12 + index * 5),
     replies: formatMetric(item?.replies, 2 + index),
-    time: item?.time || `${index + 1}m`,
+    time,
+    createdAt,
     authorOwned: Boolean(item?.authorOwned),
     children: Array.isArray(item?.children) ? item.children : [],
     expanded: Boolean(item?.expanded),
@@ -2544,6 +2583,12 @@ function normalizePost(item, index = 0, fallbackFeedType = DEFAULT_CONTENT_FEED)
     : imageDataUrl
       ? ""
       : "讨论内容生成中。";
+  const createdAt = Number(item?.createdAt) || Date.now() + index;
+  const rawTime = String(item?.time || "").trim();
+  const time =
+    Boolean(item?.authorOwned) && createdAt && (!rawTime || rawTime === "刚刚")
+      ? formatForumTimestamp(createdAt)
+      : rawTime || `${Math.max(1, index + 1)}m`;
   return {
     id: item?.id || `post_${index}_${hashText(stableSeed)}`,
     displayName: truncate(item?.displayName || fallbackName, 28),
@@ -2557,7 +2602,8 @@ function normalizePost(item, index = 0, fallbackFeedType = DEFAULT_CONTENT_FEED)
     reposts: formatMetric(item?.reposts, 6 + index * 4),
     likes: formatMetric(item?.likes, 45 + index * 27),
     views: formatMetric(item?.views, 800 + index * 420),
-    time: item?.time || `${Math.max(1, index + 1)}m`,
+    time,
+    createdAt,
     edited: Boolean(item?.edited),
     authorOwned: Boolean(item?.authorOwned),
     feedType: resolvedFeedType
@@ -2909,15 +2955,17 @@ function renderReplyAvatarMarkup(reply) {
 
 function createAuthoredReply(content, seed = "") {
   const profile = getCurrentProfile();
+  const createdAt = Date.now();
   const reply = normalizeReply(
     {
-      id: `reply_self_${Date.now()}_${hashText(`${seed}-${content}`)}`,
+      id: `reply_self_${createdAt}_${hashText(`${seed}-${content}`)}`,
       displayName: profile.username,
       handle: normalizeProfileUserId(profile.userId, profile.username),
       text: content,
       likes: 0,
       replies: 0,
-      time: "刚刚",
+      time: formatForumTimestamp(createdAt),
+      createdAt,
       children: []
     },
     0,
@@ -4438,9 +4486,10 @@ function createAuthoredPost(
   const profile = getCurrentProfile();
   const tags = normalizeTags(tagsInput, 5);
   const imageSeed = String(imageDataUrl || "").slice(0, 64);
+  const createdAt = Date.now();
   const post = normalizePost(
     {
-      id: `profile_post_${Date.now()}_${hashText(`${content}-${imageSeed}`)}`,
+      id: `profile_post_${createdAt}_${hashText(`${content}-${imageSeed}`)}`,
       displayName: profile.username,
       handle: normalizeProfileUserId(profile.userId, profile.username),
       text: content,
@@ -4450,7 +4499,8 @@ function createAuthoredPost(
       reposts: 0,
       likes: 0,
       views: 1,
-      time: "刚刚"
+      time: formatForumTimestamp(createdAt),
+      createdAt
     },
     0,
     feedType
@@ -4522,38 +4572,95 @@ async function requestGeneratedPosts(
 
   const prompt = buildPrompt(settings, resolvedFeedType, count);
   const headers = buildRequestHeaders(settings);
-
-  const response = await fetch(requestEndpoint, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(buildRequestBody(settings, prompt, count))
-  });
-
-  if (response.status === 404 && requestEndpoint.includes("api.deepseek.com")) {
-    throw new Error(
-      "DeepSeek 接口返回 404。请确认地址为 https://api.deepseek.com/chat/completions，而不是 /v1/chat/completions 或仅填写域名。"
-    );
-  }
-
-  if (!response.ok) {
-    throw new Error(`接口请求失败：HTTP ${response.status}`);
-  }
-
-  const rawResponse = await response.text();
-  let payload = rawResponse;
+  const requestBody = buildRequestBody(settings, prompt, count);
+  const logBase = buildDiscussionApiLogBase(
+    "generate_posts",
+    settings,
+    requestEndpoint,
+    prompt,
+    requestBody,
+    `页签：${getFeedLabel(resolvedFeedType)} · 数量：${count}`
+  );
+  let logged = false;
 
   try {
-    payload = JSON.parse(rawResponse);
-  } catch (_error) {
-    payload = rawResponse;
-  }
+    const response = await fetch(requestEndpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(requestBody)
+    });
+    const rawResponse = await response.text();
+    let payload = rawResponse;
 
-  const message = resolveMessage(payload);
-  if (!message) {
-    throw new Error("接口请求成功，但响应中没有可解析的文本。");
-  }
+    try {
+      payload = JSON.parse(rawResponse);
+    } catch (_error) {
+      payload = rawResponse;
+    }
 
-  return parseGeneratedPosts(message, count, resolvedFeedType);
+    if (response.status === 404 && requestEndpoint.includes("api.deepseek.com")) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage:
+          "DeepSeek 接口返回 404。请确认地址为 https://api.deepseek.com/chat/completions，而不是 /v1/chat/completions 或仅填写域名。"
+      });
+      logged = true;
+      throw new Error(
+        "DeepSeek 接口返回 404。请确认地址为 https://api.deepseek.com/chat/completions，而不是 /v1/chat/completions 或仅填写域名。"
+      );
+    }
+
+    if (!response.ok) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: `接口请求失败：HTTP ${response.status}`
+      });
+      logged = true;
+      throw new Error(`接口请求失败：HTTP ${response.status}`);
+    }
+
+    const message = resolveMessage(payload);
+    if (!message) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: "接口请求成功，但响应中没有可解析的文本。"
+      });
+      logged = true;
+      throw new Error("接口请求成功，但响应中没有可解析的文本。");
+    }
+
+    appendApiLog({
+      ...logBase,
+      status: "success",
+      statusCode: response.status,
+      responseText: rawResponse,
+      responseBody: payload,
+      summary: `页签：${getFeedLabel(resolvedFeedType)} · 已生成 ${count} 条帖子`
+    });
+    logged = true;
+    return parseGeneratedPosts(message, count, resolvedFeedType);
+  } catch (error) {
+    if (!logged) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        errorMessage: error?.message || "请求失败"
+      });
+    }
+    throw error;
+  }
 }
 
 function buildTranslatePrompt(sourceText) {
@@ -4662,43 +4769,112 @@ async function requestTranslatedPostContent(settings, post) {
     throw new Error("Gemini 模式需要填写 API Key。");
   }
 
-  const response = await fetch(requestEndpoint, {
-    method: "POST",
-    headers: buildRequestHeaders(settings),
-    body: JSON.stringify(buildTranslateRequestBody(settings, buildTranslatePostPrompt(post)))
-  });
-  if (!response.ok) {
-    throw new Error(`翻译请求失败：HTTP ${response.status}`);
-  }
+  const prompt = buildTranslatePostPrompt(post);
+  const requestBody = buildTranslateRequestBody(settings, prompt);
+  const logBase = buildDiscussionApiLogBase(
+    "translate_post",
+    settings,
+    requestEndpoint,
+    prompt,
+    requestBody,
+    `帖子：${truncate(post?.text || "图片帖子", 48)}`
+  );
+  let logged = false;
 
-  const rawResponse = await response.text();
-  let payload = rawResponse;
   try {
-    payload = JSON.parse(rawResponse);
-  } catch (_error) {
-    payload = rawResponse;
-  }
+    const response = await fetch(requestEndpoint, {
+      method: "POST",
+      headers: buildRequestHeaders(settings),
+      body: JSON.stringify(requestBody)
+    });
+    const rawResponse = await response.text();
+    let payload = rawResponse;
+    try {
+      payload = JSON.parse(rawResponse);
+    } catch (_error) {
+      payload = rawResponse;
+    }
 
-  const message = resolveMessage(payload);
-  if (!message) {
-    throw new Error("翻译请求成功，但响应为空。");
-  }
+    if (!response.ok) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: `翻译请求失败：HTTP ${response.status}`
+      });
+      logged = true;
+      throw new Error(`翻译请求失败：HTTP ${response.status}`);
+    }
 
-  const jsonText = extractJsonArray(message);
-  if (!jsonText) {
-    throw new Error("翻译响应中没有可解析的 JSON 数组。");
-  }
+    const message = resolveMessage(payload);
+    if (!message) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: "翻译请求成功，但响应为空。"
+      });
+      logged = true;
+      throw new Error("翻译请求成功，但响应为空。");
+    }
 
-  const parsed = parseJsonArrayWithRepair(jsonText, "翻译标签 JSON 解析失败。");
-  const translatedPost = Array.isArray(parsed) && parsed.length ? parsed[0] : null;
-  if (!translatedPost || typeof translatedPost !== "object") {
-    throw new Error("翻译响应格式不正确。");
-  }
+    const jsonText = extractJsonArray(message);
+    if (!jsonText) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: "翻译响应中没有可解析的 JSON 数组。"
+      });
+      logged = true;
+      throw new Error("翻译响应中没有可解析的 JSON 数组。");
+    }
 
-  return {
-    text: normalizeTranslatedText(translatedPost.text || "", post.text || ""),
-    tags: normalizeTags(translatedPost.tags || [], 5)
-  };
+    const parsed = parseJsonArrayWithRepair(jsonText, "翻译标签 JSON 解析失败。");
+    const translatedPost = Array.isArray(parsed) && parsed.length ? parsed[0] : null;
+    if (!translatedPost || typeof translatedPost !== "object") {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: "翻译响应格式不正确。"
+      });
+      logged = true;
+      throw new Error("翻译响应格式不正确。");
+    }
+
+    const result = {
+      text: normalizeTranslatedText(translatedPost.text || "", post.text || ""),
+      tags: normalizeTags(translatedPost.tags || [], 5)
+    };
+    appendApiLog({
+      ...logBase,
+      status: "success",
+      statusCode: response.status,
+      responseText: rawResponse,
+      responseBody: payload,
+      summary: `帖子翻译完成：${truncate(result.text, 48)}`
+    });
+    logged = true;
+    return result;
+  } catch (error) {
+    if (!logged) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        errorMessage: error?.message || "请求失败"
+      });
+    }
+    throw error;
+  }
 }
 
 async function requestTranslatedText(settings, sourceText) {
@@ -4719,28 +4895,80 @@ async function requestTranslatedText(settings, sourceText) {
     throw new Error("Gemini 模式需要填写 API Key。");
   }
 
-  const response = await fetch(requestEndpoint, {
-    method: "POST",
-    headers: buildRequestHeaders(settings),
-    body: JSON.stringify(buildTranslateRequestBody(settings, buildTranslatePrompt(originalText)))
-  });
-  if (!response.ok) {
-    throw new Error(`翻译请求失败：HTTP ${response.status}`);
-  }
+  const prompt = buildTranslatePrompt(originalText);
+  const requestBody = buildTranslateRequestBody(settings, prompt);
+  const logBase = buildDiscussionApiLogBase(
+    "translate_reply",
+    settings,
+    requestEndpoint,
+    prompt,
+    requestBody,
+    `回复：${truncate(originalText, 48)}`
+  );
+  let logged = false;
 
-  const rawResponse = await response.text();
-  let payload = rawResponse;
   try {
-    payload = JSON.parse(rawResponse);
-  } catch (_error) {
-    payload = rawResponse;
-  }
+    const response = await fetch(requestEndpoint, {
+      method: "POST",
+      headers: buildRequestHeaders(settings),
+      body: JSON.stringify(requestBody)
+    });
+    const rawResponse = await response.text();
+    let payload = rawResponse;
+    try {
+      payload = JSON.parse(rawResponse);
+    } catch (_error) {
+      payload = rawResponse;
+    }
 
-  const message = resolveMessage(payload);
-  if (!message) {
-    throw new Error("翻译请求成功，但响应为空。");
+    if (!response.ok) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: `翻译请求失败：HTTP ${response.status}`
+      });
+      logged = true;
+      throw new Error(`翻译请求失败：HTTP ${response.status}`);
+    }
+
+    const message = resolveMessage(payload);
+    if (!message) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: "翻译请求成功，但响应为空。"
+      });
+      logged = true;
+      throw new Error("翻译请求成功，但响应为空。");
+    }
+
+    const translated = normalizeTranslatedText(message, originalText);
+    appendApiLog({
+      ...logBase,
+      status: "success",
+      statusCode: response.status,
+      responseText: rawResponse,
+      responseBody: payload,
+      summary: `回复翻译完成：${truncate(translated, 48)}`
+    });
+    logged = true;
+    return translated;
+  } catch (error) {
+    if (!logged) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        errorMessage: error?.message || "请求失败"
+      });
+    }
+    throw error;
   }
-  return normalizeTranslatedText(message, originalText);
 }
 
 async function translatePostToChinese(postId, bucketName = state.activeFeed) {
@@ -4834,40 +5062,85 @@ async function requestGeneratedReplies(
 
   const prompt = buildReplyPrompt(settings, profile, feedType, rootPost, parentReply, count);
   const headers = buildRequestHeaders(settings);
-
-  const response = await fetch(requestEndpoint, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(
-      buildRequestBody(settings, prompt, count, {
-        images: [rootPost?.imageDataUrl].filter(Boolean)
-      })
-    )
+  const requestBody = buildRequestBody(settings, prompt, count, {
+    images: [rootPost?.imageDataUrl].filter(Boolean)
   });
-
-  if (!response.ok) {
-    throw new Error(`回复请求失败：HTTP ${response.status}`);
-  }
-
-  const rawResponse = await response.text();
-  let payload = rawResponse;
+  const logBase = buildDiscussionApiLogBase(
+    "generate_replies",
+    settings,
+    requestEndpoint,
+    prompt,
+    requestBody,
+    `主贴：${truncate(rootPost?.text || "图片帖子", 48)}${parentReply ? " · 楼中楼" : ""}`
+  );
+  let logged = false;
 
   try {
-    payload = JSON.parse(rawResponse);
-  } catch (_error) {
-    payload = rawResponse;
-  }
+    const response = await fetch(requestEndpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(requestBody)
+    });
+    const rawResponse = await response.text();
+    let payload = rawResponse;
 
-  const message = resolveMessage(payload);
-  if (!message) {
-    throw new Error("接口返回成功，但没有可解析的回复内容。");
-  }
+    try {
+      payload = JSON.parse(rawResponse);
+    } catch (_error) {
+      payload = rawResponse;
+    }
 
-  return parseGeneratedReplies(
-    message,
-    count,
-    `${rootPost.id}-${parentReply?.id || "root"}`
-  );
+    if (!response.ok) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: `回复请求失败：HTTP ${response.status}`
+      });
+      logged = true;
+      throw new Error(`回复请求失败：HTTP ${response.status}`);
+    }
+
+    const message = resolveMessage(payload);
+    if (!message) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: "接口返回成功，但没有可解析的回复内容。"
+      });
+      logged = true;
+      throw new Error("接口返回成功，但没有可解析的回复内容。");
+    }
+
+    appendApiLog({
+      ...logBase,
+      status: "success",
+      statusCode: response.status,
+      responseText: rawResponse,
+      responseBody: payload,
+      summary: `已生成 ${count} 条论坛回复${parentReply ? "（楼中楼）" : ""}`
+    });
+    logged = true;
+    return parseGeneratedReplies(
+      message,
+      count,
+      `${rootPost.id}-${parentReply?.id || "root"}`
+    );
+  } catch (error) {
+    if (!logged) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        errorMessage: error?.message || "请求失败"
+      });
+    }
+    throw error;
+  }
 }
 
 async function expandPostDiscussion(postId, bucketName = state.activeFeed) {

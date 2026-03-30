@@ -2,7 +2,7 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260330k";
+const APP_BUILD_VERSION = "20260330r";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -34,6 +34,7 @@ const homeTranslationApiConfigSelectEl = document.querySelector(
 const homeConfigExportBtn = document.querySelector("#home-config-export-btn");
 const homeConfigImportBtn = document.querySelector("#home-config-import-btn");
 const homeConfigImportInput = document.querySelector("#home-config-import-input");
+const homeApiLogBtn = document.querySelector("#home-api-log-btn");
 const homeConfigTransferStatusEl = document.querySelector("#home-config-transfer-status");
 const homeAppTriggers = [...document.querySelectorAll("[data-open-app]")];
 const homeBrowserModalEl = document.querySelector("#home-browser-modal");
@@ -876,6 +877,13 @@ function getHomeAppMeta(tabName = "home") {
       title: "Bubble"
     };
   }
+  if (tabName === "logs") {
+    return {
+      tab: "logs",
+      kicker: "Logs",
+      title: "API Log"
+    };
+  }
   return {
     tab: "home",
     kicker: "Discussion",
@@ -938,6 +946,15 @@ function openHomeApp(tabName) {
       true,
       `./bubble.html?embed=1&v=${APP_BUILD_VERSION}`,
       getHomeAppMeta("bubble")
+    );
+    return;
+  }
+
+  if (tabName === "logs") {
+    setHomeBrowserModalOpen(
+      true,
+      `./api-log.html?embed=1&v=${APP_BUILD_VERSION}`,
+      getHomeAppMeta("logs")
     );
     return;
   }
@@ -1089,6 +1106,12 @@ function attachHomeSettingsEvents() {
       const [file] = homeConfigImportInput.files || [];
       await handleHomeConfigImport(file);
       homeConfigImportInput.value = "";
+    });
+  }
+
+  if (homeApiLogBtn) {
+    homeApiLogBtn.addEventListener("click", () => {
+      openHomeApp("logs");
     });
   }
 

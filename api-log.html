@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pulse Generator · API 日志</title>
+    <link rel="stylesheet" href="./api-log.css?v=20260330r" />
+  </head>
+  <body>
+    <a class="api-log-desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
+
+    <main class="api-log-app">
+      <section class="api-log-shell" aria-label="API 日志">
+        <header class="api-log-header">
+          <button
+            id="api-log-close-btn"
+            class="api-log-header__button"
+            type="button"
+            aria-label="关闭日志页"
+            hidden
+          >
+            关闭
+          </button>
+          <div class="api-log-header__title">
+            <p class="api-log-header__kicker">Local Debug</p>
+            <h1>API Prompt / Reply Log</h1>
+          </div>
+          <div class="api-log-header__spacer" aria-hidden="true"></div>
+        </header>
+
+        <section class="api-log-toolbar" aria-label="日志操作">
+          <label class="api-log-filter">
+            <span>来源</span>
+            <select id="api-log-source-filter">
+              <option value="">全部</option>
+              <option value="discussion">论坛</option>
+              <option value="bubble">Bubble</option>
+              <option value="messages">Message</option>
+            </select>
+          </label>
+
+          <label class="api-log-filter">
+            <span>状态</span>
+            <select id="api-log-status-filter">
+              <option value="">全部</option>
+              <option value="success">成功</option>
+              <option value="error">失败</option>
+            </select>
+          </label>
+
+          <div class="api-log-toolbar__actions">
+            <button id="api-log-refresh-btn" class="api-log-chip" type="button">刷新</button>
+            <button id="api-log-export-btn" class="api-log-primary" type="button">
+              导出 JSON
+            </button>
+            <button id="api-log-clear-btn" class="api-log-chip api-log-chip--danger" type="button">
+              清空日志
+            </button>
+          </div>
+        </section>
+
+        <p id="api-log-status" class="api-log-status" aria-live="polite"></p>
+        <section id="api-log-list" class="api-log-list" aria-live="polite"></section>
+      </section>
+    </main>
+
+    <script src="./api-log.js?v=20260330r"></script>
+    <script src="./api-log-viewer.js?v=20260330r"></script>
+  </body>
+</html>

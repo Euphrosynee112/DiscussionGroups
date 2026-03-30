@@ -10,7 +10,7 @@ const BUBBLE_ROOMS_KEY = "x_style_generator_bubble_rooms_v1";
 const BUBBLE_THREADS_KEY = "x_style_generator_bubble_threads_v1";
 const BUBBLE_FAN_DETAILS_KEY = "x_style_generator_bubble_fan_details_v1";
 const DEFAULT_TEMPERATURE = 0.8;
-const FAN_DETAIL_REPLY_COUNT = 8;
+const FAN_DETAIL_REPLY_COUNT = 15;
 
 const DEFAULT_SETTINGS = {
   mode: "openai",
@@ -201,6 +201,51 @@ function formatLocalTime(now = new Date()) {
   })
     .format(now)
     .replace(/^24:/, "00:");
+}
+
+function formatBubbleTimestamp(value = Date.now()) {
+  const date = value instanceof Date ? value : new Date(Number(value) || Date.now());
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(date);
+  const map = Object.fromEntries(
+    parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value])
+  );
+  const hour = map.hour === "24" ? "00" : map.hour || "00";
+  return `${map.month || "00"}-${map.day || "00"} ${hour}:${map.minute || "00"}`;
+}
+
+function resolveBubbleTimeLabel(value, createdAt = Date.now()) {
+  const text = String(value || "").trim();
+  if (text) {
+    return text;
+  }
+  return formatBubbleTimestamp(createdAt);
+}
+
+function appendApiLog(entry) {
+  try {
+    window.PulseApiLog?.append?.(entry);
+  } catch (_error) {
+  }
+}
+
+function buildBubbleApiLogBase(action, settings, endpoint, prompt, requestBody, summary = "") {
+  const mode = normalizeApiMode(settings.mode);
+  return {
+    source: "bubble",
+    action,
+    summary,
+    endpoint,
+    mode,
+    model: mode === "generic" ? "" : settings.model || getDefaultModelByMode(mode),
+    prompt,
+    requestBody
+  };
 }
 
 function setBubbleStatus(message, tone = "") {
@@ -698,35 +743,94 @@ function validateApiSettings(settings, purpose = "请求") {
 
 async function requestJsonArrayText(settings, prompt, count = FAN_DETAIL_REPLY_COUNT) {
   const requestEndpoint = validateApiSettings(settings, "粉丝回复生成");
-  const response = await fetch(requestEndpoint, {
-    method: "POST",
-    headers: buildRequestHeaders(settings),
-    body: JSON.stringify(buildJsonArrayRequestBody(settings, prompt, count))
-  });
+  const requestBody = buildJsonArrayRequestBody(settings, prompt, count);
+  const logBase = buildBubbleApiLogBase(
+    "fan_reply_generate",
+    settings,
+    requestEndpoint,
+    prompt,
+    requestBody,
+    `请求生成 ${count} 条粉丝回复`
+  );
+  let logged = false;
 
-  if (response.status === 404 && requestEndpoint.includes("api.deepseek.com")) {
-    throw new Error(
-      "DeepSeek 接口返回 404。请确认地址为 https://api.deepseek.com/chat/completions。"
-    );
-  }
-
-  if (!response.ok) {
-    throw new Error(`接口请求失败：HTTP ${response.status}`);
-  }
-
-  const rawResponse = await response.text();
-  let payload = rawResponse;
   try {
-    payload = JSON.parse(rawResponse);
-  } catch (_error) {
-    payload = rawResponse;
-  }
+    const response = await fetch(requestEndpoint, {
+      method: "POST",
+      headers: buildRequestHeaders(settings),
+      body: JSON.stringify(requestBody)
+    });
+    const rawResponse = await response.text();
+    let payload = rawResponse;
+    try {
+      payload = JSON.parse(rawResponse);
+    } catch (_error) {
+      payload = rawResponse;
+    }
 
-  const message = resolveMessage(payload);
-  if (!message) {
-    throw new Error("接口请求成功，但响应中没有可解析的文本。");
+    if (response.status === 404 && requestEndpoint.includes("api.deepseek.com")) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage:
+          "DeepSeek 接口返回 404。请确认地址为 https://api.deepseek.com/chat/completions。"
+      });
+      logged = true;
+      throw new Error(
+        "DeepSeek 接口返回 404。请确认地址为 https://api.deepseek.com/chat/completions。"
+      );
+    }
+
+    if (!response.ok) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: `接口请求失败：HTTP ${response.status}`
+      });
+      logged = true;
+      throw new Error(`接口请求失败：HTTP ${response.status}`);
+    }
+
+    const message = resolveMessage(payload);
+    if (!message) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: "接口请求成功，但响应中没有可解析的文本。"
+      });
+      logged = true;
+      throw new Error("接口请求成功，但响应中没有可解析的文本。");
+    }
+
+    appendApiLog({
+      ...logBase,
+      status: "success",
+      statusCode: response.status,
+      responseText: rawResponse,
+      responseBody: payload,
+      summary: `已返回粉丝回复原始文本 ${message.length} 字符`
+    });
+    logged = true;
+    return message;
+  } catch (error) {
+    if (!logged) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        errorMessage: error?.message || "请求失败"
+      });
+    }
+    throw error;
   }
-  return message;
 }
 
 async function requestTranslatedText(settings, sourceText) {
@@ -736,28 +840,80 @@ async function requestTranslatedText(settings, sourceText) {
   }
 
   const requestEndpoint = validateApiSettings(settings, "翻译");
-  const response = await fetch(requestEndpoint, {
-    method: "POST",
-    headers: buildRequestHeaders(settings),
-    body: JSON.stringify(buildTranslateRequestBody(settings, buildTranslatePrompt(originalText)))
-  });
-  if (!response.ok) {
-    throw new Error(`翻译请求失败：HTTP ${response.status}`);
-  }
+  const prompt = buildTranslatePrompt(originalText);
+  const requestBody = buildTranslateRequestBody(settings, prompt);
+  const logBase = buildBubbleApiLogBase(
+    "fan_reply_translate",
+    settings,
+    requestEndpoint,
+    prompt,
+    requestBody,
+    `翻译粉丝回复：${truncateFanReply(originalText, 36)}`
+  );
+  let logged = false;
 
-  const rawResponse = await response.text();
-  let payload = rawResponse;
   try {
-    payload = JSON.parse(rawResponse);
-  } catch (_error) {
-    payload = rawResponse;
-  }
+    const response = await fetch(requestEndpoint, {
+      method: "POST",
+      headers: buildRequestHeaders(settings),
+      body: JSON.stringify(requestBody)
+    });
+    const rawResponse = await response.text();
+    let payload = rawResponse;
+    try {
+      payload = JSON.parse(rawResponse);
+    } catch (_error) {
+      payload = rawResponse;
+    }
 
-  const message = resolveMessage(payload);
-  if (!message) {
-    throw new Error("翻译请求成功，但响应为空。");
+    if (!response.ok) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: `翻译请求失败：HTTP ${response.status}`
+      });
+      logged = true;
+      throw new Error(`翻译请求失败：HTTP ${response.status}`);
+    }
+
+    const message = resolveMessage(payload);
+    if (!message) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: "翻译请求成功，但响应为空。"
+      });
+      logged = true;
+      throw new Error("翻译请求成功，但响应为空。");
+    }
+
+    const translated = normalizeTranslatedText(message, originalText);
+    appendApiLog({
+      ...logBase,
+      status: "success",
+      statusCode: response.status,
+      responseText: rawResponse,
+      responseBody: payload,
+      summary: `翻译完成：${truncateFanReply(translated, 36)}`
+    });
+    logged = true;
+    return translated;
+  } catch (error) {
+    if (!logged) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        errorMessage: error?.message || "请求失败"
+      });
+    }
+    throw error;
   }
-  return normalizeTranslatedText(message, originalText);
 }
 
 function loadProfile() {
@@ -844,17 +1000,14 @@ function resolveBubblePreview(profile, directMessages, profilePosts) {
 }
 
 function createDefaultBubbleRooms(profile = loadProfile()) {
-  const directMessages = loadDirectMessages();
-  const profilePosts = loadProfilePosts();
-  const preview = resolveBubblePreview(profile, directMessages, profilePosts);
   return [
     {
       id: "bubble_profile_room",
       name: String(profile.username || DEFAULT_PROFILE.username).trim() || DEFAULT_PROFILE.username,
       avatarImage: String(profile.avatarImage || "").trim(),
       avatarText: getAvatarFallback(profile),
-      preview: preview.text || "欢迎来到 Bubble。",
-      time: preview.time || formatLocalTime(),
+      preview: "还没有 Bubble 消息。",
+      time: formatLocalTime(),
       updatedAt: Date.now()
     }
   ];
@@ -930,10 +1083,7 @@ function normalizeBubbleMessage(message, index = 0) {
     return {
       id: String(message?.id || `fan_placeholder_${index}_${Date.now()}`),
       role,
-      time:
-        /^\d{1,2}:\d{2}$/.test(String(message?.time || "").trim())
-          ? String(message.time).trim()
-          : formatLocalTime(),
+      time: resolveBubbleTimeLabel(message?.time, message?.createdAt),
       emojiSet: resolvedEmojiSet,
       detailId:
         String(message?.detailId || "").trim() ||
@@ -947,10 +1097,7 @@ function normalizeBubbleMessage(message, index = 0) {
     id: String(message?.id || `bubble_msg_${index}_${Date.now()}`),
     role,
     text: String(message?.text || "").trim(),
-    time:
-      /^\d{1,2}:\d{2}$/.test(String(message?.time || "").trim())
-        ? String(message.time).trim()
-        : formatLocalTime(),
+    time: resolveBubbleTimeLabel(message?.time, message?.createdAt),
     createdAt: Number(message?.createdAt) || Date.now()
   };
 }
@@ -1017,6 +1164,7 @@ function normalizeFanReply(reply, index = 0) {
     avatar: String(reply?.avatar || pickRandomFanAvatar(`${index}`)).trim() || "🫧",
     language: normalizeReplyLanguage(reply?.language, reply?.text || ""),
     text: truncateFanReply(reply?.text || ""),
+    time: resolveBubbleTimeLabel(reply?.time, reply?.createdAt),
     translationZh: String(reply?.translationZh || "").trim(),
     translationVisible: Boolean(reply?.translationVisible),
     createdAt: Number(reply?.createdAt) || Date.now()
@@ -1157,12 +1305,18 @@ function getFanReplyById(detailId, replyId) {
   return detail.replies.find((item) => item.id === replyId) || null;
 }
 
-function buildRoomPreviewFromMessage(message, fallbackText = "欢迎来到 Bubble。") {
+function getLatestUserBubbleMessage(thread) {
+  const messages = Array.isArray(thread?.messages) ? thread.messages : [];
+  return (
+    [...messages]
+      .reverse()
+      .find((item) => item?.role === "user" && String(item.text || "").trim()) || null
+  );
+}
+
+function buildRoomPreviewFromMessage(message, fallbackText = "还没有 Bubble 消息。") {
   if (!message) {
     return fallbackText;
-  }
-  if (message.role === "fan") {
-    return truncate((message.emojiSet || []).slice(0, 3).join(" "), 52);
   }
   return truncate(message.text || fallbackText, 52);
 }
@@ -1173,14 +1327,20 @@ function syncRoomPreview(roomId) {
     return;
   }
   const thread = ensureThread(roomId);
-  const latestMessage = thread.messages.length ? thread.messages[thread.messages.length - 1] : null;
+  const latestUserMessage = getLatestUserBubbleMessage(thread);
   room.name = String(state.profile.username || room.name || DEFAULT_PROFILE.username).trim();
   room.avatarImage = String(state.profile.avatarImage || room.avatarImage || "").trim();
   room.avatarText = getAvatarFallback(state.profile);
-  if (latestMessage) {
-    room.preview = buildRoomPreviewFromMessage(latestMessage, room.preview);
-    room.time = latestMessage.time || formatLocalTime();
-    room.updatedAt = latestMessage.createdAt || Date.now();
+  if (latestUserMessage) {
+    room.preview = buildRoomPreviewFromMessage(latestUserMessage, room.preview);
+    room.time = formatLocalTime(new Date(latestUserMessage.createdAt || Date.now()));
+    room.updatedAt = latestUserMessage.createdAt || Date.now();
+    return;
+  }
+
+  room.preview = "还没有 Bubble 消息。";
+  if (!/^\d{1,2}:\d{2}$/.test(String(room.time || "").trim())) {
+    room.time = formatLocalTime();
   }
 }
 
@@ -1276,9 +1436,10 @@ function renderBubbleRooms() {
 
 function buildEmojiTickerMarkup(emojiSet = []) {
   const resolved = emojiSet.length ? emojiSet.slice(0, 6) : buildEmojiFallbackSet("ticker");
-  const firstRow = resolved.slice(0, 3);
-  const secondRow = resolved.slice(3, 6);
-  const rows = [firstRow, secondRow, firstRow];
+  const baseRows = Array.from({ length: 5 }, (_, rowIndex) =>
+    Array.from({ length: 3 }, (_, columnIndex) => resolved[(rowIndex + columnIndex) % resolved.length])
+  );
+  const rows = [...baseRows, baseRows[0]];
   return `
     <div class="bubble-emoji-ticker">
       <div class="bubble-emoji-ticker__track">
@@ -1311,7 +1472,12 @@ function buildFanMessageMarkup(message, index = 0) {
   const avatarEmoji = (message.emojiSet || [])[index % ((message.emojiSet || []).length || 1)] || "🫧";
   return `
     <article class="bubble-chat-item bubble-chat-item--fan">
-      <p class="bubble-chat-label">FROM FAN</p>
+      <div class="bubble-chat-label-row">
+        <p class="bubble-chat-label">FROM FAN</p>
+        <span class="bubble-chat-item__time bubble-chat-item__time--fan">${escapeHtml(
+          message.time || ""
+        )}</span>
+      </div>
       <div class="bubble-chat-fan-row">
         <span class="bubble-chat-fan-avatar">${escapeHtml(avatarEmoji)}</span>
         <div class="bubble-chat-bubble bubble-chat-bubble--fan">
@@ -1421,6 +1587,7 @@ function renderFanDetailList() {
             <div class="bubble-fan-detail-head">
               <strong class="bubble-fan-detail-id">${escapeHtml(reply.fanId)}</strong>
               <span class="bubble-fan-detail-badge">粉丝</span>
+              <span class="bubble-fan-detail-time">${escapeHtml(reply.time || "")}</span>
             </div>
             <div class="bubble-fan-detail-row">
               <div class="bubble-fan-detail-bubble">
@@ -1519,7 +1686,7 @@ function sendBubbleMessage(text) {
       id: `bubble_msg_${Date.now()}`,
       role: "user",
       text: content,
-      time: formatLocalTime(),
+      time: formatBubbleTimestamp(Date.now()),
       createdAt: Date.now()
     }
   ];
@@ -1555,7 +1722,7 @@ function acceptFanReplies() {
     return {
       id: `fan_placeholder_${now}_${index}`,
       role: "fan",
-      time: formatLocalTime(),
+      time: formatBubbleTimestamp(now + index),
       emojiSet,
       detailId,
       parentMessageId: parentMessage.id,
@@ -1684,6 +1851,7 @@ async function generateFanRepliesForDetail(detailId, options = {}) {
           avatar: pickRandomFanAvatar(`${detailId}-${index}`),
           language: item.language,
           text: item.text,
+          time: formatBubbleTimestamp(Date.now() + index),
           translationZh: "",
           translationVisible: false,
           createdAt: Date.now() + index
@@ -1919,6 +2087,9 @@ function attachEvents() {
     const activeFanDetailId = state.activeFanDetailId;
     const shouldReopenChat = state.chatOpen && Boolean(activeRoomId);
     const shouldReopenDetail = Boolean(activeFanDetailId);
+    if (!shouldReopenChat && !shouldReopenDetail) {
+      return;
+    }
     refreshBubbleData();
     renderBubbleRooms();
     if (shouldReopenChat) {

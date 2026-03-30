@@ -465,11 +465,23 @@ body.embedded .bubble-embedded-close {
 }
 
 .bubble-chat-label {
-  margin: 0 0 0 42px;
+  margin: 0;
   color: #555555;
   font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.04em;
+}
+
+.bubble-chat-label-row {
+  margin-left: 42px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bubble-chat-item__time--fan {
+  color: #9f9f9f;
+  font-size: 11px;
 }
 
 .bubble-chat-fan-row {
@@ -507,7 +519,7 @@ body.embedded .bubble-embedded-close {
 .bubble-emoji-ticker__track {
   display: grid;
   gap: 0;
-  animation: bubbleEmojiVerticalTicker 3.6s linear infinite;
+  animation: bubbleEmojiVerticalTicker 5.2s linear infinite;
   will-change: transform;
 }
 
@@ -649,6 +661,7 @@ body.embedded .bubble-embedded-close {
 .bubble-fan-detail-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 0;
 }
@@ -661,6 +674,12 @@ body.embedded .bubble-embedded-close {
 .bubble-fan-detail-badge {
   color: #c4c4c4;
   font-size: 12px;
+}
+
+.bubble-fan-detail-time {
+  margin-left: auto;
+  color: #b1b1b1;
+  font-size: 11px;
 }
 
 .bubble-fan-detail-bubble {
@@ -738,7 +757,7 @@ body.embedded .bubble-embedded-close {
     transform: translateY(0);
   }
   100% {
-    transform: translateY(calc(var(--ticker-row-height) * -2));
+    transform: translateY(calc(var(--ticker-row-height) * -5));
   }
 }
 
@@ -808,8 +827,11 @@ body.embedded .bubble-embedded-close {
   }
 
   .bubble-chat-label {
-    margin-left: 40px;
     font-size: 12px;
+  }
+
+  .bubble-chat-label-row {
+    margin-left: 40px;
   }
 
   .bubble-chat-fan-row {
