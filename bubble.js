@@ -73,6 +73,7 @@ const bubbleAcceptFanBtn = document.querySelector("#bubble-accept-fan-btn");
 const bubbleChatForm = document.querySelector("#bubble-chat-form");
 const bubbleChatInput = document.querySelector("#bubble-chat-input");
 const bubbleChatPlusBtn = document.querySelector("#bubble-chat-plus-btn");
+const bubbleChatLoadingOverlayEl = document.querySelector("#bubble-chat-loading-overlay");
 const bubbleFanDetailModalEl = document.querySelector("#bubble-fan-detail-modal");
 const bubbleFanDetailCloseBtn = document.querySelector("#bubble-fan-detail-close-btn");
 const bubbleFanDetailMoreBtn = document.querySelector("#bubble-fan-detail-more-btn");
@@ -92,6 +93,7 @@ const state = {
   chatOpen: false,
   activeRoomId: "",
   activeFanDetailId: "",
+  loadingFanDetailId: "",
   translatingFanReplyIds: {}
 };
 
@@ -1185,6 +1187,18 @@ function buildAvatarMarkup(room) {
   return `<span>${escapeHtml(room.avatarText || "B")}</span>`;
 }
 
+function setChatLoadingOverlayOpen(isOpen, detailId = "") {
+  state.loadingFanDetailId = isOpen ? String(detailId || "") : "";
+  if (!bubbleChatLoadingOverlayEl) {
+    return;
+  }
+  if (isOpen) {
+    showLayer(bubbleChatLoadingOverlayEl, "grid");
+    return;
+  }
+  hideLayer(bubbleChatLoadingOverlayEl);
+}
+
 function getFilteredRooms() {
   const query = state.query.trim().toLowerCase();
   if (!query) {
@@ -1230,10 +1244,19 @@ function renderBubbleRooms() {
 
 function buildEmojiTickerMarkup(emojiSet = []) {
   const resolved = emojiSet.length ? emojiSet.slice(0, 6) : buildEmojiFallbackSet("ticker");
+  const rows = [resolved.slice(0, 3), resolved.slice(3, 6)];
   return `
     <div class="bubble-emoji-ticker">
       <div class="bubble-emoji-ticker__track">
-        ${resolved.map((emoji) => `<span class="bubble-emoji-ticker__item">${escapeHtml(emoji)}</span>`).join("")}
+        ${rows
+          .map(
+            (row) => `
+              <span class="bubble-emoji-ticker__item">
+                ${row.map((emoji) => `<span>${escapeHtml(emoji)}</span>`).join("")}
+              </span>
+            `
+          )
+          .join("")}
       </div>
     </div>
   `;
@@ -1322,6 +1345,7 @@ function setChatModalOpen(isOpen, roomId = state.activeRoomId) {
   }
 
   state.activeRoomId = "";
+  setChatLoadingOverlayOpen(false);
   document.body.classList.remove("chat-open");
   hideLayer(bubbleChatModalEl);
   setFanDetailModalOpen(false);
@@ -1364,21 +1388,23 @@ function renderFanDetailList() {
               <strong class="bubble-fan-detail-id">${escapeHtml(reply.fanId)}</strong>
               <span class="bubble-fan-detail-badge">粉丝</span>
             </div>
-            <div class="bubble-fan-detail-bubble">
-              <p>${escapeHtml(reply.text)}</p>
-              ${translationMarkup}
+            <div class="bubble-fan-detail-row">
+              <div class="bubble-fan-detail-bubble">
+                <p>${escapeHtml(reply.text)}</p>
+                ${translationMarkup}
+              </div>
+              <button
+                class="bubble-fan-detail-action${reply.translationVisible ? " is-active" : ""}"
+                type="button"
+                data-action="toggle-fan-translation"
+                data-reply-id="${escapeHtml(reply.id)}"
+                aria-label="翻译或隐藏翻译"
+                ${isTranslating ? "disabled" : ""}
+              >
+                ${isTranslating ? "…" : "A"}
+              </button>
             </div>
           </div>
-          <button
-            class="bubble-fan-detail-action${reply.translationVisible ? " is-active" : ""}"
-            type="button"
-            data-action="toggle-fan-translation"
-            data-reply-id="${escapeHtml(reply.id)}"
-            aria-label="翻译或隐藏翻译"
-            ${isTranslating ? "disabled" : ""}
-          >
-            ${isTranslating ? "…" : "A"}
-          </button>
         </article>
       `;
     })
@@ -1576,8 +1602,10 @@ async function generateFanRepliesForDetail(detailId, options = {}) {
     placeholder?.emojiSet || state.fanDetails[detailId]?.emojiSet || []
   );
   if (!options.force && detail.replies.length) {
-    renderFanDetailList();
-    return;
+    if (state.activeFanDetailId === detailId) {
+      renderFanDetailList();
+    }
+    return true;
   }
 
   const roomId = detail.roomId || state.activeRoomId;
@@ -1588,15 +1616,19 @@ async function generateFanRepliesForDetail(detailId, options = {}) {
 
   if (!parentMessage?.text) {
     setFanDetailStatus("未找到可用于生成粉丝回复的用户消息。", "error");
-    renderFanDetailList();
-    return;
+    if (state.activeFanDetailId === detailId) {
+      renderFanDetailList();
+    }
+    return false;
   }
 
   detail.sourceText = parentMessage.text;
   persistBubbleFanDetails();
   setFanDetailStatus("正在通过当前 API 生成粉丝回复…");
-  bubbleFanDetailListEl.innerHTML =
-    '<div class="bubble-fan-detail-empty">正在获取粉丝回复，请稍候…</div>';
+  if (state.activeFanDetailId === detailId && bubbleFanDetailListEl) {
+    bubbleFanDetailListEl.innerHTML =
+      '<div class="bubble-fan-detail-empty">正在获取粉丝回复，请稍候…</div>';
+  }
 
   try {
     const rawText = await requestJsonArrayText(
@@ -1623,12 +1655,18 @@ async function generateFanRepliesForDetail(detailId, options = {}) {
     detail.replies = replies;
     detail.generatedAt = Date.now();
     persistBubbleFanDetails();
-    renderFanDetailList();
+    if (state.activeFanDetailId === detailId) {
+      renderFanDetailList();
+    }
     setFanDetailStatus("已生成粉丝回复。点击右侧 A 可翻译为中文。", "success");
+    return true;
   } catch (error) {
     setFanDetailStatus(`粉丝回复生成失败：${error?.message || "请求失败"}`, "error");
-    bubbleFanDetailListEl.innerHTML =
-      '<div class="bubble-fan-detail-empty">粉丝回复生成失败，请检查 API 配置后重试。</div>';
+    if (state.activeFanDetailId === detailId && bubbleFanDetailListEl) {
+      bubbleFanDetailListEl.innerHTML =
+        '<div class="bubble-fan-detail-empty">粉丝回复生成失败，请检查 API 配置后重试。</div>';
+    }
+    return false;
   }
 }
 
@@ -1663,7 +1701,7 @@ async function toggleFanReplyTranslation(replyId) {
       getTranslationRequestSettings(getCurrentSettings()),
       reply.text
     );
-    reply.translationZh = translatedText;
+    reply.translationZh = String(translatedText || "").trim() || reply.text;
     reply.translationVisible = true;
     persistBubbleFanDetails();
     setFanDetailStatus("已生成中文翻译。再次点击 A 可隐藏。", "success");
@@ -1675,7 +1713,7 @@ async function toggleFanReplyTranslation(replyId) {
   }
 }
 
-function openFanDetail(detailId) {
+async function openFanDetail(detailId) {
   if (!detailId) {
     return;
   }
@@ -1683,8 +1721,31 @@ function openFanDetail(detailId) {
   if (placeholder) {
     ensureFanDetail(detailId, state.activeRoomId, placeholder.parentMessageId, placeholder.emojiSet);
   }
-  setFanDetailModalOpen(true, detailId);
-  generateFanRepliesForDetail(detailId);
+  const detail = ensureFanDetail(detailId);
+  if (detail.replies.length) {
+    setFanDetailModalOpen(true, detailId);
+    renderFanDetailList();
+    return;
+  }
+
+  const roomIdAtRequest = state.activeRoomId;
+  setChatLoadingOverlayOpen(true, detailId);
+  setBubbleStatus("粉丝回复中……");
+  const success = await generateFanRepliesForDetail(detailId);
+  const shouldOpenDetail =
+    success &&
+    state.chatOpen &&
+    state.activeRoomId === roomIdAtRequest &&
+    state.loadingFanDetailId === detailId;
+  setChatLoadingOverlayOpen(false);
+  if (shouldOpenDetail) {
+    setFanDetailModalOpen(true, detailId);
+    renderFanDetailList();
+    return;
+  }
+  if (!success) {
+    setBubbleStatus("粉丝回复生成失败，请检查 API 配置后重试。", "error");
+  }
 }
 
 function attachEvents() {
