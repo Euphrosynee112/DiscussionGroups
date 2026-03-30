@@ -2,7 +2,7 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260330c";
+const APP_BUILD_VERSION = "20260330d";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -255,44 +255,66 @@ function normalizeApiConfigs(configs = []) {
     });
 }
 
-function loadSettings() {
+function buildNormalizedSettingsSnapshot(source, options = {}) {
+  const merged = {
+    ...DEFAULT_SETTINGS,
+    ...(source && typeof source === "object" ? source : {})
+  };
+  merged.mode = normalizeApiMode(merged.mode);
+  merged.endpoint = normalizeSettingsEndpointByMode(merged.mode, merged.endpoint);
+  merged.token = normalizeApiConfigToken(merged.token);
+  merged.model =
+    merged.mode === "generic"
+      ? ""
+      : String(merged.model || getDefaultModelByMode(merged.mode)).trim() ||
+        getDefaultModelByMode(merged.mode);
+  merged.apiConfigs = normalizeApiConfigs(
+    merged.apiConfigs || source?.apiPresets || source?.apiProfiles || []
+  );
+
+  const activeConfig =
+    merged.apiConfigs.find((item) => item.id === merged.activeApiConfigId) || null;
+  if (!activeConfig) {
+    merged.activeApiConfigId = "";
+  } else {
+    const shouldSyncActiveConfig =
+      options.forceActiveConfig ||
+      !merged.endpoint ||
+      (!merged.token && activeConfig.token) ||
+      normalizeApiMode(merged.mode) !== normalizeApiMode(activeConfig.mode);
+
+    if (shouldSyncActiveConfig) {
+      merged.mode = normalizeApiMode(activeConfig.mode);
+      merged.endpoint = normalizeSettingsEndpointByMode(activeConfig.mode, activeConfig.endpoint);
+      merged.token = normalizeApiConfigToken(activeConfig.token);
+      merged.model =
+        merged.mode === "generic"
+          ? ""
+          : String(activeConfig.model || getDefaultModelByMode(activeConfig.mode)).trim() ||
+            getDefaultModelByMode(activeConfig.mode);
+    }
+  }
+
+  if (!merged.apiConfigs.some((item) => item.id === merged.translationApiConfigId)) {
+    merged.translationApiConfigId = "";
+    merged.translationApiEnabled = false;
+  }
+  merged.translationApiEnabled = Boolean(
+    merged.translationApiEnabled && merged.translationApiConfigId
+  );
+  return merged;
+}
+
+function loadSettings(options = {}) {
   const raw = safeGetItem(SETTINGS_KEY);
   if (!raw) {
-    return {
-      ...DEFAULT_SETTINGS,
-      apiConfigs: []
-    };
+    return buildNormalizedSettingsSnapshot(DEFAULT_SETTINGS, options);
   }
 
   try {
-    const parsed = JSON.parse(raw);
-    const merged = {
-      ...DEFAULT_SETTINGS,
-      ...(parsed && typeof parsed === "object" ? parsed : {})
-    };
-    merged.mode = normalizeApiMode(merged.mode);
-    merged.endpoint = normalizeSettingsEndpointByMode(merged.mode, merged.endpoint);
-    merged.model =
-      merged.mode === "generic"
-        ? ""
-        : String(merged.model || getDefaultModelByMode(merged.mode)).trim() ||
-          getDefaultModelByMode(merged.mode);
-    merged.apiConfigs = normalizeApiConfigs(
-      merged.apiConfigs || parsed?.apiPresets || parsed?.apiProfiles || []
-    );
-    if (!merged.apiConfigs.some((item) => item.id === merged.activeApiConfigId)) {
-      merged.activeApiConfigId = "";
-    }
-    if (!merged.apiConfigs.some((item) => item.id === merged.translationApiConfigId)) {
-      merged.translationApiConfigId = "";
-      merged.translationApiEnabled = false;
-    }
-    return merged;
+    return buildNormalizedSettingsSnapshot(JSON.parse(raw), options);
   } catch (_error) {
-    return {
-      ...DEFAULT_SETTINGS,
-      apiConfigs: []
-    };
+    return buildNormalizedSettingsSnapshot(DEFAULT_SETTINGS, options);
   }
 }
 
@@ -425,7 +447,10 @@ function resolveImportedConfigPayload(parsed) {
 function applyImportedConfig(payload) {
   const imported = resolveImportedConfigPayload(payload);
   if (imported.settings && typeof imported.settings === "object") {
-    safeSetItem(SETTINGS_KEY, JSON.stringify(imported.settings));
+    const nextSettings = buildNormalizedSettingsSnapshot(imported.settings, {
+      forceActiveConfig: true
+    });
+    safeSetItem(SETTINGS_KEY, JSON.stringify(nextSettings));
   }
   if (typeof imported.feeds !== "undefined") {
     safeSetItem(POSTS_KEY, JSON.stringify(imported.feeds));
@@ -444,6 +469,7 @@ function applyImportedConfig(payload) {
   }
 
   homeState.settings = loadSettings();
+  persistSettings(homeState.settings);
   applySettingsToHomeForm(homeState.settings);
   syncHomeActiveConfigSummary();
 }

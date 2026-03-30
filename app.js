@@ -195,6 +195,7 @@ const state = {
   feedTopAnchorAt: Date.now(),
   touchStartY: 0,
   touchTracking: false,
+  touchStartedAtTop: false,
   wheelReleaseTimer: null,
   threadModalOpen: false,
   threadModalBucket: "",
@@ -791,51 +792,67 @@ function persistSettings(nextSettings) {
 function loadSettings() {
   const raw = safeGetItem(SETTINGS_KEY);
   if (!raw) {
-    return {
-      ...DEFAULT_SETTINGS,
-      customTabs: normalizeCustomTabs(DEFAULT_SETTINGS.customTabs),
-      apiConfigs: normalizeApiConfigs(DEFAULT_SETTINGS.apiConfigs),
-      activeApiConfigId: "",
-      translationApiEnabled: false,
-      translationApiConfigId: ""
-    };
+    return buildNormalizedSettingsSnapshot(DEFAULT_SETTINGS);
   }
 
   try {
-    const parsed = JSON.parse(raw);
-    const merged = {
-      ...DEFAULT_SETTINGS,
-      ...parsed
-    };
-    merged.mode = normalizeApiMode(merged.mode);
-    const legacyCustomTabs =
-      merged.customTabs ||
-      parsed?.customTabs ||
-      parsed?.customFeeds ||
-      parsed?.customTabList ||
-      [];
-    merged.customTabs = normalizeCustomTabs(legacyCustomTabs);
-    const legacyApiConfigs =
-      merged.apiConfigs || parsed?.apiConfigs || parsed?.apiPresets || parsed?.apiProfiles || [];
-    merged.apiConfigs = normalizeApiConfigs(legacyApiConfigs);
-    if (!merged.apiConfigs.some((item) => item.id === merged.activeApiConfigId)) {
-      merged.activeApiConfigId = "";
-    }
-    if (!merged.apiConfigs.some((item) => item.id === merged.translationApiConfigId)) {
-      merged.translationApiConfigId = "";
-      merged.translationApiEnabled = false;
-    }
-    return merged;
+    return buildNormalizedSettingsSnapshot(JSON.parse(raw));
   } catch (_error) {
-    return {
-      ...DEFAULT_SETTINGS,
-      customTabs: normalizeCustomTabs(DEFAULT_SETTINGS.customTabs),
-      apiConfigs: normalizeApiConfigs(DEFAULT_SETTINGS.apiConfigs),
-      activeApiConfigId: "",
-      translationApiEnabled: false,
-      translationApiConfigId: ""
-    };
+    return buildNormalizedSettingsSnapshot(DEFAULT_SETTINGS);
   }
+}
+
+function buildNormalizedSettingsSnapshot(source, options = {}) {
+  const merged = {
+    ...DEFAULT_SETTINGS,
+    ...(source && typeof source === "object" ? source : {})
+  };
+  merged.mode = normalizeApiMode(merged.mode);
+  merged.endpoint = normalizeSettingsEndpointByMode(merged.mode, merged.endpoint);
+  merged.token = normalizeApiConfigToken(merged.token);
+  const legacyCustomTabs =
+    merged.customTabs || source?.customTabs || source?.customFeeds || source?.customTabList || [];
+  merged.customTabs = normalizeCustomTabs(legacyCustomTabs);
+  const legacyApiConfigs =
+    merged.apiConfigs || source?.apiConfigs || source?.apiPresets || source?.apiProfiles || [];
+  merged.apiConfigs = normalizeApiConfigs(legacyApiConfigs);
+  merged.model =
+    merged.mode === "generic"
+      ? ""
+      : String(merged.model || getDefaultModelByMode(merged.mode)).trim() ||
+        getDefaultModelByMode(merged.mode);
+
+  const activeConfig =
+    merged.apiConfigs.find((item) => item.id === merged.activeApiConfigId) || null;
+  if (!activeConfig) {
+    merged.activeApiConfigId = "";
+  } else {
+    const shouldSyncActiveConfig =
+      options.forceActiveConfig ||
+      !merged.endpoint ||
+      (!merged.token && activeConfig.token) ||
+      normalizeApiMode(merged.mode) !== normalizeApiMode(activeConfig.mode);
+
+    if (shouldSyncActiveConfig) {
+      merged.mode = normalizeApiMode(activeConfig.mode);
+      merged.endpoint = normalizeSettingsEndpointByMode(activeConfig.mode, activeConfig.endpoint);
+      merged.token = normalizeApiConfigToken(activeConfig.token);
+      merged.model =
+        merged.mode === "generic"
+          ? ""
+          : String(activeConfig.model || getDefaultModelByMode(activeConfig.mode)).trim() ||
+            getDefaultModelByMode(activeConfig.mode);
+    }
+  }
+
+  if (!merged.apiConfigs.some((item) => item.id === merged.translationApiConfigId)) {
+    merged.translationApiConfigId = "";
+    merged.translationApiEnabled = false;
+  }
+  merged.translationApiEnabled = Boolean(
+    merged.translationApiEnabled && merged.translationApiConfigId
+  );
+  return merged;
 }
 
 function persistFeeds(feeds) {
@@ -2115,6 +2132,48 @@ function updateHomeRefreshAvailability() {
 
 function getHomeScrollTarget() {
   return homeScrollEl || feedEl || null;
+}
+
+function getDocumentScrollTop() {
+  const scrollingElement = document.scrollingElement || document.documentElement || document.body;
+  return Math.max(
+    Number(window.scrollY || 0),
+    Number(scrollingElement?.scrollTop || 0),
+    0
+  );
+}
+
+function isHomeScrollTargetAtTop(scrollTarget = getHomeScrollTarget()) {
+  return !scrollTarget || Math.max(Number(scrollTarget.scrollTop || 0), 0) <= 0.5;
+}
+
+function isHomeRefreshStartPosition() {
+  if (!canRefreshCurrentHomeFeed()) {
+    return false;
+  }
+  if (!isHomeScrollTargetAtTop()) {
+    return false;
+  }
+  if (!isEmbeddedView() && getDocumentScrollTop() > 2) {
+    return false;
+  }
+  return true;
+}
+
+function syncHomeRefreshAnchor() {
+  if (isHomeRefreshStartPosition()) {
+    if (!state.feedTopAnchorAt) {
+      state.feedTopAnchorAt = Date.now();
+    }
+    return;
+  }
+
+  state.feedTopAnchorAt = 0;
+  state.touchStartedAtTop = false;
+  if (state.pullDistance > 0 && !state.isRefreshing) {
+    state.pullDistance = 0;
+    setPullIndicator(0, "idle");
+  }
 }
 
 function switchHomeFeed(nextFeed) {
@@ -5114,23 +5173,33 @@ function releasePull() {
 }
 
 function handleTouchStart(event) {
-  const scrollTarget = getHomeScrollTarget();
-  const atTop = !scrollTarget || scrollTarget.scrollTop <= 1;
-  if (!canRefreshCurrentHomeFeed() || !atTop || state.isRefreshing) {
+  const atTop = isHomeRefreshStartPosition();
+  if (!atTop || state.isRefreshing) {
+    state.touchStartedAtTop = false;
     return;
   }
   state.touchTracking = true;
+  state.touchStartedAtTop = true;
   state.touchStartY = event.touches[0].clientY;
 }
 
 function handleTouchMove(event) {
-  const scrollTarget = getHomeScrollTarget();
-  if (!state.touchTracking || !canRefreshCurrentHomeFeed() || state.isRefreshing) {
+  if (
+    !state.touchTracking ||
+    !state.touchStartedAtTop ||
+    !canRefreshCurrentHomeFeed() ||
+    state.isRefreshing
+  ) {
     return;
   }
 
   const delta = event.touches[0].clientY - state.touchStartY;
-  if (delta <= 0 || (scrollTarget && scrollTarget.scrollTop > 1)) {
+  if (delta <= 0) {
+    return;
+  }
+
+  if (!isHomeRefreshStartPosition()) {
+    state.touchStartedAtTop = false;
     return;
   }
 
@@ -5147,13 +5216,20 @@ function handleTouchEnd() {
     return;
   }
   state.touchTracking = false;
+  const startedAtTop = state.touchStartedAtTop;
+  state.touchStartedAtTop = false;
+  if (!startedAtTop) {
+    state.pullDistance = 0;
+    setPullIndicator(0, "idle");
+    return;
+  }
   releasePull();
 }
 
 function handleWheel(event) {
-  const scrollTarget = getHomeScrollTarget();
-  const atTop = !scrollTarget || scrollTarget.scrollTop <= 1;
-  const topStableLongEnough = Date.now() - state.feedTopAnchorAt > 160;
+  const atTop = isHomeRefreshStartPosition();
+  const topStableLongEnough =
+    state.feedTopAnchorAt > 0 && Date.now() - state.feedTopAnchorAt > 160;
   if (
     !canRefreshCurrentHomeFeed() ||
     state.isRefreshing ||
@@ -5546,20 +5622,7 @@ function attachEvents() {
 
     const homeScrollTarget = getHomeScrollTarget();
     if (homeScrollTarget) {
-      homeScrollTarget.addEventListener("scroll", () => {
-        if (homeScrollTarget.scrollTop <= 1) {
-          if (!state.feedTopAnchorAt) {
-            state.feedTopAnchorAt = Date.now();
-          }
-          return;
-        }
-
-        state.feedTopAnchorAt = 0;
-        if (state.pullDistance > 0 && !state.isRefreshing) {
-          state.pullDistance = 0;
-          setPullIndicator(0, "idle");
-        }
-      });
+      homeScrollTarget.addEventListener("scroll", syncHomeRefreshAnchor, { passive: true });
     }
   }
 
@@ -5801,6 +5864,8 @@ function attachEvents() {
     homeScrollTarget.addEventListener("touchend", handleTouchEnd);
     homeScrollTarget.addEventListener("wheel", handleWheel, { passive: false });
   }
+  window.addEventListener("scroll", syncHomeRefreshAnchor, { passive: true });
+  window.addEventListener("resize", syncHomeRefreshAnchor, { passive: true });
 }
 
 function init() {
@@ -5855,6 +5920,7 @@ function init() {
   safeRun("set api status", () => setApiConfigStatus("可保存多套 API 配置，并在下方一键切换。"));
   safeRun("switch initial tab", () => switchTab(getInitialTabFromLocation()));
   safeRun("attach events", () => attachEvents());
+  safeRun("sync home refresh anchor", () => syncHomeRefreshAnchor());
   window.__appBootstrap.ready = true;
 }
 
