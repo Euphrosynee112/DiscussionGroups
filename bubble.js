@@ -1125,6 +1125,38 @@ function getActiveFanDetail() {
   return ensureFanDetail(state.activeFanDetailId);
 }
 
+function hydrateFanDetailFromCache(detailId) {
+  if (!detailId) {
+    return null;
+  }
+
+  const persistedDetails = loadBubbleFanDetails();
+  const persistedDetail = persistedDetails[detailId];
+  if (!persistedDetail?.replies?.length) {
+    return null;
+  }
+
+  const currentDetail = ensureFanDetail(detailId);
+  state.fanDetails[detailId] = normalizeFanDetail(
+    {
+      ...persistedDetail,
+      roomId: currentDetail.roomId || persistedDetail.roomId,
+      parentMessageId: currentDetail.parentMessageId || persistedDetail.parentMessageId,
+      emojiSet: currentDetail.emojiSet.length ? currentDetail.emojiSet : persistedDetail.emojiSet
+    },
+    detailId
+  );
+  return state.fanDetails[detailId];
+}
+
+function getFanReplyById(detailId, replyId) {
+  if (!detailId || !replyId) {
+    return null;
+  }
+  const detail = ensureFanDetail(detailId);
+  return detail.replies.find((item) => item.id === replyId) || null;
+}
+
 function buildRoomPreviewFromMessage(message, fallbackText = "欢迎来到 Bubble。") {
   if (!message) {
     return fallbackText;
@@ -1244,7 +1276,9 @@ function renderBubbleRooms() {
 
 function buildEmojiTickerMarkup(emojiSet = []) {
   const resolved = emojiSet.length ? emojiSet.slice(0, 6) : buildEmojiFallbackSet("ticker");
-  const rows = [resolved.slice(0, 3), resolved.slice(3, 6)];
+  const firstRow = resolved.slice(0, 3);
+  const secondRow = resolved.slice(3, 6);
+  const rows = [firstRow, secondRow, firstRow];
   return `
     <div class="bubble-emoji-ticker">
       <div class="bubble-emoji-ticker__track">
@@ -1410,7 +1444,6 @@ function renderFanDetailList() {
     })
     .join("");
 
-  bubbleFanDetailListEl.scrollTop = 0;
 }
 
 function setFanDetailModalOpen(isOpen, detailId = state.activeFanDetailId) {
@@ -1601,6 +1634,13 @@ async function generateFanRepliesForDetail(detailId, options = {}) {
     placeholder?.parentMessageId || state.fanDetails[detailId]?.parentMessageId || "",
     placeholder?.emojiSet || state.fanDetails[detailId]?.emojiSet || []
   );
+  const cachedDetail = hydrateFanDetailFromCache(detailId);
+  if (!options.force && cachedDetail?.replies?.length) {
+    if (state.activeFanDetailId === detailId) {
+      renderFanDetailList();
+    }
+    return true;
+  }
   if (!options.force && detail.replies.length) {
     if (state.activeFanDetailId === detailId) {
       renderFanDetailList();
@@ -1671,11 +1711,11 @@ async function generateFanRepliesForDetail(detailId, options = {}) {
 }
 
 async function toggleFanReplyTranslation(replyId) {
-  const detail = getActiveFanDetail();
-  if (!detail) {
+  const detailId = state.activeFanDetailId;
+  if (!detailId) {
     return;
   }
-  const reply = detail.replies.find((item) => item.id === replyId);
+  let reply = getFanReplyById(detailId, replyId);
   if (!reply) {
     return;
   }
@@ -1701,6 +1741,10 @@ async function toggleFanReplyTranslation(replyId) {
       getTranslationRequestSettings(getCurrentSettings()),
       reply.text
     );
+    reply = getFanReplyById(detailId, replyId);
+    if (!reply) {
+      throw new Error("未找到需要写回翻译的粉丝回复。");
+    }
     reply.translationZh = String(translatedText || "").trim() || reply.text;
     reply.translationVisible = true;
     persistBubbleFanDetails();
@@ -1709,7 +1753,9 @@ async function toggleFanReplyTranslation(replyId) {
     setFanDetailStatus(`翻译失败：${error?.message || "请求失败"}`, "error");
   } finally {
     delete state.translatingFanReplyIds[replyId];
-    renderFanDetailList();
+    if (state.activeFanDetailId === detailId) {
+      renderFanDetailList();
+    }
   }
 }
 
@@ -1721,7 +1767,7 @@ async function openFanDetail(detailId) {
   if (placeholder) {
     ensureFanDetail(detailId, state.activeRoomId, placeholder.parentMessageId, placeholder.emojiSet);
   }
-  const detail = ensureFanDetail(detailId);
+  const detail = hydrateFanDetailFromCache(detailId) || ensureFanDetail(detailId);
   if (detail.replies.length) {
     setFanDetailModalOpen(true, detailId);
     renderFanDetailList();

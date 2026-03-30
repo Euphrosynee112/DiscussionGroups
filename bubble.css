@@ -500,14 +500,14 @@ body.embedded .bubble-embedded-close {
 .bubble-emoji-ticker {
   --ticker-row-height: 28px;
   width: 110px;
-  height: calc(var(--ticker-row-height) + 2px);
+  height: var(--ticker-row-height);
   overflow: hidden;
 }
 
 .bubble-emoji-ticker__track {
   display: grid;
   gap: 0;
-  animation: bubbleEmojiVerticalTicker 4.4s ease-in-out infinite;
+  animation: bubbleEmojiVerticalTicker 3.6s linear infinite;
   will-change: transform;
 }
 
@@ -681,14 +681,24 @@ body.embedded .bubble-embedded-close {
 }
 
 .bubble-fan-detail-translation {
-  margin-top: 8px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed rgba(255, 124, 157, 0.32);
 }
 
-.bubble-fan-detail-translation-divider,
+.bubble-fan-detail-translation-divider {
+  height: 0;
+  margin: 0 0 14px;
+  color: transparent;
+  font-size: 0;
+  line-height: 0;
+}
+
 .bubble-fan-detail-translation-text {
   margin: 0;
   color: var(--pink-strong);
-  font-size: 14px;
+  font-size: 16px;
+  font-weight: 600;
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
@@ -724,16 +734,11 @@ body.embedded .bubble-embedded-close {
 }
 
 @keyframes bubbleEmojiVerticalTicker {
-  0%,
-  42% {
+  0% {
     transform: translateY(0);
   }
-  52%,
-  94% {
-    transform: translateY(calc(var(--ticker-row-height) * -1));
-  }
   100% {
-    transform: translateY(calc(var(--ticker-row-height) * -1));
+    transform: translateY(calc(var(--ticker-row-height) * -2));
   }
 }
 
@@ -821,7 +826,7 @@ body.embedded .bubble-embedded-close {
   .bubble-emoji-ticker {
     --ticker-row-height: 24px;
     width: 92px;
-    height: calc(var(--ticker-row-height) + 2px);
+    height: var(--ticker-row-height);
   }
 
   .bubble-emoji-ticker__item {
@@ -847,6 +852,15 @@ body.embedded .bubble-embedded-close {
 
   .bubble-fan-detail-bubble {
     max-width: min(72vw, 250px);
+  }
+
+  .bubble-fan-detail-translation {
+    margin-top: 14px;
+    padding-top: 14px;
+  }
+
+  .bubble-fan-detail-translation-text {
+    font-size: 15px;
   }
 
   .bubble-chat-composer {
