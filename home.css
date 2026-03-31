@@ -1,16 +1,16 @@
 :root {
-  --home-bg: #edf1f6;
-  --home-bg-strong: #dde4ec;
-  --panel: rgba(250, 251, 253, 0.72);
-  --panel-strong: rgba(255, 255, 255, 0.84);
-  --panel-soft: rgba(255, 255, 255, 0.5);
+  --home-bg: #eef1f4;
+  --home-bg-strong: #e3e8ee;
+  --panel: rgba(251, 252, 253, 0.74);
+  --panel-strong: rgba(255, 255, 255, 0.88);
+  --panel-soft: rgba(255, 255, 255, 0.56);
   --text: #0f172a;
   --muted: rgba(15, 23, 42, 0.62);
-  --shadow-lg: 0 28px 54px rgba(123, 136, 152, 0.14);
-  --shadow-md: 0 14px 24px rgba(123, 136, 152, 0.12);
-  --shadow-sm: 0 8px 16px rgba(123, 136, 152, 0.1);
-  --icon-shadow: 0 10px 18px rgba(96, 107, 122, 0.13);
-  --border: rgba(255, 255, 255, 0.56);
+  --shadow-lg: 0 22px 44px rgba(118, 129, 143, 0.12);
+  --shadow-md: 0 12px 22px rgba(118, 129, 143, 0.1);
+  --shadow-sm: 0 7px 14px rgba(118, 129, 143, 0.08);
+  --icon-shadow: 0 9px 16px rgba(96, 107, 122, 0.1);
+  --border: rgba(255, 255, 255, 0.64);
 }
 
 * {
@@ -31,8 +31,7 @@ body {
   font-family: "SF Pro Display", "Avenir Next", "PingFang SC", "Noto Sans SC", sans-serif;
   color: var(--text);
   background:
-    radial-gradient(circle at top left, rgba(255, 255, 255, 0.9), transparent 34%),
-    radial-gradient(circle at bottom right, rgba(211, 219, 230, 0.3), transparent 30%),
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.94), transparent 34%),
     linear-gradient(180deg, var(--home-bg) 0%, var(--home-bg-strong) 100%);
 }
 
@@ -61,14 +60,14 @@ button {
 .phone-home {
   width: min(390px, calc(100vw - 24px));
   height: min(844px, calc(100vh - 24px));
-  padding: 14px 18px 22px;
-  border-radius: 44px;
+  padding: 14px 18px 20px;
+  border-radius: 40px;
   background:
-    linear-gradient(180deg, rgba(248, 250, 253, 0.92), rgba(233, 238, 244, 0.94)),
+    linear-gradient(180deg, rgba(249, 250, 252, 0.95), rgba(237, 241, 246, 0.97)),
     rgba(255, 255, 255, 0.48);
   box-shadow: var(--shadow-lg);
   border: 1px solid rgba(255, 255, 255, 0.78);
-  backdrop-filter: blur(18px);
+  backdrop-filter: blur(14px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -172,40 +171,43 @@ button {
 
 .clock-panel {
   text-align: center;
-  padding: 42px 12px 24px;
+  padding: 34px 12px 18px;
 }
 
 .phone-date {
   margin: 0;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.02em;
 }
 
 .phone-clock {
-  margin: 10px 0 0;
-  font-size: clamp(78px, 21vw, 112px);
+  margin: 8px 0 0;
+  font-size: clamp(72px, 19vw, 100px);
   line-height: 0.95;
-  font-weight: 500;
+  font-weight: 520;
   letter-spacing: -0.06em;
 }
 
 .desk-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  grid-auto-rows: 82px;
-  gap: 14px;
-  margin-top: 24px;
+  grid-template-columns: repeat(3, 76px);
+  grid-auto-rows: auto;
+  justify-content: center;
+  justify-items: center;
+  gap: 18px 18px;
+  margin-top: 22px;
   align-content: start;
-  padding: 0 6px;
+  padding: 0;
 }
 
 .app-shortcut {
+  width: 76px;
   display: inline-flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 7px;
   padding: 4px 0 0;
   border: 0;
   background: none;
@@ -225,19 +227,19 @@ button {
 
 .app-shortcut__icon {
   position: relative;
-  width: 56px;
-  height: 56px;
+  width: 52px;
+  height: 52px;
   display: grid;
   place-items: center;
-  border-radius: 19px;
-  border: 1px solid rgba(255, 255, 255, 0.38);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0.09));
+  border-radius: 17px;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.08));
   box-shadow:
-    inset 0 1px 1px rgba(255, 255, 255, 0.26),
+    inset 0 1px 1px rgba(255, 255, 255, 0.24),
     inset 0 -1px 0 rgba(15, 23, 42, 0.04),
     var(--icon-shadow);
   color: #ffffff;
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 700;
   overflow: hidden;
 }
@@ -245,37 +247,37 @@ button {
 .app-shortcut__icon::before {
   content: "";
   position: absolute;
-  inset: 1px 1px 50% 1px;
-  border-radius: 18px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.05));
+  inset: 1px 1px 52% 1px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.04));
   pointer-events: none;
 }
 
 .app-shortcut__icon svg {
   position: relative;
   z-index: 1;
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
 }
 
 .app-shortcut__icon--x {
   background:
-    radial-gradient(circle at 28% 26%, rgba(255, 255, 255, 0.34), transparent 34%),
-    linear-gradient(180deg, #5d6065 0%, #212327 100%);
-  font-size: 26px;
+    radial-gradient(circle at 28% 26%, rgba(255, 255, 255, 0.28), transparent 34%),
+    linear-gradient(180deg, #676a70 0%, #292c30 100%);
+  font-size: 24px;
   letter-spacing: -0.03em;
 }
 
 .app-shortcut__icon--chat {
   background:
-    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.44), transparent 32%),
-    linear-gradient(180deg, #b6ebba 0%, #7cd894 52%, #5ebf78 100%);
+    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.38), transparent 32%),
+    linear-gradient(180deg, #aeddb3 0%, #84c995 52%, #69b97f 100%);
 }
 
 .app-shortcut__icon--bubble {
   background:
-    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.42), transparent 34%),
-    linear-gradient(180deg, #c3d7ff 0%, #96b4f0 54%, #7f97d4 100%);
+    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.38), transparent 34%),
+    linear-gradient(180deg, #bfd0f5 0%, #9bb3df 54%, #879dcc 100%);
 }
 
 .app-shortcut__icon--memory {
@@ -284,15 +286,29 @@ button {
     linear-gradient(180deg, #f3c6d9 0%, #e5a9c2 52%, #cf92af 100%);
 }
 
+.app-shortcut__icon--raising {
+  background:
+    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.42), transparent 34%),
+    linear-gradient(180deg, #efd8bb 0%, #dfbf95 56%, #ca9d69 100%);
+  font-size: 19px;
+  letter-spacing: 0.02em;
+}
+
+.app-shortcut__icon--schedule {
+  background:
+    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.4), transparent 34%),
+    linear-gradient(180deg, #f4cbb8 0%, #e5aa93 56%, #d4836b 100%);
+}
+
 .app-shortcut__icon--heart {
   font-size: 20px;
 }
 
 .app-shortcut__label {
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 500;
   letter-spacing: -0.01em;
-  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.55);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.5);
 }
 
 .app-shortcut--muted {
@@ -304,37 +320,31 @@ button {
   filter: none;
 }
 
-.desk-item-chat {
-  grid-column: 1;
-  grid-row: 1;
-}
-
-.desk-item-now {
-  grid-column: 2;
-  grid-row: 1;
+.desk-item-chat,
+.desk-item-now,
+.desk-item-memory,
+.desk-item-x,
+.desk-item-raising,
+.desk-item-schedule {
+  grid-column: auto;
+  grid-row: auto;
 }
 
 .desk-item-memory {
-  grid-column: 4;
-  grid-row: 1;
-}
-
-.desk-item-x {
-  grid-column: 3;
-  grid-row: 1;
+  display: none;
 }
 
 .dock {
   margin-top: auto;
-  padding: 14px 16px;
+  padding: 12px 14px;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-  border-radius: 30px;
-  background: rgba(255, 255, 255, 0.18);
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  backdrop-filter: blur(16px);
-  box-shadow: 0 14px 28px rgba(120, 129, 141, 0.1);
+  gap: 10px;
+  border-radius: 26px;
+  background: rgba(255, 255, 255, 0.24);
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 10px 20px rgba(120, 129, 141, 0.08);
 }
 
 .dock-app {
@@ -361,11 +371,11 @@ button {
 
 .dock-app__icon {
   position: relative;
-  width: 52px;
-  height: 52px;
+  width: 48px;
+  height: 48px;
   display: grid;
   place-items: center;
-  border-radius: 18px;
+  border-radius: 16px;
   border: 1px solid rgba(255, 255, 255, 0.34);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.36));
   box-shadow:
@@ -386,7 +396,7 @@ button {
 }
 
 .dock-app__label {
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 500;
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.55);
 }
@@ -888,8 +898,8 @@ button {
   }
 
   .desk-grid {
-    gap: 12px;
-    grid-auto-rows: 76px;
+    grid-template-columns: repeat(3, 72px);
+    gap: 16px 14px;
     margin-top: 18px;
   }
 

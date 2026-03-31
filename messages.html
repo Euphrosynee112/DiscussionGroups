@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pulse Generator · Chat</title>
-    <link rel="stylesheet" href="./messages.css?v=20260331d" />
+    <link rel="stylesheet" href="./messages.css?v=20260331o" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -406,6 +406,22 @@
             </span>
           </label>
 
+          <label class="messages-form-field">
+            <span>日程感知窗口（分钟）</span>
+            <input
+              id="messages-chat-schedule-window-input"
+              type="number"
+              min="1"
+              max="720"
+              inputmode="numeric"
+              placeholder="默认 30 分钟"
+              autocomplete="off"
+            />
+            <small class="messages-form-field__hint">
+              用于判断双方当前进行中、刚结束或即将开始的日程；若最近对话已主动提起同一行程，则会自动降低重复提醒。
+            </small>
+          </label>
+
           <label class="messages-toggle-field">
             <div class="messages-toggle-field__body">
               <strong>近期热点</strong>
@@ -426,7 +442,10 @@
           </label>
 
           <section class="messages-form-field">
-            <span>挂载内容</span>
+            <div class="messages-form-field__head">
+              <span>挂载内容</span>
+              <small id="messages-chat-hot-topics-warning" class="messages-form-field__inline-note"></small>
+            </div>
             <div class="messages-checkbox-group">
               <label class="messages-checkbox-option">
                 <input id="messages-chat-hot-topics-text-input" type="checkbox" />
@@ -438,7 +457,7 @@
               </label>
             </div>
             <small class="messages-form-field__hint">
-              至少选择一项；两项可同时挂载。页签用户定位会作为论坛背景自动附带。
+              至少选择一项；两项可同时挂载。
             </small>
           </section>
 
@@ -482,6 +501,25 @@
               <span class="messages-switch__slider"></span>
             </span>
           </label>
+
+          <section class="messages-form-field">
+            <div class="messages-form-field__head">
+              <span>聊天头像显示</span>
+            </div>
+            <div class="messages-checkbox-group">
+              <label class="messages-checkbox-option">
+                <input id="messages-chat-show-contact-avatar-input" type="checkbox" />
+                <span>显示角色头像</span>
+              </label>
+              <label class="messages-checkbox-option">
+                <input id="messages-chat-show-user-avatar-input" type="checkbox" />
+                <span>显示用户头像</span>
+              </label>
+            </div>
+            <small class="messages-form-field__hint">
+              关闭后，对应一侧的聊天头像会在对话页隐藏，仅保留气泡。
+            </small>
+          </section>
 
           <p
             id="messages-chat-settings-status"
@@ -635,7 +673,263 @@
       </div>
     </section>
 
-    <script src="./api-log.js?v=20260331d"></script>
-    <script src="./messages.js?v=20260331d"></script>
+    <section
+      id="messages-journal-modal"
+      class="messages-sheet-modal messages-journal-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div
+        class="messages-sheet-modal__panel messages-journal-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="今日日记"
+      >
+        <header class="messages-journal-modal__header">
+          <button
+            id="messages-journal-close-btn"
+            class="messages-journal-modal__icon"
+            type="button"
+            aria-label="关闭今日日记"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M15 6 9 12l6 6"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+          <strong>今日日记</strong>
+          <div class="messages-journal-modal__actions">
+            <button
+              id="messages-journal-history-btn"
+              class="messages-journal-modal__icon"
+              type="button"
+              aria-label="查看历史日记"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M6 8V4m0 0H2m4 0a8 8 0 1 1-5 8"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+                <path
+                  d="M12 8v4l2.5 1.5"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <button
+              id="messages-journal-settings-btn"
+              class="messages-journal-modal__icon"
+              type="button"
+              aria-label="日记设置"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 4.8 13.6 3l1.8 1.7 2.5.1.2 2.5L20 9l-1.8 1.8.1 2.5-2.5.2-1.8 1.8-1.8-1.8-2.5-.2.1-2.5L4 9l1.8-1.7.2-2.5 2.5-.1L10.4 3Z"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linejoin="round"
+                />
+                <circle
+                  cx="12"
+                  cy="9.1"
+                  r="2.35"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                />
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <section id="messages-journal-body" class="messages-journal-modal__body" aria-live="polite"></section>
+      </div>
+    </section>
+
+    <section
+      id="messages-journal-history-modal"
+      class="messages-sheet-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div
+        class="messages-sheet-modal__panel messages-sheet-modal__panel--picker"
+        role="dialog"
+        aria-modal="true"
+        aria-label="历史日记"
+      >
+        <header class="messages-sheet-modal__header">
+          <button
+            id="messages-journal-history-close-btn"
+            class="messages-sheet-modal__button"
+            type="button"
+            aria-label="关闭历史日记"
+          >
+            返回
+          </button>
+          <strong>历史日记</strong>
+          <span class="messages-sheet-modal__button"></span>
+        </header>
+
+        <section
+          id="messages-journal-history-list"
+          class="messages-picker-list messages-journal-history-list"
+          aria-live="polite"
+        ></section>
+      </div>
+    </section>
+
+    <section
+      id="messages-journal-settings-modal"
+      class="messages-dialog-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div
+        class="messages-dialog-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="日记设置"
+      >
+        <header class="messages-dialog-modal__header">
+          <strong>日记设置</strong>
+          <button
+            id="messages-journal-settings-close-btn"
+            class="messages-dialog-modal__close"
+            type="button"
+            aria-label="关闭日记设置"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M7 7l10 10M17 7 7 17"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </header>
+
+        <form id="messages-journal-settings-form" class="messages-dialog-modal__form">
+          <label class="messages-form-field">
+            <span>日记字数上限</span>
+            <input
+              id="messages-journal-length-input"
+              type="number"
+              min="80"
+              max="1600"
+              inputmode="numeric"
+              placeholder="默认 320 字"
+              autocomplete="off"
+            />
+            <small class="messages-form-field__hint">
+              会用于控制“喊 ta 写日记”时的输出长度，今日日记以自然段正文形式生成。
+            </small>
+          </label>
+
+          <p
+            id="messages-journal-settings-status"
+            class="messages-editor-status"
+            aria-live="polite"
+          ></p>
+
+          <div class="messages-dialog-modal__actions">
+            <button
+              class="messages-dialog-modal__button"
+              type="button"
+              id="messages-journal-settings-cancel-btn"
+            >
+              取消
+            </button>
+            <button class="messages-dialog-modal__button messages-dialog-modal__button--primary" type="submit">
+              保存
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section
+      id="messages-regenerate-modal"
+      class="messages-dialog-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div
+        class="messages-dialog-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="重新生成回复"
+      >
+        <header class="messages-dialog-modal__header">
+          <strong>重新生成回复</strong>
+          <button
+            id="messages-regenerate-close-btn"
+            class="messages-dialog-modal__close"
+            type="button"
+            aria-label="关闭重回弹窗"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M7 7l10 10M17 7 7 17"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </header>
+
+        <form id="messages-regenerate-form" class="messages-dialog-modal__form">
+          <label class="messages-dialog-modal__field">
+            <span>重回要求（可选）</span>
+            <small>可以填入对 AI 回复的要求，例如“温柔一点”“更详细”“简短回复”等。</small>
+            <textarea
+              id="messages-regenerate-instruction-input"
+              rows="5"
+              maxlength="400"
+              placeholder="输入重回要求（可选）&#10;例如：温柔一点、更详细、简短回复等"
+            ></textarea>
+          </label>
+
+          <div class="messages-dialog-modal__actions">
+            <button
+              id="messages-regenerate-cancel-btn"
+              class="messages-dialog-modal__button"
+              type="button"
+            >
+              取消
+            </button>
+            <button
+              id="messages-regenerate-confirm-btn"
+              class="messages-dialog-modal__button messages-dialog-modal__button--primary"
+              type="submit"
+            >
+              确认重回
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <script src="./api-log.js?v=20260331k"></script>
+    <script src="./messages.js?v=20260331o"></script>
   </body>
 </html>

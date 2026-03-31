@@ -90,6 +90,7 @@ const bubbleChatHotTopicsInputEl = document.querySelector("#bubble-chat-hot-topi
 const bubbleChatHotTopicsTabSelectEl = document.querySelector("#bubble-chat-hot-topics-tab-select");
 const bubbleChatHotTopicsTextInputEl = document.querySelector("#bubble-chat-hot-topics-text-input");
 const bubbleChatHotTopicsTopicInputEl = document.querySelector("#bubble-chat-hot-topics-topic-input");
+const bubbleChatHotTopicsWarningEl = document.querySelector("#bubble-chat-hot-topics-warning");
 const bubbleChatWorldbookInputEl = document.querySelector("#bubble-chat-worldbook-enabled-input");
 const bubbleChatWorldbookListEl = document.querySelector("#bubble-chat-worldbook-list");
 const bubbleChatSettingsStatusEl = document.querySelector("#bubble-chat-settings-status");
@@ -1752,6 +1753,14 @@ function updateBubbleChatSettingsFormState() {
   );
 }
 
+function updateBubbleHotTopicsWarning(promptSettings = getCurrentBubblePromptSettingsDraft()) {
+  if (!bubbleChatHotTopicsWarningEl) {
+    return;
+  }
+  const diagnostics = getBubbleHotTopicsMountDiagnostics(loadSettings(), promptSettings);
+  bubbleChatHotTopicsWarningEl.textContent = diagnostics.warnings[0] || "";
+}
+
 function applyBubblePromptSettingsToForm(promptSettings) {
   const resolved = normalizeBubblePromptSettings(promptSettings);
   if (bubbleChatHotTopicsInputEl) {
@@ -1769,6 +1778,7 @@ function applyBubblePromptSettingsToForm(promptSettings) {
   renderBubbleHotTopicsTabOptions(resolved.hotTopicsTabId);
   renderBubbleWorldbookMountOptions(resolved.worldbookIds);
   updateBubbleChatSettingsFormState();
+  updateBubbleHotTopicsWarning(resolved);
   setBubbleChatSettingsStatus("");
 }
 
@@ -2123,24 +2133,20 @@ function acceptFanReplies() {
 }
 
 function buildBubbleHotTopicsContext(settings, promptSettings) {
-  if (!promptSettings.hotTopicsEnabled || !promptSettings.hotTopicsTabId) {
+  const diagnostics = getBubbleHotTopicsMountDiagnostics(settings, promptSettings);
+  if (!diagnostics.selectedTab || (!diagnostics.mountsDiscussionText && !diagnostics.mountsHotTopic)) {
     return "";
   }
 
-  const selectedTab =
-    getAvailableCustomTabs(settings).find((tab) => tab.id === promptSettings.hotTopicsTabId) || null;
-  if (!selectedTab) {
-    return "";
-  }
-
+  const selectedTab = diagnostics.selectedTab;
   const sections = [`这个粉丝团体最近也在关注论坛讨论区「${selectedTab.name}」。`];
   const discussionText = String(selectedTab.discussionText || selectedTab.text || "").trim();
   const hotTopic = String(selectedTab.hotTopic || "").trim();
 
-  if (promptSettings.hotTopicsIncludeDiscussionText && discussionText) {
+  if (diagnostics.mountsDiscussionText && discussionText) {
     sections.push(`这个讨论区长期讨论的背景：${discussionText}`);
   }
-  if (promptSettings.hotTopicsIncludeHotTopic && hotTopic) {
+  if (diagnostics.mountsHotTopic && hotTopic) {
     sections.push(`这个讨论区当前最主要的热点：${hotTopic}`);
   }
 
@@ -2148,6 +2154,46 @@ function buildBubbleHotTopicsContext(settings, promptSettings) {
     "这些论坛信息只用于补充这个粉丝群体最近共同关注的话题；回复仍要围绕创作者这一整轮 Bubble 消息本身来做反应。"
   );
   return sections.join("\n\n");
+}
+
+function getBubbleHotTopicsMountDiagnostics(settings, promptSettings) {
+  const diagnostics = {
+    selectedTab: null,
+    hasDiscussionText: false,
+    hasHotTopic: false,
+    mountsDiscussionText: false,
+    mountsHotTopic: false,
+    warnings: []
+  };
+
+  if (!promptSettings.hotTopicsEnabled || !promptSettings.hotTopicsTabId) {
+    return diagnostics;
+  }
+
+  const selectedTab =
+    getAvailableCustomTabs(settings).find((tab) => tab.id === promptSettings.hotTopicsTabId) || null;
+  if (!selectedTab) {
+    return diagnostics;
+  }
+
+  const discussionText = String(selectedTab.discussionText || selectedTab.text || "").trim();
+  const hotTopic = String(selectedTab.hotTopic || "").trim();
+  diagnostics.selectedTab = selectedTab;
+  diagnostics.hasDiscussionText = Boolean(discussionText);
+  diagnostics.hasHotTopic = Boolean(hotTopic);
+  diagnostics.mountsDiscussionText =
+    Boolean(promptSettings.hotTopicsIncludeDiscussionText) && diagnostics.hasDiscussionText;
+  diagnostics.mountsHotTopic =
+    Boolean(promptSettings.hotTopicsIncludeHotTopic) && diagnostics.hasHotTopic;
+
+  if (promptSettings.hotTopicsIncludeDiscussionText && !diagnostics.hasDiscussionText) {
+    diagnostics.warnings.push("当前页签未填写“页签文本”，保存后会自动忽略论坛文本挂载。");
+  }
+  if (promptSettings.hotTopicsIncludeHotTopic && !diagnostics.hasHotTopic) {
+    diagnostics.warnings.push("当前页签未填写“页签热点”，保存后会自动忽略论坛热点挂载。");
+  }
+
+  return diagnostics;
 }
 
 function buildBubbleWorldbookContext(promptSettings) {
@@ -2480,37 +2526,6 @@ function attachEvents() {
         setBubbleChatSettingsStatus("论坛挂载至少要选择“页签文本”或“页签热点”中的一项。", "error");
         return;
       }
-      if (draft.hotTopicsEnabled) {
-        const hasDiscussionText = Boolean(
-          String(selectedTab?.discussionText || selectedTab?.text || "").trim()
-        );
-        const hasHotTopic = Boolean(String(selectedTab?.hotTopic || "").trim());
-        if (
-          draft.hotTopicsIncludeDiscussionText &&
-          !draft.hotTopicsIncludeHotTopic &&
-          !hasDiscussionText
-        ) {
-          setBubbleChatSettingsStatus("当前页签还没有填写“页签文本”。", "error");
-          return;
-        }
-        if (
-          draft.hotTopicsIncludeHotTopic &&
-          !draft.hotTopicsIncludeDiscussionText &&
-          !hasHotTopic
-        ) {
-          setBubbleChatSettingsStatus("当前页签还没有填写“页签热点”。", "error");
-          return;
-        }
-        if (
-          draft.hotTopicsIncludeDiscussionText &&
-          draft.hotTopicsIncludeHotTopic &&
-          !hasDiscussionText &&
-          !hasHotTopic
-        ) {
-          setBubbleChatSettingsStatus("当前页签的“页签文本”和“页签热点”都还是空的。", "error");
-          return;
-        }
-      }
       if (draft.worldbookEnabled && !draft.worldbookIds.length) {
         setBubbleChatSettingsStatus("请至少选择一条世界书。", "error");
         return;
@@ -2519,6 +2534,7 @@ function attachEvents() {
       state.settings = loadSettings();
       state.settings.bubblePromptSettings = draft;
       safeSetItem(SETTINGS_KEY, JSON.stringify(state.settings));
+      updateBubbleHotTopicsWarning(draft);
       setBubbleChatSettingsStatus("Bubble 回复设置已保存。", "success");
       setBubbleStatus("Bubble 粉丝回复 prompt 设置已更新。", "success");
       window.setTimeout(() => {
@@ -2530,6 +2546,7 @@ function attachEvents() {
   if (bubbleChatHotTopicsInputEl) {
     bubbleChatHotTopicsInputEl.addEventListener("change", () => {
       updateBubbleChatSettingsFormState();
+      updateBubbleHotTopicsWarning();
       setBubbleChatSettingsStatus("");
     });
   }
@@ -2545,6 +2562,7 @@ function attachEvents() {
     .filter(Boolean)
     .forEach((element) => {
       element.addEventListener("change", () => {
+        updateBubbleHotTopicsWarning();
         setBubbleChatSettingsStatus("");
       });
     });

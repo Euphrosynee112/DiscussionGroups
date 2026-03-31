@@ -2,7 +2,7 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260331g";
+const APP_BUILD_VERSION = "20260331m";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -41,7 +41,11 @@ const homeApiLogBtn = document.querySelector("#home-api-log-btn");
 const homeConfigTransferStatusEl = document.querySelector("#home-config-transfer-status");
 const homeTransferSelectAllBtn = document.querySelector("#home-transfer-select-all-btn");
 const homeTransferClearBtn = document.querySelector("#home-transfer-clear-btn");
+const homeExportReviewEl = document.querySelector("#home-export-review");
+const homeExportReviewSummaryEl = document.querySelector("#home-export-review-summary");
 const homeTransferExportOptionsEl = document.querySelector("#home-transfer-export-options");
+const homeExportApplyBtn = document.querySelector("#home-export-apply-btn");
+const homeExportCancelBtn = document.querySelector("#home-export-cancel-btn");
 const homeImportReviewEl = document.querySelector("#home-import-review");
 const homeImportReviewSummaryEl = document.querySelector("#home-import-review-summary");
 const homeImportReviewOptionsEl = document.querySelector("#home-import-review-options");
@@ -883,6 +887,34 @@ function refreshHomeTransferExportSelection() {
   const currentPayload = buildTransferPayloadFromCurrentState();
   homeState.exportTransferSelection = buildTransferSections(currentPayload, { mode: "export" });
   renderTransferSelection(homeTransferExportOptionsEl, homeState.exportTransferSelection, "export");
+  renderHomeExportReviewSummary();
+}
+
+function renderHomeExportReviewSummary() {
+  if (!homeExportReviewSummaryEl) {
+    return;
+  }
+  const sectionCount = homeState.exportTransferSelection.filter((section) => section.checked).length;
+  const itemCount = homeState.exportTransferSelection.reduce((total, section) => {
+    if (!section.checked) {
+      return total;
+    }
+    if (!section.items.length) {
+      return total + 1;
+    }
+    return total + section.items.filter((item) => item.checked).length;
+  }, 0);
+  homeExportReviewSummaryEl.textContent = `已选择 ${sectionCount} 个分组、${itemCount} 项内容；确认后将写入本次导出的 JSON。`;
+}
+
+function setHomeExportReviewOpen(isOpen) {
+  if (!homeExportReviewEl) {
+    return;
+  }
+  homeExportReviewEl.hidden = !isOpen;
+  if (isOpen) {
+    renderHomeExportReviewSummary();
+  }
 }
 
 function setHomeImportReviewOpen(isOpen) {
@@ -1020,13 +1052,14 @@ function exportHomeConfig() {
   const payload = buildHomeConfigExportPayload(homeState.exportTransferSelection);
   if (!payload.data || !Object.keys(payload.data).length) {
     setHomeTransferStatus("请至少勾选一项后再导出。", "error");
-    return;
+    return false;
   }
   const filename = `pulse-generator-config-${exportedAt
     .toISOString()
     .replaceAll(":", "-")}.json`;
   downloadJsonFile(filename, payload);
   setHomeTransferStatus("已按所选范围导出配置 JSON。", "success");
+  return true;
 }
 
 function mergeById(existing = [], incoming = []) {
@@ -1201,6 +1234,7 @@ async function handleHomeConfigImport(file) {
   }
 
   try {
+    setHomeExportReviewOpen(false);
     const text = await file.text();
     const parsed = JSON.parse(text);
     homeState.pendingImportTransferPayload = normalizeTransferPayload(parsed);
@@ -1567,6 +1601,7 @@ function setHomeSettingsModalOpen(isOpen) {
     homeState.settings = loadSettings();
     applySettingsToHomeForm(homeState.settings);
     refreshHomeTransferExportSelection();
+    setHomeExportReviewOpen(false);
     setHomeImportReviewOpen(false);
     showHomeLayer(homeSettingsModalEl, "grid");
     refreshBodyModalState();
@@ -1577,6 +1612,7 @@ function setHomeSettingsModalOpen(isOpen) {
   }
 
   saveCurrentHomeSettings({ silent: true });
+  setHomeExportReviewOpen(false);
   setHomeImportReviewOpen(false);
   hideHomeLayer(homeSettingsModalEl);
   refreshBodyModalState();
@@ -1595,6 +1631,20 @@ function getHomeAppMeta(tabName = "home") {
       tab: "bubble",
       kicker: "Bubble",
       title: "Bubble"
+    };
+  }
+  if (tabName === "raising") {
+    return {
+      tab: "raising",
+      kicker: "Game",
+      title: "养崽"
+    };
+  }
+  if (tabName === "schedule") {
+    return {
+      tab: "schedule",
+      kicker: "Schedule",
+      title: "日程"
     };
   }
   if (tabName === "logs") {
@@ -1677,6 +1727,7 @@ function handleTransferSelectionChange(event) {
     renderTransferSelection(homeImportReviewOptionsEl, selection, "import");
   } else {
     renderTransferSelection(homeTransferExportOptionsEl, selection, "export");
+    renderHomeExportReviewSummary();
   }
 }
 
@@ -1695,6 +1746,24 @@ function openHomeApp(tabName) {
       true,
       `./bubble.html?embed=1&v=${APP_BUILD_VERSION}`,
       getHomeAppMeta("bubble")
+    );
+    return;
+  }
+
+  if (tabName === "raising") {
+    setHomeBrowserModalOpen(
+      true,
+      `./raising.html?embed=1&v=${APP_BUILD_VERSION}`,
+      getHomeAppMeta("raising")
+    );
+    return;
+  }
+
+  if (tabName === "schedule") {
+    setHomeBrowserModalOpen(
+      true,
+      `./schedule.html?embed=1&v=${APP_BUILD_VERSION}`,
+      getHomeAppMeta("schedule")
     );
     return;
   }
@@ -1842,6 +1911,7 @@ function attachHomeSettingsEvents() {
     homeTransferSelectAllBtn.addEventListener("click", () => {
       setAllTransferSections(homeState.exportTransferSelection, true);
       renderTransferSelection(homeTransferExportOptionsEl, homeState.exportTransferSelection, "export");
+      renderHomeExportReviewSummary();
     });
   }
 
@@ -1849,6 +1919,7 @@ function attachHomeSettingsEvents() {
     homeTransferClearBtn.addEventListener("click", () => {
       setAllTransferSections(homeState.exportTransferSelection, false);
       renderTransferSelection(homeTransferExportOptionsEl, homeState.exportTransferSelection, "export");
+      renderHomeExportReviewSummary();
     });
   }
 
@@ -1862,7 +1933,9 @@ function attachHomeSettingsEvents() {
 
   if (homeConfigExportBtn) {
     homeConfigExportBtn.addEventListener("click", () => {
-      exportHomeConfig();
+      refreshHomeTransferExportSelection();
+      setHomeImportReviewOpen(false);
+      setHomeExportReviewOpen(true);
     });
   }
 
@@ -1894,6 +1967,21 @@ function attachHomeSettingsEvents() {
     });
   }
 
+  if (homeExportApplyBtn) {
+    homeExportApplyBtn.addEventListener("click", () => {
+      if (exportHomeConfig()) {
+        setHomeExportReviewOpen(false);
+      }
+    });
+  }
+
+  if (homeExportCancelBtn) {
+    homeExportCancelBtn.addEventListener("click", () => {
+      setHomeExportReviewOpen(false);
+      setHomeTransferStatus("已取消本次导出。", "");
+    });
+  }
+
   if (homeImportCancelBtn) {
     homeImportCancelBtn.addEventListener("click", () => {
       setHomeImportReviewOpen(false);
@@ -1921,6 +2009,7 @@ function attachHomeSettingsEvents() {
 function initHome() {
   hideHomeLayer(homeSettingsModalEl);
   hideHomeLayer(homeBrowserModalEl);
+  setHomeExportReviewOpen(false);
   setHomeImportReviewOpen(false);
   updateLocalClock();
   setInterval(updateLocalClock, 1000);

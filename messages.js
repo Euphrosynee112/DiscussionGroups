@@ -11,11 +11,18 @@ const MESSAGE_CONTACTS_KEY = "x_style_generator_message_contacts_v1";
 const MESSAGE_THREADS_KEY = "x_style_generator_message_threads_v1";
 const WORLD_BOOKS_KEY = "x_style_generator_message_worldbooks_v1";
 const BUBBLE_THREADS_KEY = "x_style_generator_bubble_threads_v1";
+const SCHEDULE_ENTRIES_KEY = "x_style_generator_schedule_entries_v1";
+const MESSAGE_JOURNAL_ENTRIES_KEY = "x_style_generator_message_journal_entries_v1";
+const MESSAGE_WEATHER_CACHE_KEY = "x_style_generator_message_weather_cache_v1";
 const DEFAULT_TEMPERATURE = 0.85;
 const DEFAULT_MESSAGE_HISTORY_ROUNDS = 6;
 const MAX_MESSAGE_HISTORY_ROUNDS = 20;
 const DEFAULT_MESSAGE_REPLY_SENTENCE_LIMIT = 7;
 const MAX_MESSAGE_REPLY_SENTENCE_LIMIT = 20;
+const DEFAULT_MESSAGE_JOURNAL_LENGTH = 320;
+const MAX_MESSAGE_JOURNAL_LENGTH = 1600;
+const DEFAULT_SCHEDULE_AWARENESS_WINDOW_MINUTES = 30;
+const MAX_SCHEDULE_AWARENESS_WINDOW_MINUTES = 720;
 const DEFAULT_CONTEXT_FOCUS_MINUTES = 60;
 const MAX_CONTEXT_FOCUS_MINUTES = 1440;
 const DEFAULT_WORLDVIEW =
@@ -32,7 +39,9 @@ const DEFAULT_SETTINGS = {
   messagePromptSettings: {
     historyRounds: DEFAULT_MESSAGE_HISTORY_ROUNDS,
     replySentenceLimit: DEFAULT_MESSAGE_REPLY_SENTENCE_LIMIT,
+    journalLength: DEFAULT_MESSAGE_JOURNAL_LENGTH,
     timeAwareness: false,
+    scheduleAwarenessWindowMinutes: DEFAULT_SCHEDULE_AWARENESS_WINDOW_MINUTES,
     hotTopicsEnabled: false,
     hotTopicsTabId: "",
     hotTopicsIncludeDiscussionText: true,
@@ -40,7 +49,9 @@ const DEFAULT_SETTINGS = {
     worldbookEnabled: false,
     worldbookIds: [],
     forumPostFocusEnabled: false,
-    bubbleFocusEnabled: false
+    bubbleFocusEnabled: false,
+    showContactAvatar: true,
+    showUserAvatar: true
   }
 };
 
@@ -71,6 +82,26 @@ const CONTACT_ENTRY_GROUPS = [
     { id: "emoji", label: "表情", icon: "smile" }
   ],
   [{ id: "settings", label: "设置", icon: "gear" }]
+];
+
+const CHAT_UTILITY_ITEMS = [
+  { id: "regenerate", label: "重回", icon: "refresh" },
+  { id: "voice", label: "语音", icon: "mic" },
+  { id: "emoji", label: "表情", icon: "smile" },
+  { id: "camera", label: "拍照", icon: "camera" },
+  { id: "image", label: "图片", icon: "image" },
+  { id: "transfer", label: "转账", icon: "swap" },
+  { id: "phone", label: "电话", icon: "phone" },
+  { id: "video", label: "视频", icon: "video" },
+  { id: "location", label: "位置", icon: "pin" },
+  { id: "journal", label: "日记", icon: "book" },
+  { id: "game", label: "游戏", icon: "gamepad" },
+  { id: "music", label: "听歌", icon: "headphones" },
+  { id: "shopping", label: "购物", icon: "bag" },
+  { id: "footprint", label: "足迹", icon: "steps" },
+  { id: "view", label: "查看", icon: "eye" },
+  { id: "bookshelf", label: "书架", icon: "bookshelf" },
+  { id: "companion", label: "陪伴", icon: "heart" }
 ];
 
 const messagesNavBtnEl = document.querySelector("#messages-nav-btn");
@@ -124,6 +155,9 @@ const messagesChatReplySentenceLimitInputEl = document.querySelector(
 const messagesChatTimeAwarenessInputEl = document.querySelector(
   "#messages-chat-time-awareness-input"
 );
+const messagesChatScheduleWindowInputEl = document.querySelector(
+  "#messages-chat-schedule-window-input"
+);
 const messagesChatHotTopicsInputEl = document.querySelector("#messages-chat-hot-topics-input");
 const messagesChatHotTopicsTabSelectEl = document.querySelector(
   "#messages-chat-hot-topics-tab-select"
@@ -134,6 +168,9 @@ const messagesChatHotTopicsTextInputEl = document.querySelector(
 const messagesChatHotTopicsTopicInputEl = document.querySelector(
   "#messages-chat-hot-topics-topic-input"
 );
+const messagesChatHotTopicsWarningEl = document.querySelector(
+  "#messages-chat-hot-topics-warning"
+);
 const messagesChatWorldbookInputEl = document.querySelector(
   "#messages-chat-worldbook-enabled-input"
 );
@@ -143,6 +180,12 @@ const messagesChatProfilePostFocusInputEl = document.querySelector(
 );
 const messagesChatBubbleFocusInputEl = document.querySelector(
   "#messages-chat-bubble-focus-input"
+);
+const messagesChatShowContactAvatarInputEl = document.querySelector(
+  "#messages-chat-show-contact-avatar-input"
+);
+const messagesChatShowUserAvatarInputEl = document.querySelector(
+  "#messages-chat-show-user-avatar-input"
 );
 const messagesChatSettingsStatusEl = document.querySelector("#messages-chat-settings-status");
 
@@ -179,6 +222,35 @@ const messagesWorldbookTextInputEl = document.querySelector("#messages-worldbook
 const messagesWorldbookEditorStatusEl = document.querySelector(
   "#messages-worldbook-editor-status"
 );
+const messagesRegenerateModalEl = document.querySelector("#messages-regenerate-modal");
+const messagesRegenerateCloseBtnEl = document.querySelector("#messages-regenerate-close-btn");
+const messagesRegenerateCancelBtnEl = document.querySelector("#messages-regenerate-cancel-btn");
+const messagesRegenerateFormEl = document.querySelector("#messages-regenerate-form");
+const messagesRegenerateInstructionInputEl = document.querySelector(
+  "#messages-regenerate-instruction-input"
+);
+const messagesJournalModalEl = document.querySelector("#messages-journal-modal");
+const messagesJournalCloseBtnEl = document.querySelector("#messages-journal-close-btn");
+const messagesJournalHistoryBtnEl = document.querySelector("#messages-journal-history-btn");
+const messagesJournalSettingsBtnEl = document.querySelector("#messages-journal-settings-btn");
+const messagesJournalBodyEl = document.querySelector("#messages-journal-body");
+const messagesJournalHistoryModalEl = document.querySelector("#messages-journal-history-modal");
+const messagesJournalHistoryCloseBtnEl = document.querySelector(
+  "#messages-journal-history-close-btn"
+);
+const messagesJournalHistoryListEl = document.querySelector("#messages-journal-history-list");
+const messagesJournalSettingsModalEl = document.querySelector("#messages-journal-settings-modal");
+const messagesJournalSettingsCloseBtnEl = document.querySelector(
+  "#messages-journal-settings-close-btn"
+);
+const messagesJournalSettingsCancelBtnEl = document.querySelector(
+  "#messages-journal-settings-cancel-btn"
+);
+const messagesJournalSettingsFormEl = document.querySelector("#messages-journal-settings-form");
+const messagesJournalLengthInputEl = document.querySelector("#messages-journal-length-input");
+const messagesJournalSettingsStatusEl = document.querySelector(
+  "#messages-journal-settings-status"
+);
 
 const memoryStorage = {};
 
@@ -187,6 +259,7 @@ const state = {
   contacts: loadContacts(),
   conversations: loadConversations(),
   worldbooks: loadWorldbooks(),
+  journalEntries: loadJournalEntries(),
   chatPromptSettings: loadSettings().messagePromptSettings,
   activeTab: "chat",
   activeConversationId: "",
@@ -204,7 +277,21 @@ const state = {
   worldbookEditorMode: "entry",
   worldbookEditingEntryId: "",
   worldbookCollapsedGroupIds: [],
-  sendingConversationId: ""
+  sendingConversationId: "",
+  composerPanelOpen: false,
+  messageActionMessageId: "",
+  regenerateModalOpen: false,
+  regenerateInstruction: "",
+  journalOpen: false,
+  journalHistoryOpen: false,
+  journalSettingsOpen: false,
+  journalGenerating: false,
+  journalWeatherDate: "",
+  journalWeatherLabel: "",
+  journalWeatherLoading: false,
+  journalWeatherError: "",
+  journalStatusMessage: "",
+  journalStatusTone: ""
 };
 
 function isEmbeddedView() {
@@ -362,10 +449,23 @@ function normalizeMessagePromptSettings(source = {}) {
       1,
       MAX_MESSAGE_REPLY_SENTENCE_LIMIT
     ),
+    journalLength: clampNumber(
+      normalizePositiveInteger(resolved.journalLength, DEFAULT_MESSAGE_JOURNAL_LENGTH),
+      80,
+      MAX_MESSAGE_JOURNAL_LENGTH
+    ),
     timeAwareness:
       typeof resolved.timeAwareness === "boolean"
         ? resolved.timeAwareness
         : legacyEventAwareness,
+    scheduleAwarenessWindowMinutes: clampNumber(
+      normalizePositiveInteger(
+        resolved.scheduleAwarenessWindowMinutes,
+        DEFAULT_SCHEDULE_AWARENESS_WINDOW_MINUTES
+      ),
+      1,
+      MAX_SCHEDULE_AWARENESS_WINDOW_MINUTES
+    ),
     hotTopicsEnabled: Boolean(resolved.hotTopicsEnabled),
     hotTopicsTabId: String(resolved.hotTopicsTabId || "").trim(),
     hotTopicsIncludeDiscussionText:
@@ -378,7 +478,10 @@ function normalizeMessagePromptSettings(source = {}) {
       ? [...new Set(resolved.worldbookIds.map((item) => String(item || "").trim()).filter(Boolean))]
       : [],
     forumPostFocusEnabled: Boolean(resolved.forumPostFocusEnabled),
-    bubbleFocusEnabled: Boolean(resolved.bubbleFocusEnabled)
+    bubbleFocusEnabled: Boolean(resolved.bubbleFocusEnabled),
+    showContactAvatar:
+      typeof resolved.showContactAvatar === "boolean" ? resolved.showContactAvatar : true,
+    showUserAvatar: typeof resolved.showUserAvatar === "boolean" ? resolved.showUserAvatar : true
   };
 }
 
@@ -814,6 +917,46 @@ function getWorldbookEntryById(entryId = "") {
   return state.worldbooks.entries.find((item) => item.id === entryId) || null;
 }
 
+function normalizeJournalEntry(entry, index = 0) {
+  const source = entry && typeof entry === "object" ? entry : {};
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(source.date || "").trim())
+    ? String(source.date).trim()
+    : "";
+  return {
+    id: String(source.id || `journal_${index}_${hashText(`${source.contactId || ""}-${date}-${source.content || ""}`)}`),
+    contactId: String(source.contactId || "").trim(),
+    contactNameSnapshot: String(source.contactNameSnapshot || "").trim(),
+    conversationId: String(source.conversationId || "").trim(),
+    date,
+    weather: String(source.weather || "").trim(),
+    content: String(source.content || "").trim(),
+    createdAt: Number(source.createdAt) || Date.now(),
+    updatedAt: Number(source.updatedAt) || Number(source.createdAt) || Date.now()
+  };
+}
+
+function loadJournalEntries() {
+  const raw = readStoredJson(MESSAGE_JOURNAL_ENTRIES_KEY, []);
+  return Array.isArray(raw)
+    ? raw
+        .map((entry, index) => normalizeJournalEntry(entry, index))
+        .filter((entry) => entry.contactId && entry.date && entry.content)
+    : [];
+}
+
+function persistJournalEntries() {
+  safeSetItem(MESSAGE_JOURNAL_ENTRIES_KEY, JSON.stringify(state.journalEntries));
+}
+
+function loadWeatherCache() {
+  const raw = readStoredJson(MESSAGE_WEATHER_CACHE_KEY, {});
+  return raw && typeof raw === "object" ? raw : {};
+}
+
+function persistWeatherCache(cache = {}) {
+  safeSetItem(MESSAGE_WEATHER_CACHE_KEY, JSON.stringify(cache));
+}
+
 function getWorldbookGroups() {
   const uncategorizedEntries = state.worldbooks.entries
     .filter((item) => !item.categoryId)
@@ -1158,28 +1301,66 @@ function buildTimeAwarenessContext(promptSettings) {
   return `当前本地时间：${formatAwarenessTime(new Date())}`;
 }
 
-function buildHotTopicsContext(settings, promptSettings) {
+function getHotTopicsMountDiagnostics(settings, promptSettings) {
+  const diagnostics = {
+    selectedTab: null,
+    hasDiscussionText: false,
+    hasHotTopic: false,
+    mountsDiscussionText: false,
+    mountsHotTopic: false,
+    warnings: []
+  };
+
   if (!promptSettings.hotTopicsEnabled || !promptSettings.hotTopicsTabId) {
-    return "";
+    return diagnostics;
   }
 
   const tabs = getAvailableCustomTabs(settings);
   const selectedTab = tabs.find((tab) => tab.id === promptSettings.hotTopicsTabId) || null;
   if (!selectedTab) {
-    return "";
+    return diagnostics;
   }
-  const sections = [`这个角色正在关注一个论坛讨论区「${selectedTab.name}」。`];
-  const audience = String(selectedTab.audience || "").trim();
+
   const discussionText = String(selectedTab.discussionText || selectedTab.text || "").trim();
   const hotTopic = String(selectedTab.hotTopic || "").trim();
 
-  if (audience) {
-    sections.push(`这个讨论区里活跃用户的身份与情绪倾向：${audience}`);
+  diagnostics.selectedTab = selectedTab;
+  diagnostics.hasDiscussionText = Boolean(discussionText);
+  diagnostics.hasHotTopic = Boolean(hotTopic);
+  diagnostics.mountsDiscussionText =
+    Boolean(promptSettings.hotTopicsIncludeDiscussionText) && diagnostics.hasDiscussionText;
+  diagnostics.mountsHotTopic =
+    Boolean(promptSettings.hotTopicsIncludeHotTopic) && diagnostics.hasHotTopic;
+
+  if (promptSettings.hotTopicsIncludeDiscussionText && !diagnostics.hasDiscussionText) {
+    diagnostics.warnings.push("当前页签未填写“页签文本”，保存后会自动忽略论坛文本挂载。");
   }
-  if (promptSettings.hotTopicsIncludeDiscussionText && discussionText) {
+  if (promptSettings.hotTopicsIncludeHotTopic && !diagnostics.hasHotTopic) {
+    diagnostics.warnings.push("当前页签未填写“页签热点”，保存后会自动忽略论坛热点挂载。");
+  }
+
+  return diagnostics;
+}
+
+function buildHotTopicsContext(settings, promptSettings) {
+  const diagnostics = getHotTopicsMountDiagnostics(settings, promptSettings);
+  if (!diagnostics.selectedTab) {
+    return "";
+  }
+
+  const selectedTab = diagnostics.selectedTab;
+  if (!diagnostics.mountsDiscussionText && !diagnostics.mountsHotTopic) {
+    return "";
+  }
+
+  const sections = [`这个角色正在关注一个论坛讨论区「${selectedTab.name}」。`];
+  const discussionText = String(selectedTab.discussionText || selectedTab.text || "").trim();
+  const hotTopic = String(selectedTab.hotTopic || "").trim();
+
+  if (diagnostics.mountsDiscussionText && discussionText) {
     sections.push(`这个讨论区长期讨论的背景与历史话题：${discussionText}`);
   }
-  if (promptSettings.hotTopicsIncludeHotTopic && hotTopic) {
+  if (diagnostics.mountsHotTopic && hotTopic) {
     sections.push(`这个讨论区当前最主要的热点：${hotTopic}`);
   }
 
@@ -1298,11 +1479,438 @@ function buildBubbleFocusContext(promptSettings) {
     .join("\n")}`;
 }
 
-function buildConversationSystemPrompt(profile, contact, settings, promptSettings) {
+function normalizeScheduleEntry(entry, index = 0) {
+  const source = entry && typeof entry === "object" ? entry : {};
+  const scheduleType = ["day", "hour", "week"].includes(source.scheduleType)
+    ? source.scheduleType
+    : "day";
+  const ownerType = source.ownerType === "contact" ? "contact" : "user";
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(source.date || "").trim())
+    ? String(source.date).trim()
+    : "";
+  const normalizeTimeValue = (value, fallback = "") => {
+    const trimmed = String(value || "").trim();
+    return /^\d{2}:\d{2}$/.test(trimmed) ? trimmed : fallback;
+  };
+  return {
+    id: String(source.id || `schedule_${index}_${hashText(`${source.title || ""}-${date}`)}`),
+    title: String(source.title || "").trim(),
+    scheduleType,
+    ownerType,
+    ownerId: ownerType === "contact" ? String(source.ownerId || "").trim() : "",
+    visibilityMode: source.visibilityMode === "selected" ? "selected" : "all",
+    visibleContactIds: Array.isArray(source.visibleContactIds)
+      ? [...new Set(source.visibleContactIds.map((item) => String(item || "").trim()).filter(Boolean))]
+      : [],
+    date,
+    startTime: normalizeTimeValue(
+      source.startTime,
+      scheduleType === "hour" || scheduleType === "week" ? "09:00" : ""
+    ),
+    endTime: normalizeTimeValue(
+      source.endTime,
+      scheduleType === "hour" || scheduleType === "week" ? "10:00" : ""
+    ),
+    createdAt: Number(source.createdAt) || Date.now(),
+    updatedAt: Number(source.updatedAt) || Date.now()
+  };
+}
+
+function loadScheduleEntries() {
+  const raw = readStoredJson(SCHEDULE_ENTRIES_KEY, []);
+  return Array.isArray(raw)
+    ? raw.map((entry, index) => normalizeScheduleEntry(entry, index)).filter((entry) => entry.title && entry.date)
+    : [];
+}
+
+function parseLocalDateValue(dateText) {
+  const match = String(dateText || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+  const [, year, month, day] = match;
+  return new Date(Number(year), Number(month) - 1, Number(day), 0, 0, 0, 0);
+}
+
+function parseLocalDateTimeValue(dateText, timeText = "00:00") {
+  const date = parseLocalDateValue(dateText);
+  const timeMatch = String(timeText || "").trim().match(/^(\d{2}):(\d{2})$/);
+  if (!date || !timeMatch) {
+    return null;
+  }
+  const [, hour, minute] = timeMatch;
+  date.setHours(Number(hour), Number(minute), 0, 0);
+  return date;
+}
+
+function startOfLocalDay(dateText) {
+  return parseLocalDateTimeValue(dateText, "00:00");
+}
+
+function endOfLocalDay(dateText) {
+  const date = parseLocalDateTimeValue(dateText, "23:59");
+  if (!date) {
+    return null;
+  }
+  date.setSeconds(59, 999);
+  return date;
+}
+
+function addDays(date, amount) {
+  const next = new Date(date.getTime());
+  next.setDate(next.getDate() + amount);
+  return next;
+}
+
+function formatDateToValue(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getTodayDateValue(now = new Date()) {
+  return formatDateToValue(now);
+}
+
+function formatJournalDateLabel(dateText = getTodayDateValue()) {
+  const date = parseLocalDateValue(dateText) || new Date();
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "long",
+    day: "numeric",
+    weekday: "long"
+  }).format(date);
+}
+
+function formatJournalFullDateLabel(dateText = getTodayDateValue()) {
+  const date = parseLocalDateValue(dateText) || new Date();
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    weekday: "long"
+  }).format(date);
+}
+
+function getJournalEntriesForContact(contactId = "") {
+  const resolvedContactId = String(contactId || "").trim();
+  if (!resolvedContactId) {
+    return [];
+  }
+  return state.journalEntries
+    .filter((entry) => entry.contactId === resolvedContactId)
+    .slice()
+    .sort((left, right) => (right.createdAt || 0) - (left.createdAt || 0));
+}
+
+function getJournalEntryForDate(contactId = "", dateText = getTodayDateValue()) {
+  return (
+    getJournalEntriesForContact(contactId).find((entry) => entry.date === String(dateText || "").trim()) ||
+    null
+  );
+}
+
+function getJournalMessagesForDate(conversation, dateText = getTodayDateValue()) {
+  if (!conversation?.messages?.length) {
+    return [];
+  }
+  const start = startOfLocalDay(dateText);
+  const end = endOfLocalDay(dateText);
+  if (!start || !end) {
+    return [];
+  }
+  const startTime = start.getTime();
+  const endTime = end.getTime();
+  return conversation.messages.filter((message) => {
+    const createdAt = Number(message?.createdAt);
+    return Number.isFinite(createdAt) && createdAt >= startTime && createdAt <= endTime;
+  });
+}
+
+function buildJournalChatTranscript(conversation, dateText = getTodayDateValue()) {
+  const messages = getJournalMessagesForDate(conversation, dateText);
+  if (!messages.length) {
+    return "";
+  }
+  return messages
+    .map((message) => {
+      const roleLabel = message.role === "assistant" ? "你" : "用户";
+      const timestamp = resolveStoredTimestampLabel(message.createdAt, message.time || "");
+      return `${timestamp || "--:--"} ${roleLabel}：${String(message.text || "").trim()}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildJournalReferenceContext(settings, promptSettings) {
+  return [buildWorldbookContext(promptSettings), buildHotTopicsContext(settings, promptSettings)]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function normalizeWeatherLabel(description = "", temperature = "") {
+  const desc = String(description || "").trim();
+  const temp = String(temperature || "").trim();
+  if (desc && temp) {
+    return `${desc} ${temp}°C`;
+  }
+  return desc || (temp ? `${temp}°C` : "");
+}
+
+async function fetchCurrentWeatherLabel() {
+  const response = await fetch("https://wttr.in/?format=j1&lang=zh-cn", {
+    method: "GET",
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    throw new Error(`天气请求失败：HTTP ${response.status}`);
+  }
+  const payload = await response.json();
+  const current = payload?.current_condition?.[0] || {};
+  const description =
+    current?.lang_zh?.[0]?.value ||
+    current?.lang_zh_cn?.[0]?.value ||
+    current?.weatherDesc?.[0]?.value ||
+    "";
+  const label = normalizeWeatherLabel(description, current?.temp_C);
+  if (!label) {
+    throw new Error("天气接口返回成功，但没有拿到可用天气文本。");
+  }
+  return label;
+}
+
+async function ensureJournalWeather(dateText = getTodayDateValue()) {
+  const resolvedDateText = String(dateText || "").trim() || getTodayDateValue();
+  const cache = loadWeatherCache();
+  const cachedEntry = cache?.[resolvedDateText];
+  if (cachedEntry?.label) {
+    state.journalWeatherDate = resolvedDateText;
+    state.journalWeatherLabel = String(cachedEntry.label || "").trim();
+    state.journalWeatherLoading = false;
+    state.journalWeatherError = "";
+    return state.journalWeatherLabel;
+  }
+
+  if (state.journalWeatherLoading && state.journalWeatherDate === resolvedDateText) {
+    return state.journalWeatherLabel || "";
+  }
+
+  state.journalWeatherDate = resolvedDateText;
+  state.journalWeatherLoading = true;
+  state.journalWeatherError = "";
+  if (state.journalOpen) {
+    renderJournalModal();
+  }
+
+  try {
+    const label = await fetchCurrentWeatherLabel();
+    cache[resolvedDateText] = {
+      label,
+      updatedAt: Date.now()
+    };
+    persistWeatherCache(cache);
+    state.journalWeatherLabel = label;
+    state.journalWeatherError = "";
+    return label;
+  } catch (error) {
+    state.journalWeatherLabel = "";
+    state.journalWeatherError = error?.message || "天气暂未获取到";
+    return "";
+  } finally {
+    state.journalWeatherLoading = false;
+    if (state.journalOpen) {
+      renderJournalModal();
+    }
+  }
+}
+
+function buildWeeklyOccurrenceRange(entry, baseDateText) {
+  const start = parseLocalDateTimeValue(baseDateText, entry.startTime || "09:00");
+  const end = parseLocalDateTimeValue(baseDateText, entry.endTime || "10:00");
+  if (!start || !end) {
+    return null;
+  }
+  if (end <= start) {
+    end.setTime(start.getTime() + 60 * 60 * 1000);
+  }
+  return { start, end };
+}
+
+function buildScheduleOccurrenceWindows(entry, now = new Date()) {
+  if (!entry?.date) {
+    return [];
+  }
+
+  if (entry.scheduleType === "day") {
+    const start = startOfLocalDay(entry.date);
+    const end = endOfLocalDay(entry.date);
+    return start && end ? [{ start, end }] : [];
+  }
+
+  if (entry.scheduleType === "hour") {
+    const start = parseLocalDateTimeValue(entry.date, entry.startTime || "09:00");
+    const end = parseLocalDateTimeValue(entry.date, entry.endTime || "10:00");
+    if (!start || !end) {
+      return [];
+    }
+    if (end <= start) {
+      end.setTime(start.getTime() + 60 * 60 * 1000);
+    }
+    return [{ start, end }];
+  }
+
+  const templateDate = parseLocalDateValue(entry.date);
+  if (!templateDate) {
+    return [];
+  }
+
+  const targetWeekday = templateDate.getDay();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const diffPrev = (today.getDay() - targetWeekday + 7) % 7;
+  const previousDate = addDays(today, -diffPrev);
+  const nextDate = addDays(previousDate, 7);
+  const previousRange = buildWeeklyOccurrenceRange(entry, formatDateToValue(previousDate));
+  const nextRange = buildWeeklyOccurrenceRange(entry, formatDateToValue(nextDate));
+  const ranges = [];
+  if (previousRange) {
+    ranges.push(previousRange);
+  }
+  if (nextRange && (!previousRange || nextRange.start.getTime() !== previousRange.start.getTime())) {
+    ranges.push(nextRange);
+  }
+  return ranges;
+}
+
+function getVisibleScheduleEntriesForContact(contactId = "") {
+  const resolvedContactId = String(contactId || "").trim();
+  if (!resolvedContactId) {
+    return [];
+  }
+  return loadScheduleEntries().filter((entry) => {
+    if (entry.ownerType === "contact") {
+      return entry.ownerId === resolvedContactId;
+    }
+    if (entry.visibilityMode === "all") {
+      return true;
+    }
+    return entry.visibleContactIds.includes(resolvedContactId);
+  });
+}
+
+function hasRecentAssistantMentionedSchedule(history = [], entry) {
+  const title = String(entry?.title || "").trim().toLowerCase();
+  if (!title) {
+    return false;
+  }
+  return history
+    .filter((message) => message?.role === "assistant")
+    .slice(-10)
+    .some((message) => String(message?.text || "").toLowerCase().includes(title));
+}
+
+function formatScheduleDistanceMinutes(milliseconds) {
+  const minutes = Math.max(1, Math.round(milliseconds / 60000));
+  return `${minutes} 分钟`;
+}
+
+function evaluateScheduleAwareness(
+  entry,
+  now = new Date(),
+  windowMinutes = DEFAULT_SCHEDULE_AWARENESS_WINDOW_MINUTES
+) {
+  const windowMs = windowMinutes * 60 * 1000;
+  const ranges = buildScheduleOccurrenceWindows(entry, now);
+  const evaluations = ranges
+    .map((range) => {
+      if (!range?.start || !range?.end) {
+        return null;
+      }
+      if (now >= range.start && now <= range.end) {
+        return { type: "current", distance: 0, range };
+      }
+      if (now > range.end) {
+        const distance = now.getTime() - range.end.getTime();
+        if (distance <= windowMs) {
+          return { type: "recent", distance, range };
+        }
+      }
+      if (range.start > now) {
+        const distance = range.start.getTime() - now.getTime();
+        if (distance <= windowMs) {
+          return { type: "upcoming", distance, range };
+        }
+      }
+      return null;
+    })
+    .filter(Boolean)
+    .sort((left, right) => {
+      const order = { current: 0, upcoming: 1, recent: 2 };
+      return order[left.type] - order[right.type] || left.distance - right.distance;
+    });
+
+  return evaluations[0] || null;
+}
+
+function buildScheduleAwarenessLine(entry, awareness) {
+  const ownerLabel = entry.ownerType === "contact" ? "你" : "用户";
+  if (awareness.type === "current") {
+    return `${ownerLabel}当前有行程「${entry.title}」正在进行。`;
+  }
+  if (awareness.type === "recent") {
+    return `${ownerLabel}在 ${formatScheduleDistanceMinutes(awareness.distance)} 前刚结束行程「${entry.title}」。`;
+  }
+  return `${ownerLabel}在 ${formatScheduleDistanceMinutes(awareness.distance)} 后有行程「${entry.title}」。`;
+}
+
+function buildScheduleAwarenessContext(contact, history = [], promptSettings = {}) {
+  const windowMinutes = normalizeMessagePromptSettings(promptSettings).scheduleAwarenessWindowMinutes;
+  const entries = getVisibleScheduleEntriesForContact(contact?.id || "");
+  if (!entries.length) {
+    return "";
+  }
+
+  const now = new Date();
+  const activeEntries = entries
+    .map((entry) => ({
+      entry,
+      awareness: evaluateScheduleAwareness(entry, now, windowMinutes)
+    }))
+    .filter((item) => item.awareness)
+    .filter((item) => !hasRecentAssistantMentionedSchedule(history, item.entry))
+    .sort((left, right) => {
+      const order = { current: 0, upcoming: 1, recent: 2 };
+      return (
+        order[left.awareness.type] - order[right.awareness.type] ||
+        left.awareness.distance - right.awareness.distance ||
+        (right.entry.updatedAt || 0) - (left.entry.updatedAt || 0)
+      );
+    })
+    .slice(0, 4);
+
+  if (!activeEntries.length) {
+    return "";
+  }
+
+  return [
+    `日程感知窗口：最近 ${windowMinutes} 分钟。`,
+    ...activeEntries.map((item) => `- ${buildScheduleAwarenessLine(item.entry, item.awareness)}`),
+    "如果这些行程和当前聊天自然相关，你可以顺带表达一句关心、提醒或配合；不要为了提行程而生硬转移话题，也不要重复提起刚刚已经主动说过的同一条行程。"
+  ].join("\n");
+}
+
+function buildConversationSystemPrompt(
+  profile,
+  contact,
+  settings,
+  promptSettings,
+  history = [],
+  options = {}
+) {
+  const requestOptions = options && typeof options === "object" ? options : {};
   const parts = [
     `你正在扮演一个即时聊天应用中的联系人：${contact.name}。`,
     "这是一个一对一聊天场景。",
-    "如果背景信息之间出现冲突，请按以下优先级从低到高理解：热点挂载 < 世界书挂载 < INS 关注 < Bubble 关注 < 时间感知 < 人物设定 < 最近对话轮数消息 < 回复格式要求。"
+    "如果背景信息之间出现冲突，请按以下优先级从低到高理解：热点挂载 < 世界书挂载 < INS 关注 < Bubble 关注 < 日程感知 < 时间感知 < 人物设定 < 最近对话轮数消息 < 回复格式要求。"
   ];
 
   const awarenessSections = [
@@ -1310,6 +1918,7 @@ function buildConversationSystemPrompt(profile, contact, settings, promptSetting
     buildWorldbookContext(promptSettings),
     buildForumPostFocusContext(promptSettings),
     buildBubbleFocusContext(promptSettings),
+    buildScheduleAwarenessContext(contact, history, promptSettings),
     buildTimeAwarenessContext(promptSettings)
   ].filter(Boolean);
 
@@ -1324,7 +1933,24 @@ function buildConversationSystemPrompt(profile, contact, settings, promptSetting
   parts.push(
     `你的角色人设：${contact.personaPrompt || "自然、友好、会根据设定稳定回应。"}。`,
     `正在和你聊天的用户昵称：${profile.username || DEFAULT_PROFILE.username}。`,
-    `用户的人设设定：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt}。`,
+    `用户的人设设定：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt}。`
+  );
+
+  if (requestOptions.regenerate) {
+    parts.push(
+      [
+        "这是一条针对上一版回复的重回请求，需要重新生成这一轮回复。",
+        "不要沿用上一版的句式、结构、开头或明显重复的措辞。",
+        requestOptions.regenerateInstruction
+          ? `本次重回的额外要求：${requestOptions.regenerateInstruction}。`
+          : ""
+      ]
+        .filter(Boolean)
+        .join("\n")
+    );
+  }
+
+  parts.push(
     "请只输出联系人下一条回复，不要添加角色标签、前缀、旁白或解释。",
     `回复要像真实聊天，简洁自然，可以带情绪，总共不要超过${promptSettings.replySentenceLimit}行。`,
     "如果一句话里自然出现逗号或句号，请按分句拆成多行输出。",
@@ -1335,6 +1961,47 @@ function buildConversationSystemPrompt(profile, contact, settings, promptSetting
   );
 
   return parts.join("\n\n");
+}
+
+function buildJournalSystemPrompt(
+  profile,
+  contact,
+  settings,
+  promptSettings,
+  conversation,
+  options = {}
+) {
+  const journalOptions = options && typeof options === "object" ? options : {};
+  const dateText = String(journalOptions.dateText || getTodayDateValue()).trim() || getTodayDateValue();
+  const weatherLabel = String(journalOptions.weatherLabel || "").trim();
+  const chatTranscript = buildJournalChatTranscript(conversation, dateText);
+  const referenceContext = buildJournalReferenceContext(settings, promptSettings);
+
+  return [
+    `你正在扮演即时聊天联系人：${contact.name}。`,
+    "现在不是聊天回复，而是以这个角色的第一人称口吻写一篇今日日记。",
+    `日期：${formatJournalFullDateLabel(dateText)}。`,
+    weatherLabel ? `天气：${weatherLabel}。` : "天气：暂未获取到，请不要编造具体天气或温度。",
+    `角色人设：${contact.personaPrompt || "自然、细腻、会根据设定稳定表达。"}。`,
+    `和你聊天的用户昵称：${profile.username || DEFAULT_PROFILE.username}。`,
+    `用户的人设：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt}。`,
+    referenceContext
+      ? `补充背景（只做参考，优先级低于今日日内聊天记录）：\n${referenceContext}`
+      : "",
+    chatTranscript
+      ? `今日自然日内的聊天记录（最重要，请围绕这些内容来写）：\n${chatTranscript}`
+      : "今日自然日内没有聊天记录。",
+    [
+      "输出要求：",
+      "1. 只输出日记正文，不要标题、署名、编号、项目符号、解释或 markdown。",
+      `2. 正文里要自然写出今天是几月几日、星期几，以及今天的天气${weatherLabel ? "" : "（天气未获取到时不要硬编）"}。`,
+      "3. 今日聊天记录是核心，挂载的世界书和论坛背景只做辅助参考。",
+      `4. 控制在 ${normalizeMessagePromptSettings(promptSettings).journalLength} 字以内。`,
+      "5. 语气要像当天稍晚写下来的私人记录，细节真实，不要写成总结报告。"
+    ].join("\n")
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function buildGenericConversationPrompt(systemPrompt, history = []) {
@@ -1389,6 +2056,49 @@ function buildChatRequestBody(settings, systemPrompt, history = []) {
   return {
     prompt: buildGenericConversationPrompt(systemPrompt, history),
     intent: "chat"
+  };
+}
+
+function buildDiaryRequestBody(settings, systemPrompt, userInstruction) {
+  const mode = normalizeApiMode(settings.mode);
+  if (mode === "openai") {
+    return {
+      model: settings.model || DEFAULT_DEEPSEEK_MODEL,
+      temperature: DEFAULT_TEMPERATURE,
+      messages: [
+        {
+          role: "system",
+          content: systemPrompt
+        },
+        {
+          role: "user",
+          content: userInstruction
+        }
+      ],
+      stream: false
+    };
+  }
+
+  if (mode === "gemini") {
+    return {
+      systemInstruction: {
+        parts: [{ text: systemPrompt }]
+      },
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: userInstruction }]
+        }
+      ],
+      generationConfig: {
+        temperature: DEFAULT_TEMPERATURE
+      }
+    };
+  }
+
+  return {
+    prompt: [systemPrompt, userInstruction, "日记正文："].filter(Boolean).join("\n\n"),
+    intent: "journal"
   };
 }
 
@@ -1464,8 +2174,102 @@ function limitReplyLines(lines = [], limit = DEFAULT_MESSAGE_REPLY_SENTENCE_LIMI
   return limited.filter(Boolean);
 }
 
-async function requestChatReplyText(settings, profile, contact, history = [], promptSettings = {}) {
+function buildReplyLines(replyText, promptSettings = {}) {
+  const lines = limitReplyLines(
+    splitReplyIntoMessageLines(replyText),
+    normalizeMessagePromptSettings(promptSettings).replySentenceLimit
+  ).filter(Boolean);
+  if (lines.length) {
+    return lines;
+  }
+  const fallback = String(replyText || "").trim();
+  return fallback ? [fallback] : [];
+}
+
+function recalculateConversationUpdatedAt(conversation) {
+  if (!conversation || typeof conversation !== "object") {
+    return;
+  }
+  const latestMessage = conversation.messages?.[conversation.messages.length - 1] || null;
+  conversation.updatedAt = latestMessage?.createdAt || Date.now();
+}
+
+async function appendAssistantReplyBatch(conversation, replyText, promptSettings = {}) {
+  const replyLines = buildReplyLines(replyText, promptSettings);
+  if (!replyLines.length) {
+    throw new Error("接口请求成功，但没有可展示的回复内容。");
+  }
+  const now = Date.now();
+  const timeLabel = formatLocalTime();
+  const createdMessages = [];
+
+  for (let index = 0; index < replyLines.length; index += 1) {
+    await sleep(index === 0 ? 1640 : 1460);
+    const line = replyLines[index];
+    const replyMessage = normalizeConversationMessage(
+      {
+        id: `message_${now}_${index}_${hashText(line)}`,
+        role: "assistant",
+        text: line,
+        time: timeLabel,
+        createdAt: now + index
+      },
+      conversation.messages.length + index
+    );
+    conversation.messages = [...conversation.messages, replyMessage];
+    recalculateConversationUpdatedAt(conversation);
+    createdMessages.push(replyMessage);
+    persistConversations();
+    renderMessagesPage();
+  }
+
+  return createdMessages;
+}
+
+function getLatestAssistantReplyBatch(conversation) {
+  if (!conversation?.messages?.length) {
+    return null;
+  }
+
+  const messages = conversation.messages;
+  const pendingUserMessages = messages.filter((message) => message.role === "user" && message.needsReply);
+  if (pendingUserMessages.length) {
+    return { blocked: true, reason: "pending-user-messages" };
+  }
+
+  let endIndex = messages.length - 1;
+  if (messages[endIndex]?.role !== "assistant") {
+    return null;
+  }
+
+  let startIndex = endIndex;
+  while (startIndex - 1 >= 0 && messages[startIndex - 1]?.role === "assistant") {
+    startIndex -= 1;
+  }
+
+  const anchorUser = messages[startIndex - 1];
+  if (!anchorUser || anchorUser.role !== "user") {
+    return null;
+  }
+
+  return {
+    startIndex,
+    endIndex,
+    messages: messages.slice(startIndex, endIndex + 1),
+    anchorUser
+  };
+}
+
+async function requestChatReplyText(
+  settings,
+  profile,
+  contact,
+  history = [],
+  promptSettings = {},
+  options = {}
+) {
   const normalizedPromptSettings = normalizeMessagePromptSettings(promptSettings);
+  const requestOptions = options && typeof options === "object" ? options : {};
   const requestEndpoint = validateApiSettings(settings, "对话回复");
 
   async function executeChatRequest(resolvedPromptSettings, summarySuffix = "") {
@@ -1473,16 +2277,20 @@ async function requestChatReplyText(settings, profile, contact, history = [], pr
       profile,
       contact,
       settings,
-      resolvedPromptSettings
+      resolvedPromptSettings,
+      history,
+      requestOptions
     );
     const requestBody = buildChatRequestBody(settings, systemPrompt, history);
     const logBase = buildMessageApiLogBase(
-      "chat_reply",
+      requestOptions.regenerate ? "chat_reply_regenerate" : "chat_reply",
       settings,
       requestEndpoint,
       systemPrompt,
       requestBody,
-      `联系人：${contact.name} · 历史消息 ${history.length} 条${summarySuffix}`
+      `联系人：${contact.name} · 历史消息 ${history.length} 条${
+        requestOptions.regenerate ? " · 重回" : ""
+      }${summarySuffix}`
     );
     let logged = false;
 
@@ -1590,6 +2398,116 @@ async function requestChatReplyText(settings, profile, contact, history = [], pr
   }
 }
 
+async function requestJournalEntryText(
+  settings,
+  profile,
+  contact,
+  conversation,
+  promptSettings = {},
+  options = {}
+) {
+  const journalOptions = options && typeof options === "object" ? options : {};
+  const normalizedPromptSettings = normalizeMessagePromptSettings(promptSettings);
+  const requestEndpoint = validateApiSettings(settings, "日记生成");
+  const systemPrompt = buildJournalSystemPrompt(
+    profile,
+    contact,
+    settings,
+    normalizedPromptSettings,
+    conversation,
+    journalOptions
+  );
+  const userInstruction = "请根据这些信息，直接写出今天的日记正文。";
+  const requestBody = buildDiaryRequestBody(settings, systemPrompt, userInstruction);
+  const logBase = buildMessageApiLogBase(
+    "journal_entry",
+    settings,
+    requestEndpoint,
+    systemPrompt,
+    requestBody,
+    `联系人：${contact.name} · ${journalOptions.dateText || getTodayDateValue()} · 今日日记`
+  );
+  let logged = false;
+
+  try {
+    const response = await fetch(requestEndpoint, {
+      method: "POST",
+      headers: buildRequestHeaders(settings),
+      body: JSON.stringify(requestBody)
+    });
+    const rawResponse = await response.text();
+    let payload = rawResponse;
+    try {
+      payload = JSON.parse(rawResponse);
+    } catch (_error) {
+      payload = rawResponse;
+    }
+
+    if (response.status === 404 && requestEndpoint.includes("api.deepseek.com")) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage:
+          "DeepSeek 接口返回 404。请确认地址为 https://api.deepseek.com/chat/completions。"
+      });
+      logged = true;
+      throw new Error(
+        "DeepSeek 接口返回 404。请确认地址为 https://api.deepseek.com/chat/completions。"
+      );
+    }
+
+    if (!response.ok) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: `接口请求失败：HTTP ${response.status}`
+      });
+      logged = true;
+      throw new Error(`接口请求失败：HTTP ${response.status}`);
+    }
+
+    const message = resolveMessage(payload).trim();
+    if (!message) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: "接口请求成功，但响应中没有可解析的日记文本。"
+      });
+      logged = true;
+      throw new Error("接口请求成功，但响应中没有可解析的日记文本。");
+    }
+
+    appendApiLog({
+      ...logBase,
+      status: "success",
+      statusCode: response.status,
+      responseText: rawResponse,
+      responseBody: payload,
+      summary: `联系人：${contact.name} · 已生成 ${message.length} 字今日日记`
+    });
+    logged = true;
+    return message;
+  } catch (error) {
+    if (!logged) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        errorMessage: error?.message || "请求失败"
+      });
+    }
+    throw error;
+  }
+}
+
 function setMessagesStatus(message = "", tone = "") {
   if (!messagesStatusEl) {
     return;
@@ -1621,8 +2539,302 @@ function updateBodyModalState() {
     state.conversationPickerOpen ||
     state.chatSettingsOpen ||
     state.worldbookManagerOpen ||
-    state.worldbookEditorOpen;
+    state.worldbookEditorOpen ||
+    state.regenerateModalOpen ||
+    state.journalOpen ||
+    state.journalHistoryOpen ||
+    state.journalSettingsOpen;
   document.body.classList.toggle("messages-modal-open", anyModalOpen);
+}
+
+function closeConversationTransientUi() {
+  state.composerPanelOpen = false;
+  state.messageActionMessageId = "";
+}
+
+function setRegenerateModalOpen(isOpen) {
+  state.regenerateModalOpen = Boolean(isOpen);
+  if (!state.regenerateModalOpen) {
+    state.regenerateInstruction = "";
+  }
+  if (messagesRegenerateModalEl) {
+    messagesRegenerateModalEl.hidden = !state.regenerateModalOpen;
+    messagesRegenerateModalEl.setAttribute("aria-hidden", String(!state.regenerateModalOpen));
+  }
+  if (messagesRegenerateInstructionInputEl) {
+    messagesRegenerateInstructionInputEl.value = state.regenerateInstruction || "";
+  }
+  if (state.regenerateModalOpen) {
+    window.setTimeout(() => {
+      messagesRegenerateInstructionInputEl?.focus();
+    }, 0);
+  }
+  updateBodyModalState();
+}
+
+function setJournalStatus(message = "", tone = "") {
+  state.journalStatusMessage = String(message || "").trim();
+  state.journalStatusTone = tone ? String(tone || "").trim() : "";
+  if (state.journalOpen) {
+    renderJournalModal();
+  }
+}
+
+function getActiveConversationContext() {
+  const conversation = getConversationById();
+  const contact = conversation ? getContactById(conversation.contactId) : null;
+  return {
+    conversation,
+    contact
+  };
+}
+
+function renderJournalContentText(text = "") {
+  return escapeHtml(String(text || "").trim()).replace(/\n/g, "<br />");
+}
+
+function getResolvedJournalWeatherLabel(dateText = getTodayDateValue()) {
+  const cache = loadWeatherCache();
+  const cachedLabel = String(cache?.[dateText]?.label || "").trim();
+  if (state.journalWeatherDate === dateText && state.journalWeatherLabel) {
+    return state.journalWeatherLabel;
+  }
+  return cachedLabel;
+}
+
+function renderJournalModal() {
+  if (!messagesJournalBodyEl) {
+    return;
+  }
+
+  const { conversation, contact } = getActiveConversationContext();
+  const todayDate = getTodayDateValue();
+  const todayEntry = contact ? getJournalEntryForDate(contact.id, todayDate) : null;
+  const weatherLabel = todayEntry?.weather || getResolvedJournalWeatherLabel(todayDate);
+  const weatherText = state.journalWeatherLoading
+    ? "天气获取中…"
+    : weatherLabel || state.journalWeatherError || "天气暂未获取到";
+  const statusMarkup = state.journalStatusMessage
+    ? `<p class="messages-journal-status ${escapeHtml(state.journalStatusTone)}">${escapeHtml(
+        state.journalStatusMessage
+      )}</p>`
+    : "";
+
+  if (!conversation || !contact) {
+    messagesJournalBodyEl.innerHTML =
+      '<div class="messages-journal-empty"><p>当前没有可写日记的聊天对象。</p></div>';
+    return;
+  }
+
+  if (state.journalGenerating) {
+    messagesJournalBodyEl.innerHTML = `
+      <div class="messages-journal-empty">
+        ${statusMarkup}
+        <p class="messages-journal-empty__title">${escapeHtml(contact.name)} 正在写今日日记…</p>
+        <p class="messages-journal-empty__sub">会优先参考今天的聊天，再把当前挂载的世界书与论坛背景作为补充。</p>
+      </div>
+    `;
+    return;
+  }
+
+  if (!todayEntry) {
+    messagesJournalBodyEl.innerHTML = `
+      <div class="messages-journal-empty">
+        ${statusMarkup}
+        <p class="messages-journal-empty__title">今天还没有写日记呢…</p>
+        <p class="messages-journal-empty__meta">${escapeHtml(formatJournalDateLabel(todayDate))} · ${escapeHtml(weatherText)}</p>
+        <button
+          class="messages-journal-empty__action"
+          type="button"
+          data-action="generate-journal-entry"
+        >
+          ◌ 喊ta写日记
+        </button>
+      </div>
+    `;
+    return;
+  }
+
+  messagesJournalBodyEl.innerHTML = `
+    <div class="messages-journal-scroll">
+      ${statusMarkup}
+      <article class="messages-journal-paper">
+        <div class="messages-journal-paper__meta">
+          <strong>${escapeHtml(formatJournalFullDateLabel(todayEntry.date))}</strong>
+          <span>${escapeHtml(todayEntry.weather || weatherText)}</span>
+        </div>
+        <div class="messages-journal-paper__content">${renderJournalContentText(todayEntry.content)}</div>
+      </article>
+      <button
+        class="messages-journal-paper__action"
+        type="button"
+        data-action="generate-journal-entry"
+      >
+        重新让ta写一篇
+      </button>
+    </div>
+  `;
+}
+
+function renderJournalHistoryModal() {
+  if (!messagesJournalHistoryListEl) {
+    return;
+  }
+
+  const { contact } = getActiveConversationContext();
+  const entries = contact ? getJournalEntriesForContact(contact.id) : [];
+  if (!entries.length) {
+    messagesJournalHistoryListEl.innerHTML =
+      '<div class="messages-empty">还没有任何日记记录。先生成一篇今日日记吧。</div>';
+    return;
+  }
+
+  messagesJournalHistoryListEl.innerHTML = entries
+    .map(
+      (entry) => `
+        <article class="messages-journal-history-row">
+          <div class="messages-journal-history-row__head">
+            <strong>${escapeHtml(formatJournalFullDateLabel(entry.date))}</strong>
+            <span>${escapeHtml(entry.weather || "天气未记录")}</span>
+          </div>
+          <p>${escapeHtml(truncate(entry.content, 140))}</p>
+        </article>
+      `
+    )
+    .join("");
+}
+
+function applyJournalSettingsToForm(promptSettings = state.chatPromptSettings) {
+  const resolved = normalizeMessagePromptSettings(promptSettings);
+  if (messagesJournalLengthInputEl) {
+    messagesJournalLengthInputEl.value = String(resolved.journalLength);
+  }
+  setEditorStatus(messagesJournalSettingsStatusEl);
+}
+
+function setJournalOpen(isOpen) {
+  state.journalOpen = Boolean(isOpen);
+  if (!state.journalOpen) {
+    setJournalHistoryOpen(false);
+    setJournalSettingsOpen(false);
+    state.journalGenerating = false;
+    state.journalStatusMessage = "";
+    state.journalStatusTone = "";
+  }
+  if (messagesJournalModalEl) {
+    messagesJournalModalEl.hidden = !state.journalOpen;
+    messagesJournalModalEl.setAttribute("aria-hidden", String(!state.journalOpen));
+  }
+  if (state.journalOpen) {
+    state.journalStatusMessage = "";
+    state.journalStatusTone = "";
+    renderJournalModal();
+    ensureJournalWeather(getTodayDateValue());
+  }
+  updateBodyModalState();
+}
+
+function setJournalHistoryOpen(isOpen) {
+  state.journalHistoryOpen = Boolean(isOpen);
+  if (messagesJournalHistoryModalEl) {
+    messagesJournalHistoryModalEl.hidden = !state.journalHistoryOpen;
+    messagesJournalHistoryModalEl.setAttribute("aria-hidden", String(!state.journalHistoryOpen));
+  }
+  if (state.journalHistoryOpen) {
+    renderJournalHistoryModal();
+  }
+  updateBodyModalState();
+}
+
+function setJournalSettingsOpen(isOpen) {
+  state.journalSettingsOpen = Boolean(isOpen);
+  if (messagesJournalSettingsModalEl) {
+    messagesJournalSettingsModalEl.hidden = !state.journalSettingsOpen;
+    messagesJournalSettingsModalEl.setAttribute("aria-hidden", String(!state.journalSettingsOpen));
+  }
+  if (state.journalSettingsOpen) {
+    applyJournalSettingsToForm(loadSettings().messagePromptSettings);
+    window.setTimeout(() => {
+      messagesJournalLengthInputEl?.focus();
+    }, 0);
+  }
+  updateBodyModalState();
+}
+
+async function requestJournalEntry() {
+  const { conversation, contact } = getActiveConversationContext();
+  if (!conversation || !contact) {
+    setMessagesStatus("未找到当前聊天对象，暂时无法写日记。", "error");
+    return;
+  }
+  if (state.journalGenerating) {
+    return;
+  }
+  if (state.sendingConversationId === conversation.id) {
+    setMessagesStatus("当前正在等待聊天回复，稍后再喊 ta 写日记吧。", "error");
+    setJournalStatus("当前正在等待聊天回复，稍后再喊 ta 写日记吧。", "error");
+    return;
+  }
+
+  const todayDate = getTodayDateValue();
+  const todaysMessages = getJournalMessagesForDate(conversation, todayDate);
+  if (!todaysMessages.length) {
+    setMessagesStatus("今天还没有聊天记录，先聊几句再来喊 ta 写日记吧。", "error");
+    setJournalStatus("今天还没有聊天记录，先聊几句再来喊 ta 写日记吧。", "error");
+    return;
+  }
+
+  const settings = loadSettings();
+  const promptSettings = normalizeMessagePromptSettings(settings.messagePromptSettings);
+  state.chatPromptSettings = promptSettings;
+  state.journalGenerating = true;
+  setJournalStatus("", "");
+  renderJournalModal();
+
+  try {
+    const weatherLabel = (await ensureJournalWeather(todayDate)) || "";
+    const content = await requestJournalEntryText(
+      settings,
+      state.profile,
+      contact,
+      conversation,
+      promptSettings,
+      {
+        dateText: todayDate,
+        weatherLabel
+      }
+    );
+
+    const nextEntry = normalizeJournalEntry({
+      id: `journal_${contact.id}_${todayDate}`,
+      contactId: contact.id,
+      contactNameSnapshot: contact.name,
+      conversationId: conversation.id,
+      date: todayDate,
+      weather: weatherLabel,
+      content,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    });
+    const existingIndex = state.journalEntries.findIndex(
+      (entry) => entry.contactId === contact.id && entry.date === todayDate
+    );
+    if (existingIndex >= 0) {
+      state.journalEntries[existingIndex] = nextEntry;
+    } else {
+      state.journalEntries = [nextEntry, ...state.journalEntries];
+    }
+    persistJournalEntries();
+    renderJournalHistoryModal();
+    setMessagesStatus("今日日记已生成。", "success");
+    setJournalStatus("今日日记已生成。", "success");
+  } catch (error) {
+    setMessagesStatus(`日记生成失败：${error?.message || "请求失败"}`, "error");
+    setJournalStatus(`日记生成失败：${error?.message || "请求失败"}`, "error");
+  } finally {
+    state.journalGenerating = false;
+    renderJournalModal();
+  }
 }
 
 function getFilteredConversations() {
@@ -1754,6 +2966,233 @@ function buildConversationAvatarMarkup(conversation) {
     : `<span>${escapeHtml(meta.avatarText)}</span>`;
 }
 
+function buildConversationDetailAvatarMarkup(role, conversation, promptSettings = state.chatPromptSettings) {
+  if (role === "user") {
+    if (!promptSettings.showUserAvatar) {
+      return "";
+    }
+    return buildAvatarMarkup(
+      state.profile.avatarImage,
+      getProfileAvatarFallback(state.profile),
+      "messages-message-row__avatar"
+    );
+  }
+
+  if (!promptSettings.showContactAvatar) {
+    return "";
+  }
+  const meta = getConversationMeta(conversation);
+  return buildAvatarMarkup(
+    meta.avatarImage,
+    meta.avatarText || getContactAvatarFallback({ name: meta.name }),
+    "messages-message-row__avatar"
+  );
+}
+
+function renderConversationUtilityIcon(icon) {
+  switch (icon) {
+    case "refresh":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 8.5A7 7 0 0 1 18 7M18 7v4M18 7h-4M18 15.5A7 7 0 0 1 6 17M6 17v-4M6 17h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      `;
+    case "mic":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="9" y="4.5" width="6" height="10" rx="3" fill="none" stroke="currentColor" stroke-width="1.8" />
+          <path d="M6.8 11.8a5.2 5.2 0 0 0 10.4 0M12 17v2.5M9.2 19.5h5.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+        </svg>
+      `;
+    case "smile":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="7.2" fill="none" stroke="currentColor" stroke-width="1.8" />
+          <path d="M9.1 14.1c.7.8 1.7 1.2 2.9 1.2s2.2-.4 2.9-1.2M9 10.4h.01M15 10.4h.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+        </svg>
+      `;
+    case "camera":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M7.5 8.5 9 6.5h6l1.5 2H18a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-6.5a2 2 0 0 1 2-2Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
+          <circle cx="12" cy="13" r="3.1" fill="none" stroke="currentColor" stroke-width="1.8" />
+        </svg>
+      `;
+    case "image":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="4.5" y="5" width="15" height="14" rx="2.3" fill="none" stroke="currentColor" stroke-width="1.8" />
+          <path d="m7.2 16 3.1-3.4 2.5 2.6 1.9-2 2.1 2.8M9 9.4h.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      `;
+    case "swap":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M7 7h10m0 0-2.5-2.5M17 7l-2.5 2.5M17 17H7m0 0 2.5-2.5M7 17l2.5 2.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      `;
+    case "phone":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M7.5 5.5c.8-.4 1.5-.3 2 .4l1.2 1.9c.4.7.3 1.4-.2 1.9l-.9.9c1 1.8 2.5 3.3 4.3 4.3l.9-.9c.5-.5 1.2-.6 1.9-.2l1.9 1.2c.7.5.8 1.2.4 2l-.6 1.2c-.4.8-1.1 1.2-2 1.1-7-.7-12.4-6.1-13.1-13.1-.1-.9.3-1.6 1.1-2Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+        </svg>
+      `;
+    case "video":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="4.5" y="7" width="10.5" height="10" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.8" />
+          <path d="m15 10.1 4.5-2.3v8.4L15 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
+        </svg>
+      `;
+    case "pin":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 19s5-4.4 5-8.5A5 5 0 0 0 7 10.5C7 14.6 12 19 12 19Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
+          <circle cx="12" cy="10.3" r="1.9" fill="none" stroke="currentColor" stroke-width="1.8" />
+        </svg>
+      `;
+    case "book":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M7 5.5h10a2 2 0 0 1 2 2V18a1.5 1.5 0 0 0-1.5-1.5H7.8A2.8 2.8 0 0 0 5 19.3V7.5a2 2 0 0 1 2-2Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
+          <path d="M8.5 9.2h6M8.5 12.2h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+        </svg>
+      `;
+    case "gamepad":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M7.5 9h9a4 4 0 0 1 3.8 5l-.6 2a2 2 0 0 1-3.2 1l-2.1-1.7H9.6L7.5 17a2 2 0 0 1-3.2-1l-.6-2a4 4 0 0 1 3.8-5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
+          <path d="M8.4 12.6h2.6M9.7 11.3v2.6M15.8 12.3h.01M17.4 13.7h.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+        </svg>
+      `;
+    case "headphones":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 12a6 6 0 1 1 12 0" fill="none" stroke="currentColor" stroke-width="1.8" />
+          <rect x="5" y="12" width="3.2" height="6.2" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.8" />
+          <rect x="15.8" y="12" width="3.2" height="6.2" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.8" />
+        </svg>
+      `;
+    case "bag":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6.2 9.5h11.6l-1 9H7.2l-1-9Zm3.2 0V8a2.6 2.6 0 1 1 5.2 0v1.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
+        </svg>
+      `;
+    case "steps":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M8 8.5c0 1.5-.8 2.8-2 3.4l-1.5.8M13 6.5c0 1.9 1 3.4 2.4 4.1l2.1 1M9.5 14.5c0 1.5-.8 2.8-2 3.4l-1.5.8M15.5 12.8c0 1.8 1 3.3 2.5 4l1 .5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      `;
+    case "eye":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M3.8 12s2.8-4.7 8.2-4.7S20.2 12 20.2 12s-2.8 4.7-8.2 4.7S3.8 12 3.8 12Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
+          <circle cx="12" cy="12" r="2.4" fill="none" stroke="currentColor" stroke-width="1.8" />
+        </svg>
+      `;
+    case "bookshelf":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 6v12M10 8v10M14 6v12M18 9v9M5 18h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      `;
+    case "heart":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 19s-6-3.8-6-8.2A3.8 3.8 0 0 1 12 8a3.8 3.8 0 0 1 6 2.8C18 15.2 12 19 12 19Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
+        </svg>
+      `;
+    default:
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+        </svg>
+      `;
+  }
+}
+
+function renderConversationUtilityPanel() {
+  return `
+    <div class="messages-conversation__utility ${state.composerPanelOpen ? "is-open" : ""}">
+      <button
+        class="messages-conversation__utility-backdrop"
+        type="button"
+        data-action="close-composer-panel"
+        aria-label="关闭聊天功能栏"
+      ></button>
+      <div class="messages-conversation__utility-panel" role="group" aria-label="聊天功能栏">
+        ${CHAT_UTILITY_ITEMS.map(
+          (item) => `
+            <button
+              class="messages-conversation__utility-item"
+              type="button"
+              data-action="conversation-tool"
+              data-tool-id="${escapeHtml(item.id)}"
+            >
+              <span class="messages-conversation__utility-icon">
+                ${renderConversationUtilityIcon(item.icon)}
+              </span>
+              <span>${escapeHtml(item.label)}</span>
+            </button>
+          `
+        ).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderConversationMessage(message, conversation, promptSettings = state.chatPromptSettings) {
+  const isUser = message.role === "user";
+  const avatarMarkup = buildConversationDetailAvatarMarkup(message.role, conversation, promptSettings);
+  const isMenuOpen = state.messageActionMessageId === message.id;
+  return `
+    <article class="messages-message-row messages-message-row--${isUser ? "user" : "assistant"}${
+      avatarMarkup ? "" : " is-avatar-hidden"
+    }">
+      ${!isUser && avatarMarkup ? avatarMarkup : ""}
+      <div class="messages-message-row__bubble-wrap">
+        <div class="messages-message-row__stack">
+          <div
+            class="messages-bubble-toggle"
+            data-action="toggle-message-menu"
+            data-message-id="${escapeHtml(message.id)}"
+          >
+            <article class="messages-bubble ${isUser ? "messages-bubble--user" : "messages-bubble--assistant"}">
+              <p>${escapeHtml(message.text)}</p>
+              <span class="messages-bubble__time">${escapeHtml(message.time)}</span>
+            </article>
+          </div>
+          ${
+            isMenuOpen
+              ? `
+                <div class="messages-message-row__menu" role="group" aria-label="消息操作">
+                  <button
+                    type="button"
+                    data-action="edit-conversation-message"
+                    data-message-id="${escapeHtml(message.id)}"
+                  >
+                    编辑
+                  </button>
+                  <button
+                    type="button"
+                    data-action="delete-conversation-message"
+                    data-message-id="${escapeHtml(message.id)}"
+                  >
+                    删除
+                  </button>
+                </div>
+              `
+              : ""
+          }
+        </div>
+      </div>
+      ${isUser && avatarMarkup ? avatarMarkup : ""}
+    </article>
+  `;
+}
+
 function renderChatList() {
   if (!messagesContentEl) {
     return;
@@ -1810,24 +3249,19 @@ function renderConversationDetail() {
   const hasPendingUserMessages = conversation.messages.some(
     (message) => message.role === "user" && message.needsReply
   );
+  const promptSettings = normalizeMessagePromptSettings(state.chatPromptSettings);
   messagesContentEl.innerHTML = `
     <section class="messages-conversation">
       <div class="messages-conversation__history">
         ${
           conversation.messages.length
             ? conversation.messages
-                .map(
-                  (message) => `
-                    <article class="messages-bubble ${message.role === "user" ? "messages-bubble--user" : "messages-bubble--assistant"}">
-                      <p>${escapeHtml(message.text)}</p>
-                      <span class="messages-bubble__time">${escapeHtml(message.time)}</span>
-                    </article>
-                  `
-                )
+                .map((message) => renderConversationMessage(message, conversation, promptSettings))
                 .join("")
             : '<div class="messages-conversation__empty">输入第一条消息，开始和这个角色聊天。</div>'
         }
       </div>
+      ${renderConversationUtilityPanel()}
       <form class="messages-conversation__composer" data-action="send-conversation-message">
         <input
           class="messages-conversation__input"
@@ -1855,6 +3289,23 @@ function renderConversationDetail() {
               stroke-width="2"
               stroke-linecap="round"
               stroke-linejoin="round"
+            />
+          </svg>
+        </button>
+        <button
+          class="messages-conversation__plus ${state.composerPanelOpen ? "is-open" : ""}"
+          type="button"
+          data-action="toggle-composer-panel"
+          aria-label="打开聊天功能栏"
+          aria-expanded="${state.composerPanelOpen ? "true" : "false"}"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M12 5v14M5 12h14"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
             />
           </svg>
         </button>
@@ -2536,6 +3987,9 @@ function applyChatPromptSettingsToForm(promptSettings) {
   if (messagesChatTimeAwarenessInputEl) {
     messagesChatTimeAwarenessInputEl.checked = resolved.timeAwareness;
   }
+  if (messagesChatScheduleWindowInputEl) {
+    messagesChatScheduleWindowInputEl.value = String(resolved.scheduleAwarenessWindowMinutes);
+  }
   if (messagesChatHotTopicsInputEl) {
     messagesChatHotTopicsInputEl.checked = resolved.hotTopicsEnabled;
   }
@@ -2554,9 +4008,16 @@ function applyChatPromptSettingsToForm(promptSettings) {
   if (messagesChatBubbleFocusInputEl) {
     messagesChatBubbleFocusInputEl.checked = resolved.bubbleFocusEnabled;
   }
+  if (messagesChatShowContactAvatarInputEl) {
+    messagesChatShowContactAvatarInputEl.checked = resolved.showContactAvatar;
+  }
+  if (messagesChatShowUserAvatarInputEl) {
+    messagesChatShowUserAvatarInputEl.checked = resolved.showUserAvatar;
+  }
   renderHotTopicsTabOptions(resolved.hotTopicsTabId);
   renderWorldbookMountOptions(resolved.worldbookIds);
   updateChatSettingsFormState();
+  updateChatHotTopicsWarning(resolved);
   setEditorStatus(messagesChatSettingsStatusEl);
 }
 
@@ -2607,6 +4068,14 @@ function updateChatSettingsFormState() {
   );
 }
 
+function updateChatHotTopicsWarning(promptSettings = getCurrentChatPromptSettingsDraft()) {
+  if (!messagesChatHotTopicsWarningEl) {
+    return;
+  }
+  const diagnostics = getHotTopicsMountDiagnostics(loadSettings(), promptSettings);
+  messagesChatHotTopicsWarningEl.textContent = diagnostics.warnings[0] || "";
+}
+
 function getCurrentChatPromptSettingsDraft() {
   const tabs = getAvailableCustomTabs(loadSettings());
   const selectedTabId = String(messagesChatHotTopicsTabSelectEl?.value || "").trim();
@@ -2620,7 +4089,9 @@ function getCurrentChatPromptSettingsDraft() {
   return normalizeMessagePromptSettings({
     historyRounds: messagesChatHistoryRoundsInputEl?.value,
     replySentenceLimit: messagesChatReplySentenceLimitInputEl?.value,
+    journalLength: normalizeMessagePromptSettings(state.chatPromptSettings).journalLength,
     timeAwareness: Boolean(messagesChatTimeAwarenessInputEl?.checked),
+    scheduleAwarenessWindowMinutes: messagesChatScheduleWindowInputEl?.value,
     hotTopicsEnabled: Boolean(messagesChatHotTopicsInputEl?.checked),
     hotTopicsTabId: tabs.some((tab) => tab.id === selectedTabId) ? selectedTabId : "",
     hotTopicsIncludeDiscussionText: Boolean(messagesChatHotTopicsTextInputEl?.checked),
@@ -2628,7 +4099,9 @@ function getCurrentChatPromptSettingsDraft() {
     worldbookEnabled: Boolean(messagesChatWorldbookInputEl?.checked),
     worldbookIds: selectedWorldbookIds,
     forumPostFocusEnabled: Boolean(messagesChatProfilePostFocusInputEl?.checked),
-    bubbleFocusEnabled: Boolean(messagesChatBubbleFocusInputEl?.checked)
+    bubbleFocusEnabled: Boolean(messagesChatBubbleFocusInputEl?.checked),
+    showContactAvatar: Boolean(messagesChatShowContactAvatarInputEl?.checked),
+    showUserAvatar: Boolean(messagesChatShowUserAvatarInputEl?.checked)
   });
 }
 
@@ -2645,6 +4118,104 @@ function setChatSettingsOpen(isOpen) {
     }, 0);
   }
   updateBodyModalState();
+}
+
+function editConversationMessage(messageId = "") {
+  const conversation = getConversationById();
+  if (!conversation) {
+    return;
+  }
+  const targetMessage = conversation.messages.find((message) => message.id === messageId) || null;
+  if (!targetMessage) {
+    setMessagesStatus("未找到要编辑的消息。", "error");
+    return;
+  }
+  const nextText = window.prompt(
+    targetMessage.role === "user" ? "编辑你发送的消息" : "编辑角色回复",
+    targetMessage.text
+  );
+  if (nextText == null) {
+    return;
+  }
+  const resolved = String(nextText || "").trim();
+  if (!resolved) {
+    setMessagesStatus("消息内容不能为空。", "error");
+    return;
+  }
+
+  conversation.messages = conversation.messages.map((message) =>
+    message.id === targetMessage.id ? { ...message, text: resolved } : message
+  );
+  recalculateConversationUpdatedAt(conversation);
+  state.messageActionMessageId = "";
+  persistConversations();
+  renderMessagesPage();
+  setMessagesStatus("消息已更新。", "success");
+}
+
+function deleteConversationMessage(messageId = "") {
+  const conversation = getConversationById();
+  if (!conversation) {
+    return;
+  }
+  const targetMessage = conversation.messages.find((message) => message.id === messageId) || null;
+  if (!targetMessage) {
+    setMessagesStatus("未找到要删除的消息。", "error");
+    return;
+  }
+  const confirmed = window.confirm("确定删除这条消息吗？");
+  if (!confirmed) {
+    return;
+  }
+
+  conversation.messages = conversation.messages.filter((message) => message.id !== targetMessage.id);
+  recalculateConversationUpdatedAt(conversation);
+  state.messageActionMessageId = "";
+  persistConversations();
+  renderMessagesPage();
+  setMessagesStatus("消息已删除。", "success");
+}
+
+function handleConversationToolAction(toolId = "") {
+  const resolvedToolId = String(toolId || "").trim();
+  closeConversationTransientUi();
+
+  if (resolvedToolId === "journal") {
+    const { conversation, contact } = getActiveConversationContext();
+    if (!conversation || !contact) {
+      setMessagesStatus("请先进入一个聊天，再打开日记。", "error");
+      renderConversationDetail();
+      return;
+    }
+    renderConversationDetail();
+    setJournalOpen(true);
+    return;
+  }
+
+  if (resolvedToolId === "regenerate") {
+    const conversation = getConversationById();
+    if (!conversation) {
+      return;
+    }
+    const latestBatch = getLatestAssistantReplyBatch(conversation);
+    if (latestBatch?.blocked) {
+      setMessagesStatus("当前还有待回复的新消息，请先完成这一轮对话。", "error");
+      renderConversationDetail();
+      return;
+    }
+    if (!latestBatch) {
+      setMessagesStatus("当前没有可重回的上一轮回复。", "error");
+      renderConversationDetail();
+      return;
+    }
+    renderConversationDetail();
+    setRegenerateModalOpen(true);
+    return;
+  }
+
+  renderConversationDetail();
+  const entry = CHAT_UTILITY_ITEMS.find((item) => item.id === resolvedToolId);
+  setMessagesStatus(`${entry?.label || "该"}功能暂未开放。`);
 }
 
 function sendConversationMessage(text) {
@@ -2665,6 +4236,7 @@ function sendConversationMessage(text) {
     return;
   }
 
+  closeConversationTransientUi();
   const userMessage = normalizeConversationMessage(
     {
       id: `message_${Date.now()}_${hashText(content)}`,
@@ -2685,11 +4257,15 @@ function sendConversationMessage(text) {
   setMessagesStatus("消息已加入对话，点击右侧圆标向 API 请求回复。", "success");
 }
 
-async function requestConversationReply() {
+async function requestConversationReply(options = {}) {
   const conversation = getConversationById();
   if (!conversation) {
     return;
   }
+
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const isRegenerate = Boolean(requestOptions.regenerate);
+  const regenerateInstruction = String(requestOptions.regenerateInstruction || "").trim();
 
   if (state.sendingConversationId === conversation.id) {
     return;
@@ -2701,22 +4277,47 @@ async function requestConversationReply() {
     return;
   }
 
-  const pendingUserMessages = conversation.messages.filter(
-    (message) => message.role === "user" && message.needsReply
-  );
-  if (!pendingUserMessages.length) {
-    setMessagesStatus("当前没有待推送到 API 的新消息。");
-    return;
-  }
-
   const settings = loadSettings();
   const promptSettings = normalizeMessagePromptSettings(settings.messagePromptSettings);
   state.chatPromptSettings = promptSettings;
-  const history = selectConversationHistory(conversation.messages, promptSettings.historyRounds);
+  let history = [];
+  let removedReplyBatch = [];
 
+  closeConversationTransientUi();
   state.sendingConversationId = conversation.id;
-  renderMessagesPage();
-  setMessagesStatus("正在等待对方回复…");
+  if (isRegenerate) {
+    const latestReplyBatch = getLatestAssistantReplyBatch(conversation);
+    if (latestReplyBatch?.blocked) {
+      state.sendingConversationId = "";
+      setMessagesStatus("当前还有待回复的新消息，请先完成这一轮对话。", "error");
+      return;
+    }
+    if (!latestReplyBatch) {
+      state.sendingConversationId = "";
+      setMessagesStatus("当前没有可重回的上一轮回复。", "error");
+      return;
+    }
+
+    removedReplyBatch = latestReplyBatch.messages.map((message) => ({ ...message }));
+    conversation.messages = conversation.messages.slice(0, latestReplyBatch.startIndex);
+    recalculateConversationUpdatedAt(conversation);
+    persistConversations();
+    history = selectConversationHistory(conversation.messages, promptSettings.historyRounds);
+    renderMessagesPage();
+    setMessagesStatus("正在重新生成回复…");
+  } else {
+    const pendingUserMessages = conversation.messages.filter(
+      (message) => message.role === "user" && message.needsReply
+    );
+    if (!pendingUserMessages.length) {
+      state.sendingConversationId = "";
+      setMessagesStatus("当前没有待推送到 API 的新消息。");
+      return;
+    }
+    history = selectConversationHistory(conversation.messages, promptSettings.historyRounds);
+    renderMessagesPage();
+    setMessagesStatus("正在等待对方回复…");
+  }
 
   try {
     const replyText = await requestChatReplyText(
@@ -2724,49 +4325,33 @@ async function requestConversationReply() {
       state.profile,
       contact,
       history,
-      promptSettings
+      promptSettings,
+      {
+        regenerate: isRegenerate,
+        regenerateInstruction
+      }
     );
     const updatedConversation = getConversationById(conversation.id);
     if (!updatedConversation) {
       return;
     }
-    updatedConversation.messages = updatedConversation.messages.map((message) =>
-      message.role === "user" && message.needsReply ? { ...message, needsReply: false } : message
-    );
-
-    const replyLines = limitReplyLines(
-      splitReplyIntoMessageLines(replyText),
-      promptSettings.replySentenceLimit
-    );
-    const now = Date.now();
-    const timeLabel = formatLocalTime();
-    const createdMessages = [];
-
-    for (let index = 0; index < replyLines.length; index += 1) {
-      await sleep(index === 0 ? 1640 : 1460);
-      const line = replyLines[index];
-      const replyMessage = normalizeConversationMessage(
-        {
-          id: `message_${now}_${index}_${hashText(line)}`,
-          role: "assistant",
-          text: line,
-          time: timeLabel,
-          createdAt: now + index
-        },
-        updatedConversation.messages.length + index
+    if (!isRegenerate) {
+      updatedConversation.messages = updatedConversation.messages.map((message) =>
+        message.role === "user" && message.needsReply ? { ...message, needsReply: false } : message
       );
-      updatedConversation.messages = [...updatedConversation.messages, replyMessage];
-      updatedConversation.updatedAt = replyMessage.createdAt;
-      createdMessages.push(replyMessage);
-      persistConversations();
-      renderMessagesPage();
     }
 
-    setMessagesStatus(
-      createdMessages.length > 1 ? `已收到 ${createdMessages.length} 条分句回复。` : "已收到回复。",
-      "success"
-    );
+    await appendAssistantReplyBatch(updatedConversation, replyText, promptSettings);
+    setMessagesStatus(isRegenerate ? "已重新生成回复。" : "已收到回复。", "success");
   } catch (error) {
+    if (isRegenerate) {
+      const rollbackConversation = getConversationById(conversation.id);
+      if (rollbackConversation && removedReplyBatch.length) {
+        rollbackConversation.messages = [...rollbackConversation.messages, ...removedReplyBatch];
+        recalculateConversationUpdatedAt(rollbackConversation);
+        persistConversations();
+      }
+    }
     setMessagesStatus(`回复失败：${error?.message || "请求失败"}`, "error");
   } finally {
     state.sendingConversationId = "";
@@ -2780,6 +4365,7 @@ function refreshStateFromStorage() {
   state.contacts = loadContacts();
   state.conversations = loadConversations();
   state.worldbooks = loadWorldbooks();
+  state.journalEntries = loadJournalEntries();
   state.chatPromptSettings = normalizeMessagePromptSettings(loadSettings().messagePromptSettings);
 }
 
@@ -2787,6 +4373,7 @@ function attachEvents() {
   if (messagesNavBtnEl) {
     messagesNavBtnEl.addEventListener("click", () => {
       if (state.activeConversationId && state.activeTab === "chat") {
+        closeConversationTransientUi();
         state.activeConversationId = "";
         setMessagesStatus("");
         renderMessagesPage();
@@ -2819,6 +4406,7 @@ function attachEvents() {
       if (!state.activeConversationId) {
         return;
       }
+      closeConversationTransientUi();
       setChatSettingsOpen(true);
     });
   }
@@ -2858,6 +4446,8 @@ function attachEvents() {
       if (!(actionEl instanceof Element) || !actionEl.getAttribute("data-tab")) {
         return;
       }
+      closeConversationTransientUi();
+      setRegenerateModalOpen(false);
       state.activeTab = String(actionEl.getAttribute("data-tab") || "");
       state.activeConversationId = "";
       state.query = "";
@@ -2873,8 +4463,69 @@ function attachEvents() {
       if (!(target instanceof Element)) {
         return;
       }
+
       const actionEl = target.closest("[data-action]");
+
+      if (
+        state.messageActionMessageId &&
+        !target.closest(".messages-message-row__menu") &&
+        !target.closest("[data-action='toggle-message-menu']")
+      ) {
+        state.messageActionMessageId = "";
+        if (!(actionEl instanceof Element)) {
+          renderConversationDetail();
+          return;
+        }
+      }
       if (!(actionEl instanceof Element)) {
+        return;
+      }
+
+      if (actionEl.getAttribute("data-action") === "toggle-composer-panel") {
+        state.composerPanelOpen = !state.composerPanelOpen;
+        state.messageActionMessageId = "";
+        renderConversationDetail();
+        return;
+      }
+
+      if (actionEl.getAttribute("data-action") === "close-composer-panel") {
+        state.composerPanelOpen = false;
+        renderConversationDetail();
+        return;
+      }
+
+      if (
+        actionEl.getAttribute("data-action") === "conversation-tool" &&
+        actionEl.getAttribute("data-tool-id")
+      ) {
+        handleConversationToolAction(String(actionEl.getAttribute("data-tool-id") || ""));
+        return;
+      }
+
+      if (
+        actionEl.getAttribute("data-action") === "toggle-message-menu" &&
+        actionEl.getAttribute("data-message-id")
+      ) {
+        const messageId = String(actionEl.getAttribute("data-message-id") || "");
+        state.composerPanelOpen = false;
+        state.messageActionMessageId = state.messageActionMessageId === messageId ? "" : messageId;
+        renderConversationDetail();
+        return;
+      }
+
+      if (
+        actionEl.getAttribute("data-action") === "edit-conversation-message" &&
+        actionEl.getAttribute("data-message-id")
+      ) {
+        editConversationMessage(String(actionEl.getAttribute("data-message-id") || ""));
+        return;
+      }
+
+      if (
+        actionEl.getAttribute("data-action") === "delete-conversation-message" &&
+        actionEl.getAttribute("data-message-id")
+      ) {
+        deleteConversationMessage(String(actionEl.getAttribute("data-message-id") || ""));
         return;
       }
 
@@ -2887,6 +4538,7 @@ function attachEvents() {
         actionEl.getAttribute("data-action") === "open-conversation" &&
         actionEl.getAttribute("data-conversation-id")
       ) {
+        closeConversationTransientUi();
         state.activeConversationId = String(actionEl.getAttribute("data-conversation-id") || "");
         setMessagesStatus("");
         renderMessagesPage();
@@ -3103,44 +4755,6 @@ function attachEvents() {
         );
         return;
       }
-      if (draft.hotTopicsEnabled) {
-        const selectedTab =
-          getAvailableCustomTabs(loadSettings()).find((tab) => tab.id === draft.hotTopicsTabId) ||
-          null;
-        const hasDiscussionText = Boolean(
-          String(selectedTab?.discussionText || selectedTab?.text || "").trim()
-        );
-        const hasHotTopic = Boolean(String(selectedTab?.hotTopic || "").trim());
-        if (
-          draft.hotTopicsIncludeDiscussionText &&
-          !draft.hotTopicsIncludeHotTopic &&
-          !hasDiscussionText
-        ) {
-          setEditorStatus(messagesChatSettingsStatusEl, "当前页签还没有填写“页签文本”。", "error");
-          return;
-        }
-        if (
-          draft.hotTopicsIncludeDiscussionText &&
-          draft.hotTopicsIncludeHotTopic &&
-          !hasDiscussionText &&
-          !hasHotTopic
-        ) {
-          setEditorStatus(
-            messagesChatSettingsStatusEl,
-            "当前页签的“页签文本”和“页签热点”都还是空的。",
-            "error"
-          );
-          return;
-        }
-        if (
-          draft.hotTopicsIncludeHotTopic &&
-          !draft.hotTopicsIncludeDiscussionText &&
-          !hasHotTopic
-        ) {
-          setEditorStatus(messagesChatSettingsStatusEl, "当前页签还没有填写“页签热点”。", "error");
-          return;
-        }
-      }
       if (draft.worldbookEnabled && !draft.worldbookIds.length) {
         setEditorStatus(messagesChatSettingsStatusEl, "请至少选择一条世界书。", "error");
         return;
@@ -3149,8 +4763,12 @@ function attachEvents() {
       nextSettings.messagePromptSettings = draft;
       persistSettings(nextSettings);
       state.chatPromptSettings = draft;
+      updateChatHotTopicsWarning(draft);
       setEditorStatus(messagesChatSettingsStatusEl, "对话回复设置已保存。", "success");
       setMessagesStatus("对话 prompt 设置已更新。", "success");
+      if (state.activeConversationId && state.activeTab === "chat") {
+        renderConversationDetail();
+      }
       window.setTimeout(() => {
         setChatSettingsOpen(false);
       }, 220);
@@ -3160,6 +4778,7 @@ function attachEvents() {
   if (messagesChatHotTopicsInputEl) {
     messagesChatHotTopicsInputEl.addEventListener("change", () => {
       updateChatSettingsFormState();
+      updateChatHotTopicsWarning();
       setEditorStatus(messagesChatSettingsStatusEl);
     });
   }
@@ -3169,9 +4788,17 @@ function attachEvents() {
       return;
     }
     input.addEventListener("change", () => {
+      updateChatHotTopicsWarning();
       setEditorStatus(messagesChatSettingsStatusEl);
     });
   });
+
+  if (messagesChatHotTopicsTabSelectEl) {
+    messagesChatHotTopicsTabSelectEl.addEventListener("change", () => {
+      updateChatHotTopicsWarning();
+      setEditorStatus(messagesChatSettingsStatusEl);
+    });
+  }
 
   if (messagesChatWorldbookInputEl) {
     messagesChatWorldbookInputEl.addEventListener("change", () => {
@@ -3186,9 +4813,109 @@ function attachEvents() {
     });
   }
 
-  if (messagesWorldbookCloseBtnEl) {
-    messagesWorldbookCloseBtnEl.addEventListener("click", () => {
-      setWorldbookManagerOpen(false);
+      if (messagesWorldbookCloseBtnEl) {
+        messagesWorldbookCloseBtnEl.addEventListener("click", () => {
+          setWorldbookManagerOpen(false);
+        });
+      }
+
+  if (messagesRegenerateCloseBtnEl) {
+    messagesRegenerateCloseBtnEl.addEventListener("click", () => {
+      setRegenerateModalOpen(false);
+    });
+  }
+
+  if (messagesRegenerateCancelBtnEl) {
+    messagesRegenerateCancelBtnEl.addEventListener("click", () => {
+      setRegenerateModalOpen(false);
+    });
+  }
+
+  if (messagesRegenerateInstructionInputEl) {
+    messagesRegenerateInstructionInputEl.addEventListener("input", () => {
+      state.regenerateInstruction = String(messagesRegenerateInstructionInputEl.value || "");
+    });
+  }
+
+  if (messagesRegenerateFormEl) {
+    messagesRegenerateFormEl.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const instruction = String(messagesRegenerateInstructionInputEl?.value || "").trim();
+      state.regenerateInstruction = instruction;
+      setRegenerateModalOpen(false);
+      await requestConversationReply({
+        regenerate: true,
+        regenerateInstruction: instruction
+      });
+    });
+  }
+
+  if (messagesJournalCloseBtnEl) {
+    messagesJournalCloseBtnEl.addEventListener("click", () => {
+      setJournalOpen(false);
+    });
+  }
+
+  if (messagesJournalHistoryBtnEl) {
+    messagesJournalHistoryBtnEl.addEventListener("click", () => {
+      setJournalHistoryOpen(true);
+    });
+  }
+
+  if (messagesJournalSettingsBtnEl) {
+    messagesJournalSettingsBtnEl.addEventListener("click", () => {
+      setJournalSettingsOpen(true);
+    });
+  }
+
+  if (messagesJournalBodyEl) {
+    messagesJournalBodyEl.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      const actionEl = target.closest("[data-action='generate-journal-entry']");
+      if (!(actionEl instanceof Element)) {
+        return;
+      }
+      requestJournalEntry();
+    });
+  }
+
+  if (messagesJournalHistoryCloseBtnEl) {
+    messagesJournalHistoryCloseBtnEl.addEventListener("click", () => {
+      setJournalHistoryOpen(false);
+    });
+  }
+
+  if (messagesJournalSettingsCloseBtnEl) {
+    messagesJournalSettingsCloseBtnEl.addEventListener("click", () => {
+      setJournalSettingsOpen(false);
+    });
+  }
+
+  if (messagesJournalSettingsCancelBtnEl) {
+    messagesJournalSettingsCancelBtnEl.addEventListener("click", () => {
+      setJournalSettingsOpen(false);
+    });
+  }
+
+  if (messagesJournalSettingsFormEl) {
+    messagesJournalSettingsFormEl.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const nextSettings = loadSettings();
+      const nextPromptSettings = normalizeMessagePromptSettings({
+        ...nextSettings.messagePromptSettings,
+        journalLength: messagesJournalLengthInputEl?.value
+      });
+      nextSettings.messagePromptSettings = nextPromptSettings;
+      persistSettings(nextSettings);
+      state.chatPromptSettings = nextPromptSettings;
+      setEditorStatus(messagesJournalSettingsStatusEl, "日记长度设置已保存。", "success");
+      renderJournalModal();
+      window.setTimeout(() => {
+        setJournalSettingsOpen(false);
+      }, 180);
     });
   }
 
@@ -3310,6 +5037,38 @@ function attachEvents() {
     });
   }
 
+  if (messagesRegenerateModalEl) {
+    messagesRegenerateModalEl.addEventListener("click", (event) => {
+      if (event.target === messagesRegenerateModalEl) {
+        setRegenerateModalOpen(false);
+      }
+    });
+  }
+
+  if (messagesJournalModalEl) {
+    messagesJournalModalEl.addEventListener("click", (event) => {
+      if (event.target === messagesJournalModalEl) {
+        setJournalOpen(false);
+      }
+    });
+  }
+
+  if (messagesJournalHistoryModalEl) {
+    messagesJournalHistoryModalEl.addEventListener("click", (event) => {
+      if (event.target === messagesJournalHistoryModalEl) {
+        setJournalHistoryOpen(false);
+      }
+    });
+  }
+
+  if (messagesJournalSettingsModalEl) {
+    messagesJournalSettingsModalEl.addEventListener("click", (event) => {
+      if (event.target === messagesJournalSettingsModalEl) {
+        setJournalSettingsOpen(false);
+      }
+    });
+  }
+
   window.addEventListener("focus", () => {
     if (
       state.profileEditorOpen ||
@@ -3317,7 +5076,11 @@ function attachEvents() {
       state.conversationPickerOpen ||
       state.chatSettingsOpen ||
       state.worldbookManagerOpen ||
-      state.worldbookEditorOpen
+      state.worldbookEditorOpen ||
+      state.regenerateModalOpen ||
+      state.journalOpen ||
+      state.journalHistoryOpen ||
+      state.journalSettingsOpen
     ) {
       return;
     }
@@ -3350,7 +5113,34 @@ function attachEvents() {
       setWorldbookManagerOpen(false);
       return;
     }
+    if (event.key === "Escape" && state.regenerateModalOpen) {
+      setRegenerateModalOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.journalSettingsOpen) {
+      setJournalSettingsOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.journalHistoryOpen) {
+      setJournalHistoryOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.journalOpen) {
+      setJournalOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.composerPanelOpen) {
+      state.composerPanelOpen = false;
+      renderConversationDetail();
+      return;
+    }
+    if (event.key === "Escape" && state.messageActionMessageId) {
+      state.messageActionMessageId = "";
+      renderConversationDetail();
+      return;
+    }
     if (event.key === "Escape" && state.activeConversationId) {
+      closeConversationTransientUi();
       state.activeConversationId = "";
       renderMessagesPage();
     }

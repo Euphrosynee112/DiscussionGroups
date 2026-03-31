@@ -447,10 +447,26 @@ body.embedded .bubble-embedded-close {
 }
 
 .bubble-sheet-field > span,
+.bubble-sheet-field__head > span,
 .bubble-sheet-toggle__body strong {
   display: block;
   font-size: 16px;
   font-weight: 700;
+}
+
+.bubble-sheet-field__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bubble-sheet-field__inline-note {
+  margin: 0;
+  color: #c77700;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: right;
 }
 
 .bubble-sheet-field small,
@@ -538,7 +554,8 @@ body.embedded .bubble-embedded-close {
 
 .bubble-sheet-checklist__item,
 .bubble-chat-settings-option {
-  display: flex;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
   align-items: flex-start;
   gap: 10px;
   color: var(--text);
@@ -547,9 +564,13 @@ body.embedded .bubble-embedded-close {
 .bubble-sheet-checklist__item span,
 .bubble-chat-settings-option span {
   display: grid;
+  min-width: 0;
   gap: 2px;
   font-size: 14px;
   line-height: 1.5;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .bubble-sheet-checklist__item small,
@@ -581,6 +602,22 @@ body.embedded .bubble-embedded-close {
 
 .bubble-chat-settings-status.error {
   color: #b42318;
+}
+
+@media (max-width: 720px) {
+  .bubble-sheet-field__head {
+    align-items: flex-start;
+  }
+
+  .bubble-sheet-field__inline-note {
+    max-width: 48%;
+  }
+
+  .bubble-sheet-checklist__item,
+  .bubble-chat-settings-option {
+    grid-template-columns: 18px minmax(0, 1fr);
+    gap: 8px;
+  }
 }
 
 .bubble-chat-loading-overlay {

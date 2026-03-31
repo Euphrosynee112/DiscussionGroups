@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pulse Generator · 养崽</title>
+    <link rel="stylesheet" href="./raising.css?v=20260331k" />
+  </head>
+  <body>
+    <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
+
+    <main class="raising-app">
+      <section class="raising-shell" aria-label="养崽首页">
+        <header class="raising-topbar">
+          <button
+            id="raising-back-btn"
+            class="raising-topbar__button"
+            type="button"
+            aria-label="返回首页"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M15 6l-6 6 6 6"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+          <h1 class="raising-topbar__title">养崽</h1>
+          <div class="raising-topbar__actions">
+            <button
+              id="raising-create-btn"
+              class="raising-topbar__button"
+              type="button"
+              aria-label="新增崽崽"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 5v14M5 12h14"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+            <button
+              id="raising-trash-btn"
+              class="raising-topbar__button"
+              type="button"
+              aria-label="删除崽崽"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M8 7h8m-7 0 .5 11h5L15 7m-5 0 1-2h2l1 2M6 7h12"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.9"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <p id="raising-status" class="raising-status" aria-live="polite"></p>
+
+        <section class="raising-page">
+          <div id="raising-list" class="raising-list" aria-live="polite"></div>
+        </section>
+
+        <section id="raising-room-view" class="raising-room-view" hidden aria-hidden="true">
+          <header class="raising-room-topbar">
+            <button
+              id="raising-room-back-btn"
+              class="raising-room-topbar__button"
+              type="button"
+              aria-label="返回首页"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M15 6l-6 6 6 6"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <h2 id="raising-room-title" class="raising-room-topbar__title">房间</h2>
+            <button
+              id="raising-room-action-btn"
+              class="raising-room-topbar__button raising-room-topbar__button--action"
+              type="button"
+              hidden
+            >
+              辅导
+            </button>
+          </header>
+
+          <div id="raising-room-content" class="raising-room-content" aria-live="polite"></div>
+
+          <nav id="raising-room-tabbar" class="raising-room-tabbar" aria-label="房间功能页签">
+            <button class="raising-room-tabbar__item" type="button" data-room-tab="archive">
+              <span class="raising-room-tabbar__icon">▣</span>
+              <span>成长档案</span>
+            </button>
+            <button class="raising-room-tabbar__item" type="button" data-room-tab="chat">
+              <span class="raising-room-tabbar__icon">◦◦</span>
+              <span>聊天</span>
+            </button>
+            <button class="raising-room-tabbar__item" type="button" data-room-tab="diary">
+              <span class="raising-room-tabbar__icon">✎</span>
+              <span>日记手帐</span>
+            </button>
+            <button class="raising-room-tabbar__item" type="button" data-room-tab="activities">
+              <span class="raising-room-tabbar__icon">✣</span>
+              <span>活动</span>
+            </button>
+          </nav>
+        </section>
+
+        <section
+          id="raising-detail-view"
+          class="raising-detail-view"
+          hidden
+          aria-hidden="true"
+        >
+          <header class="raising-detail-topbar">
+            <button
+              id="raising-detail-back-btn"
+              class="raising-detail-topbar__button"
+              type="button"
+              aria-label="返回养崽首页"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M15 6l-6 6 6 6"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <h2 class="raising-detail-topbar__title">成长档案</h2>
+            <button
+              id="raising-detail-retry-btn"
+              class="raising-detail-topbar__button raising-detail-topbar__button--retry"
+              type="button"
+              hidden
+            >
+              重试
+            </button>
+          </header>
+
+          <div class="raising-detail-view__body">
+            <div id="raising-archive-content" aria-live="polite"></div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <section
+      id="raising-create-modal"
+      class="raising-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div class="raising-modal__backdrop"></div>
+      <div class="raising-modal__panel" role="dialog" aria-modal="true" aria-label="选择共同抚养人">
+        <div class="raising-modal__head">
+          <strong>选择共同抚养人</strong>
+          <p>最多领养 5 个宝宝。已养崽的伴侣不会重复出现在这里。</p>
+        </div>
+
+        <form id="raising-create-form" class="raising-modal__form">
+          <div id="raising-create-options" class="raising-partner-list"></div>
+          <p id="raising-create-status" class="raising-modal__status" aria-live="polite"></p>
+          <div class="raising-modal__actions">
+            <button
+              id="raising-create-cancel-btn"
+              class="raising-modal__button raising-modal__button--ghost"
+              type="button"
+            >
+              再想想
+            </button>
+            <button
+              id="raising-create-confirm-btn"
+              class="raising-modal__button"
+              type="submit"
+            >
+              生成
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section
+      id="raising-registration-modal"
+      class="raising-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div class="raising-modal__backdrop"></div>
+      <div
+        class="raising-modal__panel raising-modal__panel--register"
+        role="dialog"
+        aria-modal="true"
+        aria-label="新生儿登记卡"
+      >
+        <form id="raising-registration-form" class="raising-registration">
+          <div class="raising-modal__head">
+            <strong>新生儿登记卡</strong>
+          </div>
+
+          <div id="raising-registration-gender" class="raising-registration__gender">女孩 ♀</div>
+
+          <div class="raising-registration__avatar-wrap">
+            <div id="raising-registration-avatar" class="raising-registration__avatar is-girl">
+              ♀
+            </div>
+          </div>
+
+          <label class="raising-registration__field">
+            <input
+              id="raising-registration-name-input"
+              type="text"
+              maxlength="12"
+              placeholder="给宝宝起个好听的名字…"
+              autocomplete="off"
+            />
+          </label>
+
+          <label id="raising-registration-date" class="raising-registration__date">
+            <span id="raising-registration-birthday-text">2026年3月31日</span>
+            <input id="raising-registration-birthday-input" type="date" />
+          </label>
+
+          <p id="raising-registration-status" class="raising-modal__status" aria-live="polite"></p>
+
+          <button
+            id="raising-registration-submit-btn"
+            class="raising-registration__submit"
+            type="submit"
+          >
+            完成登记（AI 生成档案）
+          </button>
+        </form>
+      </div>
+    </section>
+
+    <script src="./api-log.js?v=20260331k"></script>
+    <script src="./raising.js?v=20260331k"></script>
+  </body>
+</html>

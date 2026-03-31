@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pulse Generator v2.0</title>
-    <link rel="stylesheet" href="./home.css?v=20260331g" />
+    <link rel="stylesheet" href="./home.css?v=20260331m" />
   </head>
   <body>
     <main class="home-scene">
@@ -87,6 +87,39 @@
           >
             <span class="app-shortcut__icon app-shortcut__icon--x">X</span>
             <span class="app-shortcut__label">X</span>
+          </button>
+
+          <button
+            class="app-shortcut desk-item-raising"
+            type="button"
+            data-open-app="raising"
+            aria-label="打开养崽"
+          >
+            <span class="app-shortcut__icon app-shortcut__icon--raising">养</span>
+            <span class="app-shortcut__label">养崽</span>
+          </button>
+
+          <button
+            class="app-shortcut desk-item-schedule"
+            type="button"
+            data-open-app="schedule"
+            aria-label="打开日程"
+          >
+            <span class="app-shortcut__icon app-shortcut__icon--schedule">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="4.5" y="6.5" width="15" height="13" rx="3" fill="currentColor" />
+                <path
+                  d="M8 4.5v4M16 4.5v4M5 10.5h14"
+                  fill="none"
+                  stroke="rgba(255,255,255,0.92)"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                />
+                <rect x="8" y="13" width="3" height="2.8" rx="1" fill="rgba(255,255,255,0.92)" />
+                <rect x="13" y="13" width="3" height="2.8" rx="1" fill="rgba(255,255,255,0.66)" />
+              </svg>
+            </span>
+            <span class="app-shortcut__label">日程</span>
           </button>
         </section>
 
@@ -221,15 +254,6 @@
             <p class="home-field-hint">
               默认全选。可分别导出 API 配置、API 密钥、论坛设置、论坛个人主页、Chat 人设、世界书、通讯录、聊天设置与 Bubble 挂载设置；论坛 / 世界书 / 通讯录支持局部选择。
             </p>
-            <div class="home-config-transfer__toolbar">
-              <button id="home-transfer-select-all-btn" class="home-chip" type="button">
-                全选
-              </button>
-              <button id="home-transfer-clear-btn" class="home-chip" type="button">
-                清空
-              </button>
-            </div>
-            <div id="home-transfer-export-options" class="home-transfer-options"></div>
             <div class="home-config-transfer__actions">
               <button id="home-config-export-btn" class="home-primary-button" type="button">
                 导出 JSON
@@ -247,6 +271,33 @@
                 hidden
               />
             </div>
+            <section id="home-export-review" class="home-import-review" hidden>
+              <div class="home-import-review__head">
+                <div>
+                  <p class="home-settings-kicker">Export Review</p>
+                  <h4 class="home-import-review__title">准备导出</h4>
+                </div>
+                <button id="home-export-cancel-btn" class="home-chip" type="button">取消</button>
+              </div>
+              <p
+                id="home-export-review-summary"
+                class="home-field-hint"
+              >请选择本次要写入 JSON 的内容；默认已全选。</p>
+              <div class="home-config-transfer__toolbar">
+                <button id="home-transfer-select-all-btn" class="home-chip" type="button">
+                  全选
+                </button>
+                <button id="home-transfer-clear-btn" class="home-chip" type="button">
+                  清空
+                </button>
+              </div>
+              <div id="home-transfer-export-options" class="home-transfer-options"></div>
+              <div class="home-config-transfer__actions">
+                <button id="home-export-apply-btn" class="home-primary-button" type="button">
+                  确认导出所选内容
+                </button>
+              </div>
+            </section>
             <section id="home-import-review" class="home-import-review" hidden>
               <div class="home-import-review__head">
                 <div>
@@ -292,6 +343,6 @@
       </div>
     </section>
 
-    <script src="./home.js?v=20260331g"></script>
+    <script src="./home.js?v=20260331m"></script>
   </body>
 </html>

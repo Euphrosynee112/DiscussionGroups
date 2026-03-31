@@ -57,6 +57,9 @@ function getSourceLabel(source) {
   if (source === "messages") {
     return "Message";
   }
+  if (source === "raising") {
+    return "养崽";
+  }
   return source || "未知";
 }
 
@@ -68,7 +71,8 @@ function getActionLabel(action) {
     translate_reply: "翻译回复",
     chat_reply: "聊天回复",
     fan_reply_generate: "粉丝回复生成",
-    fan_reply_translate: "粉丝回复翻译"
+    fan_reply_translate: "粉丝回复翻译",
+    kid_archive_generate: "成长档案生成"
   };
   return map[action] || action || "请求";
 }

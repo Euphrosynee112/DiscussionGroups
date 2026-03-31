@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pulse Generator · 日程</title>
+    <link rel="stylesheet" href="./schedule.css?v=20260331m" />
+  </head>
+  <body>
+    <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
+
+    <main class="schedule-app">
+      <section class="schedule-shell" aria-label="日程">
+        <header class="schedule-topbar">
+          <button
+            id="schedule-back-btn"
+            class="schedule-topbar__button"
+            type="button"
+            aria-label="返回首页"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M15 6l-6 6 6 6"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+          <div class="schedule-topbar__body">
+            <p class="schedule-topbar__kicker">Calendar</p>
+            <h1 class="schedule-topbar__title">日程</h1>
+          </div>
+          <button
+            id="schedule-add-btn"
+            class="schedule-topbar__button"
+            type="button"
+            aria-label="新增日程"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M12 5v14M5 12h14"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </header>
+
+        <p id="schedule-status" class="schedule-status" aria-live="polite"></p>
+
+        <section class="schedule-toolbar" aria-label="日历工具栏">
+          <div id="schedule-view-switch" class="schedule-view-switch">
+            <button class="schedule-view-switch__item" type="button" data-view="day">日</button>
+            <button class="schedule-view-switch__item" type="button" data-view="week">周</button>
+            <button class="schedule-view-switch__item" type="button" data-view="month">月</button>
+          </div>
+          <div class="schedule-toolbar__nav">
+            <button id="schedule-prev-btn" class="schedule-nav-btn" type="button" aria-label="上一页">
+              ‹
+            </button>
+            <button id="schedule-today-btn" class="schedule-nav-btn schedule-nav-btn--today" type="button">
+              今天
+            </button>
+            <button id="schedule-next-btn" class="schedule-nav-btn" type="button" aria-label="下一页">
+              ›
+            </button>
+          </div>
+        </section>
+
+        <section class="schedule-range" aria-label="当前时间范围">
+          <p id="schedule-range-label" class="schedule-range__label"></p>
+          <p id="schedule-range-subtitle" class="schedule-range__subtitle"></p>
+        </section>
+
+        <section id="schedule-content" class="schedule-content" aria-live="polite"></section>
+      </section>
+    </main>
+
+    <section id="schedule-editor-modal" class="schedule-modal" hidden aria-hidden="true">
+      <div class="schedule-modal__backdrop"></div>
+      <div class="schedule-modal__panel" role="dialog" aria-modal="true" aria-label="新增日程">
+        <div class="schedule-modal__head">
+          <strong id="schedule-editor-title">新增日程</strong>
+          <button id="schedule-editor-close-btn" class="schedule-modal__close" type="button" aria-label="关闭">
+            ×
+          </button>
+        </div>
+
+        <form id="schedule-editor-form" class="schedule-editor">
+          <label class="schedule-field">
+            <span>日程标题</span>
+            <input
+              id="schedule-title-input"
+              type="text"
+              maxlength="40"
+              placeholder="例如：练舞、直播、彩排、陪家人吃饭"
+              autocomplete="off"
+            />
+          </label>
+
+          <label class="schedule-field">
+            <span>新增方式</span>
+            <select id="schedule-type-select">
+              <option value="day">按天</option>
+              <option value="hour">按小时</option>
+              <option value="week">按周</option>
+            </select>
+            <small id="schedule-type-hint" class="schedule-field__hint"></small>
+          </label>
+
+          <label class="schedule-field">
+            <span>归属</span>
+            <select id="schedule-owner-type-select">
+              <option value="user">用户</option>
+              <option value="contact">角色</option>
+            </select>
+          </label>
+
+          <label id="schedule-owner-contact-field" class="schedule-field">
+            <span>角色</span>
+            <select id="schedule-owner-contact-select"></select>
+          </label>
+
+          <section id="schedule-visibility-field" class="schedule-field schedule-field--group">
+            <div class="schedule-field__head">
+              <span>用户日程可见范围</span>
+              <label class="schedule-inline-check">
+                <input id="schedule-visible-all-input" type="checkbox" />
+                <span>全部可见</span>
+              </label>
+            </div>
+            <div id="schedule-visible-contacts" class="schedule-visibility-list"></div>
+            <small class="schedule-field__hint">
+              只有勾选到的角色，才会在对话时感知这条用户日程。
+            </small>
+          </section>
+
+          <label class="schedule-field">
+            <span>日期</span>
+            <input id="schedule-date-input" type="date" />
+          </label>
+
+          <div id="schedule-time-grid" class="schedule-time-grid">
+            <label class="schedule-field">
+              <span>开始时间</span>
+              <input id="schedule-start-time-input" type="time" />
+            </label>
+            <label class="schedule-field">
+              <span>结束时间</span>
+              <input id="schedule-end-time-input" type="time" />
+            </label>
+          </div>
+
+          <p id="schedule-editor-status" class="schedule-editor-status" aria-live="polite"></p>
+
+          <div class="schedule-modal__actions">
+            <button id="schedule-delete-btn" class="schedule-modal__button schedule-modal__button--danger" type="button" hidden>
+              删除
+            </button>
+            <button id="schedule-editor-cancel-btn" class="schedule-modal__button schedule-modal__button--ghost" type="button">
+              取消
+            </button>
+            <button class="schedule-modal__button" type="submit">保存日程</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <script src="./schedule.js?v=20260331m"></script>
+  </body>
+</html>
