@@ -253,6 +253,10 @@ const messagesJournalSettingsStatusEl = document.querySelector(
 );
 
 const memoryStorage = {};
+const initialWindowFocusPrimed =
+  typeof document !== "undefined" && typeof document.hasFocus === "function"
+    ? document.hasFocus()
+    : true;
 
 const state = {
   profile: loadProfile(),
@@ -291,7 +295,8 @@ const state = {
   journalWeatherLoading: false,
   journalWeatherError: "",
   journalStatusMessage: "",
-  journalStatusTone: ""
+  journalStatusTone: "",
+  windowFocusPrimed: initialWindowFocusPrimed
 };
 
 function isEmbeddedView() {
@@ -3197,7 +3202,8 @@ function renderConversationMessage(message, conversation, promptSettings = state
       ${!isUser && avatarMarkup ? avatarMarkup : ""}
       <div class="messages-message-row__bubble-wrap">
         <div class="messages-message-row__stack">
-          <div
+          <button
+            type="button"
             class="messages-bubble-toggle"
             data-action="toggle-message-menu"
             data-message-id="${escapeHtml(message.id)}"
@@ -3205,7 +3211,7 @@ function renderConversationMessage(message, conversation, promptSettings = state
             <article class="messages-bubble ${isUser ? "messages-bubble--user" : "messages-bubble--assistant"}">
               <p>${escapeHtml(message.text)}</p>
             </article>
-          </div>
+          </button>
           ${
             isMenuOpen
               ? `
@@ -3253,7 +3259,8 @@ function renderChatList() {
         .map((conversation) => {
           const meta = getConversationMeta(conversation);
           return `
-            <article
+            <button
+              type="button"
               class="messages-row"
               data-action="open-conversation"
               data-conversation-id="${escapeHtml(conversation.id)}"
@@ -3267,7 +3274,7 @@ function renderChatList() {
                 </div>
                 <div class="messages-row__preview">${escapeHtml(getConversationPreview(conversation))}</div>
               </div>
-            </article>
+            </button>
           `;
         })
         .join("")}
@@ -3696,7 +3703,18 @@ function setConversationPickerOpen(isOpen) {
   updateBodyModalState();
 }
 
-function focusConversationInput() {
+function shouldAutoFocusConversationInput() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return true;
+  }
+  return !window.matchMedia("(pointer: coarse)").matches;
+}
+
+function focusConversationInput(options = {}) {
+  const focusOptions = options && typeof options === "object" ? options : {};
+  if (!focusOptions.force && !shouldAutoFocusConversationInput()) {
+    return;
+  }
   const input = messagesContentEl?.querySelector(".messages-conversation__input");
   input?.focus();
 }
@@ -4297,7 +4315,7 @@ function sendConversationMessage(text) {
   conversation.updatedAt = userMessage.createdAt;
   persistConversations();
   renderMessagesPage();
-  focusConversationInput();
+  focusConversationInput({ force: false });
   setMessagesStatus("消息已加入对话，点击右侧圆标向 API 请求回复。", "success");
 }
 
@@ -5115,6 +5133,10 @@ function attachEvents() {
   }
 
   window.addEventListener("focus", () => {
+    if (!state.windowFocusPrimed) {
+      state.windowFocusPrimed = true;
+      return;
+    }
     if (
       state.profileEditorOpen ||
       state.contactEditorOpen ||

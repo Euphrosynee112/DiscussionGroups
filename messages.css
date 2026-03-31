@@ -245,6 +245,12 @@ body.embedded .messages-shell {
   cursor: pointer;
   position: relative;
   background: #ffffff;
+  border: 0;
+  font: inherit;
+  -webkit-appearance: none;
+  appearance: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .messages-row::after,
@@ -480,6 +486,11 @@ body.embedded .messages-shell {
   display: block;
   text-align: inherit;
   cursor: pointer;
+  font: inherit;
+  -webkit-appearance: none;
+  appearance: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .messages-bubble {
@@ -584,6 +595,8 @@ body.embedded .messages-shell {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .messages-conversation__send:disabled {
@@ -603,6 +616,10 @@ body.embedded .messages-shell {
   border: 1px solid rgba(17, 17, 17, 0.08);
   cursor: pointer;
   justify-self: end;
+  -webkit-appearance: none;
+  appearance: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .messages-conversation__trigger svg,
