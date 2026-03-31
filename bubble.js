@@ -2133,14 +2133,10 @@ function buildBubbleHotTopicsContext(settings, promptSettings) {
     return "";
   }
 
-  const sections = [`创作者最近也在关注一个论坛讨论区「${selectedTab.name}」。`];
-  const audience = String(selectedTab.audience || "").trim();
+  const sections = [`这个粉丝团体最近也在关注论坛讨论区「${selectedTab.name}」。`];
   const discussionText = String(selectedTab.discussionText || selectedTab.text || "").trim();
   const hotTopic = String(selectedTab.hotTopic || "").trim();
 
-  if (audience) {
-    sections.push(`这个讨论区里活跃用户的身份与情绪倾向：${audience}`);
-  }
   if (promptSettings.hotTopicsIncludeDiscussionText && discussionText) {
     sections.push(`这个讨论区长期讨论的背景：${discussionText}`);
   }
@@ -2148,7 +2144,9 @@ function buildBubbleHotTopicsContext(settings, promptSettings) {
     sections.push(`这个讨论区当前最主要的热点：${hotTopic}`);
   }
 
-  sections.push("这些论坛信息只用于辅助理解创作者当前 Bubble 消息，回复重心仍要放在创作者这一次发言本身。");
+  sections.push(
+    "这些论坛信息只用于补充这个粉丝群体最近共同关注的话题；回复仍要围绕创作者这一整轮 Bubble 消息本身来做反应。"
+  );
   return sections.join("\n\n");
 }
 
@@ -2170,27 +2168,20 @@ function buildBubbleWorldbookContext(promptSettings) {
     return "";
   }
 
-  return [
-    "补充背景设定（仅作隐性参考，禁止单独提起这些设定来源，也不要像背设定一样直接复述）：",
-    entries.join("\n\n")
-  ].join("\n");
+  return entries.join("\n\n");
 }
 
 function buildFanReplyPrompt(profile, sourceMessages = [], emojiSet = [], settings = getCurrentSettings()) {
   const creatorName = String(profile.username || DEFAULT_PROFILE.username).trim();
   const creatorPersona = String(profile.personaPrompt || DEFAULT_PROFILE.personaPrompt).trim();
-  const emojiMood = emojiSet.slice(0, 3).join(" ");
   const promptSettings = normalizeBubblePromptSettings(settings.bubblePromptSettings);
   const normalizedMessages = Array.isArray(sourceMessages)
     ? sourceMessages
         .map((item, index) => normalizeFanDetailSourceMessage(item, index))
         .filter((item) => item.text)
     : [];
-  const latestMessage = normalizedMessages[normalizedMessages.length - 1] || null;
-  const supplementalContexts = [
-    buildBubbleHotTopicsContext(settings, promptSettings),
-    buildBubbleWorldbookContext(promptSettings)
-  ].filter(Boolean);
+  const worldbookContext = buildBubbleWorldbookContext(promptSettings);
+  const hotTopicsContext = buildBubbleHotTopicsContext(settings, promptSettings);
   return [
     "你正在模拟 Bubble 中创作者的粉丝回复列表。",
     "请严格输出 JSON 数组，不要输出额外解释。",
@@ -2201,23 +2192,25 @@ function buildFanReplyPrompt(profile, sourceMessages = [], emojiSet = [], settin
     "每条 text 不得超过 50 个字符。",
     "语气要像真实粉丝：可以可爱、惊讶、夸赞、调侃、尖叫，但都要围绕原消息做反应。",
     "不要加编号、不要加标签、不要解释、不要输出用户名字段。",
+    worldbookContext
+      ? `补充背景设定（优先级低于粉丝团体近期关注话题、创作者人设与本轮 Bubble 消息，只作弱背景参考）：\n${worldbookContext}`
+      : "",
     `创作者昵称：${creatorName}`,
     `创作者人设：${creatorPersona}`,
-    supplementalContexts.length
-      ? `补充参考语境（优先级低于创作者人设与本轮 Bubble 消息）：\n${supplementalContexts.join(
-          "\n\n"
-        )}`
+    hotTopicsContext
+      ? `粉丝团体近期共同关注的话题：\n${hotTopicsContext}`
       : "",
-    emojiMood ? `这批粉丝情绪关键词：${emojiMood}` : "",
     normalizedMessages.length
-      ? `创作者这一轮连续发送了 ${normalizedMessages.length} 条 Bubble 消息；请以最新一条为主、前面的消息为上下文：`
+      ? `创作者这一轮连续发送了 ${normalizedMessages.length} 条 Bubble 消息；以下所有消息在理解上同等重要，请综合这一整轮内容生成粉丝回复：`
       : "",
     normalizedMessages.length
       ? normalizedMessages
           .map((item, index) => `${index + 1}. ${item.time ? `${item.time} · ` : ""}${item.text}`)
           .join("\n")
       : "",
-    latestMessage ? "请优先回应最后一条，但不要忽略这一轮前面的内容。" : ""
+    normalizedMessages.length
+      ? "请把这一整轮消息视作同一组连续表达，回复可以综合回应其中的共同情绪、主题、转折和细节，不要只盯某一条。"
+      : ""
   ]
     .filter(Boolean)
     .join("\n\n");

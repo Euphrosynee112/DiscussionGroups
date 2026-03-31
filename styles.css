@@ -477,9 +477,109 @@ body.embedded .embedded-close-btn {
   margin-top: 16px;
 }
 
+.composer-quote-preview {
+  display: grid;
+  gap: 10px;
+}
+
+.composer-quote-preview__hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .custom-tabs-list {
   display: grid;
   gap: 12px;
+}
+
+.custom-tabs-workspace {
+  display: grid;
+  grid-template-columns: minmax(220px, 252px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.custom-tabs-workspace.is-editing .custom-tabs-sidebar {
+  opacity: 0.82;
+}
+
+.custom-tabs-sidebar,
+.custom-tab-editor {
+  border-radius: 26px;
+  border: 1px solid rgba(255, 255, 255, 0.62);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 249, 252, 0.92)),
+    rgba(255, 255, 255, 0.74);
+  box-shadow: 0 20px 38px rgba(15, 23, 42, 0.06);
+}
+
+.custom-tabs-sidebar {
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.custom-tabs-sidebar__head {
+  display: grid;
+  gap: 12px;
+}
+
+.custom-tabs-sidebar__head .solid-button {
+  justify-self: stretch;
+}
+
+.custom-tab-editor {
+  padding: 18px;
+  display: grid;
+  gap: 16px;
+}
+
+.custom-tab-editor__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.custom-tab-editor__head h3 {
+  margin: 8px 0 0;
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.custom-tab-editor__head .ghost-chip {
+  flex-shrink: 0;
+}
+
+.custom-tab-form {
+  gap: 18px;
+}
+
+.custom-tab-editor-section {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 22px;
+  background: rgba(247, 249, 251, 0.72);
+}
+
+.custom-tab-editor-section__head {
+  display: grid;
+  gap: 4px;
+}
+
+.custom-tab-editor-section__head strong {
+  font-size: 16px;
+  color: var(--text);
+}
+
+.custom-tab-editor-section__head small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .custom-tab-item {
@@ -494,11 +594,18 @@ body.embedded .embedded-close-btn {
   transition:
     border-color 160ms ease,
     box-shadow 160ms ease,
-    opacity 160ms ease;
+    opacity 160ms ease,
+    transform 160ms ease;
 }
 
 .custom-tab-item:active {
   cursor: grabbing;
+}
+
+.custom-tab-item.is-active {
+  border-color: rgba(29, 155, 240, 0.42);
+  box-shadow: 0 0 0 3px rgba(29, 155, 240, 0.08);
+  transform: translateY(-1px);
 }
 
 .custom-tab-item.is-dragging {
@@ -515,45 +622,6 @@ body.embedded .embedded-close-btn {
   flex-direction: column;
   gap: 8px;
   flex-shrink: 0;
-}
-
-.custom-tab-settings-list {
-  display: grid;
-  gap: 18px;
-}
-
-.custom-tab-settings-item {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  padding: 18px;
-  background: rgba(255, 255, 255, 0.92);
-}
-
-.custom-tab-settings-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.custom-tab-prompt {
-  margin-top: 8px;
-}
-
-#custom-tabs-settings-list label {
-  display: block;
-  margin-bottom: 12px;
-}
-
-#custom-tabs-settings-list input,
-#custom-tabs-settings-list textarea {
-  width: 100%;
-}
-
-#custom-tabs-settings-list input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
 }
 
 #custom-tab-form input,
@@ -650,8 +718,8 @@ body.embedded .embedded-close-btn {
 }
 
 .custom-tabs-modal__panel {
-  width: min(720px, calc(100vw - 32px));
-  max-height: min(88vh, 920px);
+  width: min(940px, calc(100vw - 32px));
+  max-height: min(88vh, 940px);
 }
 
 .custom-tabs-modal__body {
@@ -1815,6 +1883,18 @@ textarea {
     padding: 14px;
   }
 
+  .custom-tabs-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .custom-tabs-sidebar__head {
+    grid-template-columns: 1fr;
+  }
+
+  .custom-tab-editor__head {
+    flex-direction: column;
+  }
+
   .thread-modal__panel {
     width: calc(100vw - 12px);
     max-height: 92vh;
@@ -1838,6 +1918,11 @@ textarea {
   .custom-tabs-modal__body {
     padding: 14px;
     gap: 12px;
+  }
+
+  .custom-tabs-modal__panel {
+    width: min(100vw - 16px, 100%);
+    max-height: 92vh;
   }
 
   .custom-tab-settings-grid {
@@ -1883,6 +1968,12 @@ textarea {
 
   .profile-body {
     padding: 0 14px 18px;
+  }
+
+  .custom-tabs-sidebar,
+  .custom-tab-editor {
+    padding: 16px;
+    border-radius: 22px;
   }
 
   .profile-avatar {

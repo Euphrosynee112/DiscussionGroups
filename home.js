@@ -2,15 +2,18 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260331f";
+const APP_BUILD_VERSION = "20260331g";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
 const PROFILE_KEY = "x_style_generator_profile_v1";
 const PROFILE_POSTS_KEY = "x_style_generator_profile_posts_v1";
 const DISCUSSIONS_KEY = "x_style_generator_discussions_v1";
+const WORLD_BOOKS_KEY = "x_style_generator_message_worldbooks_v1";
+const MESSAGE_CONTACTS_KEY = "x_style_generator_message_contacts_v1";
 const API_CONFIG_LIMIT = 12;
 const CONFIG_EXPORT_SCHEMA = "pulse-generator-config";
+const TRANSFER_FORUM_BASE_ITEM_ID = "__forum_base__";
 
 const phoneDateEl = document.querySelector("#phone-date");
 const phoneClockEl = document.querySelector("#phone-clock");
@@ -36,6 +39,14 @@ const homeConfigImportBtn = document.querySelector("#home-config-import-btn");
 const homeConfigImportInput = document.querySelector("#home-config-import-input");
 const homeApiLogBtn = document.querySelector("#home-api-log-btn");
 const homeConfigTransferStatusEl = document.querySelector("#home-config-transfer-status");
+const homeTransferSelectAllBtn = document.querySelector("#home-transfer-select-all-btn");
+const homeTransferClearBtn = document.querySelector("#home-transfer-clear-btn");
+const homeTransferExportOptionsEl = document.querySelector("#home-transfer-export-options");
+const homeImportReviewEl = document.querySelector("#home-import-review");
+const homeImportReviewSummaryEl = document.querySelector("#home-import-review-summary");
+const homeImportReviewOptionsEl = document.querySelector("#home-import-review-options");
+const homeImportApplyBtn = document.querySelector("#home-import-apply-btn");
+const homeImportCancelBtn = document.querySelector("#home-import-cancel-btn");
 const homeAppTriggers = [...document.querySelectorAll("[data-open-app]")];
 const homeBrowserModalEl = document.querySelector("#home-browser-modal");
 const homeBrowserFrameEl = document.querySelector("#home-browser-frame");
@@ -71,7 +82,10 @@ const homeState = {
   modalOpen: false,
   browserOpen: false,
   activeAppUrl: "",
-  activeAppTab: "home"
+  activeAppTab: "home",
+  exportTransferSelection: [],
+  pendingImportTransferPayload: null,
+  importTransferSelection: []
 };
 
 function showHomeLayer(element, displayValue = "block") {
@@ -374,32 +388,100 @@ function downloadJsonFile(filename, payload) {
   }, 0);
 }
 
-function buildHomeConfigExportPayload() {
-  saveCurrentHomeSettings({ silent: true });
+function truncateText(value, length = 60) {
+  const text = String(value || "").trim();
+  if (text.length <= length) {
+    return text;
+  }
+  return `${text.slice(0, length - 1)}…`;
+}
+
+function normalizeObjectArray(value) {
+  return Array.isArray(value) ? value.filter((item) => item && typeof item === "object") : [];
+}
+
+function pickForumProfilePayload(profile = {}) {
   return {
-    schema: CONFIG_EXPORT_SCHEMA,
-    version: 2,
-    exportedAt: new Date().toISOString(),
-    settings: readStoredJson(SETTINGS_KEY, { ...homeState.settings }),
-    feeds: readStoredJson(POSTS_KEY, {}),
-    profile: readStoredJson(PROFILE_KEY, {}),
-    profilePosts: readStoredJson(PROFILE_POSTS_KEY, []),
-    discussions: readStoredJson(DISCUSSIONS_KEY, {}),
-    lastRefreshAt: safeGetItem(REFRESH_KEY) || ""
+    avatar: String(profile.avatar || "").trim(),
+    username: String(profile.username || "").trim(),
+    userId: String(profile.userId || "").trim(),
+    avatarImage: String(profile.avatarImage || "").trim(),
+    bannerImage: String(profile.bannerImage || "").trim(),
+    following: String(profile.following || "").trim(),
+    followers: String(profile.followers || "").trim(),
+    signature: String(profile.signature || "").trim()
   };
 }
 
-function exportHomeConfig() {
-  const exportedAt = new Date();
-  const payload = buildHomeConfigExportPayload();
-  const filename = `pulse-generator-config-${exportedAt
-    .toISOString()
-    .replaceAll(":", "-")}.json`;
-  downloadJsonFile(filename, payload);
-  setHomeTransferStatus("已导出 API 与论坛配置 JSON。", "success");
+function hasAnyTextValue(source = {}) {
+  return Object.values(source).some((value) => String(value || "").trim());
 }
 
-function resolveImportedConfigPayload(parsed) {
+function buildTransferPayloadFromCurrentState() {
+  const settings = loadSettings();
+  const profile = readStoredJson(PROFILE_KEY, {}) || {};
+  const worldbooks = readStoredJson(WORLD_BOOKS_KEY, { categories: [], entries: [] }) || {};
+  const contacts = readStoredJson(MESSAGE_CONTACTS_KEY, []) || [];
+  const apiConfigs = normalizeApiConfigs(settings.apiConfigs || []);
+
+  return {
+    apiConfig: {
+      current: {
+        mode: normalizeApiMode(settings.mode),
+        endpoint: normalizeSettingsEndpointByMode(settings.mode, settings.endpoint),
+        model:
+          normalizeApiMode(settings.mode) === "generic"
+            ? ""
+            : String(settings.model || getDefaultModelByMode(settings.mode)).trim() ||
+              getDefaultModelByMode(settings.mode),
+        activeApiConfigId: String(settings.activeApiConfigId || "").trim(),
+        translationApiEnabled: Boolean(settings.translationApiEnabled),
+        translationApiConfigId: String(settings.translationApiConfigId || "").trim()
+      },
+      apiConfigs: apiConfigs.map(({ token, ...rest }) => ({ ...rest }))
+    },
+    apiSecrets: {
+      currentToken: normalizeApiConfigToken(settings.token),
+      apiConfigs: apiConfigs
+        .filter((item) => item.token)
+        .map((item) => ({ id: item.id, token: normalizeApiConfigToken(item.token) }))
+    },
+    forum: {
+      baseSettings: {
+        worldview: String(settings.worldview || "").trim(),
+        homeCount: Number(settings.homeCount) || "",
+        replyCount: Number(settings.replyCount) || "",
+        temperature: Number.isFinite(Number(settings.temperature))
+          ? Number(settings.temperature)
+          : ""
+      },
+      customTabs: normalizeObjectArray(settings.customTabs)
+    },
+    forumProfile: pickForumProfilePayload(profile),
+    chatPersona: {
+      personaPrompt: String(profile.personaPrompt || "").trim()
+    },
+    worldbooks: {
+      categories: normalizeObjectArray(worldbooks.categories),
+      entries: normalizeObjectArray(worldbooks.entries).filter(
+        (item) => String(item.name || "").trim() && String(item.text || "").trim()
+      )
+    },
+    contacts: {
+      contacts: normalizeObjectArray(contacts).filter((item) => String(item.name || "").trim())
+    },
+    contactChatSettings:
+      settings.messagePromptSettings && typeof settings.messagePromptSettings === "object"
+        ? { ...settings.messagePromptSettings }
+        : null,
+    bubbleMountSettings:
+      settings.bubblePromptSettings && typeof settings.bubblePromptSettings === "object"
+        ? { ...settings.bubblePromptSettings }
+        : null
+  };
+}
+
+function resolveLegacyImportedConfigPayload(parsed) {
   if (!parsed || typeof parsed !== "object") {
     throw new Error("导入文件不是有效的 JSON 对象。");
   }
@@ -445,34 +527,672 @@ function resolveImportedConfigPayload(parsed) {
   };
 }
 
-function applyImportedConfig(payload) {
-  const imported = resolveImportedConfigPayload(payload);
-  if (imported.settings && typeof imported.settings === "object") {
-    const nextSettings = buildNormalizedSettingsSnapshot(imported.settings, {
-      forceActiveConfig: true
-    });
-    safeSetItem(SETTINGS_KEY, JSON.stringify(nextSettings));
+function normalizeTransferPayload(parsed) {
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("导入文件不是有效的 JSON 对象。");
   }
-  if (typeof imported.feeds !== "undefined") {
-    safeSetItem(POSTS_KEY, JSON.stringify(imported.feeds));
+
+  if (parsed.schema === CONFIG_EXPORT_SCHEMA && Number(parsed.version) >= 3) {
+    const source = parsed.data && typeof parsed.data === "object" ? parsed.data : parsed;
+    return {
+      apiConfig:
+        source.apiConfig && typeof source.apiConfig === "object" ? source.apiConfig : null,
+      apiSecrets:
+        source.apiSecrets && typeof source.apiSecrets === "object" ? source.apiSecrets : null,
+      forum: source.forum && typeof source.forum === "object" ? source.forum : null,
+      forumProfile:
+        source.forumProfile && typeof source.forumProfile === "object" ? source.forumProfile : null,
+      chatPersona:
+        source.chatPersona && typeof source.chatPersona === "object" ? source.chatPersona : null,
+      worldbooks:
+        source.worldbooks && typeof source.worldbooks === "object" ? source.worldbooks : null,
+      contacts: source.contacts && typeof source.contacts === "object" ? source.contacts : null,
+      contactChatSettings:
+        source.contactChatSettings && typeof source.contactChatSettings === "object"
+          ? source.contactChatSettings
+          : null,
+      bubbleMountSettings:
+        source.bubbleMountSettings && typeof source.bubbleMountSettings === "object"
+          ? source.bubbleMountSettings
+          : null
+    };
   }
-  if (typeof imported.profile !== "undefined") {
-    safeSetItem(PROFILE_KEY, JSON.stringify(imported.profile));
+
+  const legacy = resolveLegacyImportedConfigPayload(parsed);
+  const settings =
+    legacy.settings && typeof legacy.settings === "object"
+      ? buildNormalizedSettingsSnapshot(legacy.settings, { forceActiveConfig: false })
+      : null;
+  const profile = legacy.profile && typeof legacy.profile === "object" ? legacy.profile : {};
+  return {
+    apiConfig: settings
+      ? {
+          current: {
+            mode: settings.mode,
+            endpoint: settings.endpoint,
+            model: settings.model,
+            activeApiConfigId: settings.activeApiConfigId || "",
+            translationApiEnabled: Boolean(settings.translationApiEnabled),
+            translationApiConfigId: settings.translationApiConfigId || ""
+          },
+          apiConfigs: normalizeApiConfigs(settings.apiConfigs || []).map(({ token, ...rest }) => ({
+            ...rest
+          }))
+        }
+      : null,
+    apiSecrets: settings
+      ? {
+          currentToken: normalizeApiConfigToken(settings.token),
+          apiConfigs: normalizeApiConfigs(settings.apiConfigs || [])
+            .filter((item) => item.token)
+            .map((item) => ({ id: item.id, token: normalizeApiConfigToken(item.token) }))
+        }
+      : null,
+    forum: settings
+      ? {
+          baseSettings: {
+            worldview: String(settings.worldview || "").trim(),
+            homeCount: Number(settings.homeCount) || "",
+            replyCount: Number(settings.replyCount) || "",
+            temperature: Number.isFinite(Number(settings.temperature))
+              ? Number(settings.temperature)
+              : ""
+          },
+          customTabs: normalizeObjectArray(settings.customTabs)
+        }
+      : null,
+    forumProfile: hasAnyTextValue(pickForumProfilePayload(profile))
+      ? pickForumProfilePayload(profile)
+      : null,
+    chatPersona: String(profile.personaPrompt || "").trim()
+      ? { personaPrompt: String(profile.personaPrompt || "").trim() }
+      : null,
+    worldbooks: parsed.worldbooks && typeof parsed.worldbooks === "object" ? parsed.worldbooks : null,
+    contacts: parsed.contacts && typeof parsed.contacts === "object" ? parsed.contacts : null,
+    contactChatSettings:
+      settings?.messagePromptSettings && typeof settings.messagePromptSettings === "object"
+        ? { ...settings.messagePromptSettings }
+        : null,
+    bubbleMountSettings:
+      settings?.bubblePromptSettings && typeof settings.bubblePromptSettings === "object"
+        ? { ...settings.bubblePromptSettings }
+        : null
+  };
+}
+
+function buildTransferSections(payload, options = {}) {
+  const mode = options.mode || "export";
+  const forumTabs = normalizeObjectArray(payload?.forum?.customTabs);
+  const worldbookEntries = normalizeObjectArray(payload?.worldbooks?.entries).filter(
+    (item) => String(item.name || "").trim()
+  );
+  const contacts = normalizeObjectArray(payload?.contacts?.contacts).filter((item) =>
+    String(item.name || "").trim()
+  );
+  const hasApiSecrets = Boolean(
+    payload?.apiSecrets &&
+      (String(payload.apiSecrets.currentToken || "").trim() ||
+        normalizeObjectArray(payload.apiSecrets.apiConfigs).some((item) =>
+          String(item.token || "").trim()
+        ))
+  );
+
+  const sections = [
+    {
+      id: "apiConfig",
+      label: "API 配置",
+      description: "当前接口类型、地址、模型、翻译专用指向与缓存预设（不含密钥）。",
+      checked: Boolean(payload?.apiConfig),
+      disabled: !payload?.apiConfig,
+      items: []
+    },
+    {
+      id: "apiSecrets",
+      label: "已缓存的 API 密钥",
+      description: "当前 API Key / Token 与缓存预设内的密钥字段。",
+      checked: hasApiSecrets,
+      disabled: !hasApiSecrets,
+      items: []
+    },
+    {
+      id: "forum",
+      label: "论坛设置",
+      description: "内容生成配置与自定义页签；可按页签局部导入导出。",
+      checked: Boolean(payload?.forum),
+      disabled: !payload?.forum,
+      items: [
+        ...(payload?.forum
+          ? [
+              {
+                id: TRANSFER_FORUM_BASE_ITEM_ID,
+                label: "内容生成配置",
+                description: truncateText(
+                  String(payload.forum.baseSettings?.worldview || "").trim() ||
+                    "论坛世界观、首页数量、回复数量与温度参数。",
+                  80
+                ),
+                checked: true
+              }
+            ]
+          : []),
+        ...forumTabs.map((tab) => ({
+          id: String(tab.id || "").trim(),
+          label: String(tab.name || "自定义页签").trim() || "自定义页签",
+          description: truncateText(
+            String(tab.hotTopic || tab.discussionText || tab.audience || "尚未填写内容"),
+            80
+          ),
+          checked: true
+        }))
+      ]
+    },
+    {
+      id: "forumProfile",
+      label: "论坛个人主页信息",
+      description: "用户名、头像、横幅、签名与粉丝数据显示。",
+      checked: Boolean(payload?.forumProfile && hasAnyTextValue(payload.forumProfile)),
+      disabled: !(payload?.forumProfile && hasAnyTextValue(payload.forumProfile)),
+      items: []
+    },
+    {
+      id: "chatPersona",
+      label: "Chat 用户人设",
+      description: "Chat 下的人设 prompt，会参与 Bubble / 私聊等生成。",
+      checked: Boolean(String(payload?.chatPersona?.personaPrompt || "").trim()),
+      disabled: !String(payload?.chatPersona?.personaPrompt || "").trim(),
+      items: []
+    },
+    {
+      id: "worldbooks",
+      label: "世界书",
+      description: "支持按条选择；分类会随所选世界书一起带出。",
+      checked: worldbookEntries.length > 0,
+      disabled: worldbookEntries.length === 0,
+      items: worldbookEntries.map((entry) => ({
+        id: String(entry.id || "").trim(),
+        label: String(entry.name || "世界书").trim() || "世界书",
+        description: truncateText(String(entry.text || "").trim(), 80),
+        checked: true
+      }))
+    },
+    {
+      id: "contacts",
+      label: "通讯录",
+      description: "支持按联系人局部导入导出。",
+      checked: contacts.length > 0,
+      disabled: contacts.length === 0,
+      items: contacts.map((contact) => ({
+        id: String(contact.id || "").trim(),
+        label: String(contact.name || "联系人").trim() || "联系人",
+        description: truncateText(String(contact.personaPrompt || "未设置人设。").trim(), 80),
+        checked: true
+      }))
+    },
+    {
+      id: "contactChatSettings",
+      label: "通讯录对应的聊天设置",
+      description: "1v1 聊天页右上角设置内的历史轮数、时间感知、热点挂载与世界书挂载。",
+      checked: Boolean(
+        payload?.contactChatSettings && typeof payload.contactChatSettings === "object"
+      ),
+      disabled: !(payload?.contactChatSettings && typeof payload.contactChatSettings === "object"),
+      items: []
+    },
+    {
+      id: "bubbleMountSettings",
+      label: "Bubble 挂载设置",
+      description: "Bubble 的论坛热点挂载与世界书挂载设置。",
+      checked: Boolean(payload?.bubbleMountSettings && typeof payload.bubbleMountSettings === "object"),
+      disabled: !(payload?.bubbleMountSettings && typeof payload.bubbleMountSettings === "object"),
+      items: []
+    }
+  ];
+
+  return sections.filter((section) => mode === "export" || !section.disabled);
+}
+
+function cloneTransferSections(sections = []) {
+  return sections.map((section) => ({
+    ...section,
+    items: Array.isArray(section.items) ? section.items.map((item) => ({ ...item })) : []
+  }));
+}
+
+function getTransferSection(selection, sectionId) {
+  return selection.find((section) => section.id === sectionId) || null;
+}
+
+function setTransferSectionChecked(section, checked) {
+  if (!section || section.disabled) {
+    return;
   }
-  if (typeof imported.profilePosts !== "undefined") {
-    safeSetItem(PROFILE_POSTS_KEY, JSON.stringify(imported.profilePosts));
+  section.checked = Boolean(checked);
+  if (section.items.length) {
+    section.items = section.items.map((item) => ({ ...item, checked: Boolean(checked) }));
   }
-  if (typeof imported.discussions !== "undefined") {
-    safeSetItem(DISCUSSIONS_KEY, JSON.stringify(imported.discussions));
+}
+
+function toggleTransferItemSelection(selection, sectionId, itemId, checked) {
+  const section = getTransferSection(selection, sectionId);
+  if (!section || section.disabled) {
+    return;
   }
-  if (imported.hasLastRefreshAt) {
-    safeSetItem(REFRESH_KEY, String(imported.lastRefreshAt || ""));
+  section.items = section.items.map((item) =>
+    item.id === itemId ? { ...item, checked: Boolean(checked) } : item
+  );
+  section.checked = section.items.some((item) => item.checked);
+}
+
+function setAllTransferSections(selection, checked) {
+  selection.forEach((section) => {
+    setTransferSectionChecked(section, checked);
+  });
+}
+
+function buildTransferGroupCountText(section) {
+  if (!section.items.length) {
+    return section.disabled ? "当前没有可选内容" : "当前项可整体导入 / 导出";
   }
+  const selectedCount = section.items.filter((item) => item.checked).length;
+  return `已选择 ${selectedCount} / ${section.items.length}`;
+}
+
+function renderTransferSelection(containerEl, selection, scope) {
+  if (!containerEl) {
+    return;
+  }
+  if (!selection.length) {
+    containerEl.innerHTML = '<div class="home-empty-state">当前没有可选配置。</div>';
+    return;
+  }
+
+  containerEl.innerHTML = selection
+    .map((section) => {
+      const groupId = `${scope}-${section.id}`;
+      return `
+        <section class="home-transfer-group${section.disabled ? " is-disabled" : ""}">
+          <div class="home-transfer-group__top">
+            <label class="home-transfer-group__label">
+              <input
+                type="checkbox"
+                data-scope="${escapeHtml(scope)}"
+                data-role="section"
+                data-section-id="${escapeHtml(section.id)}"
+                ${section.checked ? "checked" : ""}
+                ${section.disabled ? "disabled" : ""}
+              />
+              <span class="home-transfer-group__meta">
+                <span>${escapeHtml(section.label)}</span>
+                <span class="home-transfer-group__desc">${escapeHtml(section.description)}</span>
+              </span>
+            </label>
+            <p class="home-transfer-group__count" data-count-for="${escapeHtml(groupId)}">${escapeHtml(
+              buildTransferGroupCountText(section)
+            )}</p>
+          </div>
+          ${
+            section.items.length
+              ? `
+                <div class="home-transfer-group__items">
+                  ${section.items
+                    .map(
+                      (item) => `
+                        <label class="home-transfer-item">
+                          <input
+                            type="checkbox"
+                            data-scope="${escapeHtml(scope)}"
+                            data-role="item"
+                            data-section-id="${escapeHtml(section.id)}"
+                            data-item-id="${escapeHtml(item.id)}"
+                            ${item.checked ? "checked" : ""}
+                            ${section.disabled ? "disabled" : ""}
+                          />
+                          <span class="home-transfer-item__meta">
+                            <span class="home-transfer-item__title">${escapeHtml(item.label)}</span>
+                            <span class="home-transfer-item__desc">${escapeHtml(item.description || "")}</span>
+                          </span>
+                        </label>
+                      `
+                    )
+                    .join("")}
+                </div>
+              `
+              : ""
+          }
+        </section>
+      `;
+    })
+    .join("");
+
+  selection.forEach((section) => {
+    if (!section.items.length) {
+      return;
+    }
+    const input = containerEl.querySelector(
+      `input[data-role="section"][data-section-id="${section.id}"]`
+    );
+    if (!(input instanceof HTMLInputElement)) {
+      return;
+    }
+    const checkedCount = section.items.filter((item) => item.checked).length;
+    input.indeterminate = checkedCount > 0 && checkedCount < section.items.length;
+  });
+}
+
+function refreshHomeTransferExportSelection() {
+  const currentPayload = buildTransferPayloadFromCurrentState();
+  homeState.exportTransferSelection = buildTransferSections(currentPayload, { mode: "export" });
+  renderTransferSelection(homeTransferExportOptionsEl, homeState.exportTransferSelection, "export");
+}
+
+function setHomeImportReviewOpen(isOpen) {
+  if (!homeImportReviewEl) {
+    return;
+  }
+  homeImportReviewEl.hidden = !isOpen;
+  if (!isOpen) {
+    homeState.pendingImportTransferPayload = null;
+    homeState.importTransferSelection = [];
+    if (homeImportReviewOptionsEl) {
+      homeImportReviewOptionsEl.innerHTML = "";
+    }
+  }
+}
+
+function renderHomeImportReview(filename = "") {
+  if (!homeState.pendingImportTransferPayload) {
+    setHomeImportReviewOpen(false);
+    return;
+  }
+  homeState.importTransferSelection = buildTransferSections(homeState.pendingImportTransferPayload, {
+    mode: "import"
+  });
+  if (!homeState.importTransferSelection.length) {
+    throw new Error("导入文件里没有可恢复到当前版本的配置内容。");
+  }
+  if (homeImportReviewSummaryEl) {
+    homeImportReviewSummaryEl.textContent = filename
+      ? `已读取 ${filename}，请选择要恢复到本地的内容。`
+      : "请选择要从当前 JSON 中恢复到本地的内容。";
+  }
+  renderTransferSelection(homeImportReviewOptionsEl, homeState.importTransferSelection, "import");
+  setHomeImportReviewOpen(true);
+}
+
+function getSelectionStateByScope(scope) {
+  return scope === "import" ? homeState.importTransferSelection : homeState.exportTransferSelection;
+}
+
+function buildSelectedTransferPayload(payload, selection) {
+  const selected = {};
+  const sectionMap = new Map(selection.map((section) => [section.id, section]));
+
+  const apiConfigSection = sectionMap.get("apiConfig");
+  if (apiConfigSection?.checked && payload.apiConfig) {
+    selected.apiConfig = payload.apiConfig;
+  }
+
+  const apiSecretsSection = sectionMap.get("apiSecrets");
+  if (apiSecretsSection?.checked && payload.apiSecrets) {
+    selected.apiSecrets = payload.apiSecrets;
+  }
+
+  const forumSection = sectionMap.get("forum");
+  if (forumSection?.checked && payload.forum) {
+    const selectedIds = new Set(forumSection.items.filter((item) => item.checked).map((item) => item.id));
+    const customTabs = normalizeObjectArray(payload.forum.customTabs).filter((tab) =>
+      selectedIds.has(String(tab.id || "").trim())
+    );
+    const includeBaseSettings = selectedIds.has(TRANSFER_FORUM_BASE_ITEM_ID);
+    if (includeBaseSettings || customTabs.length) {
+      selected.forum = {
+        baseSettings: includeBaseSettings ? payload.forum.baseSettings : null,
+        customTabs
+      };
+    }
+  }
+
+  const forumProfileSection = sectionMap.get("forumProfile");
+  if (forumProfileSection?.checked && payload.forumProfile) {
+    selected.forumProfile = payload.forumProfile;
+  }
+
+  const chatPersonaSection = sectionMap.get("chatPersona");
+  if (chatPersonaSection?.checked && payload.chatPersona) {
+    selected.chatPersona = payload.chatPersona;
+  }
+
+  const worldbooksSection = sectionMap.get("worldbooks");
+  if (worldbooksSection?.checked && payload.worldbooks) {
+    const selectedIds = new Set(
+      worldbooksSection.items.filter((item) => item.checked).map((item) => item.id)
+    );
+    const entries = normalizeObjectArray(payload.worldbooks.entries).filter((entry) =>
+      selectedIds.has(String(entry.id || "").trim())
+    );
+    const referencedCategoryIds = new Set(
+      entries.map((entry) => String(entry.categoryId || "").trim()).filter(Boolean)
+    );
+    selected.worldbooks = {
+      categories: normalizeObjectArray(payload.worldbooks.categories).filter((category) =>
+        referencedCategoryIds.has(String(category.id || "").trim())
+      ),
+      entries
+    };
+  }
+
+  const contactsSection = sectionMap.get("contacts");
+  if (contactsSection?.checked && payload.contacts) {
+    const selectedIds = new Set(contactsSection.items.filter((item) => item.checked).map((item) => item.id));
+    selected.contacts = {
+      contacts: normalizeObjectArray(payload.contacts.contacts).filter((contact) =>
+        selectedIds.has(String(contact.id || "").trim())
+      )
+    };
+  }
+
+  const contactChatSettingsSection = sectionMap.get("contactChatSettings");
+  if (contactChatSettingsSection?.checked && payload.contactChatSettings) {
+    selected.contactChatSettings = payload.contactChatSettings;
+  }
+
+  const bubbleMountSettingsSection = sectionMap.get("bubbleMountSettings");
+  if (bubbleMountSettingsSection?.checked && payload.bubbleMountSettings) {
+    selected.bubbleMountSettings = payload.bubbleMountSettings;
+  }
+
+  return selected;
+}
+
+function buildHomeConfigExportPayload(selection = homeState.exportTransferSelection) {
+  const fullPayload = buildTransferPayloadFromCurrentState();
+  return {
+    schema: CONFIG_EXPORT_SCHEMA,
+    version: 3,
+    exportedAt: new Date().toISOString(),
+    data: buildSelectedTransferPayload(fullPayload, selection)
+  };
+}
+
+function exportHomeConfig() {
+  saveCurrentHomeSettings({ silent: true });
+  const exportedAt = new Date();
+  const payload = buildHomeConfigExportPayload(homeState.exportTransferSelection);
+  if (!payload.data || !Object.keys(payload.data).length) {
+    setHomeTransferStatus("请至少勾选一项后再导出。", "error");
+    return;
+  }
+  const filename = `pulse-generator-config-${exportedAt
+    .toISOString()
+    .replaceAll(":", "-")}.json`;
+  downloadJsonFile(filename, payload);
+  setHomeTransferStatus("已按所选范围导出配置 JSON。", "success");
+}
+
+function mergeById(existing = [], incoming = []) {
+  const merged = normalizeObjectArray(existing).map((item) => ({ ...item }));
+  normalizeObjectArray(incoming).forEach((item) => {
+    const id = String(item.id || "").trim();
+    if (!id) {
+      merged.push({ ...item });
+      return;
+    }
+    const index = merged.findIndex((current) => String(current.id || "").trim() === id);
+    if (index >= 0) {
+      merged[index] = { ...merged[index], ...item };
+    } else {
+      merged.push({ ...item });
+    }
+  });
+  return merged;
+}
+
+function mergeCustomTabs(existing = [], incoming = []) {
+  const normalizedIncoming = normalizeObjectArray(incoming);
+  const incomingIds = new Set(normalizedIncoming.map((item) => String(item.id || "").trim()));
+  const preserved = normalizeObjectArray(existing).filter(
+    (item) => !incomingIds.has(String(item.id || "").trim())
+  );
+  return [...normalizedIncoming, ...preserved].slice(0, 4);
+}
+
+function mergeWorldbooks(existing, incoming) {
+  const current = existing && typeof existing === "object" ? existing : { categories: [], entries: [] };
+  const nextEntries = mergeById(current.entries, incoming.entries);
+  const nextCategories = mergeById(current.categories, incoming.categories);
+  return {
+    categories: nextCategories,
+    entries: nextEntries
+  };
+}
+
+function applyImportedConfig(payload, selection = homeState.importTransferSelection) {
+  const imported = buildSelectedTransferPayload(payload, selection);
+  if (!Object.keys(imported).length) {
+    throw new Error("请至少勾选一项后再导入。");
+  }
+
+  let nextSettings = {
+    ...loadSettings({ forceActiveConfig: false })
+  };
+  let nextProfile = {
+    ...(readStoredJson(PROFILE_KEY, {}) || {})
+  };
+  let nextWorldbooks =
+    readStoredJson(WORLD_BOOKS_KEY, {
+      categories: [],
+      entries: []
+    }) || { categories: [], entries: [] };
+  let nextContacts = normalizeObjectArray(readStoredJson(MESSAGE_CONTACTS_KEY, []));
+
+  if (imported.apiConfig) {
+    nextSettings.mode = normalizeApiMode(imported.apiConfig.current?.mode);
+    nextSettings.endpoint = normalizeSettingsEndpointByMode(
+      imported.apiConfig.current?.mode,
+      imported.apiConfig.current?.endpoint
+    );
+    nextSettings.model =
+      normalizeApiMode(imported.apiConfig.current?.mode) === "generic"
+        ? ""
+        : String(
+            imported.apiConfig.current?.model || getDefaultModelByMode(imported.apiConfig.current?.mode)
+          ).trim() || getDefaultModelByMode(imported.apiConfig.current?.mode);
+    nextSettings.activeApiConfigId = String(imported.apiConfig.current?.activeApiConfigId || "").trim();
+    nextSettings.translationApiEnabled = Boolean(imported.apiConfig.current?.translationApiEnabled);
+    nextSettings.translationApiConfigId = String(
+      imported.apiConfig.current?.translationApiConfigId || ""
+    ).trim();
+    nextSettings.token = "";
+    nextSettings.apiConfigs = normalizeApiConfigs(
+      normalizeObjectArray(imported.apiConfig.apiConfigs).map((item) => ({
+        ...item,
+        token: ""
+      }))
+    );
+  }
+
+  if (imported.apiSecrets) {
+    if (typeof imported.apiSecrets.currentToken === "string") {
+      nextSettings.token = normalizeApiConfigToken(imported.apiSecrets.currentToken);
+    }
+    const tokenMap = new Map(
+      normalizeObjectArray(imported.apiSecrets.apiConfigs).map((item) => [
+        String(item.id || "").trim(),
+        normalizeApiConfigToken(item.token)
+      ])
+    );
+    nextSettings.apiConfigs = normalizeApiConfigs(nextSettings.apiConfigs || []).map((item) => ({
+      ...item,
+      token: tokenMap.has(item.id) ? tokenMap.get(item.id) : normalizeApiConfigToken(item.token)
+    }));
+  }
+
+  if (imported.forum) {
+    if (imported.forum.baseSettings && typeof imported.forum.baseSettings === "object") {
+      if (Object.prototype.hasOwnProperty.call(imported.forum.baseSettings, "worldview")) {
+        nextSettings.worldview = String(imported.forum.baseSettings.worldview || "").trim();
+      }
+      if (Object.prototype.hasOwnProperty.call(imported.forum.baseSettings, "homeCount")) {
+        nextSettings.homeCount = Number(imported.forum.baseSettings.homeCount) || nextSettings.homeCount;
+      }
+      if (Object.prototype.hasOwnProperty.call(imported.forum.baseSettings, "replyCount")) {
+        nextSettings.replyCount =
+          Number(imported.forum.baseSettings.replyCount) || nextSettings.replyCount;
+      }
+      if (Object.prototype.hasOwnProperty.call(imported.forum.baseSettings, "temperature")) {
+        nextSettings.temperature =
+          Number(imported.forum.baseSettings.temperature) || nextSettings.temperature;
+      }
+    }
+    nextSettings.customTabs = mergeCustomTabs(nextSettings.customTabs, imported.forum.customTabs);
+  }
+
+  if (imported.forumProfile) {
+    nextProfile = {
+      ...nextProfile,
+      ...pickForumProfilePayload(imported.forumProfile)
+    };
+  }
+
+  if (imported.chatPersona) {
+    nextProfile.personaPrompt = String(imported.chatPersona.personaPrompt || "").trim();
+  }
+
+  if (imported.worldbooks) {
+    nextWorldbooks = mergeWorldbooks(nextWorldbooks, imported.worldbooks);
+  }
+
+  if (imported.contacts) {
+    nextContacts = mergeById(nextContacts, imported.contacts.contacts);
+  }
+
+  if (imported.contactChatSettings && typeof imported.contactChatSettings === "object") {
+    nextSettings.messagePromptSettings = {
+      ...imported.contactChatSettings
+    };
+  }
+
+  if (imported.bubbleMountSettings && typeof imported.bubbleMountSettings === "object") {
+    nextSettings.bubblePromptSettings = {
+      ...imported.bubbleMountSettings
+    };
+  }
+
+  nextSettings = buildNormalizedSettingsSnapshot(nextSettings, {
+    forceActiveConfig: Boolean(imported.apiConfig || imported.apiSecrets)
+  });
+
+  safeSetItem(SETTINGS_KEY, JSON.stringify(nextSettings));
+  safeSetItem(PROFILE_KEY, JSON.stringify(nextProfile));
+  safeSetItem(WORLD_BOOKS_KEY, JSON.stringify(nextWorldbooks));
+  safeSetItem(MESSAGE_CONTACTS_KEY, JSON.stringify(nextContacts));
 
   homeState.settings = loadSettings();
   persistSettings(homeState.settings);
   applySettingsToHomeForm(homeState.settings);
   syncHomeActiveConfigSummary();
+  refreshHomeTransferExportSelection();
+  setHomeImportReviewOpen(false);
 }
 
 async function handleHomeConfigImport(file) {
@@ -480,17 +1200,14 @@ async function handleHomeConfigImport(file) {
     return;
   }
 
-  const confirmed = window.confirm("导入将覆盖当前浏览器中的 API 与论坛配置，是否继续？");
-  if (!confirmed) {
-    return;
-  }
-
   try {
     const text = await file.text();
     const parsed = JSON.parse(text);
-    applyImportedConfig(parsed);
-    setHomeTransferStatus("配置已导入，本地 API 密钥与论坛数据已恢复。", "success");
+    homeState.pendingImportTransferPayload = normalizeTransferPayload(parsed);
+    renderHomeImportReview(file.name);
+    setHomeTransferStatus("已读取导入文件，请确认要恢复的内容。", "");
   } catch (error) {
+    setHomeImportReviewOpen(false);
     setHomeTransferStatus(`导入失败：${error?.message || "无法解析该 JSON 文件。"}`, "error");
   }
 }
@@ -849,6 +1566,8 @@ function setHomeSettingsModalOpen(isOpen) {
   if (homeState.modalOpen) {
     homeState.settings = loadSettings();
     applySettingsToHomeForm(homeState.settings);
+    refreshHomeTransferExportSelection();
+    setHomeImportReviewOpen(false);
     showHomeLayer(homeSettingsModalEl, "grid");
     refreshBodyModalState();
     window.setTimeout(() => {
@@ -858,6 +1577,7 @@ function setHomeSettingsModalOpen(isOpen) {
   }
 
   saveCurrentHomeSettings({ silent: true });
+  setHomeImportReviewOpen(false);
   hideHomeLayer(homeSettingsModalEl);
   refreshBodyModalState();
 }
@@ -929,6 +1649,35 @@ function setHomeBrowserModalOpen(
   homeState.activeAppUrl = "";
   homeState.activeAppTab = "home";
   refreshBodyModalState();
+}
+
+function handleTransferSelectionChange(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement) || target.type !== "checkbox") {
+    return;
+  }
+  const scope = String(target.dataset.scope || "export").trim();
+  const sectionId = String(target.dataset.sectionId || "").trim();
+  const role = String(target.dataset.role || "").trim();
+  const selection = getSelectionStateByScope(scope);
+  if (!sectionId || !selection.length) {
+    return;
+  }
+
+  if (role === "section") {
+    const section = getTransferSection(selection, sectionId);
+    if (section) {
+      setTransferSectionChecked(section, target.checked);
+    }
+  } else if (role === "item") {
+    toggleTransferItemSelection(selection, sectionId, String(target.dataset.itemId || ""), target.checked);
+  }
+
+  if (scope === "import") {
+    renderTransferSelection(homeImportReviewOptionsEl, selection, "import");
+  } else {
+    renderTransferSelection(homeTransferExportOptionsEl, selection, "export");
+  }
 }
 
 function openHomeApp(tabName) {
@@ -1089,6 +1838,28 @@ function attachHomeSettingsEvents() {
     });
   }
 
+  if (homeTransferSelectAllBtn) {
+    homeTransferSelectAllBtn.addEventListener("click", () => {
+      setAllTransferSections(homeState.exportTransferSelection, true);
+      renderTransferSelection(homeTransferExportOptionsEl, homeState.exportTransferSelection, "export");
+    });
+  }
+
+  if (homeTransferClearBtn) {
+    homeTransferClearBtn.addEventListener("click", () => {
+      setAllTransferSections(homeState.exportTransferSelection, false);
+      renderTransferSelection(homeTransferExportOptionsEl, homeState.exportTransferSelection, "export");
+    });
+  }
+
+  if (homeTransferExportOptionsEl) {
+    homeTransferExportOptionsEl.addEventListener("change", handleTransferSelectionChange);
+  }
+
+  if (homeImportReviewOptionsEl) {
+    homeImportReviewOptionsEl.addEventListener("change", handleTransferSelectionChange);
+  }
+
   if (homeConfigExportBtn) {
     homeConfigExportBtn.addEventListener("click", () => {
       exportHomeConfig();
@@ -1106,6 +1877,27 @@ function attachHomeSettingsEvents() {
       const [file] = homeConfigImportInput.files || [];
       await handleHomeConfigImport(file);
       homeConfigImportInput.value = "";
+    });
+  }
+
+  if (homeImportApplyBtn) {
+    homeImportApplyBtn.addEventListener("click", () => {
+      try {
+        applyImportedConfig(
+          homeState.pendingImportTransferPayload,
+          homeState.importTransferSelection
+        );
+        setHomeTransferStatus("已导入所选配置，API 密钥与挂载设置已同步到本地。", "success");
+      } catch (error) {
+        setHomeTransferStatus(`导入失败：${error?.message || "无法应用所选配置。"}`, "error");
+      }
+    });
+  }
+
+  if (homeImportCancelBtn) {
+    homeImportCancelBtn.addEventListener("click", () => {
+      setHomeImportReviewOpen(false);
+      setHomeTransferStatus("已取消本次导入。", "");
     });
   }
 
@@ -1129,10 +1921,12 @@ function attachHomeSettingsEvents() {
 function initHome() {
   hideHomeLayer(homeSettingsModalEl);
   hideHomeLayer(homeBrowserModalEl);
+  setHomeImportReviewOpen(false);
   updateLocalClock();
   setInterval(updateLocalClock, 1000);
   attachHomeSettingsEvents();
   syncHomeActiveConfigSummary();
+  refreshHomeTransferExportSelection();
 }
 
 initHome();

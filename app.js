@@ -99,10 +99,16 @@ const homeStatusEl = document.querySelector("#home-status");
 const homeComposerCardEl = document.querySelector("#home-composer-card");
 const homeComposerToggleBtn = document.querySelector("#home-composer-toggle-btn");
 const homeComposerForm = document.querySelector("#home-composer-form");
+const homeComposerKickerEl = document.querySelector("#home-composer-kicker");
+const homeComposerTitleEl = document.querySelector("#home-composer-title");
+const homeComposerMetaEl = document.querySelector("#home-composer-meta");
 const homeComposerInput = document.querySelector("#home-composer-input");
 const homeComposerTagsInput = document.querySelector("#home-composer-tags-input");
+const homeComposerTagsFieldEl = document.querySelector("#home-composer-tags-field");
 const homeComposerImageInput = document.querySelector("#home-composer-image-input");
+const homeComposerImageFieldEl = document.querySelector("#home-composer-image-field");
 const homeComposerImagePreviewEl = document.querySelector("#home-composer-image-preview");
+const homeComposerQuotePreviewEl = document.querySelector("#home-composer-quote-preview");
 const homeComposerStatusEl = document.querySelector("#home-composer-status");
 const settingsStatusEl = document.querySelector("#settings-status");
 const promptPreviewEl = document.querySelector("#prompt-preview");
@@ -112,8 +118,14 @@ const settingsGenerateBtn = document.querySelector("#settings-generate-btn");
 const settingsForm = document.querySelector("#settings-form");
 const customTabsManageBtn = document.querySelector("#custom-tabs-manage-btn");
 const customTabsPanel = document.querySelector("#custom-tabs-manager");
+const customTabsWorkspaceEl = document.querySelector("#custom-tabs-workspace");
 const customTabsListEl = document.querySelector("#custom-tabs-list");
+const customTabCreateBtn = document.querySelector("#custom-tab-create-btn");
 const customTabForm = document.querySelector("#custom-tab-form");
+const customTabEditorKickerEl = document.querySelector("#custom-tab-editor-kicker");
+const customTabEditorTitleEl = document.querySelector("#custom-tab-editor-title");
+const customTabEditorDescriptionEl = document.querySelector("#custom-tab-editor-description");
+const customTabEditorResetBtn = document.querySelector("#custom-tab-editor-reset-btn");
 const customTabNameInput = document.querySelector("#custom-tab-name-input");
 const customTabAudienceInput = document.querySelector("#custom-tab-audience-input");
 const customTabTextInput = document.querySelector("#custom-tab-text-input");
@@ -132,9 +144,6 @@ const customTabFormStatusEl = document.querySelector("#custom-tab-form-status");
 const customTabCancelBtn = document.querySelector("#custom-tab-cancel-btn");
 const customTabsCloseBtn = document.querySelector("#custom-tabs-close-btn");
 const customTabsLimitHintEl = document.querySelector("#custom-tabs-limit-hint");
-const customTabSettingsSection = document.querySelector("#custom-tabs-settings-section");
-const customTabSettingsListEl = document.querySelector("#custom-tabs-settings-list");
-const customTabSettingsEmptyEl = document.querySelector("#custom-tabs-settings-empty");
 const homeScrollEl = document.querySelector("#home-scroll");
 const pullIndicatorEl = document.querySelector("#pull-indicator");
 const pullLabelEl = document.querySelector("#pull-label");
@@ -205,6 +214,8 @@ const state = {
   profilePostEditingDraft: "",
   composerOpen: false,
   homeComposerImageDataUrl: "",
+  homeComposerRepostSource: null,
+  homeComposerRepostPostId: "",
   isRefreshing: false,
   lastRefreshAt: safeGetItem(REFRESH_KEY) || "",
   pullDistance: 0,
@@ -815,8 +826,9 @@ function buildCustomTabBubbleContext(tab) {
   return {
     batch,
     text: [
-      `补充即时动态（重要程度接近当前讨论区主导热点）：用户最近一轮 Bubble 消息最后发送于 ${batch.time}。`,
-      "如果合适，可让帖子把这轮 Bubble 动态当成讨论切口之一，但大部分讨论仍要围绕当前讨论区本身展开。",
+      `爆炸性即时动态（权重与当前讨论区主导热点等同）：用户最近一轮 Bubble 消息最后发送于 ${batch.time}。`,
+      "请把这轮 Bubble 动态当成突然引爆论坛的大新闻来理解：如果挂载生效，本轮生成的大部分帖子都应围绕它展开，讨论密度要明显升高，不要只把它当成轻描淡写的补充信息。",
+      "允许不同帖子围绕同一轮 Bubble 动态拆成不同立场、不同情绪、不同细节、不同猜测与不同争议点，但中心讨论必须足够集中。",
       ...batch.messages.map(
         (item, index) =>
           `${index + 1}. ${String(item.time || "").trim() || formatForumTimestamp(item.createdAt)} · ${truncate(
@@ -1070,7 +1082,6 @@ function commitCustomTabs(nextTabs) {
   persistDiscussions();
   renderHomeTabs();
   renderCustomTabsManager();
-  renderCustomTabSettings();
   renderActiveFeed();
   updatePromptPreview();
   updateReplyPromptPreview();
@@ -1669,12 +1680,92 @@ function renderComposerMediaPreview(containerEl, dataUrl, removeAction) {
   containerEl.innerHTML = imageSrc ? renderInlineMediaPreview(imageSrc, removeAction) : "";
 }
 
+function getHomeComposerRepostSource() {
+  return normalizeRepostSource(state.homeComposerRepostSource || null);
+}
+
+function isHomeComposerQuoteMode() {
+  return Boolean(getHomeComposerRepostSource());
+}
+
+function renderHomeComposerQuotePreview() {
+  if (!homeComposerQuotePreviewEl) {
+    return;
+  }
+  const repostSource = getHomeComposerRepostSource();
+  homeComposerQuotePreviewEl.classList.toggle("hidden", !repostSource);
+  if (!repostSource) {
+    homeComposerQuotePreviewEl.innerHTML = "";
+    return;
+  }
+  homeComposerQuotePreviewEl.innerHTML = `
+    <p class="composer-quote-preview__hint">这是一条引用转发：最终只会保留你的转发文字和被引用原帖，不会附带图片，也不会生成新的 Tag。</p>
+    ${renderRepostSourceBlock(repostSource)}
+    <div class="composer-media-preview__actions">
+      <button class="ghost-chip" type="button" data-action="clear-home-composer-quote">取消引用</button>
+    </div>
+  `;
+}
+
+function syncHomeComposerModeUI() {
+  const isQuoteMode = isHomeComposerQuoteMode();
+  if (homeComposerCardEl) {
+    homeComposerCardEl.classList.toggle("section-card--quote", isQuoteMode);
+  }
+  if (homeComposerKickerEl) {
+    homeComposerKickerEl.textContent = isQuoteMode ? "Quote post" : "Composer";
+  }
+  if (homeComposerTitleEl) {
+    homeComposerTitleEl.textContent = isQuoteMode ? "引用转发" : "新帖子";
+  }
+  if (homeComposerMetaEl) {
+    const message = isQuoteMode
+      ? "当前为引用转发模式：只编辑附带的转发文字；如果不想继续引用，可直接取消引用。"
+      : "";
+    homeComposerMetaEl.textContent = message;
+    homeComposerMetaEl.classList.toggle("hidden", !message);
+  }
+  if (homeComposerInput) {
+    homeComposerInput.placeholder = isQuoteMode
+      ? "写下你想附带的转发文字（可留空）。"
+      : "输入你想发送的新帖子内容，它会出现在个人主页，并可继续展开回复。";
+  }
+  if (homeComposerTagsFieldEl) {
+    homeComposerTagsFieldEl.classList.toggle("hidden", isQuoteMode);
+  }
+  if (homeComposerImageFieldEl) {
+    homeComposerImageFieldEl.classList.toggle("hidden", isQuoteMode);
+  }
+  if (homeComposerTagsInput) {
+    homeComposerTagsInput.disabled = isQuoteMode;
+    if (isQuoteMode) {
+      homeComposerTagsInput.value = "";
+    }
+  }
+  if (homeComposerImageInput) {
+    homeComposerImageInput.disabled = isQuoteMode;
+  }
+  if (isQuoteMode && state.homeComposerImageDataUrl) {
+    clearHomeComposerImage();
+  }
+  renderHomeComposerQuotePreview();
+}
+
 function clearHomeComposerImage() {
   state.homeComposerImageDataUrl = "";
   if (homeComposerImageInput) {
     homeComposerImageInput.value = "";
   }
   renderComposerMediaPreview(homeComposerImagePreviewEl, "", "remove-home-composer-image");
+}
+
+function clearHomeComposerRepostSource(options = {}) {
+  state.homeComposerRepostSource = null;
+  state.homeComposerRepostPostId = "";
+  if (!options.preserveContent && homeComposerInput && !state.composerOpen) {
+    homeComposerInput.value = "";
+  }
+  syncHomeComposerModeUI();
 }
 
 function parseDataUrlParts(dataUrl) {
@@ -2417,7 +2508,7 @@ function buildPrompt(
     forumPromptContext.backgroundReferenceText,
     dominantHotTopicInstruction,
     forumPromptContext.supplementalTopicTexts.length
-      ? `补充即时讨论语境（重要程度接近当前主导热点）：\n${forumPromptContext.supplementalTopicTexts.join(
+      ? `主导即时讨论语境（与页签热点同级，可共同成为主线）：\n${forumPromptContext.supplementalTopicTexts.join(
           "\n\n"
         )}`
       : "",
@@ -2546,7 +2637,7 @@ function buildReplyPrompt(
       ? `当前这个讨论区的主导热点：${customTab.hotTopic}`
       : "",
     forumPromptContext.supplementalTopicTexts.length
-      ? `补充即时讨论语境（重要程度接近当前主导热点）：\n${forumPromptContext.supplementalTopicTexts.join(
+      ? `主导即时讨论语境（与页签热点同级，可共同成为主线）：\n${forumPromptContext.supplementalTopicTexts.join(
           "\n\n"
         )}`
       : "",
@@ -2717,18 +2808,23 @@ function saveCurrentSettings() {
   updateReplyPromptPreview();
   updateInsightPanel();
   renderProfilePage();
-  renderCustomTabSettings();
   renderApiConfigList();
 }
 
 function setHomeComposerOpen(isOpen) {
-  state.composerOpen = Boolean(isOpen);
+  const nextOpen = Boolean(isOpen);
+  if (!nextOpen && state.composerOpen && isHomeComposerQuoteMode()) {
+    clearHomeComposerRepostSource({ preserveContent: false });
+  }
+  state.composerOpen = nextOpen;
   if (homeComposerCardEl) {
     homeComposerCardEl.classList.toggle("hidden", !state.composerOpen);
   }
   if (homeComposerToggleBtn) {
-    homeComposerToggleBtn.textContent = state.composerOpen ? "收起发帖" : "发布新帖子";
+    homeComposerToggleBtn.textContent =
+      state.composerOpen && isHomeComposerQuoteMode() ? "收起引用" : state.composerOpen ? "收起发帖" : "发布新帖子";
   }
+  syncHomeComposerModeUI();
   if (state.composerOpen) {
     renderComposerMediaPreview(
       homeComposerImagePreviewEl,
@@ -2742,6 +2838,21 @@ function setHomeComposerOpen(isOpen) {
       homeComposerInput?.focus();
     }, 0);
   }
+}
+
+function startHomeComposerQuote(post, bucketName = state.activeFeed) {
+  const repostSource = createRepostSourceSnapshotFromPost(post);
+  if (!repostSource) {
+    setHomeStatus("这条帖子没有可引用的正文或图片。", "error");
+    return;
+  }
+  const targetFeed = post.feedType || getCurrentContentFeed(bucketName);
+  state.homeComposerRepostSource = repostSource;
+  state.homeComposerRepostPostId = String(post.id || "").trim();
+  switchHomeFeed(targetFeed);
+  switchTab("home");
+  setHomeComposerOpen(true);
+  setHomeComposerStatus(`正在引用“${post.displayName || "论坛用户"}”的帖子。`, "");
 }
 
 function canRefreshCurrentHomeFeed() {
@@ -4146,6 +4257,19 @@ function setCustomTabFormStatus(message, tone = "") {
   }
 }
 
+function focusCustomTabNameField() {
+  if (!customTabNameInput || customTabNameInput.disabled) {
+    return;
+  }
+  window.requestAnimationFrame(() => {
+    try {
+      customTabNameInput.focus({ preventScroll: true });
+    } catch (_error) {
+      customTabNameInput.focus();
+    }
+  });
+}
+
 function renderCustomTabFormWorldbookSelector(selectedIds = []) {
   if (!customTabWorldbookListEl) {
     return;
@@ -4243,6 +4367,39 @@ function resetCustomTabForm(preserveStatus = false) {
   renderCustomTabsManager();
 }
 
+function syncCustomTabEditorChrome() {
+  const editingTab = state.customTabEditingId ? getCustomTab(state.customTabEditingId) : null;
+  const isEditing = Boolean(editingTab);
+  if (customTabsWorkspaceEl) {
+    customTabsWorkspaceEl.classList.toggle("is-editing", isEditing);
+  }
+  if (customTabEditorKickerEl) {
+    customTabEditorKickerEl.textContent = isEditing ? "Editing tab" : "New tab";
+  }
+  if (customTabEditorTitleEl) {
+    customTabEditorTitleEl.textContent = isEditing
+      ? `编辑「${editingTab?.name || "自定义页签"}」`
+      : "新增自定义页签";
+  }
+  if (customTabEditorDescriptionEl) {
+    customTabEditorDescriptionEl.textContent = isEditing
+      ? "当前正在覆盖这个页签的论坛设定与高级挂载。保存后会直接影响首页与论坛生成逻辑。"
+      : "新增状态下会创建一个新的论坛讨论区；建议先完成基础设定，再按需打开世界书、Bubble 或 INS 挂载。";
+  }
+  if (customTabEditorResetBtn) {
+    customTabEditorResetBtn.textContent = isEditing ? "结束编辑" : "清空重填";
+  }
+  if (customTabCancelBtn) {
+    customTabCancelBtn.textContent = isEditing ? "取消编辑" : "取消";
+  }
+}
+
+function startCustomTabCreate() {
+  resetCustomTabForm();
+  setCustomTabFormStatus("正在新增新的自定义页签。", "");
+  focusCustomTabNameField();
+}
+
 function updateCustomTabsManageButton() {
   if (!customTabsManageBtn) {
     return;
@@ -4262,15 +4419,7 @@ function setCustomTabsPanelOpen(isOpen) {
   if (state.customTabEditorOpen) {
     document.body.style.overflow = "hidden";
     renderCustomTabsManager();
-    window.requestAnimationFrame(() => {
-      if (customTabNameInput && !customTabNameInput.disabled) {
-        try {
-          customTabNameInput.focus({ preventScroll: true });
-        } catch (_error) {
-          customTabNameInput.focus();
-        }
-      }
-    });
+    focusCustomTabNameField();
     return;
   }
 
@@ -4318,6 +4467,7 @@ function startCustomTabEdit(tabId) {
   updateCustomTabFormAdvancedState();
   setCustomTabFormStatus(`正在编辑“${tab.name || "自定义页签"}”`, "");
   renderCustomTabsManager();
+  focusCustomTabNameField();
 }
 
 function deleteCustomTab(tabId) {
@@ -4376,11 +4526,12 @@ function renderCustomTabsManager() {
   }
 
   const editingTab = state.customTabEditingId ? getCustomTab(state.customTabEditingId) : null;
-  renderCustomTabFormWorldbookSelector(editingTab?.worldbookIds || []);
+  const currentDraft = editingTab || getCurrentCustomTabFormDraft();
+  renderCustomTabFormWorldbookSelector(currentDraft?.worldbookIds || []);
 
   if (!state.customTabs.length) {
     customTabsListEl.innerHTML =
-      '<p class="empty-state">还没有自定义页签，使用下方表单新增。</p>';
+      '<p class="empty-state">还没有自定义页签。先点击上方“新建页签”，再在右侧完成这个讨论区的完整编辑。</p>';
   } else {
     customTabsListEl.innerHTML = state.customTabs
       .map((tab) => {
@@ -4389,7 +4540,9 @@ function renderCustomTabsManager() {
           88
         );
         return `
-          <article class="custom-tab-item" data-tab-id="${escapeHtml(tab.id)}" draggable="true">
+          <article class="custom-tab-item${editingTab?.id === tab.id ? " is-active" : ""}" data-tab-id="${escapeHtml(
+            tab.id
+          )}" draggable="true">
             <div>
               <strong>${escapeHtml(tab.name || "未命名页签")}</strong>
               <p class="tag-stat-meta">${escapeHtml(snippet)}</p>
@@ -4448,144 +4601,16 @@ function renderCustomTabsManager() {
   if (saveButton) {
     saveButton.textContent = isEditing ? "更新页签" : "保存页签";
   }
+  if (customTabCreateBtn) {
+    customTabCreateBtn.disabled = reachedLimit && !isEditing;
+  }
   updateCustomTabFormAdvancedState();
+  syncCustomTabEditorChrome();
   if (disableCreation) {
     setCustomTabFormStatus("已达到自定义页签上限，请删除后再新增。", "error");
   } else if (!isEditing && customTabFormStatusEl?.classList.contains("error")) {
     setCustomTabFormStatus("");
   }
-}
-
-function renderCustomTabWorldbookSelector(tab) {
-  const library = loadWorldbookLibrary();
-  if (!library.entries.length) {
-    return '<div class="custom-tab-mount-empty">还没有世界书，可先到 Message → 我 → 世界书 创建。</div>';
-  }
-
-  const selectedIds = new Set(normalizeMountedIds(tab?.worldbookIds || []));
-  return `
-    <div class="custom-tab-mount-list">
-      ${library.entries
-        .map((entry) => {
-          const categoryName =
-            library.categories.find((category) => category.id === entry.categoryId)?.name || "未分类";
-          return `
-            <label class="custom-tab-mount-option">
-              <input
-                type="checkbox"
-                data-field="worldbookIds"
-                value="${escapeHtml(entry.id)}"
-                ${selectedIds.has(entry.id) ? "checked" : ""}
-              />
-              <span>${escapeHtml(entry.name)}<small>${escapeHtml(categoryName)}</small></span>
-            </label>
-          `;
-        })
-        .join("")}
-    </div>
-  `;
-}
-
-function renderCustomTabSettings() {
-  if (!customTabSettingsListEl || !customTabSettingsEmptyEl) {
-    return;
-  }
-
-  if (!state.customTabs.length) {
-    customTabSettingsEmptyEl.style.display = "block";
-    customTabSettingsListEl.innerHTML = "";
-    return;
-  }
-
-  customTabSettingsEmptyEl.style.display = "none";
-  customTabSettingsListEl.innerHTML = state.customTabs
-    .map((tab) => {
-      return `
-        <article class="custom-tab-settings-item" data-custom-tab-id="${escapeHtml(tab.id)}">
-          <div class="custom-tab-settings-head">
-            <strong>${escapeHtml(tab.name || "未命名页签")}</strong>
-            <span class="badge">${escapeHtml(getFeedLabel(tab.id))}</span>
-          </div>
-          <label>
-            页签名称
-            <input type="text" data-field="name" maxlength="10" value="${escapeHtml(tab.name || "")}" />
-          </label>
-          <label>
-            页签用户定位
-            <textarea data-field="audience" rows="3" placeholder="输入这个讨论区里常见活跃用户的身份与情绪。">${escapeHtml(
-              tab.audience || ""
-            )}</textarea>
-          </label>
-          <label>
-            页签文本
-            <textarea data-field="discussionText" rows="4" placeholder="输入整体讨论内容，也可以补充历史讨论点。">${escapeHtml(
-              tab.discussionText || tab.text || ""
-            )}</textarea>
-          </label>
-          <label>
-            页签热点
-            <textarea data-field="hotTopic" rows="4" placeholder="可留空；如果填写，这个热点会占据讨论的大部分篇幅。">${escapeHtml(
-              tab.hotTopic || ""
-            )}</textarea>
-          </label>
-          <label class="custom-tab-toggle-row">
-            <span>
-              <strong>时间感知</strong>
-              <small>开启后，会把本地日期、星期和当前时间带给 AI，并结合页签文本/热点判断时效性。</small>
-            </span>
-            <input type="checkbox" data-field="timeAwareness" ${tab.timeAwareness ? "checked" : ""} />
-          </label>
-          <section class="custom-tab-settings-group">
-            <div class="custom-tab-settings-group__head">
-              <strong>挂载世界书</strong>
-              <small>仅作背景信息参考，禁止单独提起。</small>
-            </div>
-            ${renderCustomTabWorldbookSelector(tab)}
-          </section>
-          <div class="custom-tab-settings-grid">
-            <label class="custom-tab-toggle-row">
-              <span>
-                <strong>挂载 Bubble</strong>
-                <small>仅在最近一轮 Bubble 消息落在时间窗内时带给 AI。</small>
-              </span>
-              <input type="checkbox" data-field="bubbleFocusEnabled" ${tab.bubbleFocusEnabled ? "checked" : ""} />
-            </label>
-            <label>
-              Bubble 关注时间（分钟）
-              <input
-                type="number"
-                min="1"
-                max="${MAX_CONTEXT_FOCUS_MINUTES}"
-                data-field="bubbleFocusMinutes"
-                value="${escapeHtml(String(normalizeContextFocusMinutes(tab.bubbleFocusMinutes)))}"
-                ${tab.bubbleFocusEnabled ? "" : "disabled"}
-              />
-            </label>
-          </div>
-          <div class="custom-tab-settings-grid">
-            <label class="custom-tab-toggle-row">
-              <span>
-                <strong>挂载 INS</strong>
-                <small>仅在最近一条论坛动态落在时间窗内时带给 AI，并按转发原帖来讨论。</small>
-              </span>
-              <input type="checkbox" data-field="insFocusEnabled" ${tab.insFocusEnabled ? "checked" : ""} />
-            </label>
-            <label>
-              INS 关注时间（分钟）
-              <input
-                type="number"
-                min="1"
-                max="${MAX_CONTEXT_FOCUS_MINUTES}"
-                data-field="insFocusMinutes"
-                value="${escapeHtml(String(normalizeContextFocusMinutes(tab.insFocusMinutes)))}"
-                ${tab.insFocusEnabled ? "" : "disabled"}
-              />
-            </label>
-          </div>
-        </article>
-      `;
-    })
-    .join("");
 }
 
 function handleCustomTabFormSubmit() {
@@ -4633,73 +4658,6 @@ function handleCustomTabFormSubmit() {
   switchHomeFeed(tabId);
   setCustomTabFormStatus("自定义页签已保存。", "success");
   resetCustomTabForm(true);
-}
-
-function handleCustomTabSettingsInput(event) {
-  const target = event.target;
-  if (
-    !(target instanceof HTMLInputElement) &&
-    !(target instanceof HTMLTextAreaElement) &&
-    !(target instanceof HTMLSelectElement)
-  ) {
-    return;
-  }
-  const wrapper = target.closest("[data-custom-tab-id]");
-  if (!(wrapper instanceof HTMLElement)) {
-    return;
-  }
-  const tabId = wrapper.dataset.customTabId;
-  const field = target.dataset.field;
-  if (!tabId || !field) {
-    return;
-  }
-
-  const index = state.customTabs.findIndex((tab) => tab.id === tabId);
-  if (index === -1) {
-    return;
-  }
-
-  let value = target.value;
-  if (field === "name") {
-    value = target.value.trim().slice(0, 10) || "自定义页签";
-  } else if (field === "worldbookIds") {
-    value = [...wrapper.querySelectorAll('input[data-field="worldbookIds"]:checked')]
-      .map((input) => (input instanceof HTMLInputElement ? String(input.value || "").trim() : ""))
-      .filter(Boolean);
-  } else if (target instanceof HTMLInputElement && target.type === "checkbox") {
-    value = target.checked;
-  } else if (field === "bubbleFocusMinutes" || field === "insFocusMinutes") {
-    value = normalizeContextFocusMinutes(target.value);
-    target.value = String(value);
-  }
-  state.customTabs[index] = {
-    ...state.customTabs[index],
-    [field]: value,
-    ...(field === "discussionText" ? { text: value } : {})
-  };
-  state.settings.customTabs = [...state.customTabs];
-  persistSettings(state.settings);
-  if (field === "name") {
-    const headEl = wrapper.querySelector(".custom-tab-settings-head strong");
-    if (headEl) {
-      headEl.textContent = value;
-    }
-    renderHomeTabs();
-    renderCustomTabsManager();
-  }
-  if (field === "bubbleFocusEnabled") {
-    const minutesInput = wrapper.querySelector('[data-field="bubbleFocusMinutes"]');
-    if (minutesInput instanceof HTMLInputElement) {
-      minutesInput.disabled = !Boolean(value);
-    }
-  }
-  if (field === "insFocusEnabled") {
-    const minutesInput = wrapper.querySelector('[data-field="insFocusMinutes"]');
-    if (minutesInput instanceof HTMLInputElement) {
-      minutesInput.disabled = !Boolean(value);
-    }
-  }
-
 }
 
 function getTagFilteredPosts(tag) {
@@ -5374,20 +5332,6 @@ function createAuthoredPost(
   return post;
 }
 
-function createAuthoredRepostPost(sourcePost, feedType = state.activeFeed) {
-  const repostSource = createRepostSourceSnapshotFromPost(sourcePost);
-  if (!repostSource) {
-    return null;
-  }
-  return createAuthoredPost(
-    "",
-    feedType,
-    getRenderableTags(sourcePost, sourcePost.feedType || feedType).join(" "),
-    "",
-    { repostSource }
-  );
-}
-
 function repostMainPost(postId, bucketName = state.activeFeed) {
   const sourcePost = findPostById(postId, bucketName);
   if (!sourcePost) {
@@ -5395,25 +5339,9 @@ function repostMainPost(postId, bucketName = state.activeFeed) {
     return;
   }
 
-  const targetFeed = sourcePost.feedType || getCurrentContentFeed(state.activeFeed);
-  const repostPost = createAuthoredRepostPost(sourcePost, targetFeed);
-  if (!repostPost) {
-    setHomeStatus("这条帖子没有可转发的正文或图片。", "error");
-    return;
-  }
-
-  state.profilePosts = [repostPost, ...state.profilePosts];
-  state.feeds[targetFeed] = [repostPost, ...(state.feeds[targetFeed] || [])].slice(0, MAX_FEED_ITEMS);
-  updatePostAcrossBuckets(sourcePost.id, (currentPost) => ({
-    ...currentPost,
-    reposts: Math.max(0, Number(currentPost.reposts) || 0) + 1
-  }));
-  persistProfilePosts(state.profilePosts);
-  persistFeeds(state.feeds);
-  renderActiveFeed();
-  renderProfilePage();
+  startHomeComposerQuote(sourcePost, bucketName);
   renderThreadModal();
-  setHomeStatus("已转发到个人主页。", "success");
+  setHomeStatus("已进入引用转发模式。", "success");
 }
 
 function setHomeComposerStatus(message, tone = "") {
@@ -5426,20 +5354,28 @@ function setHomeComposerStatus(message, tone = "") {
 
 function submitHomePost() {
   const content = homeComposerInput.value.trim();
-  const tagsInput = homeComposerTagsInput?.value.trim() || "";
-  const imageDataUrl = state.homeComposerImageDataUrl || "";
+  const repostSource = getHomeComposerRepostSource();
+  const isQuoteMode = Boolean(repostSource);
+  const tagsInput = isQuoteMode ? "" : homeComposerTagsInput?.value.trim() || "";
+  const imageDataUrl = isQuoteMode ? "" : state.homeComposerImageDataUrl || "";
   const targetFeed = getCurrentContentFeed(state.activeFeed);
-  if (!content && !imageDataUrl) {
+  if (!content && !imageDataUrl && !repostSource) {
     setHomeComposerStatus("请输入帖子内容或添加图片后再发送。", "error");
     return;
   }
 
-  const post = createAuthoredPost(content, targetFeed, tagsInput, imageDataUrl);
+  const post = createAuthoredPost(content, targetFeed, tagsInput, imageDataUrl, { repostSource });
   state.profilePosts = [post, ...state.profilePosts];
   state.feeds[targetFeed] = [post, ...(state.feeds[targetFeed] || [])].slice(
     0,
     MAX_FEED_ITEMS
   );
+  if (isQuoteMode && state.homeComposerRepostPostId) {
+    updatePostAcrossBuckets(state.homeComposerRepostPostId, (currentPost) => ({
+      ...currentPost,
+      reposts: Math.max(0, Number(currentPost.reposts) || 0) + 1
+    }));
+  }
   persistProfilePosts(state.profilePosts);
   persistFeeds(state.feeds);
   persistDiscussions();
@@ -5451,8 +5387,12 @@ function submitHomePost() {
     homeComposerTagsInput.value = "";
   }
   clearHomeComposerImage();
+  clearHomeComposerRepostSource({ preserveContent: true });
   setHomeComposerOpen(false);
-  setHomeComposerStatus("帖子已发送，并同步到个人主页。", "success");
+  setHomeComposerStatus(
+    isQuoteMode ? "引用转发已发送，并同步到个人主页。" : "帖子已发送，并同步到个人主页。",
+    "success"
+  );
 }
 
 async function requestGeneratedPosts(
@@ -6503,6 +6443,23 @@ function attachEvents() {
     });
   }
 
+  if (homeComposerQuotePreviewEl) {
+    homeComposerQuotePreviewEl.addEventListener("click", (event) => {
+      const target = getEventHTMLElement(event);
+      if (!target) {
+        return;
+      }
+      const actionEl = target.closest("[data-action]");
+      if (!(actionEl instanceof HTMLElement)) {
+        return;
+      }
+      if (actionEl.dataset.action === "clear-home-composer-quote") {
+        clearHomeComposerRepostSource({ preserveContent: true });
+        setHomeComposerStatus("已取消引用，继续作为普通新帖子编辑。", "");
+      }
+    });
+  }
+
   if (settingsGenerateBtn) {
     settingsGenerateBtn.addEventListener("click", () => {
       saveCurrentSettings();
@@ -6563,7 +6520,7 @@ function attachEvents() {
   if (customTabsManageBtn) {
     customTabsManageBtn.addEventListener("click", () => {
       setCustomTabsPanelOpen(true);
-      resetCustomTabForm();
+      startCustomTabCreate();
     });
   }
 
@@ -6575,7 +6532,19 @@ function attachEvents() {
 
   if (customTabCancelBtn) {
     customTabCancelBtn.addEventListener("click", () => {
-      resetCustomTabForm();
+      startCustomTabCreate();
+    });
+  }
+
+  if (customTabCreateBtn) {
+    customTabCreateBtn.addEventListener("click", () => {
+      startCustomTabCreate();
+    });
+  }
+
+  if (customTabEditorResetBtn) {
+    customTabEditorResetBtn.addEventListener("click", () => {
+      startCustomTabCreate();
     });
   }
 
@@ -6710,15 +6679,6 @@ function attachEvents() {
     customTabsListEl.addEventListener("dragend", () => {
       clearCustomTabDragClasses();
       state.draggingCustomTabId = "";
-    });
-  }
-
-  if (customTabSettingsListEl) {
-    customTabSettingsListEl.addEventListener("input", (event) => {
-      handleCustomTabSettingsInput(event);
-    });
-    customTabSettingsListEl.addEventListener("change", (event) => {
-      handleCustomTabSettingsInput(event);
     });
   }
 
@@ -7129,7 +7089,6 @@ function init() {
   safeRun("render profile", () => renderProfilePage());
   safeRun("render custom tabs manager", () => renderCustomTabsManager());
   safeRun("custom tabs manage button", () => updateCustomTabsManageButton());
-  safeRun("render custom tabs settings", () => renderCustomTabSettings());
   safeRun("render api config list", () => renderApiConfigList());
   safeRun("persist discussions", () => persistDiscussions());
   safeRun("update prompt preview", () => updatePromptPreview());

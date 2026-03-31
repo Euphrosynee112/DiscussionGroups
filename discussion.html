@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pulse Generator · 讨论页</title>
-    <link rel="stylesheet" href="./styles.css?v=20260331f" />
+    <link rel="stylesheet" href="./styles.css?v=20260331g" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -66,14 +66,16 @@
 
         <section id="home-page" class="page-section active" aria-label="首页">
           <div id="home-scroll" class="page-scroll">
-            <section id="home-composer-card" class="section-card hidden">
-              <div class="section-card__head">
-                <div>
-                  <p class="section-card__eyebrow">Composer</p>
-                  <h2>新帖子</h2>
-                </div>
-              </div>
+        <section id="home-composer-card" class="section-card hidden">
+          <div class="section-card__head">
+            <div>
+              <p id="home-composer-kicker" class="section-card__eyebrow">Composer</p>
+              <h2 id="home-composer-title">新帖子</h2>
+            </div>
+          </div>
               <form id="home-composer-form" class="settings-form">
+                <p id="home-composer-meta" class="tag-stat-meta hidden"></p>
+                <div id="home-composer-quote-preview" class="composer-quote-preview hidden"></div>
                 <label>
                   帖子内容
                   <textarea
@@ -82,7 +84,7 @@
                     placeholder="输入你想发送的新帖子内容，它会出现在个人主页，并可继续展开回复。"
                   ></textarea>
                 </label>
-                <label>
+                <label id="home-composer-tags-field">
                   Tag（可选）
                   <input
                     id="home-composer-tags-input"
@@ -90,7 +92,7 @@
                     placeholder="例如：#榜单 #行业洞察，不填则留空"
                   />
                 </label>
-                <label>
+                <label id="home-composer-image-field">
                   帖子图片（可选）
                   <input
                     id="home-composer-image-input"
@@ -375,110 +377,150 @@
           <button id="custom-tabs-close-btn" class="ghost-chip" type="button">关闭</button>
         </div>
         <div class="thread-modal__body custom-tabs-modal__body">
-          <p class="tag-stat-meta">最多新增 4 个自定义页签，用于扩展首页讨论主题与论坛讨论区设定。</p>
-          <div id="custom-tabs-list" class="stack-list custom-tabs-list"></div>
-          <form id="custom-tab-form" class="settings-form" autocomplete="off">
-            <label>
-              页签名称
-              <input
-                id="custom-tab-name-input"
-                type="text"
-                maxlength="10"
-                placeholder="例如：出海、消费新变"
-              />
-            </label>
-            <label>
-              页签用户定位
-              <textarea
-                id="custom-tab-audience-input"
-                rows="3"
-                placeholder="输入这个论坛讨论区里最活跃的人大致是什么身份、什么情绪。"
-              ></textarea>
-            </label>
-            <label>
-              页签文本
-              <textarea
-                id="custom-tab-text-input"
-                rows="4"
-                placeholder="输入这个讨论区长期在讨论什么，也可以补充一部分历史讨论点。"
-              ></textarea>
-            </label>
-            <label>
-              页签热点
-              <textarea
-                id="custom-tab-hot-topic-input"
-                rows="4"
-                placeholder="可留空；如果填写，这个热点会占据该讨论区绝大部分篇幅。"
-              ></textarea>
-            </label>
-            <label class="custom-tab-toggle-row">
-              <span>
-                <strong>时间感知</strong>
-                <small>开启后，会把本地日期、星期和当前时间带给 AI，并结合页签文本/热点判断时效性。</small>
-              </span>
-              <input id="custom-tab-time-awareness-input" type="checkbox" />
-            </label>
-            <section class="custom-tab-settings-group">
-              <div class="custom-tab-settings-group__head">
-                <strong>挂载世界书</strong>
-                <small>仅作背景信息参考，禁止单独提起。</small>
+          <div id="custom-tabs-workspace" class="custom-tabs-workspace">
+            <aside class="custom-tabs-sidebar">
+              <div class="custom-tabs-sidebar__head">
+                <div>
+                  <p class="tag-stat-meta">最多新增 4 个自定义页签，用于扩展首页讨论主题与论坛讨论区设定。</p>
+                </div>
+                <button id="custom-tab-create-btn" class="solid-button" type="button">新建页签</button>
               </div>
-              <div id="custom-tab-worldbook-list" class="custom-tab-mount-list"></div>
+              <p class="tag-stat-meta">拖拽列表可调整首页页签顺序；点编辑后右侧进入独立编辑态。</p>
+              <div id="custom-tabs-list" class="stack-list custom-tabs-list"></div>
+              <p id="custom-tabs-limit-hint" class="tag-stat-meta"></p>
+            </aside>
+
+            <section class="custom-tab-editor">
+              <div class="custom-tab-editor__head">
+                <div>
+                  <p id="custom-tab-editor-kicker" class="section-card__eyebrow">New tab</p>
+                  <h3 id="custom-tab-editor-title">新增自定义页签</h3>
+                  <p id="custom-tab-editor-description" class="tag-stat-meta">
+                    新增状态下会创建一个新的论坛讨论区；编辑状态下会直接覆盖当前页签。
+                  </p>
+                </div>
+                <button id="custom-tab-editor-reset-btn" class="ghost-chip" type="button">
+                  清空重填
+                </button>
+              </div>
+
+              <form id="custom-tab-form" class="settings-form custom-tab-form" autocomplete="off">
+                <section class="custom-tab-editor-section">
+                  <div class="custom-tab-editor-section__head">
+                    <strong>基础设定</strong>
+                    <small>先定义这个讨论区的人群、长期背景和当前爆点。</small>
+                  </div>
+                  <label>
+                    页签名称
+                    <input
+                      id="custom-tab-name-input"
+                      type="text"
+                      maxlength="10"
+                      placeholder="例如：出海、消费新变"
+                    />
+                  </label>
+                  <label>
+                    页签用户定位
+                    <textarea
+                      id="custom-tab-audience-input"
+                      rows="3"
+                      placeholder="输入这个论坛讨论区里最活跃的人大致是什么身份、什么情绪。"
+                    ></textarea>
+                  </label>
+                  <label>
+                    页签文本
+                    <textarea
+                      id="custom-tab-text-input"
+                      rows="4"
+                      placeholder="输入这个讨论区长期在讨论什么，也可以补充一部分历史讨论点。"
+                    ></textarea>
+                  </label>
+                  <label>
+                    页签热点
+                    <textarea
+                      id="custom-tab-hot-topic-input"
+                      rows="4"
+                      placeholder="可留空；如果填写，这个热点会占据该讨论区绝大部分篇幅。"
+                    ></textarea>
+                  </label>
+                </section>
+
+                <section class="custom-tab-editor-section">
+                  <div class="custom-tab-editor-section__head">
+                    <strong>高级挂载</strong>
+                    <small>这些内容会直接影响论坛生成 prompt，建议按实际需要打开。</small>
+                  </div>
+                  <label class="custom-tab-toggle-row">
+                    <span>
+                      <strong>时间感知</strong>
+                      <small>开启后，会把本地日期、星期和当前时间带给 AI，并结合页签文本/热点判断时效性。</small>
+                    </span>
+                    <input id="custom-tab-time-awareness-input" type="checkbox" />
+                  </label>
+                  <section class="custom-tab-settings-group">
+                    <div class="custom-tab-settings-group__head">
+                      <strong>挂载世界书</strong>
+                      <small>仅作背景信息参考，禁止单独提起。</small>
+                    </div>
+                    <div id="custom-tab-worldbook-list" class="custom-tab-mount-list"></div>
+                  </section>
+                  <div class="custom-tab-settings-grid">
+                    <label class="custom-tab-toggle-row">
+                      <span>
+                        <strong>挂载 Bubble</strong>
+                        <small>仅在最近一轮 Bubble 消息落在时间窗内时带给 AI。</small>
+                      </span>
+                      <input id="custom-tab-bubble-focus-enabled-input" type="checkbox" />
+                    </label>
+                    <label>
+                      Bubble 关注时间（分钟）
+                      <input
+                        id="custom-tab-bubble-focus-minutes-input"
+                        type="number"
+                        min="1"
+                        max="1440"
+                        value="60"
+                      />
+                    </label>
+                  </div>
+                  <div class="custom-tab-settings-grid">
+                    <label class="custom-tab-toggle-row">
+                      <span>
+                        <strong>挂载 INS</strong>
+                        <small>仅在最近一条论坛动态落在时间窗内时带给 AI，并按转发原帖来讨论。</small>
+                      </span>
+                      <input id="custom-tab-ins-focus-enabled-input" type="checkbox" />
+                    </label>
+                    <label>
+                      INS 关注时间（分钟）
+                      <input
+                        id="custom-tab-ins-focus-minutes-input"
+                        type="number"
+                        min="1"
+                        max="1440"
+                        value="60"
+                      />
+                    </label>
+                  </div>
+                </section>
+
+                <div class="settings-actions">
+                  <button id="custom-tab-save-btn" class="solid-button" type="submit">
+                    保存页签
+                  </button>
+                  <button id="custom-tab-cancel-btn" class="ghost-button" type="button">
+                    取消
+                  </button>
+                </div>
+                <p id="custom-tab-form-status" class="status-text"></p>
+              </form>
             </section>
-            <div class="custom-tab-settings-grid">
-              <label class="custom-tab-toggle-row">
-                <span>
-                  <strong>挂载 Bubble</strong>
-                  <small>仅在最近一轮 Bubble 消息落在时间窗内时带给 AI。</small>
-                </span>
-                <input id="custom-tab-bubble-focus-enabled-input" type="checkbox" />
-              </label>
-              <label>
-                Bubble 关注时间（分钟）
-                <input
-                  id="custom-tab-bubble-focus-minutes-input"
-                  type="number"
-                  min="1"
-                  max="1440"
-                  value="60"
-                />
-              </label>
-            </div>
-            <div class="custom-tab-settings-grid">
-              <label class="custom-tab-toggle-row">
-                <span>
-                  <strong>挂载 INS</strong>
-                  <small>仅在最近一条论坛动态落在时间窗内时带给 AI，并按转发原帖来讨论。</small>
-                </span>
-                <input id="custom-tab-ins-focus-enabled-input" type="checkbox" />
-              </label>
-              <label>
-                INS 关注时间（分钟）
-                <input
-                  id="custom-tab-ins-focus-minutes-input"
-                  type="number"
-                  min="1"
-                  max="1440"
-                  value="60"
-                />
-              </label>
-            </div>
-            <div class="settings-actions">
-              <button id="custom-tab-save-btn" class="solid-button" type="submit">
-                保存页签
-              </button>
-              <button id="custom-tab-cancel-btn" class="ghost-button" type="button">
-                取消
-              </button>
-            </div>
-            <p id="custom-tab-form-status" class="status-text"></p>
-          </form>
-          <p id="custom-tabs-limit-hint" class="tag-stat-meta"></p>
+          </div>
         </div>
       </div>
     </section>
 
-    <script src="./api-log.js?v=20260331f"></script>
-    <script src="./app.js?v=20260331f"></script>
+    <script src="./api-log.js?v=20260331g"></script>
+    <script src="./app.js?v=20260331g"></script>
   </body>
 </html>

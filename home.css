@@ -698,6 +698,12 @@ button {
   line-height: 1.2;
 }
 
+.home-config-transfer__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .home-config-transfer__actions {
   display: flex;
   flex-wrap: wrap;
@@ -713,6 +719,109 @@ button {
 
 .home-field-hint {
   font-size: 13px;
+}
+
+.home-transfer-options {
+  display: grid;
+  gap: 12px;
+}
+
+.home-transfer-group {
+  padding: 14px 16px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.52);
+  display: grid;
+  gap: 12px;
+}
+
+.home-transfer-group.is-disabled {
+  opacity: 0.58;
+}
+
+.home-transfer-group__top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.home-transfer-group__label {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.home-transfer-group__label input,
+.home-transfer-item input {
+  margin-top: 2px;
+}
+
+.home-transfer-group__meta {
+  display: grid;
+  gap: 4px;
+}
+
+.home-transfer-group__desc,
+.home-transfer-group__count {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.home-transfer-group__items {
+  display: grid;
+  gap: 8px;
+  padding-left: 30px;
+}
+
+.home-transfer-item {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--text);
+}
+
+.home-transfer-item__meta {
+  display: grid;
+  gap: 2px;
+}
+
+.home-transfer-item__title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.home-transfer-item__desc {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.home-import-review {
+  padding: 16px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(29, 155, 240, 0.12);
+  display: grid;
+  gap: 12px;
+}
+
+.home-import-review__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.home-import-review__title {
+  margin: 8px 0 0;
+  font-size: 18px;
+  line-height: 1.2;
 }
 
 .home-empty-state {
@@ -809,6 +918,19 @@ button {
   .home-api-toolbar {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .home-config-transfer__actions {
+    flex-direction: column;
+  }
+
+  .home-transfer-group__top,
+  .home-import-review__head {
+    flex-direction: column;
+  }
+
+  .home-transfer-group__items {
+    padding-left: 0;
   }
 
   .home-browser-modal__panel {
