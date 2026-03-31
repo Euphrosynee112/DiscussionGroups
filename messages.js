@@ -319,6 +319,28 @@ function requestEmbeddedClose() {
   }
 }
 
+function notifyEmbeddedReady() {
+  if (!isEmbeddedView()) {
+    return;
+  }
+
+  const sendReady = () => {
+    try {
+      window.parent?.postMessage({ type: "pulse-generator-app-ready", app: "messages" }, "*");
+    } catch (_error) {
+    }
+  };
+
+  if (typeof window.requestAnimationFrame === "function") {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(sendReady);
+    });
+    return;
+  }
+
+  window.setTimeout(sendReady, 0);
+}
+
 function safeGetItem(key) {
   try {
     return window.localStorage.getItem(key);
@@ -5221,6 +5243,7 @@ function init() {
   persistConversations();
   renderMessagesPage();
   attachEvents();
+  notifyEmbeddedReady();
 }
 
 init();

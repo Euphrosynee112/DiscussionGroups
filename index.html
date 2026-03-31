@@ -2,9 +2,9 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Pulse Generator v2.0</title>
-    <link rel="stylesheet" href="./home.css?v=20260331m" />
+    <link rel="stylesheet" href="./home.css?v=20260331n" />
   </head>
   <body>
     <main class="home-scene">
@@ -333,6 +333,18 @@
       <div class="home-browser-modal__backdrop" data-close-home-browser></div>
       <div class="home-browser-modal__panel" role="dialog" aria-modal="true" aria-label="应用弹窗">
         <div class="home-browser-modal__viewport">
+          <div
+            id="home-browser-loading"
+            class="home-browser-modal__loading"
+            aria-hidden="true"
+            hidden
+          >
+            <img
+              class="home-browser-modal__loading-image"
+              src="./images/wechat开屏图.jpg"
+              alt=""
+            />
+          </div>
           <iframe
             id="home-browser-frame"
             class="home-browser-modal__frame"
@@ -343,6 +355,6 @@
       </div>
     </section>
 
-    <script src="./home.js?v=20260331m"></script>
+    <script src="./home.js?v=20260331n"></script>
   </body>
 </html>

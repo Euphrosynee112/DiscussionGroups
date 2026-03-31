@@ -25,6 +25,7 @@ body {
   margin: 0;
   min-height: 100%;
   height: 100%;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
@@ -584,7 +585,7 @@ body.embedded .messages-shell {
   border-radius: 999px;
   background: #ffffff;
   outline: none;
-  font-size: 13px;
+  font-size: 16px;
 }
 
 .messages-conversation__send {
@@ -733,6 +734,17 @@ body.embedded .messages-shell {
 
 body.embedded {
   overflow: hidden;
+}
+
+@media (pointer: coarse) {
+  .messages-search input,
+  .messages-conversation__input,
+  .messages-form-field input,
+  .messages-form-field textarea,
+  .messages-form-field select,
+  .messages-dialog-modal__field textarea {
+    font-size: 16px;
+  }
 }
 
 .messages-me-page {
