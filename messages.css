@@ -511,14 +511,14 @@ body.embedded .messages-shell {
 
 .messages-bubble p {
   margin: 0;
-  font-size: 15px;
+  font-size: 13px;
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .messages-bubble__time {
-  display: block;
+  display: none;
   margin-top: 8px;
   color: rgba(17, 17, 17, 0.42);
   font-size: 11px;
@@ -573,6 +573,7 @@ body.embedded .messages-shell {
   border-radius: 999px;
   background: #ffffff;
   outline: none;
+  font-size: 13px;
 }
 
 .messages-conversation__send {
@@ -580,6 +581,7 @@ body.embedded .messages-shell {
   border-radius: 999px;
   background: var(--green);
   color: #ffffff;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
 }

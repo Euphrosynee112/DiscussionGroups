@@ -1416,6 +1416,17 @@ function persistProfile(profile) {
   safeSetItem(PROFILE_KEY, JSON.stringify(profile));
 }
 
+function refreshSharedProfileState() {
+  if (state.profileEditorOpen) {
+    return false;
+  }
+  state.profile = loadProfile();
+  if (typeof applyProfileToForm === "function") {
+    applyProfileToForm(state.profile);
+  }
+  return true;
+}
+
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -7043,6 +7054,29 @@ function attachEvents() {
       await handleProfileImageUpload(file, "bannerImage", "主页背景图片已更新。");
     });
   }
+
+  window.addEventListener("focus", () => {
+    if (!refreshSharedProfileState()) {
+      return;
+    }
+    renderActiveFeed();
+    renderProfilePage();
+    renderThreadModal();
+    updateReplyPromptPreview();
+  });
+
+  window.addEventListener("storage", (event) => {
+    if (event.key && event.key !== PROFILE_KEY) {
+      return;
+    }
+    if (!refreshSharedProfileState()) {
+      return;
+    }
+    renderActiveFeed();
+    renderProfilePage();
+    renderThreadModal();
+    updateReplyPromptPreview();
+  });
 
   const homeScrollTarget = getHomeScrollTarget();
   if (homeScrollTarget) {

@@ -1044,6 +1044,11 @@ function loadProfile() {
   }
 }
 
+function syncProfileStateFromStorage() {
+  state.profile = loadProfile();
+  return state.profile;
+}
+
 function loadProfilePosts() {
   const raw = safeGetItem(PROFILE_POSTS_KEY);
   if (!raw) {
@@ -1642,6 +1647,8 @@ function renderBubbleRooms() {
     return;
   }
 
+  syncProfileStateFromStorage();
+
   const rooms = getFilteredRooms();
   if (!rooms.length) {
     bubbleListEl.innerHTML =
@@ -2051,6 +2058,8 @@ function handleRoomOpen(roomId) {
   if (!room) {
     return;
   }
+  syncProfileStateFromStorage();
+  syncRoomPreview(room.id);
   room.updatedAt = Date.now();
   room.time = room.time || formatLocalTime();
   persistBubbleRooms();
@@ -2660,16 +2669,31 @@ function attachEvents() {
     const activeFanDetailId = state.activeFanDetailId;
     const shouldReopenChat = state.chatOpen && Boolean(activeRoomId);
     const shouldReopenDetail = Boolean(activeFanDetailId);
+    refreshBubbleData();
+    renderBubbleRooms();
     if (!shouldReopenChat && !shouldReopenDetail) {
       return;
     }
-    refreshBubbleData();
-    renderBubbleRooms();
     if (shouldReopenChat) {
       setChatModalOpen(true, activeRoomId);
     }
     if (shouldReopenDetail) {
       setFanDetailModalOpen(true, activeFanDetailId);
+      renderFanDetailList();
+    }
+  });
+
+  window.addEventListener("storage", (event) => {
+    if (event.key && event.key !== PROFILE_KEY) {
+      return;
+    }
+    refreshBubbleData();
+    renderBubbleRooms();
+    if (state.chatOpen && state.activeRoomId) {
+      setChatModalOpen(true, state.activeRoomId);
+    }
+    if (state.activeFanDetailId) {
+      setFanDetailModalOpen(true, state.activeFanDetailId);
       renderFanDetailList();
     }
   });

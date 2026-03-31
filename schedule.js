@@ -365,6 +365,39 @@ function parseTimeHour(timeText = "") {
   return match ? Number(match[1]) : 0;
 }
 
+function parseTimeMinute(timeText = "") {
+  const match = String(timeText || "").trim().match(/^(\d{2}):(\d{2})$/);
+  return match ? Number(match[2]) : 0;
+}
+
+function parseTimeToMinutes(timeText = "") {
+  return parseTimeHour(timeText) * 60 + parseTimeMinute(timeText);
+}
+
+function getEntryVisibleEndHour(entry) {
+  const startMinutes = parseTimeToMinutes(entry.startTime);
+  const endMinutes = Math.max(startMinutes + 1, parseTimeToMinutes(entry.endTime));
+  return Math.max(parseTimeHour(entry.startTime), Math.ceil(endMinutes / 60) - 1);
+}
+
+function entryOccupiesHour(entry, hour) {
+  if (!entry || entry.scheduleType === "day") {
+    return false;
+  }
+  const startMinutes = parseTimeToMinutes(entry.startTime);
+  const endMinutes = Math.max(startMinutes + 1, parseTimeToMinutes(entry.endTime));
+  const slotStart = hour * 60;
+  const slotEnd = Math.min(24 * 60, (hour + 1) * 60);
+  return startMinutes < slotEnd && endMinutes > slotStart;
+}
+
+function getTimedEntrySlotState(entry, hour) {
+  if (!entryOccupiesHour(entry, hour)) {
+    return "hidden";
+  }
+  return parseTimeHour(entry.startTime) === hour ? "start" : "continuation";
+}
+
 function getDayEntryBuckets(dateText) {
   const entries = getEntriesForDate(dateText);
   return {
@@ -380,7 +413,7 @@ function getVisibleTimelineHours(dateText) {
 
   timedEntries.forEach((entry) => {
     minHour = Math.min(minHour, parseTimeHour(entry.startTime));
-    maxHour = Math.max(maxHour, parseTimeHour(entry.endTime));
+    maxHour = Math.max(maxHour, getEntryVisibleEndHour(entry));
   });
 
   minHour = Math.max(0, minHour - 1);
@@ -390,7 +423,7 @@ function getVisibleTimelineHours(dateText) {
 }
 
 function getTimedEntriesForHour(dateText, hour) {
-  return getDayEntryBuckets(dateText).timedEntries.filter((entry) => parseTimeHour(entry.startTime) === hour);
+  return getDayEntryBuckets(dateText).timedEntries.filter((entry) => entryOccupiesHour(entry, hour));
 }
 
 function getWeekTimelineHours() {
@@ -518,14 +551,18 @@ function renderDayView(dateText) {
                               .map(
                                 (entry) => `
                                   <button
-                                    class="schedule-time-entry"
+                                    class="schedule-time-entry schedule-time-entry--${escapeHtml(
+                                      getTimedEntrySlotState(entry, hour)
+                                    )}"
                                     type="button"
                                     data-action="edit-entry"
                                     data-entry-id="${escapeHtml(entry.id)}"
                                   >
                                     <span class="schedule-time-entry__title">${escapeHtml(entry.title)}</span>
                                     <span class="schedule-time-entry__meta">${escapeHtml(
-                                      formatEntryTime(entry)
+                                      getTimedEntrySlotState(entry, hour) === "continuation"
+                                        ? `延续中 · 至 ${entry.endTime}`
+                                        : formatEntryTime(entry)
                                     )} · ${escapeHtml(
                                       entry.ownerType === "contact"
                                         ? `角色 ${getContactName(entry.ownerId)}`
@@ -646,14 +683,18 @@ function renderWeekView(dateText) {
                                 .map(
                                   (entry) => `
                                     <button
-                                      class="schedule-week-timeline__entry"
+                                      class="schedule-week-timeline__entry schedule-week-timeline__entry--${escapeHtml(
+                                        getTimedEntrySlotState(entry, hour)
+                                      )}"
                                       type="button"
                                       data-action="edit-entry"
                                       data-entry-id="${escapeHtml(entry.id)}"
                                     >
                                       <span class="schedule-week-timeline__entry-title">${escapeHtml(entry.title)}</span>
                                       <span class="schedule-week-timeline__entry-meta">${escapeHtml(
-                                        `${entry.startTime}-${entry.endTime}`
+                                        getTimedEntrySlotState(entry, hour) === "continuation"
+                                          ? `延续至 ${entry.endTime}`
+                                          : `${entry.startTime}-${entry.endTime}`
                                       )}</span>
                                     </button>
                                   `

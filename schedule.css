@@ -433,6 +433,11 @@ body.embedded .schedule-shell {
   cursor: pointer;
 }
 
+.schedule-time-entry--continuation {
+  background: rgba(255, 255, 255, 0.82);
+  border-style: dashed;
+}
+
 .schedule-time-entry__title {
   font-size: 14px;
   font-weight: 700;
@@ -617,6 +622,12 @@ body.embedded .schedule-shell {
   cursor: pointer;
 }
 
+.schedule-week-timeline__entry--continuation {
+  background: rgba(204, 124, 89, 0.08);
+  color: rgba(156, 93, 63, 0.9);
+  border: 1px dashed rgba(156, 93, 63, 0.18);
+}
+
 .schedule-week-timeline__entry + .schedule-week-timeline__entry {
   margin-top: 6px;
 }
@@ -790,6 +801,7 @@ body.embedded .schedule-shell {
 }
 
 .schedule-field {
+  min-width: 0;
   display: grid;
   gap: 8px;
   padding: 14px;
@@ -809,6 +821,9 @@ body.embedded .schedule-shell {
 .schedule-field input,
 .schedule-field select {
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  display: block;
   min-height: 42px;
   padding: 0 12px;
   border-radius: 14px;
@@ -893,6 +908,10 @@ body.embedded .schedule-shell {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.schedule-time-grid > .schedule-field {
+  min-width: 0;
 }
 
 .schedule-editor-status {

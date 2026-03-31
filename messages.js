@@ -823,6 +823,11 @@ function persistProfile(profile) {
   safeSetItem(PROFILE_KEY, JSON.stringify(profile));
 }
 
+function syncProfileStateFromStorage() {
+  state.profile = loadProfile();
+  return state.profile;
+}
+
 function normalizeContact(contact, index = 0) {
   const source = contact && typeof contact === "object" ? contact : {};
   const name = String(source.name || "").trim() || `联系人 ${index + 1}`;
@@ -1353,12 +1358,12 @@ function buildHotTopicsContext(settings, promptSettings) {
     return "";
   }
 
-  const sections = [`这个角色正在关注一个论坛讨论区「${selectedTab.name}」。`];
+  const sections = [`这个人最近也会留意论坛讨论区「${selectedTab.name}」。`];
   const discussionText = String(selectedTab.discussionText || selectedTab.text || "").trim();
   const hotTopic = String(selectedTab.hotTopic || "").trim();
 
   if (diagnostics.mountsDiscussionText && discussionText) {
-    sections.push(`这个讨论区长期讨论的背景与历史话题：${discussionText}`);
+    sections.push(`这个讨论区平时常见的讨论背景：${discussionText}`);
   }
   if (diagnostics.mountsHotTopic && hotTopic) {
     sections.push(`这个讨论区当前最主要的热点：${hotTopic}`);
@@ -1385,7 +1390,7 @@ function buildWorldbookContext(promptSettings) {
     return "";
   }
 
-  return `世界书挂载：\n${entries.join("\n\n")}`;
+  return `世界书背景资料（只做潜在参考，不要单独拎出来讲）：\n${entries.join("\n\n")}`;
 }
 
 function stripHotTopicsPromptSettings(promptSettings = {}) {
@@ -1908,8 +1913,9 @@ function buildConversationSystemPrompt(
 ) {
   const requestOptions = options && typeof options === "object" ? options : {};
   const parts = [
-    `你正在扮演一个即时聊天应用中的联系人：${contact.name}。`,
+    `你是即时聊天应用中的联系人：${contact.name}。`,
     "这是一个一对一聊天场景。",
+    "请把下面的设定和背景当作长期记忆与当下处境，而不是待逐条执行的任务。",
     "如果背景信息之间出现冲突，请按以下优先级从低到高理解：热点挂载 < 世界书挂载 < INS 关注 < Bubble 关注 < 日程感知 < 时间感知 < 人物设定 < 最近对话轮数消息 < 回复格式要求。"
   ];
 
@@ -1924,16 +1930,16 @@ function buildConversationSystemPrompt(
 
   if (awarenessSections.length) {
     parts.push(
-      `补充语境信息（低于人物设定与最近对话优先级，仅用于感知背景）：\n${awarenessSections.join(
+      `补充语境信息（只在确实自然时轻微融入；不要为了贴设定而硬提名词、热点或资料，也不要像总结背景一样复述）：\n${awarenessSections.join(
         "\n\n"
       )}`
     );
   }
 
   parts.push(
-    `你的角色人设：${contact.personaPrompt || "自然、友好、会根据设定稳定回应。"}。`,
+    `你的人物设定与说话习惯：${contact.personaPrompt || "自然、友好、会根据关系与语境稳定回应。"}。`,
     `正在和你聊天的用户昵称：${profile.username || DEFAULT_PROFILE.username}。`,
-    `用户的人设设定：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt}。`
+    `用户的设定：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt}。`
   );
 
   if (requestOptions.regenerate) {
@@ -1951,13 +1957,18 @@ function buildConversationSystemPrompt(
   }
 
   parts.push(
+    "先回应这轮对话里最真实的情绪、关系和潜台词，再决定是否需要带出背景信息。",
+    "如果某些背景对这一句回复没有帮助，可以完全不提。",
+    "回复要像真人在聊天软件里即时回消息，可以有自然口语、省略、停顿和情绪，不要像客服、摘要、设定说明或任务执行结果。",
+    "不要为了显得记得很多背景，就生硬提论坛、世界书、Bubble、INS、日程或时间信息；只有真的会自然想到时才轻轻带过。",
+    "不要使用“根据设定”“你最近关注”“结合以上信息”“从背景来看”这类机械引入。",
     "请只输出联系人下一条回复，不要添加角色标签、前缀、旁白或解释。",
     `回复要像真实聊天，简洁自然，可以带情绪，总共不要超过${promptSettings.replySentenceLimit}行。`,
     "如果一句话里自然出现逗号或句号，请按分句拆成多行输出。",
     "每一行都会被视为一条单独发出的聊天消息。",
     "每一行结尾若原本是逗号或句号，请去掉这一枚逗号或句号。",
     "不要去掉感叹号、问号、波浪号、省略号等表达情绪的标点。",
-    "不要输出编号、列表符号、引号包裹、解释说明或舞台指令。"
+    "不要输出编号、列表符号、引号包裹、解释说明、舞台指令或心理活动旁白。"
   );
 
   return parts.join("\n\n");
@@ -1978,7 +1989,7 @@ function buildJournalSystemPrompt(
   const referenceContext = buildJournalReferenceContext(settings, promptSettings);
 
   return [
-    `你正在扮演即时聊天联系人：${contact.name}。`,
+    `你是即时聊天联系人：${contact.name}。`,
     "现在不是聊天回复，而是以这个角色的第一人称口吻写一篇今日日记。",
     `日期：${formatJournalFullDateLabel(dateText)}。`,
     weatherLabel ? `天气：${weatherLabel}。` : "天气：暂未获取到，请不要编造具体天气或温度。",
@@ -2059,6 +2070,37 @@ function buildChatRequestBody(settings, systemPrompt, history = []) {
   };
 }
 
+function collapseConversationMessagesByTurn(messages = []) {
+  if (!Array.isArray(messages) || !messages.length) {
+    return [];
+  }
+
+  return messages.reduce((collapsed, message) => {
+    const text = String(message?.text || "").trim();
+    if (!text) {
+      return collapsed;
+    }
+
+    const role = message?.role === "assistant" ? "assistant" : "user";
+    const lastMessage = collapsed[collapsed.length - 1] || null;
+    if (lastMessage && lastMessage.role === role) {
+      lastMessage.text = `${lastMessage.text}\n${text}`;
+      lastMessage.createdAt = Math.max(Number(lastMessage.createdAt) || 0, Number(message?.createdAt) || 0);
+      if (message?.time) {
+        lastMessage.time = message.time;
+      }
+      return collapsed;
+    }
+
+    collapsed.push({
+      ...message,
+      role,
+      text
+    });
+    return collapsed;
+  }, []);
+}
+
 function buildDiaryRequestBody(settings, systemPrompt, userInstruction) {
   const mode = normalizeApiMode(settings.mode);
   if (mode === "openai") {
@@ -2104,11 +2146,12 @@ function buildDiaryRequestBody(settings, systemPrompt, userInstruction) {
 
 function selectConversationHistory(messages = [], historyRounds = DEFAULT_MESSAGE_HISTORY_ROUNDS) {
   const limit = normalizeMessagePromptSettings({ historyRounds }).historyRounds;
+  const turnMessages = collapseConversationMessagesByTurn(messages);
   const selected = [];
   let userTurnCount = 0;
 
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
+  for (let index = turnMessages.length - 1; index >= 0; index -= 1) {
+    const message = turnMessages[index];
     if (!message || !String(message.text || "").trim()) {
       continue;
     }
@@ -3161,7 +3204,6 @@ function renderConversationMessage(message, conversation, promptSettings = state
           >
             <article class="messages-bubble ${isUser ? "messages-bubble--user" : "messages-bubble--assistant"}">
               <p>${escapeHtml(message.text)}</p>
-              <span class="messages-bubble__time">${escapeHtml(message.time)}</span>
             </article>
           </div>
           ${
@@ -3237,6 +3279,8 @@ function renderConversationDetail() {
   if (!messagesContentEl) {
     return;
   }
+
+  syncProfileStateFromStorage();
 
   const conversation = getConversationById();
   if (!conversation) {
@@ -4258,6 +4302,7 @@ function sendConversationMessage(text) {
 }
 
 async function requestConversationReply(options = {}) {
+  syncProfileStateFromStorage();
   const conversation = getConversationById();
   if (!conversation) {
     return;
