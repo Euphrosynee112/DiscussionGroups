@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pulse Generator · Bubble</title>
-    <link rel="stylesheet" href="./bubble.css?v=20260330r" />
+    <link rel="stylesheet" href="./bubble.css?v=20260331d" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -187,6 +187,87 @@
         </section>
 
         <section
+          id="bubble-chat-settings-modal"
+          class="bubble-sheet-modal"
+          aria-hidden="true"
+          hidden
+        >
+          <div class="bubble-sheet-modal__panel" role="dialog" aria-modal="true" aria-label="Bubble 回复设置">
+            <header class="bubble-sheet-modal__header">
+              <button
+                id="bubble-chat-settings-close-btn"
+                class="bubble-sheet-modal__button"
+                type="button"
+                aria-label="关闭 Bubble 回复设置"
+              >
+                返回
+              </button>
+              <strong>Bubble 回复设置</strong>
+              <button
+                class="bubble-sheet-modal__button bubble-sheet-modal__button--primary"
+                type="submit"
+                form="bubble-chat-settings-form"
+              >
+                保存
+              </button>
+            </header>
+
+            <form id="bubble-chat-settings-form" class="bubble-sheet-form">
+              <label class="bubble-sheet-toggle">
+                <div class="bubble-sheet-toggle__body">
+                  <strong>论坛挂载</strong>
+                  <p>开启后，可挂载一个论坛自定义页签作为 Bubble 回复的辅助语境。</p>
+                </div>
+                <span class="bubble-sheet-switch">
+                  <input id="bubble-chat-hot-topics-input" type="checkbox" />
+                  <span class="bubble-sheet-switch__slider"></span>
+                </span>
+              </label>
+
+              <label class="bubble-sheet-field">
+                <span>挂载页签</span>
+                <select id="bubble-chat-hot-topics-tab-select"></select>
+                <small>请选择论坛里的一个自定义页签；页签用户定位会自动作为背景带入。</small>
+              </label>
+
+              <section class="bubble-sheet-field">
+                <span>挂载内容</span>
+                <div class="bubble-sheet-checklist">
+                  <label class="bubble-sheet-checklist__item">
+                    <input id="bubble-chat-hot-topics-text-input" type="checkbox" />
+                    <span>页签文本</span>
+                  </label>
+                  <label class="bubble-sheet-checklist__item">
+                    <input id="bubble-chat-hot-topics-topic-input" type="checkbox" />
+                    <span>页签热点</span>
+                  </label>
+                </div>
+                <small>至少选择一项；论坛信息只作为辅助，回复主体仍要围绕用户这次 Bubble 消息。</small>
+              </section>
+
+              <label class="bubble-sheet-toggle">
+                <div class="bubble-sheet-toggle__body">
+                  <strong>世界书挂载</strong>
+                  <p>开启后，可同时挂载多条世界书，作为粉丝回复的背景参考。</p>
+                </div>
+                <span class="bubble-sheet-switch">
+                  <input id="bubble-chat-worldbook-enabled-input" type="checkbox" />
+                  <span class="bubble-sheet-switch__slider"></span>
+                </span>
+              </label>
+
+              <section class="bubble-sheet-field">
+                <span>挂载的世界书</span>
+                <div id="bubble-chat-worldbook-list" class="bubble-sheet-worldbook-list"></div>
+                <small>世界书仅作背景信息参考，禁止在回复里单独点名或生硬复述。</small>
+              </section>
+
+              <p id="bubble-chat-settings-status" class="bubble-chat-settings-status" aria-live="polite"></p>
+            </form>
+          </div>
+        </section>
+
+        <section
           id="bubble-fan-detail-modal"
           class="bubble-fan-detail-modal"
           aria-hidden="true"
@@ -243,7 +324,7 @@
       </section>
     </main>
 
-    <script src="./api-log.js?v=20260330r"></script>
-    <script src="./bubble.js?v=20260330r"></script>
+    <script src="./api-log.js?v=20260331d"></script>
+    <script src="./bubble.js?v=20260331d"></script>
   </body>
 </html>

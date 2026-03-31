@@ -5,6 +5,7 @@ const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const PROFILE_KEY = "x_style_generator_profile_v1";
 const PROFILE_POSTS_KEY = "x_style_generator_profile_posts_v1";
+const WORLD_BOOKS_KEY = "x_style_generator_message_worldbooks_v1";
 const DIRECT_MESSAGES_KEY = "x_style_generator_direct_messages_v1";
 const BUBBLE_ROOMS_KEY = "x_style_generator_bubble_rooms_v1";
 const BUBBLE_THREADS_KEY = "x_style_generator_bubble_threads_v1";
@@ -20,7 +21,15 @@ const DEFAULT_SETTINGS = {
   apiConfigs: [],
   activeApiConfigId: "",
   translationApiEnabled: false,
-  translationApiConfigId: ""
+  translationApiConfigId: "",
+  bubblePromptSettings: {
+    hotTopicsEnabled: false,
+    hotTopicsTabId: "",
+    hotTopicsIncludeDiscussionText: true,
+    hotTopicsIncludeHotTopic: false,
+    worldbookEnabled: false,
+    worldbookIds: []
+  }
 };
 
 const DEFAULT_PROFILE = {
@@ -74,6 +83,16 @@ const bubbleChatForm = document.querySelector("#bubble-chat-form");
 const bubbleChatInput = document.querySelector("#bubble-chat-input");
 const bubbleChatPlusBtn = document.querySelector("#bubble-chat-plus-btn");
 const bubbleChatLoadingOverlayEl = document.querySelector("#bubble-chat-loading-overlay");
+const bubbleChatSettingsModalEl = document.querySelector("#bubble-chat-settings-modal");
+const bubbleChatSettingsCloseBtn = document.querySelector("#bubble-chat-settings-close-btn");
+const bubbleChatSettingsFormEl = document.querySelector("#bubble-chat-settings-form");
+const bubbleChatHotTopicsInputEl = document.querySelector("#bubble-chat-hot-topics-input");
+const bubbleChatHotTopicsTabSelectEl = document.querySelector("#bubble-chat-hot-topics-tab-select");
+const bubbleChatHotTopicsTextInputEl = document.querySelector("#bubble-chat-hot-topics-text-input");
+const bubbleChatHotTopicsTopicInputEl = document.querySelector("#bubble-chat-hot-topics-topic-input");
+const bubbleChatWorldbookInputEl = document.querySelector("#bubble-chat-worldbook-enabled-input");
+const bubbleChatWorldbookListEl = document.querySelector("#bubble-chat-worldbook-list");
+const bubbleChatSettingsStatusEl = document.querySelector("#bubble-chat-settings-status");
 const bubbleFanDetailModalEl = document.querySelector("#bubble-fan-detail-modal");
 const bubbleFanDetailCloseBtn = document.querySelector("#bubble-fan-detail-close-btn");
 const bubbleFanDetailMoreBtn = document.querySelector("#bubble-fan-detail-more-btn");
@@ -85,12 +104,14 @@ const memoryStorage = {};
 const state = {
   profile: loadProfile(),
   settings: loadSettings(),
+  worldbooks: loadWorldbooks(),
   rooms: [],
   threads: {},
   fanDetails: {},
   searchOpen: false,
   query: "",
   chatOpen: false,
+  chatSettingsOpen: false,
   activeRoomId: "",
   activeFanDetailId: "",
   loadingFanDetailId: "",
@@ -359,6 +380,93 @@ function normalizeApiConfigs(configs = []) {
     });
 }
 
+function normalizeMountedIds(value) {
+  if (Array.isArray(value)) {
+    return [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))];
+  }
+  const single = String(value || "").trim();
+  return single ? [single] : [];
+}
+
+function normalizeBubblePromptSettings(source = {}) {
+  const resolved = source && typeof source === "object" ? source : {};
+  return {
+    hotTopicsEnabled: Boolean(resolved.hotTopicsEnabled),
+    hotTopicsTabId: String(resolved.hotTopicsTabId || "").trim(),
+    hotTopicsIncludeDiscussionText:
+      typeof resolved.hotTopicsIncludeDiscussionText === "boolean"
+        ? resolved.hotTopicsIncludeDiscussionText
+        : true,
+    hotTopicsIncludeHotTopic: Boolean(resolved.hotTopicsIncludeHotTopic),
+    worldbookEnabled: Boolean(resolved.worldbookEnabled),
+    worldbookIds: normalizeMountedIds(resolved.worldbookIds || [])
+  };
+}
+
+function normalizeCustomTabs(tabs = []) {
+  if (!Array.isArray(tabs)) {
+    return [];
+  }
+
+  return tabs
+    .map((tab, index) => {
+      if (typeof tab === "string") {
+        const name = String(tab).trim().slice(0, 20) || "自定义页签";
+        return {
+          id: `custom_${index}_${hashText(name)}`,
+          name,
+          audience: "",
+          discussionText: "",
+          hotTopic: "",
+          text: ""
+        };
+      }
+      if (!tab || typeof tab !== "object") {
+        return null;
+      }
+      const rawName = tab.name || tab.label || tab.title || tab.tabName || tab.tabLabel || "";
+      const rawAudience =
+        tab.audience ||
+        tab.userPosition ||
+        tab.userProfile ||
+        tab.positioning ||
+        tab.targetAudience ||
+        tab.memberProfile ||
+        "";
+      const rawDiscussionText =
+        tab.discussionText ||
+        tab.text ||
+        tab.prompt ||
+        tab.content ||
+        tab.description ||
+        "";
+      const rawHotTopic =
+        tab.hotTopic ||
+        tab.hotspot ||
+        tab.hotText ||
+        tab.topicText ||
+        tab.topic ||
+        "";
+      return {
+        id:
+          tab.id ||
+          tab.feedId ||
+          tab.key ||
+          `custom_${index}_${hashText(`${rawName || ""}-${rawDiscussionText || ""}-${rawHotTopic || ""}`)}`,
+        name: String(rawName || "自定义页签").trim().slice(0, 20) || "自定义页签",
+        audience: String(rawAudience || "").trim(),
+        discussionText: String(rawDiscussionText || "").trim(),
+        hotTopic: String(rawHotTopic || "").trim(),
+        text: String(rawDiscussionText || "").trim()
+      };
+    })
+    .filter(Boolean);
+}
+
+function getAvailableCustomTabs(settings = loadSettings()) {
+  return normalizeCustomTabs(settings.customTabs || []);
+}
+
 function buildNormalizedSettingsSnapshot(source, options = {}) {
   const merged = {
     ...DEFAULT_SETTINGS,
@@ -374,6 +482,9 @@ function buildNormalizedSettingsSnapshot(source, options = {}) {
         getDefaultModelByMode(merged.mode);
   merged.apiConfigs = normalizeApiConfigs(
     merged.apiConfigs || source?.apiPresets || source?.apiProfiles || []
+  );
+  merged.bubblePromptSettings = normalizeBubblePromptSettings(
+    merged.bubblePromptSettings || source?.bubblePromptSettings || {}
   );
 
   const activeConfig =
@@ -946,6 +1057,61 @@ function loadProfilePosts() {
   }
 }
 
+function normalizeWorldbookCategory(category, index = 0) {
+  const source = category && typeof category === "object" ? category : {};
+  const name = String(source.name || "").trim() || `分类 ${index + 1}`;
+  return {
+    id: String(source.id || `worldbook_category_${index}_${hashText(name)}`),
+    name: name.slice(0, 24),
+    createdAt: Number(source.createdAt) || Date.now(),
+    updatedAt: Number(source.updatedAt) || Date.now()
+  };
+}
+
+function normalizeWorldbookEntry(entry, categories = [], index = 0) {
+  const source = entry && typeof entry === "object" ? entry : {};
+  const name = String(source.name || "").trim() || `世界书 ${index + 1}`;
+  const categoryId = String(source.categoryId || "").trim();
+  return {
+    id: String(source.id || `worldbook_entry_${index}_${hashText(name)}`),
+    name: name.slice(0, 40),
+    text: String(source.text || "").trim(),
+    categoryId: categories.some((item) => item.id === categoryId) ? categoryId : "",
+    createdAt: Number(source.createdAt) || Date.now(),
+    updatedAt: Number(source.updatedAt) || Date.now()
+  };
+}
+
+function loadWorldbooks() {
+  const raw = safeGetItem(WORLD_BOOKS_KEY);
+  if (!raw) {
+    return { categories: [], entries: [] };
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    const categories = Array.isArray(parsed?.categories)
+      ? parsed.categories.map((item, index) => normalizeWorldbookCategory(item, index))
+      : [];
+    const entries = Array.isArray(parsed?.entries)
+      ? parsed.entries
+          .map((item, index) => normalizeWorldbookEntry(item, categories, index))
+          .filter((item) => item.name && item.text)
+      : [];
+    return { categories, entries };
+  } catch (_error) {
+    return { categories: [], entries: [] };
+  }
+}
+
+function getWorldbookEntryById(entryId = "") {
+  return state.worldbooks.entries.find((item) => item.id === entryId) || null;
+}
+
+function getWorldbookCategoryById(categoryId = "") {
+  return state.worldbooks.categories.find((item) => item.id === categoryId) || null;
+}
+
 function loadDirectMessages() {
   const raw = safeGetItem(DIRECT_MESSAGES_KEY);
   if (!raw) {
@@ -1171,12 +1337,22 @@ function normalizeFanReply(reply, index = 0) {
   };
 }
 
+function normalizeFanDetailSourceMessage(message, index = 0) {
+  return {
+    id: String(message?.id || `fan_source_message_${index}`),
+    text: String(message?.text || "").trim(),
+    time: resolveBubbleTimeLabel(message?.time, message?.createdAt),
+    createdAt: Number(message?.createdAt) || Date.now() + index
+  };
+}
+
 function createDefaultFanDetail(detailId, roomId = "", parentMessageId = "", emojiSet = []) {
   return {
     detailId,
     roomId,
     parentMessageId,
     emojiSet: Array.isArray(emojiSet) ? emojiSet.slice(0, 6) : [],
+    sourceMessages: [],
     sourceText: "",
     replies: [],
     generatedAt: 0
@@ -1191,6 +1367,11 @@ function normalizeFanDetail(detail, detailId) {
     parentMessageId: String(source.parentMessageId || "").trim(),
     emojiSet: Array.isArray(source.emojiSet)
       ? source.emojiSet.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 6)
+      : [],
+    sourceMessages: Array.isArray(source.sourceMessages)
+      ? source.sourceMessages
+          .map((item, index) => normalizeFanDetailSourceMessage(item, index))
+          .filter((item) => item.text)
       : [],
     sourceText: String(source.sourceText || "").trim(),
     replies: Array.isArray(source.replies)
@@ -1314,6 +1495,58 @@ function getLatestUserBubbleMessage(thread) {
   );
 }
 
+function getLatestPendingUserBubbleBatch(thread) {
+  const messages = Array.isArray(thread?.messages) ? thread.messages : [];
+  if (!messages.length) {
+    return [];
+  }
+
+  let cursor = messages.length - 1;
+  while (cursor >= 0 && messages[cursor]?.role !== "user") {
+    cursor -= 1;
+  }
+  if (cursor < 0) {
+    return [];
+  }
+
+  const batch = [];
+  while (cursor >= 0 && messages[cursor]?.role === "user") {
+    const currentMessage = messages[cursor];
+    const text = String(currentMessage?.text || "").trim();
+    if (text) {
+      batch.unshift(currentMessage);
+    }
+    cursor -= 1;
+  }
+  return batch;
+}
+
+function getUserBubbleBatchAroundMessage(thread, messageId = "") {
+  const messages = Array.isArray(thread?.messages) ? thread.messages : [];
+  if (!messages.length) {
+    return [];
+  }
+
+  const anchorIndex = messageId
+    ? messages.findIndex((item) => item?.id === messageId)
+    : messages.length - 1;
+  if (anchorIndex < 0 || messages[anchorIndex]?.role !== "user") {
+    return [];
+  }
+
+  const batch = [];
+  let cursor = anchorIndex;
+  while (cursor >= 0 && messages[cursor]?.role === "user") {
+    const currentMessage = messages[cursor];
+    const text = String(currentMessage?.text || "").trim();
+    if (text) {
+      batch.unshift(currentMessage);
+    }
+    cursor -= 1;
+  }
+  return batch;
+}
+
 function buildRoomPreviewFromMessage(message, fallbackText = "还没有 Bubble 消息。") {
   if (!message) {
     return fallbackText;
@@ -1349,6 +1582,7 @@ function refreshBubbleData(options = {}) {
   const currentDetailId = state.activeFanDetailId;
   state.profile = loadProfile();
   state.settings = loadSettings();
+  state.worldbooks = loadWorldbooks();
   state.threads = options.reset ? {} : loadBubbleThreads();
   state.fanDetails = options.reset ? {} : loadBubbleFanDetails();
   state.rooms = options.reset
@@ -1432,6 +1666,147 @@ function renderBubbleRooms() {
       `
     )
     .join("");
+}
+
+function setBubbleChatSettingsStatus(message, tone = "") {
+  if (!bubbleChatSettingsStatusEl) {
+    return;
+  }
+  bubbleChatSettingsStatusEl.textContent = message;
+  bubbleChatSettingsStatusEl.className = "bubble-chat-settings-status";
+  if (tone) {
+    bubbleChatSettingsStatusEl.classList.add(tone);
+  }
+}
+
+function renderBubbleHotTopicsTabOptions(selectedId = "") {
+  if (!bubbleChatHotTopicsTabSelectEl) {
+    return;
+  }
+  const tabs = getAvailableCustomTabs(loadSettings());
+  if (!tabs.length) {
+    bubbleChatHotTopicsTabSelectEl.innerHTML = '<option value="">暂无论坛自定义页签</option>';
+    bubbleChatHotTopicsTabSelectEl.value = "";
+    return;
+  }
+
+  bubbleChatHotTopicsTabSelectEl.innerHTML = [
+    '<option value="">请选择论坛自定义页签</option>',
+    ...tabs.map((tab) => `<option value="${escapeHtml(tab.id)}">${escapeHtml(tab.name)}</option>`)
+  ].join("");
+  bubbleChatHotTopicsTabSelectEl.value = tabs.some((tab) => tab.id === selectedId) ? selectedId : "";
+}
+
+function renderBubbleWorldbookMountOptions(selectedIds = []) {
+  if (!bubbleChatWorldbookListEl) {
+    return;
+  }
+
+  if (!state.worldbooks.entries.length) {
+    bubbleChatWorldbookListEl.innerHTML =
+      '<div class="bubble-chat-settings-empty">当前还没有世界书。先到 Message → 我 → 世界书 创建后再回来挂载。</div>';
+    return;
+  }
+
+  const selectedIdSet = new Set(normalizeMountedIds(selectedIds));
+  bubbleChatWorldbookListEl.innerHTML = state.worldbooks.entries
+    .map((entry) => {
+      const categoryName = entry.categoryId
+        ? getWorldbookCategoryById(entry.categoryId)?.name || "未分类"
+        : "未分类";
+      return `
+        <label class="bubble-chat-settings-option">
+          <input
+            type="checkbox"
+            value="${escapeHtml(entry.id)}"
+            ${selectedIdSet.has(entry.id) ? "checked" : ""}
+          />
+          <span>${escapeHtml(entry.name)}<small>${escapeHtml(categoryName)}</small></span>
+        </label>
+      `;
+    })
+    .join("");
+}
+
+function updateBubbleChatSettingsFormState() {
+  if (bubbleChatHotTopicsTabSelectEl) {
+    bubbleChatHotTopicsTabSelectEl.disabled = !Boolean(bubbleChatHotTopicsInputEl?.checked);
+  }
+  [bubbleChatHotTopicsTextInputEl, bubbleChatHotTopicsTopicInputEl].forEach((input) => {
+    if (input instanceof HTMLInputElement) {
+      input.disabled = !Boolean(bubbleChatHotTopicsInputEl?.checked);
+    }
+  });
+  if (bubbleChatWorldbookListEl) {
+    bubbleChatWorldbookListEl
+      .querySelectorAll("input[type='checkbox']")
+      .forEach((input) => {
+        if (input instanceof HTMLInputElement) {
+          input.disabled = !Boolean(bubbleChatWorldbookInputEl?.checked);
+        }
+      });
+  }
+  bubbleChatWorldbookListEl?.classList.toggle(
+    "is-disabled",
+    !Boolean(bubbleChatWorldbookInputEl?.checked)
+  );
+}
+
+function applyBubblePromptSettingsToForm(promptSettings) {
+  const resolved = normalizeBubblePromptSettings(promptSettings);
+  if (bubbleChatHotTopicsInputEl) {
+    bubbleChatHotTopicsInputEl.checked = resolved.hotTopicsEnabled;
+  }
+  if (bubbleChatHotTopicsTextInputEl) {
+    bubbleChatHotTopicsTextInputEl.checked = resolved.hotTopicsIncludeDiscussionText;
+  }
+  if (bubbleChatHotTopicsTopicInputEl) {
+    bubbleChatHotTopicsTopicInputEl.checked = resolved.hotTopicsIncludeHotTopic;
+  }
+  if (bubbleChatWorldbookInputEl) {
+    bubbleChatWorldbookInputEl.checked = resolved.worldbookEnabled;
+  }
+  renderBubbleHotTopicsTabOptions(resolved.hotTopicsTabId);
+  renderBubbleWorldbookMountOptions(resolved.worldbookIds);
+  updateBubbleChatSettingsFormState();
+  setBubbleChatSettingsStatus("");
+}
+
+function getCurrentBubblePromptSettingsDraft() {
+  const tabs = getAvailableCustomTabs(loadSettings());
+  const selectedTabId = String(bubbleChatHotTopicsTabSelectEl?.value || "").trim();
+  const selectedWorldbookIds = bubbleChatWorldbookListEl
+    ? [...bubbleChatWorldbookListEl.querySelectorAll("input[type='checkbox']:checked")]
+        .map((input) => (input instanceof HTMLInputElement ? String(input.value || "").trim() : ""))
+        .filter((id) => getWorldbookEntryById(id))
+    : [];
+  return normalizeBubblePromptSettings({
+    hotTopicsEnabled: Boolean(bubbleChatHotTopicsInputEl?.checked),
+    hotTopicsTabId: tabs.some((tab) => tab.id === selectedTabId) ? selectedTabId : "",
+    hotTopicsIncludeDiscussionText: Boolean(bubbleChatHotTopicsTextInputEl?.checked),
+    hotTopicsIncludeHotTopic: Boolean(bubbleChatHotTopicsTopicInputEl?.checked),
+    worldbookEnabled: Boolean(bubbleChatWorldbookInputEl?.checked),
+    worldbookIds: selectedWorldbookIds
+  });
+}
+
+function setBubbleChatSettingsOpen(isOpen) {
+  state.chatSettingsOpen = Boolean(isOpen);
+  if (!bubbleChatSettingsModalEl) {
+    return;
+  }
+  if (state.chatSettingsOpen) {
+    state.settings = loadSettings();
+    state.worldbooks = loadWorldbooks();
+    bubbleChatSettingsModalEl.hidden = false;
+    bubbleChatSettingsModalEl.setAttribute("aria-hidden", "false");
+    applyBubblePromptSettingsToForm(state.settings.bubblePromptSettings);
+    document.body.classList.add("bubble-settings-open");
+    return;
+  }
+  bubbleChatSettingsModalEl.hidden = true;
+  bubbleChatSettingsModalEl.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("bubble-settings-open");
 }
 
 function buildEmojiTickerMarkup(emojiSet = []) {
@@ -1546,6 +1921,7 @@ function setChatModalOpen(isOpen, roomId = state.activeRoomId) {
 
   state.activeRoomId = "";
   setChatLoadingOverlayOpen(false);
+  setBubbleChatSettingsOpen(false);
   document.body.classList.remove("chat-open");
   hideLayer(bubbleChatModalEl);
   setFanDetailModalOpen(false);
@@ -1709,8 +2085,9 @@ function acceptFanReplies() {
     return;
   }
 
-  const parentMessage = [...thread.messages].reverse().find((item) => item.role === "user") || null;
-  if (!parentMessage) {
+  const userBatch = getLatestPendingUserBubbleBatch(thread);
+  const parentMessage = userBatch[userBatch.length - 1] || null;
+  if (!parentMessage || !userBatch.length) {
     return;
   }
 
@@ -1718,7 +2095,11 @@ function acceptFanReplies() {
   const placeholders = Array.from({ length: 3 }, (_, index) => {
     const emojiSet = pickUniqueEmojis(6, `${parentMessage.id}-${index}`);
     const detailId = `fan_detail_${now}_${index}_${hashText(parentMessage.id)}`;
-    ensureFanDetail(detailId, state.activeRoomId, parentMessage.id, emojiSet);
+    const detail = ensureFanDetail(detailId, state.activeRoomId, parentMessage.id, emojiSet);
+    detail.sourceMessages = userBatch.map((item, itemIndex) =>
+      normalizeFanDetailSourceMessage(item, itemIndex)
+    );
+    detail.sourceText = detail.sourceMessages.map((item) => item.text).join("\n");
     return {
       id: `fan_placeholder_${now}_${index}`,
       role: "fan",
@@ -1741,10 +2122,75 @@ function acceptFanReplies() {
   setBubbleStatus("已生成 3 张粉丝卡片；点击右侧箭头查看真实粉丝回复。", "success");
 }
 
-function buildFanReplyPrompt(profile, sourceMessage, emojiSet = []) {
+function buildBubbleHotTopicsContext(settings, promptSettings) {
+  if (!promptSettings.hotTopicsEnabled || !promptSettings.hotTopicsTabId) {
+    return "";
+  }
+
+  const selectedTab =
+    getAvailableCustomTabs(settings).find((tab) => tab.id === promptSettings.hotTopicsTabId) || null;
+  if (!selectedTab) {
+    return "";
+  }
+
+  const sections = [`创作者最近也在关注一个论坛讨论区「${selectedTab.name}」。`];
+  const audience = String(selectedTab.audience || "").trim();
+  const discussionText = String(selectedTab.discussionText || selectedTab.text || "").trim();
+  const hotTopic = String(selectedTab.hotTopic || "").trim();
+
+  if (audience) {
+    sections.push(`这个讨论区里活跃用户的身份与情绪倾向：${audience}`);
+  }
+  if (promptSettings.hotTopicsIncludeDiscussionText && discussionText) {
+    sections.push(`这个讨论区长期讨论的背景：${discussionText}`);
+  }
+  if (promptSettings.hotTopicsIncludeHotTopic && hotTopic) {
+    sections.push(`这个讨论区当前最主要的热点：${hotTopic}`);
+  }
+
+  sections.push("这些论坛信息只用于辅助理解创作者当前 Bubble 消息，回复重心仍要放在创作者这一次发言本身。");
+  return sections.join("\n\n");
+}
+
+function buildBubbleWorldbookContext(promptSettings) {
+  if (!promptSettings.worldbookEnabled || !promptSettings.worldbookIds.length) {
+    return "";
+  }
+
+  const entries = promptSettings.worldbookIds
+    .map((entryId) => getWorldbookEntryById(entryId))
+    .filter(Boolean)
+    .map((entry) => {
+      const category = entry.categoryId ? getWorldbookCategoryById(entry.categoryId) : null;
+      const categoryLabel = category?.name ? `（${category.name}）` : "（未分类）";
+      return `- ${entry.name}${categoryLabel}\n${entry.text}`;
+    });
+
+  if (!entries.length) {
+    return "";
+  }
+
+  return [
+    "补充背景设定（仅作隐性参考，禁止单独提起这些设定来源，也不要像背设定一样直接复述）：",
+    entries.join("\n\n")
+  ].join("\n");
+}
+
+function buildFanReplyPrompt(profile, sourceMessages = [], emojiSet = [], settings = getCurrentSettings()) {
   const creatorName = String(profile.username || DEFAULT_PROFILE.username).trim();
   const creatorPersona = String(profile.personaPrompt || DEFAULT_PROFILE.personaPrompt).trim();
   const emojiMood = emojiSet.slice(0, 3).join(" ");
+  const promptSettings = normalizeBubblePromptSettings(settings.bubblePromptSettings);
+  const normalizedMessages = Array.isArray(sourceMessages)
+    ? sourceMessages
+        .map((item, index) => normalizeFanDetailSourceMessage(item, index))
+        .filter((item) => item.text)
+    : [];
+  const latestMessage = normalizedMessages[normalizedMessages.length - 1] || null;
+  const supplementalContexts = [
+    buildBubbleHotTopicsContext(settings, promptSettings),
+    buildBubbleWorldbookContext(promptSettings)
+  ].filter(Boolean);
   return [
     "你正在模拟 Bubble 中创作者的粉丝回复列表。",
     "请严格输出 JSON 数组，不要输出额外解释。",
@@ -1757,9 +2203,21 @@ function buildFanReplyPrompt(profile, sourceMessage, emojiSet = []) {
     "不要加编号、不要加标签、不要解释、不要输出用户名字段。",
     `创作者昵称：${creatorName}`,
     `创作者人设：${creatorPersona}`,
+    supplementalContexts.length
+      ? `补充参考语境（优先级低于创作者人设与本轮 Bubble 消息）：\n${supplementalContexts.join(
+          "\n\n"
+        )}`
+      : "",
     emojiMood ? `这批粉丝情绪关键词：${emojiMood}` : "",
-    "创作者刚发出的消息：",
-    sourceMessage
+    normalizedMessages.length
+      ? `创作者这一轮连续发送了 ${normalizedMessages.length} 条 Bubble 消息；请以最新一条为主、前面的消息为上下文：`
+      : "",
+    normalizedMessages.length
+      ? normalizedMessages
+          .map((item, index) => `${index + 1}. ${item.time ? `${item.time} · ` : ""}${item.text}`)
+          .join("\n")
+      : "",
+    latestMessage ? "请优先回应最后一条，但不要忽略这一轮前面的内容。" : ""
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -1816,12 +2274,14 @@ async function generateFanRepliesForDetail(detailId, options = {}) {
   }
 
   const roomId = detail.roomId || state.activeRoomId;
-  const parentMessage =
-    findThreadMessageById(roomId, detail.parentMessageId) ||
-    [...ensureThread(roomId).messages].reverse().find((item) => item.role === "user") ||
-    null;
+  const thread = ensureThread(roomId);
+  const sourceMessages =
+    detail.sourceMessages.length
+      ? detail.sourceMessages
+      : getUserBubbleBatchAroundMessage(thread, detail.parentMessageId);
+  const parentMessage = sourceMessages[sourceMessages.length - 1] || null;
 
-  if (!parentMessage?.text) {
+  if (!parentMessage?.text || !sourceMessages.length) {
     setFanDetailStatus("未找到可用于生成粉丝回复的用户消息。", "error");
     if (state.activeFanDetailId === detailId) {
       renderFanDetailList();
@@ -1829,7 +2289,10 @@ async function generateFanRepliesForDetail(detailId, options = {}) {
     return false;
   }
 
-  detail.sourceText = parentMessage.text;
+  detail.sourceMessages = sourceMessages.map((item, index) =>
+    normalizeFanDetailSourceMessage(item, index)
+  );
+  detail.sourceText = detail.sourceMessages.map((item) => item.text).join("\n");
   persistBubbleFanDetails();
   setFanDetailStatus("正在通过当前 API 生成粉丝回复…");
   if (state.activeFanDetailId === detailId && bubbleFanDetailListEl) {
@@ -1840,7 +2303,7 @@ async function generateFanRepliesForDetail(detailId, options = {}) {
   try {
     const rawText = await requestJsonArrayText(
       getCurrentSettings(),
-      buildFanReplyPrompt(state.profile, parentMessage.text, detail.emojiSet),
+      buildFanReplyPrompt(state.profile, detail.sourceMessages, detail.emojiSet, getCurrentSettings()),
       FAN_DETAIL_REPLY_COUNT
     );
     const replies = parseFanReplies(rawText, FAN_DETAIL_REPLY_COUNT).map((item, index) =>
@@ -1996,7 +2459,106 @@ function attachEvents() {
 
   if (bubbleChatMoreBtn) {
     bubbleChatMoreBtn.addEventListener("click", () => {
-      setBubbleStatus("Bubble 聊天页目前保留本地消息、粉丝卡片和详情展开。");
+      setBubbleChatSettingsOpen(true);
+    });
+  }
+
+  if (bubbleChatSettingsCloseBtn) {
+    bubbleChatSettingsCloseBtn.addEventListener("click", () => {
+      setBubbleChatSettingsOpen(false);
+    });
+  }
+
+  if (bubbleChatSettingsFormEl) {
+    bubbleChatSettingsFormEl.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const draft = getCurrentBubblePromptSettingsDraft();
+      const selectedTab =
+        getAvailableCustomTabs(loadSettings()).find((tab) => tab.id === draft.hotTopicsTabId) || null;
+      if (draft.hotTopicsEnabled && !draft.hotTopicsTabId) {
+        setBubbleChatSettingsStatus("请先为论坛挂载选择一个自定义页签。", "error");
+        return;
+      }
+      if (
+        draft.hotTopicsEnabled &&
+        !draft.hotTopicsIncludeDiscussionText &&
+        !draft.hotTopicsIncludeHotTopic
+      ) {
+        setBubbleChatSettingsStatus("论坛挂载至少要选择“页签文本”或“页签热点”中的一项。", "error");
+        return;
+      }
+      if (draft.hotTopicsEnabled) {
+        const hasDiscussionText = Boolean(
+          String(selectedTab?.discussionText || selectedTab?.text || "").trim()
+        );
+        const hasHotTopic = Boolean(String(selectedTab?.hotTopic || "").trim());
+        if (
+          draft.hotTopicsIncludeDiscussionText &&
+          !draft.hotTopicsIncludeHotTopic &&
+          !hasDiscussionText
+        ) {
+          setBubbleChatSettingsStatus("当前页签还没有填写“页签文本”。", "error");
+          return;
+        }
+        if (
+          draft.hotTopicsIncludeHotTopic &&
+          !draft.hotTopicsIncludeDiscussionText &&
+          !hasHotTopic
+        ) {
+          setBubbleChatSettingsStatus("当前页签还没有填写“页签热点”。", "error");
+          return;
+        }
+        if (
+          draft.hotTopicsIncludeDiscussionText &&
+          draft.hotTopicsIncludeHotTopic &&
+          !hasDiscussionText &&
+          !hasHotTopic
+        ) {
+          setBubbleChatSettingsStatus("当前页签的“页签文本”和“页签热点”都还是空的。", "error");
+          return;
+        }
+      }
+      if (draft.worldbookEnabled && !draft.worldbookIds.length) {
+        setBubbleChatSettingsStatus("请至少选择一条世界书。", "error");
+        return;
+      }
+
+      state.settings = loadSettings();
+      state.settings.bubblePromptSettings = draft;
+      safeSetItem(SETTINGS_KEY, JSON.stringify(state.settings));
+      setBubbleChatSettingsStatus("Bubble 回复设置已保存。", "success");
+      setBubbleStatus("Bubble 粉丝回复 prompt 设置已更新。", "success");
+      window.setTimeout(() => {
+        setBubbleChatSettingsOpen(false);
+      }, 180);
+    });
+  }
+
+  if (bubbleChatHotTopicsInputEl) {
+    bubbleChatHotTopicsInputEl.addEventListener("change", () => {
+      updateBubbleChatSettingsFormState();
+      setBubbleChatSettingsStatus("");
+    });
+  }
+
+  if (bubbleChatWorldbookInputEl) {
+    bubbleChatWorldbookInputEl.addEventListener("change", () => {
+      updateBubbleChatSettingsFormState();
+      setBubbleChatSettingsStatus("");
+    });
+  }
+
+  [bubbleChatHotTopicsTabSelectEl, bubbleChatHotTopicsTextInputEl, bubbleChatHotTopicsTopicInputEl]
+    .filter(Boolean)
+    .forEach((element) => {
+      element.addEventListener("change", () => {
+        setBubbleChatSettingsStatus("");
+      });
+    });
+
+  if (bubbleChatWorldbookListEl) {
+    bubbleChatWorldbookListEl.addEventListener("change", () => {
+      setBubbleChatSettingsStatus("");
     });
   }
 
@@ -2102,6 +2664,10 @@ function attachEvents() {
   });
 
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.chatSettingsOpen) {
+      setBubbleChatSettingsOpen(false);
+      return;
+    }
     if (event.key === "Escape" && state.activeFanDetailId) {
       setFanDetailModalOpen(false);
       return;

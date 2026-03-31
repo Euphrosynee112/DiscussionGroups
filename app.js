@@ -5,6 +5,8 @@ const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
 const PROFILE_KEY = "x_style_generator_profile_v1";
 const PROFILE_POSTS_KEY = "x_style_generator_profile_posts_v1";
+const WORLD_BOOKS_KEY = "x_style_generator_message_worldbooks_v1";
+const BUBBLE_THREADS_KEY = "x_style_generator_bubble_threads_v1";
 const DISCUSSIONS_KEY = "x_style_generator_discussions_v1";
 const DEFAULT_POST_COUNT = 10;
 const DEFAULT_REPLY_COUNT = 4;
@@ -12,6 +14,8 @@ const MAX_FEED_ITEMS = 50;
 const MAX_POST_TEXT_LENGTH = 1400;
 const MAX_REPLY_TEXT_LENGTH = 1400;
 const DEFAULT_TEMPERATURE = 0.8;
+const DEFAULT_CONTEXT_FOCUS_MINUTES = 60;
+const MAX_CONTEXT_FOCUS_MINUTES = 1440;
 const PULL_THRESHOLD = 88;
 const DEFAULT_CONTENT_FEED = "entertainment";
 const CUSTOM_TAB_LIMIT = 4;
@@ -111,7 +115,19 @@ const customTabsPanel = document.querySelector("#custom-tabs-manager");
 const customTabsListEl = document.querySelector("#custom-tabs-list");
 const customTabForm = document.querySelector("#custom-tab-form");
 const customTabNameInput = document.querySelector("#custom-tab-name-input");
+const customTabAudienceInput = document.querySelector("#custom-tab-audience-input");
 const customTabTextInput = document.querySelector("#custom-tab-text-input");
+const customTabHotTopicInput = document.querySelector("#custom-tab-hot-topic-input");
+const customTabTimeAwarenessInput = document.querySelector("#custom-tab-time-awareness-input");
+const customTabWorldbookListEl = document.querySelector("#custom-tab-worldbook-list");
+const customTabBubbleFocusEnabledInput = document.querySelector(
+  "#custom-tab-bubble-focus-enabled-input"
+);
+const customTabBubbleFocusMinutesInput = document.querySelector(
+  "#custom-tab-bubble-focus-minutes-input"
+);
+const customTabInsFocusEnabledInput = document.querySelector("#custom-tab-ins-focus-enabled-input");
+const customTabInsFocusMinutesInput = document.querySelector("#custom-tab-ins-focus-minutes-input");
 const customTabFormStatusEl = document.querySelector("#custom-tab-form-status");
 const customTabCancelBtn = document.querySelector("#custom-tab-cancel-btn");
 const customTabsCloseBtn = document.querySelector("#custom-tabs-close-btn");
@@ -333,6 +349,23 @@ function formatForumTimestamp(value = Date.now()) {
   );
 }
 
+function formatAwarenessDateTime(now = new Date()) {
+  const date = new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    weekday: "long"
+  }).format(now);
+  const time = new Intl.DateTimeFormat("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  })
+    .format(now)
+    .replace(/^24:/, "00:");
+  return `${date} ${time}`;
+}
+
 function appendApiLog(entry) {
   try {
     window.PulseApiLog?.append?.(entry);
@@ -352,6 +385,34 @@ function buildDiscussionApiLogBase(action, settings, endpoint, prompt, requestBo
     prompt,
     requestBody
   };
+}
+
+function readStoredJson(key, fallback = null) {
+  const raw = safeGetItem(key);
+  if (!raw) {
+    return fallback;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+function normalizeMountedIds(value) {
+  if (Array.isArray(value)) {
+    return [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))];
+  }
+  const single = String(value || "").trim();
+  return single ? [single] : [];
+}
+
+function normalizeContextFocusMinutes(value, fallback = DEFAULT_CONTEXT_FOCUS_MINUTES) {
+  return Math.min(
+    MAX_CONTEXT_FOCUS_MINUTES,
+    Math.max(1, normalizePositiveInteger(value, fallback))
+  );
 }
 
 function truncate(text, length = 120) {
@@ -399,29 +460,85 @@ function normalizeCustomTabs(tabs = []) {
         return {
           id: `custom_${index}_${hashText(name)}`,
           name,
-          text: ""
+          audience: "",
+          discussionText: "",
+          hotTopic: "",
+          text: "",
+          timeAwareness: false,
+          worldbookIds: [],
+          bubbleFocusEnabled: false,
+          bubbleFocusMinutes: DEFAULT_CONTEXT_FOCUS_MINUTES,
+          insFocusEnabled: false,
+          insFocusMinutes: DEFAULT_CONTEXT_FOCUS_MINUTES
         };
       }
       if (!tab || typeof tab !== "object") {
         return null;
       }
       const rawName = tab.name || tab.label || tab.title || tab.tabName || tab.tabLabel || "";
-      const rawText =
+      const rawAudience =
+        tab.audience ||
+        tab.userPosition ||
+        tab.userProfile ||
+        tab.positioning ||
+        tab.targetAudience ||
+        tab.memberProfile ||
+        "";
+      const rawDiscussionText =
+        tab.discussionText ||
         tab.text ||
         tab.prompt ||
         tab.content ||
         tab.description ||
+        "";
+      const rawHotTopic =
+        tab.hotTopic ||
+        tab.hotspot ||
+        tab.hotText ||
         tab.topicText ||
         tab.topic ||
         "";
+      const rawWorldbookIds =
+        tab.worldbookIds ||
+        tab.mountedWorldbookIds ||
+        tab.worldbooks ||
+        tab.worldbookEntries ||
+        [];
       return {
         id:
           tab.id ||
           tab.feedId ||
           tab.key ||
-          `custom_${index}_${hashText(`${rawName || ""}-${rawText || ""}`)}`,
+          `custom_${index}_${hashText(`${rawName || ""}-${rawDiscussionText || ""}-${rawHotTopic || ""}`)}`,
         name: String(rawName || "自定义页签").trim().slice(0, 20) || "自定义页签",
-        text: String(rawText || "").trim()
+        audience: String(rawAudience || "").trim(),
+        discussionText: String(rawDiscussionText || "").trim(),
+        hotTopic: String(rawHotTopic || "").trim(),
+        text: String(rawDiscussionText || "").trim(),
+        timeAwareness:
+          typeof tab.timeAwareness === "boolean"
+            ? tab.timeAwareness
+            : Boolean(tab.enableTimeAwareness || tab.dateAwareness || tab.timeAware),
+        worldbookIds: normalizeMountedIds(rawWorldbookIds),
+        bubbleFocusEnabled: Boolean(
+          tab.bubbleFocusEnabled || tab.mountBubble || tab.bubbleMounted || tab.bubbleEnabled
+        ),
+        bubbleFocusMinutes: normalizeContextFocusMinutes(
+          tab.bubbleFocusMinutes || tab.bubbleMinutes || tab.bubbleFocusWindow
+        ),
+        insFocusEnabled: Boolean(
+          tab.insFocusEnabled ||
+            tab.mountIns ||
+            tab.profilePostFocusEnabled ||
+            tab.profileMounted ||
+            tab.insMounted
+        ),
+        insFocusMinutes: normalizeContextFocusMinutes(
+          tab.insFocusMinutes ||
+            tab.insMinutes ||
+            tab.profilePostFocusMinutes ||
+            tab.profileFocusWindow
+        )
       };
     })
     .filter(Boolean)
@@ -429,8 +546,387 @@ function normalizeCustomTabs(tabs = []) {
     .map((tab) => ({
       id: tab.id || createCustomTabId(tab.name || "custom"),
       name: String(tab.name || "自定义页签").trim().slice(0, 20) || "自定义页签",
-      text: String(tab.text || "").trim()
+      audience: String(tab.audience || "").trim(),
+      discussionText: String(tab.discussionText || tab.text || "").trim(),
+      hotTopic: String(tab.hotTopic || "").trim(),
+      text: String(tab.discussionText || tab.text || "").trim(),
+      timeAwareness: Boolean(tab.timeAwareness),
+      worldbookIds: normalizeMountedIds(tab.worldbookIds || []),
+      bubbleFocusEnabled: Boolean(tab.bubbleFocusEnabled),
+      bubbleFocusMinutes: normalizeContextFocusMinutes(tab.bubbleFocusMinutes),
+      insFocusEnabled: Boolean(tab.insFocusEnabled),
+      insFocusMinutes: normalizeContextFocusMinutes(tab.insFocusMinutes)
     }));
+}
+
+function normalizeWorldbookCategory(category, index = 0) {
+  const source = category && typeof category === "object" ? category : {};
+  const name = String(source.name || "").trim() || `分类 ${index + 1}`;
+  return {
+    id: String(source.id || `worldbook_category_${index}_${hashText(name)}`),
+    name: name.slice(0, 24),
+    createdAt: Number(source.createdAt) || Date.now(),
+    updatedAt: Number(source.updatedAt) || Date.now()
+  };
+}
+
+function normalizeWorldbookEntry(entry, categories = [], index = 0) {
+  const source = entry && typeof entry === "object" ? entry : {};
+  const name = String(source.name || "").trim() || `世界书 ${index + 1}`;
+  const categoryId = String(source.categoryId || "").trim();
+  return {
+    id: String(source.id || `worldbook_entry_${index}_${hashText(name)}`),
+    name: name.slice(0, 40),
+    text: String(source.text || "").trim(),
+    categoryId: categories.some((item) => item.id === categoryId) ? categoryId : "",
+    createdAt: Number(source.createdAt) || Date.now(),
+    updatedAt: Number(source.updatedAt) || Date.now()
+  };
+}
+
+function loadWorldbookLibrary() {
+  const raw = readStoredJson(WORLD_BOOKS_KEY, { categories: [], entries: [] });
+  const categories = Array.isArray(raw?.categories)
+    ? raw.categories.map((item, index) => normalizeWorldbookCategory(item, index))
+    : [];
+  const entries = Array.isArray(raw?.entries)
+    ? raw.entries
+        .map((item, index) => normalizeWorldbookEntry(item, categories, index))
+        .filter((item) => item.name && item.text)
+    : [];
+  return { categories, entries };
+}
+
+function getMountedWorldbookEntries(tab) {
+  const library = loadWorldbookLibrary();
+  return normalizeMountedIds(tab?.worldbookIds || [])
+    .map((entryId) => library.entries.find((item) => item.id === entryId) || null)
+    .filter(Boolean)
+    .map((entry) => ({
+      ...entry,
+      categoryName:
+        library.categories.find((category) => category.id === entry.categoryId)?.name || "未分类"
+    }));
+}
+
+function extractLatestBubbleBatch(thread) {
+  const messages = Array.isArray(thread?.messages) ? thread.messages : [];
+  if (!messages.length) {
+    return [];
+  }
+
+  let cursor = messages.length - 1;
+  while (cursor >= 0 && messages[cursor]?.role !== "user") {
+    cursor -= 1;
+  }
+  if (cursor < 0) {
+    return [];
+  }
+
+  const batch = [];
+  while (cursor >= 0 && messages[cursor]?.role === "user") {
+    const current = messages[cursor];
+    const text = String(current?.text || "").trim();
+    if (text) {
+      batch.unshift(current);
+    }
+    cursor -= 1;
+  }
+  return batch;
+}
+
+function getRecentBubbleBatchForTab(tab) {
+  if (!tab?.bubbleFocusEnabled) {
+    return null;
+  }
+
+  const threads = readStoredJson(BUBBLE_THREADS_KEY, {});
+  if (!threads || typeof threads !== "object") {
+    return null;
+  }
+
+  const latestBatch = Object.values(threads)
+    .map((thread) => extractLatestBubbleBatch(thread))
+    .filter((batch) => batch.length)
+    .sort(
+      (left, right) =>
+        (Number(right[right.length - 1]?.createdAt) || 0) -
+        (Number(left[left.length - 1]?.createdAt) || 0)
+    )[0];
+
+  if (!latestBatch?.length) {
+    return null;
+  }
+
+  const latestCreatedAt = Number(latestBatch[latestBatch.length - 1]?.createdAt) || 0;
+  if (!latestCreatedAt) {
+    return null;
+  }
+
+  if (Date.now() - latestCreatedAt > normalizeContextFocusMinutes(tab.bubbleFocusMinutes) * 60_000) {
+    return null;
+  }
+
+  return {
+    messages: latestBatch,
+    createdAt: latestCreatedAt,
+    time:
+      String(latestBatch[latestBatch.length - 1]?.time || "").trim() ||
+      formatForumTimestamp(latestCreatedAt)
+  };
+}
+
+function normalizeRepostSource(source, fallbackId = "") {
+  if (!source || typeof source !== "object") {
+    return null;
+  }
+
+  const rawText =
+    typeof source.text === "string"
+      ? source.text
+      : source.text == null
+        ? ""
+        : String(source.text);
+  const imageDataUrl = String(source.imageDataUrl || source.imageUrl || "").trim();
+  const text = rawText.trim() ? truncate(rawText, MAX_POST_TEXT_LENGTH) : "";
+  const tags = normalizeTags(source.tags || [], 5);
+  if (!text && !imageDataUrl) {
+    return null;
+  }
+
+  const createdAt = Number(source.createdAt) || 0;
+  return {
+    id:
+      String(source.id || "").trim() ||
+      fallbackId ||
+      `repost_source_${hashText(`${source.displayName || ""}-${source.handle || ""}-${text}`)}`,
+    displayName: truncate(source.displayName || source.username || "论坛用户", 28),
+    handle: truncate(source.handle || source.userId || "@forum_user", 28),
+    text,
+    imageDataUrl,
+    tags,
+    time:
+      String(source.time || "").trim() ||
+      (createdAt ? formatForumTimestamp(createdAt) : ""),
+    createdAt
+  };
+}
+
+function createRepostSourceSnapshotFromPost(post) {
+  if (!post || typeof post !== "object") {
+    return null;
+  }
+  if (post.repostSource) {
+    return normalizeRepostSource(post.repostSource, post.repostSource.id || post.id || "");
+  }
+  return normalizeRepostSource(
+    {
+      id: post.id,
+      displayName: post.displayName,
+      handle: post.handle,
+      text: post.text,
+      imageDataUrl: post.imageDataUrl,
+      tags: getRenderableTags(post, post.feedType || DEFAULT_CONTENT_FEED),
+      time: post.time,
+      createdAt: post.createdAt
+    },
+    post.id || ""
+  );
+}
+
+function extractPostTopic(post) {
+  if (!post || typeof post !== "object") {
+    return "";
+  }
+  const sourceText = String(post.text || post.repostSource?.text || "").replace(/\s+/g, " ").trim();
+  const tags = normalizeTags(post.tags || post.repostSource?.tags || [], 3);
+  if (tags.length) {
+    return tags.join(" ");
+  }
+  if (!sourceText) {
+    return "";
+  }
+  const firstLine = sourceText.split("\n")[0].trim();
+  const firstClause = firstLine.split(/[。！？!?]/)[0].trim();
+  const firstSegment = firstClause.split(/[，,]/)[0].trim();
+  return truncate(firstSegment || firstClause || firstLine, 72);
+}
+
+function getRecentProfilePostForTab(tab) {
+  if (!tab?.insFocusEnabled) {
+    return null;
+  }
+
+  const posts = state.profilePosts.length ? state.profilePosts : loadProfilePosts();
+  const latestPost = [...posts]
+    .sort((left, right) => (Number(right?.createdAt) || 0) - (Number(left?.createdAt) || 0))
+    .find((item) => item && typeof item === "object" && (String(item.text || "").trim() || item.repostSource));
+
+  if (!latestPost) {
+    return null;
+  }
+
+  const createdAt = Number(latestPost.createdAt) || 0;
+  if (!createdAt) {
+    return null;
+  }
+
+  if (Date.now() - createdAt > normalizeContextFocusMinutes(tab.insFocusMinutes) * 60_000) {
+    return null;
+  }
+
+  return {
+    post: latestPost,
+    repostSource: createRepostSourceSnapshotFromPost(latestPost),
+    createdAt,
+    time: String(latestPost.time || "").trim() || formatForumTimestamp(createdAt)
+  };
+}
+
+function buildCustomTabTimeAwarenessContext(tab) {
+  if (!tab?.timeAwareness) {
+    return "";
+  }
+  return [
+    `当前本地时间：${formatAwarenessDateTime(new Date())}`,
+    "请结合这个讨论区的长期讨论背景与当前核心热点里提到的日期、星期、倒计时或事件节点来判断时效性。",
+    "如果设定内容指向未来某一天，请自然表现期待、等结果、预测或临近发生前的情绪；如果指向已经过去的日期，请自然表现回顾、复盘、后劲、落差或继续争论过去某天发生的事。"
+  ].join("\n");
+}
+
+function buildCustomTabWorldbookContext(tab) {
+  const entries = getMountedWorldbookEntries(tab);
+  if (!entries.length) {
+    return "";
+  }
+  return [
+    "补充背景参考（仅作隐性背景信息，禁止单独提起这些设定来源，也不要直接照抄原文）：",
+    ...entries.map(
+      (entry) => `- ${entry.name}（${entry.categoryName || "未分类"}）\n${entry.text}`
+    )
+  ].join("\n");
+}
+
+function buildCustomTabBubbleContext(tab) {
+  const batch = getRecentBubbleBatchForTab(tab);
+  if (!batch?.messages?.length) {
+    return { text: "", batch: null };
+  }
+  return {
+    batch,
+    text: [
+      `补充即时动态（重要程度接近当前讨论区主导热点）：用户最近一轮 Bubble 消息最后发送于 ${batch.time}。`,
+      "如果合适，可让帖子把这轮 Bubble 动态当成讨论切口之一，但大部分讨论仍要围绕当前讨论区本身展开。",
+      ...batch.messages.map(
+        (item, index) =>
+          `${index + 1}. ${String(item.time || "").trim() || formatForumTimestamp(item.createdAt)} · ${truncate(
+            String(item.text || "").trim(),
+            120
+          )}`
+      )
+    ].join("\n")
+  };
+}
+
+function buildCustomTabInsContext(tab) {
+  const recentProfilePost = getRecentProfilePostForTab(tab);
+  if (!recentProfilePost?.post || !recentProfilePost.repostSource) {
+    return { text: "", repostSource: null, post: null };
+  }
+
+  const topic = extractPostTopic(recentProfilePost.post);
+  return {
+    post: recentProfilePost.post,
+    repostSource: recentProfilePost.repostSource,
+    text: [
+      `补充转发话题（重要程度接近当前讨论区主导热点）：用户最近在论坛发了一条动态，时间是 ${recentProfilePost.time}。`,
+      topic ? `这条动态的主题：${topic}` : "这条动态以原帖内容为主，没有额外说明。",
+      "如果本轮帖子需要围绕这条动态讨论，请使用“转发/引用这条原帖再评论”的发帖形式，而不是脱离原帖凭空讨论。"
+    ].join("\n")
+  };
+}
+
+function buildForumPromptContext(settings, feedType = state.activeFeed) {
+  const customTab = findCustomTabInSettings(settings, feedType);
+  if (!customTab) {
+    return {
+      customTab: null,
+      timeAwarenessText: "",
+      backgroundReferenceText: "",
+      supplementalTopicTexts: [],
+      repostSource: null
+    };
+  }
+
+  const bubbleContext = buildCustomTabBubbleContext(customTab);
+  const insContext = buildCustomTabInsContext(customTab);
+  return {
+    customTab,
+    timeAwarenessText: buildCustomTabTimeAwarenessContext(customTab),
+    backgroundReferenceText: buildCustomTabWorldbookContext(customTab),
+    supplementalTopicTexts: [bubbleContext.text, insContext.text].filter(Boolean),
+    repostSource: insContext.repostSource || null
+  };
+}
+
+function formatRepostSourceForPrompt(source) {
+  const normalized = normalizeRepostSource(source);
+  if (!normalized) {
+    return "";
+  }
+  return [
+    `原帖用户：${normalized.displayName} ${normalized.handle}`,
+    normalized.time ? `原帖时间：${normalized.time}` : "",
+    normalized.text ? `原帖正文：${normalized.text}` : "原帖正文：这是一条以图片为主的帖子。",
+    normalized.tags.length ? `原帖标签：${normalized.tags.join(" ")}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function getMountedInsRepostSource(settings, feedType = state.activeFeed) {
+  return buildForumPromptContext(settings, feedType).repostSource || null;
+}
+
+function buildCustomTabSourceText(tab, options = {}) {
+  if (!tab || typeof tab !== "object") {
+    return "";
+  }
+  const {
+    includeAudience = true,
+    includeDiscussionText = true,
+    includeHotTopic = true
+  } = options;
+  const sections = [];
+  const audience = String(tab.audience || "").trim();
+  const discussionText = String(tab.discussionText || tab.text || "").trim();
+  const hotTopic = String(tab.hotTopic || "").trim();
+
+  if (includeAudience && audience) {
+    sections.push(`论坛活跃用户定位：${audience}`);
+  }
+  if (includeDiscussionText && discussionText) {
+    sections.push(`论坛长期讨论背景：${discussionText}`);
+  }
+  if (includeHotTopic && hotTopic) {
+    sections.push(`论坛当前核心热点：${hotTopic}`);
+  }
+
+  return sections.join("\n");
+}
+
+function buildCustomTabTopicSeedText(settings, feedType = state.activeFeed) {
+  const customTab = findCustomTabInSettings(settings, feedType);
+  if (!customTab) {
+    return "";
+  }
+  return [
+    String(customTab.hotTopic || "").trim(),
+    String(customTab.discussionText || customTab.text || "").trim(),
+    String(customTab.name || "").trim()
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function normalizeApiMode(mode) {
@@ -1205,6 +1701,40 @@ function renderPostMedia(post) {
   `;
 }
 
+function renderRepostSourceBlock(repostSource) {
+  const source = normalizeRepostSource(repostSource);
+  if (!source) {
+    return "";
+  }
+
+  return `
+    <section class="repost-card">
+      <div class="repost-card__head">
+        <strong>${escapeHtml(source.displayName)}</strong>
+        <span class="post-handle">${escapeHtml(source.handle)}</span>
+        ${source.time ? `<span class="post-time">· ${escapeHtml(source.time)}</span>` : ""}
+      </div>
+      ${source.text ? `<p class="repost-card__text">${escapeHtml(source.text)}</p>` : ""}
+      ${
+        source.imageDataUrl
+          ? `
+            <div class="repost-card__media">
+              <img class="post-media__image" src="${escapeHtml(source.imageDataUrl)}" alt="转发原帖图片" />
+            </div>
+          `
+          : ""
+      }
+      ${
+        source.tags.length
+          ? `<p class="repost-card__tags">${source.tags
+              .map((tag) => `<span class="post-tag">${escapeHtml(tag)}</span>`)
+              .join(" ")}</p>`
+          : ""
+      }
+    </section>
+  `;
+}
+
 function renderTranslationBlock(translationText, translatedTags = []) {
   const text = String(translationText || "").trim();
   const tags = normalizeTags(translatedTags, 5);
@@ -1853,18 +2383,24 @@ function buildPrompt(
 ) {
   const resolvedFeedType = getCurrentContentFeed(feedType);
   const feedLabel = getFeedLabel(resolvedFeedType);
+  const customTab = findCustomTabInSettings(settings, resolvedFeedType);
+  const forumPromptContext = buildForumPromptContext(settings, resolvedFeedType);
   const feedSource = buildFeedSourceText(settings, resolvedFeedType).trim();
-  const feedInstruction = `当前“${feedLabel}”页签文本：`;
+  const feedInstruction = `当前论坛讨论区「${feedLabel}」设定：`;
   const resolvedSource =
     feedSource ||
-    "暂无页签文本，请结合世界观与实时讨论语境自行展开内容。";
+    "暂无讨论区设定，请结合世界观与实时讨论语境自行展开内容。";
   const historyAvoidanceText = buildFeedHistoryAvoidanceText(resolvedFeedType, count);
+  const dominantHotTopicInstruction = String(customTab?.hotTopic || "").trim()
+    ? `这个讨论区当前存在一个主导性热点：${customTab.hotTopic}。本轮生成的绝大部分帖子都应围绕这个热点展开，但仍要拆成不同立场、不同情绪、不同细节与不同争议点。`
+    : "如果这个讨论区没有单一主导热点，可围绕长期讨论背景自由展开。";
 
   return [
     "你是一个负责生成 X 风格中文讨论流的内容助手。",
-    `当前目标分页签是“${feedLabel}”。`,
+    `当前目标论坛讨论区是“${feedLabel}”。`,
     `请严格输出 JSON 数组，并且包含 ${count} 个对象，不要输出额外解释。`,
     "每个对象必须包含以下字段：displayName, handle, text, tags, replies, reposts, likes, views。",
+    "如需表现转发/引用帖子，可额外输出可选字段 repostSource；其中应包含 displayName, handle, text, time, tags，未使用时可省略。",
     "输出必须是可以直接被 JSON.parse 解析的合法 JSON，所有字符串都必须使用双引号包裹。",
     "text 需要像 X 首页上的真实讨论帖，长度控制在 50 到 300 字之间，语气自然、有观点、有轻微冲突感。",
     "不同帖子需要分别模拟来自中国、日本、韩国、美国社区的用户发言风格。",
@@ -1872,20 +2408,33 @@ function buildPrompt(
     "text 要避免整段大段文字，尽量拆成短句；每条至少 2 段，可使用换行或空一行让版式更像真人发帖。",
     "tags 必须是数组，至少 2 个、最多 5 个标签；每个标签都必须以 # 开头，例如 #榜单、#行业洞察。",
     "这些标签必须根据该条内容本身提炼，不能空泛重复；text 字段里不要重复输出标签行，标签只放在 tags 数组中。",
-    "严禁直接复制、引用或轻微改写世界观文本或页签文本里的原句。你需要先理解这些设定，再把它们转化成更口语化、更具体的讨论表达。",
+    "严禁直接复制、引用或轻微改写世界观文本或论坛设定里的原句。你需要先理解这些设定，再把它们转化成更口语化、更具体的讨论表达。",
     "所有内容都应遵循以下世界观：",
     settings.worldview || DEFAULT_SETTINGS.worldview,
     feedInstruction,
     resolvedSource,
+    forumPromptContext.timeAwarenessText,
+    forumPromptContext.backgroundReferenceText,
+    dominantHotTopicInstruction,
+    forumPromptContext.supplementalTopicTexts.length
+      ? `补充即时讨论语境（重要程度接近当前主导热点）：\n${forumPromptContext.supplementalTopicTexts.join(
+          "\n\n"
+        )}`
+      : "",
+    forumPromptContext.repostSource
+      ? "如果需要围绕用户最近一条论坛动态展开，请把它作为被转发原帖来写，再在外层加上不同用户各自的评论。"
+      : "",
     historyAvoidanceText || "如果没有历史缓存，可自由生成，但仍要让每条帖子讨论方向明显不同。",
     `请保证 ${count} 条内容不重复，角度不同；即使围绕同一大主题，也要主动拆出不同争议点、不同立场、不同细节切口。`
-  ].join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function buildFeedSourceText(settings, feedType = state.activeFeed) {
   const customTab = findCustomTabInSettings(settings, feedType);
   if (customTab) {
-    return customTab.text || "";
+    return buildCustomTabSourceText(customTab);
   }
   return "";
 }
@@ -1905,7 +2454,8 @@ function buildFeedHistoryAvoidanceText(
   const summaries = historyPosts.map((post, index) => {
     const tags = normalizeTags(post.tags || [], 3).join(" ");
     const baseSummary =
-      String(post.text || "").trim() || (post.imageDataUrl ? "带图帖子" : "已有历史讨论");
+      String(post.text || post.repostSource?.text || "").trim() ||
+      (post.imageDataUrl || post.repostSource?.imageDataUrl ? "带图帖子" : "已有历史讨论");
     const summaryText = truncate(
       baseSummary.replace(/\s+/g, " "),
       90
@@ -1914,7 +2464,7 @@ function buildFeedHistoryAvoidanceText(
   });
 
   return [
-    "下面是当前页签最近已缓存、应尽量避开的讨论方向：",
+    "下面是当前讨论区最近已缓存、应尽量避开的讨论方向：",
     ...summaries,
     `新的 ${count} 条帖子请主动换争议点、换关注对象、换判断维度，不要沿着以上内容重复改写。`
   ].join("\n");
@@ -1926,10 +2476,25 @@ function buildCustomTabsSummary(settings) {
     return "暂无自定义页签。";
   }
   return tabs
-    .map(
-      (tab) =>
-        `${tab.name || "自定义页签"}：${tab.text?.trim() || "尚未填写内容"}`
-    )
+    .map((tab) => {
+      const worldbookNames = getMountedWorldbookEntries(tab).map((entry) => entry.name);
+      return [
+        `${tab.name || "自定义页签"}：`,
+        tab.audience ? `用户定位：${tab.audience}` : "",
+        tab.discussionText ? `页签文本：${tab.discussionText}` : "",
+        tab.hotTopic ? `页签热点：${tab.hotTopic}` : "",
+        tab.timeAwareness ? "时间感知：开启" : "",
+        worldbookNames.length ? `挂载世界书：${worldbookNames.join("、")}` : "",
+        tab.bubbleFocusEnabled
+          ? `Bubble 关注：开启（${normalizeContextFocusMinutes(tab.bubbleFocusMinutes)} 分钟内）`
+          : "",
+        tab.insFocusEnabled
+          ? `INS 关注：开启（${normalizeContextFocusMinutes(tab.insFocusMinutes)} 分钟内）`
+          : ""
+      ]
+        .filter(Boolean)
+        .join("\n");
+    })
     .join("\n");
 }
 
@@ -1942,16 +2507,22 @@ function buildReplyPrompt(
   count = settings.replyCount || DEFAULT_REPLY_COUNT
 ) {
   const feedLabel = getFeedLabel(feedType);
+  const customTab = findCustomTabInSettings(settings, feedType);
+  const forumPromptContext = buildForumPromptContext(settings, feedType);
   const targetText = parentReply ? parentReply.text : rootPost.text;
   const promptTitle = parentReply ? "楼中楼回复" : "主楼回复";
   const feedSourceText = buildFeedSourceText(settings, feedType);
   const rootHasImage = Boolean(rootPost?.imageDataUrl);
-  const resolvedRootText = String(rootPost?.text || "").trim() || "这是一条仅包含图片的帖子。";
+  const resolvedRootText =
+    String(rootPost?.text || "").trim() ||
+    (rootPost?.repostSource
+      ? "这是一条转发/引用帖子，本体评论为空。"
+      : "这是一条仅包含图片的帖子。");
   const resolvedTargetText = String(targetText || "").trim() || resolvedRootText;
 
   return [
     `你正在生成 X 风格中文讨论串中的${promptTitle}。`,
-    `当前所属分页签是“${feedLabel}”。`,
+    `当前所属论坛讨论区是“${feedLabel}”。`,
     "请严格输出 JSON 数组，不要输出额外解释。",
     `请生成 ${count} 条回复，每条都必须是不同用户的口吻。`,
     "每个对象必须包含以下字段：displayName, handle, text, likes, replies。",
@@ -1962,24 +2533,39 @@ function buildReplyPrompt(
     "回复生成优先级：",
     "1. 首先直接回应当前帖子或上一层回复的具体内容，抓住文本里的观点、情绪、判断、细节或矛盾点。",
     "2. 识别当前发帖用户的人设，让回复看起来像是在对这样一个具体的人说话，而不是对匿名文本发言。",
-    "3. 再结合整体世界观与自定义页签文本补充背景判断，但这些背景只能辅助，不能盖过帖子内容本身。",
+    "3. 再结合整体世界观与论坛讨论区设定补充背景判断，但这些背景只能辅助，不能盖过帖子内容本身。",
     "当前发帖用户人设：",
     profile?.personaPrompt || DEFAULT_PROFILE.personaPrompt,
     "整体世界观：",
     settings.worldview || DEFAULT_SETTINGS.worldview,
-    "当前页签参考文本：",
-    feedSourceText || "尚未提供页签文本，请根据帖子语境自行补充。",
+    "当前论坛讨论区设定：",
+    feedSourceText || "尚未提供讨论区设定，请根据帖子语境自行补充。",
+    forumPromptContext.timeAwarenessText,
+    forumPromptContext.backgroundReferenceText,
+    String(customTab?.hotTopic || "").trim()
+      ? `当前这个讨论区的主导热点：${customTab.hotTopic}`
+      : "",
+    forumPromptContext.supplementalTopicTexts.length
+      ? `补充即时讨论语境（重要程度接近当前主导热点）：\n${forumPromptContext.supplementalTopicTexts.join(
+          "\n\n"
+        )}`
+      : "",
     rootHasImage
       ? "主楼附带了一张图片；如果模型能看到图片，请把图片内容也一起纳入理解和回复。"
       : "主楼没有附图。",
+    rootPost?.repostSource
+      ? `当前主楼是一条转发/引用帖子，请同时理解被转发的原帖：\n${formatRepostSourceForPrompt(
+          rootPost.repostSource
+        )}`
+      : "",
     "主楼内容：",
     resolvedRootText,
     parentReply ? "当前正在回复的上一层内容：" : "当前需要围绕主楼展开讨论的内容：",
     resolvedTargetText,
-    "当前板块参考素材：",
-    buildFeedSourceText(settings, feedType),
     "请避免重复句式，并保持楼中讨论的连贯性。"
-  ].join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function getReplyPreviewSeedPost(settings) {
@@ -1995,7 +2581,7 @@ function getReplyPreviewSeedPost(settings) {
   }
 
   const resolvedFeedType = getCurrentContentFeed();
-  const topicCandidates = parseTopics(buildFeedSourceText(settings, resolvedFeedType));
+  const topicCandidates = parseTopics(buildCustomTabTopicSeedText(settings, resolvedFeedType));
   const topic = topicCandidates[0] || getFeedLabel(resolvedFeedType) || "当前讨论";
   return {
     id: "reply_preview_seed",
@@ -2557,7 +3143,7 @@ function ensureDistinctGeneratedPosts(
 
 function normalizePost(item, index = 0, fallbackFeedType = DEFAULT_CONTENT_FEED) {
   const [fallbackName, fallbackHandle] = FEED_NAMES[index % FEED_NAMES.length];
-  const stableSeed = `${item?.text || ""}-${item?.displayName || fallbackName}-${index}`;
+  const stableSeed = `${item?.text || ""}-${item?.displayName || fallbackName}-${item?.repostSource?.id || ""}-${index}`;
   const incomingFeedType =
     typeof item?.feedType === "string" ? String(item.feedType).trim() : "";
   const normalizedIncomingFeedType = incomingFeedType === "hot" ? "entertainment" : incomingFeedType;
@@ -2578,9 +3164,10 @@ function normalizePost(item, index = 0, fallbackFeedType = DEFAULT_CONTENT_FEED)
         ? ""
         : String(item.text);
   const imageDataUrl = String(item?.imageDataUrl || item?.imageUrl || "").trim();
+  const repostSource = normalizeRepostSource(item?.repostSource || null, item?.id || "");
   const normalizedText = rawText.trim()
     ? truncate(rawText, MAX_POST_TEXT_LENGTH)
-    : imageDataUrl
+    : imageDataUrl || repostSource
       ? ""
       : "讨论内容生成中。";
   const createdAt = Number(item?.createdAt) || Date.now() + index;
@@ -2606,7 +3193,8 @@ function normalizePost(item, index = 0, fallbackFeedType = DEFAULT_CONTENT_FEED)
     createdAt,
     edited: Boolean(item?.edited),
     authorOwned: Boolean(item?.authorOwned),
-    feedType: resolvedFeedType
+    feedType: resolvedFeedType,
+    repostSource
   };
 }
 
@@ -2622,6 +3210,7 @@ function renderFeedPost(post, bucketName = state.activeFeed) {
   const tagMarkup = renderPostTags(post, post.feedType || actualBucket);
   const translationMarkup = renderTranslationBlock(post.translationZh, post.translatedTags);
   const mediaMarkup = renderPostMedia(post);
+  const repostMarkup = renderRepostSourceBlock(post.repostSource);
   const translateLabel = isPostTranslating(post.id, actualBucket)
     ? "翻译中..."
     : post.translationZh
@@ -2641,6 +3230,7 @@ function renderFeedPost(post, bucketName = state.activeFeed) {
             <span class="post-time">· ${escapeHtml(post.time)}</span>
           </div>
           ${post.text ? `<p class="post-text">${escapeHtml(post.text)}</p>` : ""}
+          ${repostMarkup}
           ${mediaMarkup}
           ${tagMarkup}
           ${translationMarkup}
@@ -2657,6 +3247,11 @@ function renderFeedPost(post, bucketName = state.activeFeed) {
               isPostTranslating(post.id, actualBucket) ? "disabled" : ""
             }>
               ${translateLabel}
+            </button>
+            <button class="action-link" type="button" data-action="repost-post" data-bucket="${escapeHtml(
+              actualBucket
+            )}" data-post-id="${escapeHtml(post.id)}">
+              转发
             </button>
             <span>回复 ${post.replies}</span>
             <span>转发 ${post.reposts}</span>
@@ -3190,6 +3785,7 @@ function renderThreadModalRootPost(post, bucketName, threadState = null) {
   const tagMarkup = renderPostTags(post, post.feedType || bucketName);
   const translationMarkup = renderTranslationBlock(post.translationZh, post.translatedTags);
   const mediaMarkup = renderPostMedia(post);
+  const repostMarkup = renderRepostSourceBlock(post.repostSource);
   const isLoading = isPostTranslating(post.id, bucketName);
   const translateLabel = isLoading ? "翻译中..." : post.translationZh ? "重新翻译" : "翻译";
   const canReply = Boolean(threadState) && !threadState.loading;
@@ -3205,6 +3801,7 @@ function renderThreadModalRootPost(post, bucketName, threadState = null) {
           <span class="post-time">· ${escapeHtml(post.time)}</span>
         </div>
         ${post.text ? `<p class="post-text">${escapeHtml(post.text)}</p>` : ""}
+        ${repostMarkup}
         ${mediaMarkup}
         ${tagMarkup}
         ${translationMarkup}
@@ -3217,6 +3814,9 @@ function renderThreadModalRootPost(post, bucketName, threadState = null) {
           <button class="action-link" type="button" data-action="translate-post" data-bucket="${escapeHtml(
             bucketName
           )}" data-post-id="${escapeHtml(post.id)}" ${isLoading ? "disabled" : ""}>${translateLabel}</button>
+          <button class="action-link" type="button" data-action="repost-post" data-bucket="${escapeHtml(
+            bucketName
+          )}" data-post-id="${escapeHtml(post.id)}">转发</button>
           <span>回复 ${post.replies}</span>
           <span>转发 ${post.reposts}</span>
           <span>喜欢 ${post.likes}</span>
@@ -3546,14 +4146,97 @@ function setCustomTabFormStatus(message, tone = "") {
   }
 }
 
+function renderCustomTabFormWorldbookSelector(selectedIds = []) {
+  if (!customTabWorldbookListEl) {
+    return;
+  }
+  const library = loadWorldbookLibrary();
+  if (!library.entries.length) {
+    customTabWorldbookListEl.innerHTML =
+      '<div class="custom-tab-mount-empty">还没有世界书，可先到 Message → 我 → 世界书 创建。</div>';
+    return;
+  }
+
+  const selectedIdSet = new Set(normalizeMountedIds(selectedIds));
+  customTabWorldbookListEl.innerHTML = library.entries
+    .map((entry) => {
+      const categoryName =
+        library.categories.find((category) => category.id === entry.categoryId)?.name || "未分类";
+      return `
+        <label class="custom-tab-mount-option">
+          <input
+            type="checkbox"
+            value="${escapeHtml(entry.id)}"
+            ${selectedIdSet.has(entry.id) ? "checked" : ""}
+          />
+          <span>${escapeHtml(entry.name)}<small>${escapeHtml(categoryName)}</small></span>
+        </label>
+      `;
+    })
+    .join("");
+}
+
+function updateCustomTabFormAdvancedState() {
+  if (customTabBubbleFocusMinutesInput) {
+    customTabBubbleFocusMinutesInput.disabled = !Boolean(customTabBubbleFocusEnabledInput?.checked);
+  }
+  if (customTabInsFocusMinutesInput) {
+    customTabInsFocusMinutesInput.disabled = !Boolean(customTabInsFocusEnabledInput?.checked);
+  }
+}
+
+function getCurrentCustomTabFormDraft() {
+  const worldbookIds = customTabWorldbookListEl
+    ? [...customTabWorldbookListEl.querySelectorAll("input[type='checkbox']:checked")]
+        .map((input) => (input instanceof HTMLInputElement ? String(input.value || "").trim() : ""))
+        .filter(Boolean)
+    : [];
+  return {
+    name: String(customTabNameInput?.value || "").trim().slice(0, 10) || "自定义页签",
+    audience: String(customTabAudienceInput?.value || "").trim(),
+    discussionText: String(customTabTextInput?.value || "").trim(),
+    hotTopic: String(customTabHotTopicInput?.value || "").trim(),
+    text: String(customTabTextInput?.value || "").trim(),
+    timeAwareness: Boolean(customTabTimeAwarenessInput?.checked),
+    worldbookIds,
+    bubbleFocusEnabled: Boolean(customTabBubbleFocusEnabledInput?.checked),
+    bubbleFocusMinutes: normalizeContextFocusMinutes(customTabBubbleFocusMinutesInput?.value),
+    insFocusEnabled: Boolean(customTabInsFocusEnabledInput?.checked),
+    insFocusMinutes: normalizeContextFocusMinutes(customTabInsFocusMinutesInput?.value)
+  };
+}
+
 function resetCustomTabForm(preserveStatus = false) {
   state.customTabEditingId = "";
   if (customTabNameInput) {
     customTabNameInput.value = "";
   }
+  if (customTabAudienceInput) {
+    customTabAudienceInput.value = "";
+  }
   if (customTabTextInput) {
     customTabTextInput.value = "";
   }
+  if (customTabHotTopicInput) {
+    customTabHotTopicInput.value = "";
+  }
+  if (customTabTimeAwarenessInput) {
+    customTabTimeAwarenessInput.checked = false;
+  }
+  renderCustomTabFormWorldbookSelector([]);
+  if (customTabBubbleFocusEnabledInput) {
+    customTabBubbleFocusEnabledInput.checked = false;
+  }
+  if (customTabBubbleFocusMinutesInput) {
+    customTabBubbleFocusMinutesInput.value = String(DEFAULT_CONTEXT_FOCUS_MINUTES);
+  }
+  if (customTabInsFocusEnabledInput) {
+    customTabInsFocusEnabledInput.checked = false;
+  }
+  if (customTabInsFocusMinutesInput) {
+    customTabInsFocusMinutesInput.value = String(DEFAULT_CONTEXT_FOCUS_MINUTES);
+  }
+  updateCustomTabFormAdvancedState();
   if (!preserveStatus) {
     setCustomTabFormStatus("");
   }
@@ -3603,9 +4286,36 @@ function startCustomTabEdit(tabId) {
   if (customTabNameInput) {
     customTabNameInput.value = tab.name || "";
   }
-  if (customTabTextInput) {
-    customTabTextInput.value = tab.text || "";
+  if (customTabAudienceInput) {
+    customTabAudienceInput.value = tab.audience || "";
   }
+  if (customTabTextInput) {
+    customTabTextInput.value = tab.discussionText || tab.text || "";
+  }
+  if (customTabHotTopicInput) {
+    customTabHotTopicInput.value = tab.hotTopic || "";
+  }
+  if (customTabTimeAwarenessInput) {
+    customTabTimeAwarenessInput.checked = Boolean(tab.timeAwareness);
+  }
+  renderCustomTabFormWorldbookSelector(tab.worldbookIds || []);
+  if (customTabBubbleFocusEnabledInput) {
+    customTabBubbleFocusEnabledInput.checked = Boolean(tab.bubbleFocusEnabled);
+  }
+  if (customTabBubbleFocusMinutesInput) {
+    customTabBubbleFocusMinutesInput.value = String(
+      normalizeContextFocusMinutes(tab.bubbleFocusMinutes)
+    );
+  }
+  if (customTabInsFocusEnabledInput) {
+    customTabInsFocusEnabledInput.checked = Boolean(tab.insFocusEnabled);
+  }
+  if (customTabInsFocusMinutesInput) {
+    customTabInsFocusMinutesInput.value = String(
+      normalizeContextFocusMinutes(tab.insFocusMinutes)
+    );
+  }
+  updateCustomTabFormAdvancedState();
   setCustomTabFormStatus(`正在编辑“${tab.name || "自定义页签"}”`, "");
   renderCustomTabsManager();
 }
@@ -3665,13 +4375,19 @@ function renderCustomTabsManager() {
     return;
   }
 
+  const editingTab = state.customTabEditingId ? getCustomTab(state.customTabEditingId) : null;
+  renderCustomTabFormWorldbookSelector(editingTab?.worldbookIds || []);
+
   if (!state.customTabs.length) {
     customTabsListEl.innerHTML =
       '<p class="empty-state">还没有自定义页签，使用下方表单新增。</p>';
   } else {
     customTabsListEl.innerHTML = state.customTabs
       .map((tab) => {
-        const snippet = truncate(tab.text || "尚未设置文本", 88);
+        const snippet = truncate(
+          tab.hotTopic || tab.discussionText || tab.text || tab.audience || "尚未设置内容",
+          88
+        );
         return `
           <article class="custom-tab-item" data-tab-id="${escapeHtml(tab.id)}" draggable="true">
             <div>
@@ -3704,16 +4420,70 @@ function renderCustomTabsManager() {
   const reachedLimit = state.customTabs.length >= CUSTOM_TAB_LIMIT;
   const disableCreation = !isEditing && reachedLimit;
   const saveButton = customTabForm.querySelector("#custom-tab-save-btn");
-  [customTabNameInput, customTabTextInput, saveButton].forEach((field) => {
+  [
+    customTabNameInput,
+    customTabAudienceInput,
+    customTabTextInput,
+    customTabHotTopicInput,
+    customTabTimeAwarenessInput,
+    customTabBubbleFocusEnabledInput,
+    customTabBubbleFocusMinutesInput,
+    customTabInsFocusEnabledInput,
+    customTabInsFocusMinutesInput,
+    saveButton
+  ].forEach((field) => {
     if (field) {
       field.disabled = disableCreation;
     }
   });
+  if (customTabWorldbookListEl) {
+    customTabWorldbookListEl
+      .querySelectorAll("input[type='checkbox']")
+      .forEach((input) => {
+        if (input instanceof HTMLInputElement) {
+          input.disabled = disableCreation;
+        }
+      });
+  }
+  if (saveButton) {
+    saveButton.textContent = isEditing ? "更新页签" : "保存页签";
+  }
+  updateCustomTabFormAdvancedState();
   if (disableCreation) {
     setCustomTabFormStatus("已达到自定义页签上限，请删除后再新增。", "error");
   } else if (!isEditing && customTabFormStatusEl?.classList.contains("error")) {
     setCustomTabFormStatus("");
   }
+}
+
+function renderCustomTabWorldbookSelector(tab) {
+  const library = loadWorldbookLibrary();
+  if (!library.entries.length) {
+    return '<div class="custom-tab-mount-empty">还没有世界书，可先到 Message → 我 → 世界书 创建。</div>';
+  }
+
+  const selectedIds = new Set(normalizeMountedIds(tab?.worldbookIds || []));
+  return `
+    <div class="custom-tab-mount-list">
+      ${library.entries
+        .map((entry) => {
+          const categoryName =
+            library.categories.find((category) => category.id === entry.categoryId)?.name || "未分类";
+          return `
+            <label class="custom-tab-mount-option">
+              <input
+                type="checkbox"
+                data-field="worldbookIds"
+                value="${escapeHtml(entry.id)}"
+                ${selectedIds.has(entry.id) ? "checked" : ""}
+              />
+              <span>${escapeHtml(entry.name)}<small>${escapeHtml(categoryName)}</small></span>
+            </label>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
 }
 
 function renderCustomTabSettings() {
@@ -3728,11 +4498,8 @@ function renderCustomTabSettings() {
   }
 
   customTabSettingsEmptyEl.style.display = "none";
-  const currentSettings = getCurrentSettings();
-  const postCount = currentSettings.homeCount || DEFAULT_POST_COUNT;
   customTabSettingsListEl.innerHTML = state.customTabs
     .map((tab) => {
-      const promptPreview = buildPrompt(currentSettings, tab.id, postCount);
       return `
         <article class="custom-tab-settings-item" data-custom-tab-id="${escapeHtml(tab.id)}">
           <div class="custom-tab-settings-head">
@@ -3744,13 +4511,77 @@ function renderCustomTabSettings() {
             <input type="text" data-field="name" maxlength="10" value="${escapeHtml(tab.name || "")}" />
           </label>
           <label>
-            页签文本
-            <textarea data-field="text" rows="4" placeholder="输入该页签要聚焦的主题、设定或提示。">${escapeHtml(
-              tab.text || ""
+            页签用户定位
+            <textarea data-field="audience" rows="3" placeholder="输入这个讨论区里常见活跃用户的身份与情绪。">${escapeHtml(
+              tab.audience || ""
             )}</textarea>
           </label>
-          <p class="tag-stat-meta">Prompt 预览</p>
-          <pre class="prompt-preview custom-tab-prompt">${escapeHtml(promptPreview)}</pre>
+          <label>
+            页签文本
+            <textarea data-field="discussionText" rows="4" placeholder="输入整体讨论内容，也可以补充历史讨论点。">${escapeHtml(
+              tab.discussionText || tab.text || ""
+            )}</textarea>
+          </label>
+          <label>
+            页签热点
+            <textarea data-field="hotTopic" rows="4" placeholder="可留空；如果填写，这个热点会占据讨论的大部分篇幅。">${escapeHtml(
+              tab.hotTopic || ""
+            )}</textarea>
+          </label>
+          <label class="custom-tab-toggle-row">
+            <span>
+              <strong>时间感知</strong>
+              <small>开启后，会把本地日期、星期和当前时间带给 AI，并结合页签文本/热点判断时效性。</small>
+            </span>
+            <input type="checkbox" data-field="timeAwareness" ${tab.timeAwareness ? "checked" : ""} />
+          </label>
+          <section class="custom-tab-settings-group">
+            <div class="custom-tab-settings-group__head">
+              <strong>挂载世界书</strong>
+              <small>仅作背景信息参考，禁止单独提起。</small>
+            </div>
+            ${renderCustomTabWorldbookSelector(tab)}
+          </section>
+          <div class="custom-tab-settings-grid">
+            <label class="custom-tab-toggle-row">
+              <span>
+                <strong>挂载 Bubble</strong>
+                <small>仅在最近一轮 Bubble 消息落在时间窗内时带给 AI。</small>
+              </span>
+              <input type="checkbox" data-field="bubbleFocusEnabled" ${tab.bubbleFocusEnabled ? "checked" : ""} />
+            </label>
+            <label>
+              Bubble 关注时间（分钟）
+              <input
+                type="number"
+                min="1"
+                max="${MAX_CONTEXT_FOCUS_MINUTES}"
+                data-field="bubbleFocusMinutes"
+                value="${escapeHtml(String(normalizeContextFocusMinutes(tab.bubbleFocusMinutes)))}"
+                ${tab.bubbleFocusEnabled ? "" : "disabled"}
+              />
+            </label>
+          </div>
+          <div class="custom-tab-settings-grid">
+            <label class="custom-tab-toggle-row">
+              <span>
+                <strong>挂载 INS</strong>
+                <small>仅在最近一条论坛动态落在时间窗内时带给 AI，并按转发原帖来讨论。</small>
+              </span>
+              <input type="checkbox" data-field="insFocusEnabled" ${tab.insFocusEnabled ? "checked" : ""} />
+            </label>
+            <label>
+              INS 关注时间（分钟）
+              <input
+                type="number"
+                min="1"
+                max="${MAX_CONTEXT_FOCUS_MINUTES}"
+                data-field="insFocusMinutes"
+                value="${escapeHtml(String(normalizeContextFocusMinutes(tab.insFocusMinutes)))}"
+                ${tab.insFocusEnabled ? "" : "disabled"}
+              />
+            </label>
+          </div>
         </article>
       `;
     })
@@ -3761,12 +4592,14 @@ function handleCustomTabFormSubmit() {
   if (!customTabForm) {
     return;
   }
-  const rawName = customTabNameInput?.value || "";
-  const rawText = customTabTextInput?.value || "";
-  const name = rawName.trim().slice(0, 10) || "自定义页签";
-  const text = rawText.trim();
+  const draft = getCurrentCustomTabFormDraft();
+  const { name, audience, discussionText: text, hotTopic } = draft;
+  if (!audience) {
+    setCustomTabFormStatus("请填写页签用户定位，用于告诉 AI 这个论坛里活跃的是什么人。", "error");
+    return;
+  }
   if (!text) {
-    setCustomTabFormStatus("请填写页签文本，用于生成该页签的讨论内容。", "error");
+    setCustomTabFormStatus("请填写页签文本，用于生成该讨论区的整体讨论内容。", "error");
     return;
   }
 
@@ -3776,8 +4609,7 @@ function handleCustomTabFormSubmit() {
       tab.id === tabId
         ? {
             ...tab,
-            name,
-            text
+            ...draft
           }
         : tab
     );
@@ -3793,7 +4625,10 @@ function handleCustomTabFormSubmit() {
   }
 
   const tabId = createCustomTabId(name);
-  const nextTabs = [...state.customTabs, { id: tabId, name, text }];
+  const nextTabs = [
+    ...state.customTabs,
+    { id: tabId, ...draft }
+  ];
   commitCustomTabs(nextTabs);
   switchHomeFeed(tabId);
   setCustomTabFormStatus("自定义页签已保存。", "success");
@@ -3802,7 +4637,11 @@ function handleCustomTabFormSubmit() {
 
 function handleCustomTabSettingsInput(event) {
   const target = event.target;
-  if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLTextAreaElement)) {
+  if (
+    !(target instanceof HTMLInputElement) &&
+    !(target instanceof HTMLTextAreaElement) &&
+    !(target instanceof HTMLSelectElement)
+  ) {
     return;
   }
   const wrapper = target.closest("[data-custom-tab-id]");
@@ -3820,11 +4659,23 @@ function handleCustomTabSettingsInput(event) {
     return;
   }
 
-  const value =
-    field === "name" ? target.value.trim().slice(0, 10) || "自定义页签" : target.value;
+  let value = target.value;
+  if (field === "name") {
+    value = target.value.trim().slice(0, 10) || "自定义页签";
+  } else if (field === "worldbookIds") {
+    value = [...wrapper.querySelectorAll('input[data-field="worldbookIds"]:checked')]
+      .map((input) => (input instanceof HTMLInputElement ? String(input.value || "").trim() : ""))
+      .filter(Boolean);
+  } else if (target instanceof HTMLInputElement && target.type === "checkbox") {
+    value = target.checked;
+  } else if (field === "bubbleFocusMinutes" || field === "insFocusMinutes") {
+    value = normalizeContextFocusMinutes(target.value);
+    target.value = String(value);
+  }
   state.customTabs[index] = {
     ...state.customTabs[index],
-    [field]: value
+    [field]: value,
+    ...(field === "discussionText" ? { text: value } : {})
   };
   state.settings.customTabs = [...state.customTabs];
   persistSettings(state.settings);
@@ -3836,17 +4687,19 @@ function handleCustomTabSettingsInput(event) {
     renderHomeTabs();
     renderCustomTabsManager();
   }
-
-  const currentSettings = getCurrentSettings();
-  const promptPreview = buildPrompt(
-    currentSettings,
-    tabId,
-    currentSettings.homeCount || DEFAULT_POST_COUNT
-  );
-  const previewEl = wrapper.querySelector(".custom-tab-prompt");
-  if (previewEl) {
-    previewEl.textContent = promptPreview;
+  if (field === "bubbleFocusEnabled") {
+    const minutesInput = wrapper.querySelector('[data-field="bubbleFocusMinutes"]');
+    if (minutesInput instanceof HTMLInputElement) {
+      minutesInput.disabled = !Boolean(value);
+    }
   }
+  if (field === "insFocusEnabled") {
+    const minutesInput = wrapper.querySelector('[data-field="insFocusMinutes"]');
+    if (minutesInput instanceof HTMLInputElement) {
+      minutesInput.disabled = !Boolean(value);
+    }
+  }
+
 }
 
 function getTagFilteredPosts(tag) {
@@ -3959,6 +4812,7 @@ function renderProfilePage() {
           </div>
         `;
       const tagMarkup = renderPostTags(post, post.feedType || DEFAULT_CONTENT_FEED);
+      const repostMarkup = renderRepostSourceBlock(post.repostSource);
 
       return `
         <article class="post" data-post-id="${escapeHtml(post.id)}">
@@ -3996,12 +4850,18 @@ function renderProfilePage() {
                 </div>
               </div>
               ${editorBlock}
+              ${repostMarkup}
               ${tagMarkup}
               <div class="post-actions">
                 <button class="action-link" type="button" data-action="open-thread-modal" data-bucket="profile" data-post-id="${escapeHtml(
                   post.id
                 )}">
                   查看讨论
+                </button>
+                <button class="action-link" type="button" data-action="repost-post" data-bucket="profile" data-post-id="${escapeHtml(
+                  post.id
+                )}">
+                  转发
                 </button>
                 <span>回复 ${post.replies || 0}</span>
                 <span>转发 ${post.reposts || 0}</span>
@@ -4401,7 +5261,7 @@ function findReplyNode(replies, replyId) {
 }
 
 function buildLocalPosts(settings, count = DEFAULT_POST_COUNT, feedType = DEFAULT_CONTENT_FEED) {
-  const sourceText = buildFeedSourceText(settings, feedType);
+  const sourceText = buildCustomTabTopicSeedText(settings, feedType);
   const topics = parseTopics(sourceText);
   const worldviewParts = parseWorldviewFragments(settings.worldview);
   const fallbackTopic = feedType === "entertainment" ? "文娱趋势" : getFeedLabel(feedType) || "当前讨论";
@@ -4481,9 +5341,11 @@ function createAuthoredPost(
   content,
   feedType = state.activeFeed,
   tagsInput = "",
-  imageDataUrl = ""
+  imageDataUrl = "",
+  options = {}
 ) {
   const profile = getCurrentProfile();
+  const repostSource = normalizeRepostSource(options.repostSource || null);
   const tags = normalizeTags(tagsInput, 5);
   const imageSeed = String(imageDataUrl || "").slice(0, 64);
   const createdAt = Date.now();
@@ -4500,7 +5362,8 @@ function createAuthoredPost(
       likes: 0,
       views: 1,
       time: formatForumTimestamp(createdAt),
-      createdAt
+      createdAt,
+      repostSource
     },
     0,
     feedType
@@ -4509,6 +5372,48 @@ function createAuthoredPost(
   post.authorOwned = true;
   post.feedType = feedType;
   return post;
+}
+
+function createAuthoredRepostPost(sourcePost, feedType = state.activeFeed) {
+  const repostSource = createRepostSourceSnapshotFromPost(sourcePost);
+  if (!repostSource) {
+    return null;
+  }
+  return createAuthoredPost(
+    "",
+    feedType,
+    getRenderableTags(sourcePost, sourcePost.feedType || feedType).join(" "),
+    "",
+    { repostSource }
+  );
+}
+
+function repostMainPost(postId, bucketName = state.activeFeed) {
+  const sourcePost = findPostById(postId, bucketName);
+  if (!sourcePost) {
+    setHomeStatus("未找到要转发的帖子。", "error");
+    return;
+  }
+
+  const targetFeed = sourcePost.feedType || getCurrentContentFeed(state.activeFeed);
+  const repostPost = createAuthoredRepostPost(sourcePost, targetFeed);
+  if (!repostPost) {
+    setHomeStatus("这条帖子没有可转发的正文或图片。", "error");
+    return;
+  }
+
+  state.profilePosts = [repostPost, ...state.profilePosts];
+  state.feeds[targetFeed] = [repostPost, ...(state.feeds[targetFeed] || [])].slice(0, MAX_FEED_ITEMS);
+  updatePostAcrossBuckets(sourcePost.id, (currentPost) => ({
+    ...currentPost,
+    reposts: Math.max(0, Number(currentPost.reposts) || 0) + 1
+  }));
+  persistProfilePosts(state.profilePosts);
+  persistFeeds(state.feeds);
+  renderActiveFeed();
+  renderProfilePage();
+  renderThreadModal();
+  setHomeStatus("已转发到个人主页。", "success");
 }
 
 function setHomeComposerStatus(message, tone = "") {
@@ -5071,7 +5976,7 @@ async function requestGeneratedReplies(
     requestEndpoint,
     prompt,
     requestBody,
-    `主贴：${truncate(rootPost?.text || "图片帖子", 48)}${parentReply ? " · 楼中楼" : ""}`
+    `页签：${getFeedLabel(feedType)} · 主贴：${truncate(rootPost?.text || "图片帖子", 48)}${parentReply ? " · 楼中楼" : ""}`
   );
   let logged = false;
 
@@ -5123,7 +6028,7 @@ async function requestGeneratedReplies(
       statusCode: response.status,
       responseText: rawResponse,
       responseBody: payload,
-      summary: `已生成 ${count} 条论坛回复${parentReply ? "（楼中楼）" : ""}`
+      summary: `页签：${getFeedLabel(feedType)} · 已生成 ${count} 条论坛回复${parentReply ? "（楼中楼）" : ""}`
     });
     logged = true;
     return parseGeneratedReplies(
@@ -5390,8 +6295,20 @@ async function refreshHomeFeed(trigger = "manual") {
 
     syncAuthoredPostIdentity(profile);
     refreshAuthoredPostsEngagement(profile);
+    const mountedRepostSource = getMountedInsRepostSource(settings, targetFeed);
     const normalizedIncomingPosts = ensureDistinctGeneratedPosts(
-      posts.map((item, index) => normalizePost(item, index, targetFeed)),
+      posts.map((item, index) =>
+        normalizePost(
+          mountedRepostSource
+            ? {
+                ...item,
+                repostSource: mountedRepostSource
+              }
+            : item,
+          index,
+          targetFeed
+        )
+      ),
       state.feeds[targetFeed] || [],
       settings,
       targetFeed,
@@ -5669,6 +6586,23 @@ function attachEvents() {
     });
   }
 
+  [customTabBubbleFocusEnabledInput, customTabInsFocusEnabledInput].filter(Boolean).forEach((input) => {
+    input.addEventListener("change", () => {
+      updateCustomTabFormAdvancedState();
+      if (customTabFormStatusEl?.classList.contains("error")) {
+        setCustomTabFormStatus("");
+      }
+    });
+  });
+
+  if (customTabWorldbookListEl) {
+    customTabWorldbookListEl.addEventListener("change", () => {
+      if (customTabFormStatusEl?.classList.contains("error")) {
+        setCustomTabFormStatus("");
+      }
+    });
+  }
+
   if (customTabsPanel) {
     customTabsPanel.addEventListener("click", (event) => {
       const target = getEventHTMLElement(event);
@@ -5783,6 +6717,9 @@ function attachEvents() {
     customTabSettingsListEl.addEventListener("input", (event) => {
       handleCustomTabSettingsInput(event);
     });
+    customTabSettingsListEl.addEventListener("change", (event) => {
+      handleCustomTabSettingsInput(event);
+    });
   }
 
   if (embeddedCloseBtn) {
@@ -5885,6 +6822,11 @@ function attachEvents() {
         return;
       }
 
+      if (action === "repost-post" && actionEl.dataset.postId) {
+        repostMainPost(actionEl.dataset.postId, actionEl.dataset.bucket || state.activeFeed);
+        return;
+      }
+
       if (action === "open-thread-modal" && actionEl.dataset.postId) {
         await openThreadModal(
           actionEl.dataset.postId,
@@ -5945,6 +6887,10 @@ function attachEvents() {
         await openThreadModal(actionEl.dataset.postId, "profile");
         return;
       }
+
+      if (actionEl.dataset.action === "repost-post" && actionEl.dataset.postId) {
+        repostMainPost(actionEl.dataset.postId, "profile");
+      }
     });
 
     profilePostsEl.addEventListener("input", (event) => {
@@ -5995,6 +6941,14 @@ function attachEvents() {
 
       if (action === "translate-post" && actionEl.dataset.postId) {
         await translatePostToChinese(
+          actionEl.dataset.postId,
+          actionEl.dataset.bucket || state.threadModalBucket || state.activeFeed
+        );
+        return;
+      }
+
+      if (action === "repost-post" && actionEl.dataset.postId) {
+        repostMainPost(
           actionEl.dataset.postId,
           actionEl.dataset.bucket || state.threadModalBucket || state.activeFeed
         );
@@ -6188,7 +7142,7 @@ function init() {
     )
   );
   safeRun("set settings status", () =>
-    setSettingsStatus("设置页会自动保存内容生成配置；API 参数请在下方独立管理。")
+    setSettingsStatus("设置页会自动保存内容生成配置。")
   );
   safeRun("set api status", () => setApiConfigStatus("可保存多套 API 配置，并在下方一键切换。"));
   safeRun("switch initial tab", () => switchTab(getInitialTabFromLocation()));

@@ -9,10 +9,15 @@ const PROFILE_POSTS_KEY = "x_style_generator_profile_posts_v1";
 const DIRECT_MESSAGES_KEY = "x_style_generator_direct_messages_v1";
 const MESSAGE_CONTACTS_KEY = "x_style_generator_message_contacts_v1";
 const MESSAGE_THREADS_KEY = "x_style_generator_message_threads_v1";
+const WORLD_BOOKS_KEY = "x_style_generator_message_worldbooks_v1";
 const BUBBLE_THREADS_KEY = "x_style_generator_bubble_threads_v1";
 const DEFAULT_TEMPERATURE = 0.85;
 const DEFAULT_MESSAGE_HISTORY_ROUNDS = 6;
 const MAX_MESSAGE_HISTORY_ROUNDS = 20;
+const DEFAULT_MESSAGE_REPLY_SENTENCE_LIMIT = 7;
+const MAX_MESSAGE_REPLY_SENTENCE_LIMIT = 20;
+const DEFAULT_CONTEXT_FOCUS_MINUTES = 60;
+const MAX_CONTEXT_FOCUS_MINUTES = 1440;
 const DEFAULT_WORLDVIEW =
   "这是一个强调长期主义、产品洞察和公共讨论质量的中文社交世界。用户习惯像在 X 上一样快速表达观点，但会天然追问效率、增长、AI 和平台变迁。整体语气要真实、犀利、能引发跟帖，不要写成官方通稿。";
 
@@ -26,9 +31,14 @@ const DEFAULT_SETTINGS = {
   worldview: DEFAULT_WORLDVIEW,
   messagePromptSettings: {
     historyRounds: DEFAULT_MESSAGE_HISTORY_ROUNDS,
+    replySentenceLimit: DEFAULT_MESSAGE_REPLY_SENTENCE_LIMIT,
     timeAwareness: false,
     hotTopicsEnabled: false,
     hotTopicsTabId: "",
+    hotTopicsIncludeDiscussionText: true,
+    hotTopicsIncludeHotTopic: false,
+    worldbookEnabled: false,
+    worldbookIds: [],
     forumPostFocusEnabled: false,
     bubbleFocusEnabled: false
   }
@@ -108,6 +118,9 @@ const messagesChatSettingsFormEl = document.querySelector("#messages-chat-settin
 const messagesChatHistoryRoundsInputEl = document.querySelector(
   "#messages-chat-history-rounds-input"
 );
+const messagesChatReplySentenceLimitInputEl = document.querySelector(
+  "#messages-chat-reply-sentence-limit-input"
+);
 const messagesChatTimeAwarenessInputEl = document.querySelector(
   "#messages-chat-time-awareness-input"
 );
@@ -115,6 +128,16 @@ const messagesChatHotTopicsInputEl = document.querySelector("#messages-chat-hot-
 const messagesChatHotTopicsTabSelectEl = document.querySelector(
   "#messages-chat-hot-topics-tab-select"
 );
+const messagesChatHotTopicsTextInputEl = document.querySelector(
+  "#messages-chat-hot-topics-text-input"
+);
+const messagesChatHotTopicsTopicInputEl = document.querySelector(
+  "#messages-chat-hot-topics-topic-input"
+);
+const messagesChatWorldbookInputEl = document.querySelector(
+  "#messages-chat-worldbook-enabled-input"
+);
+const messagesChatWorldbookListEl = document.querySelector("#messages-chat-worldbook-list");
 const messagesChatProfilePostFocusInputEl = document.querySelector(
   "#messages-chat-profile-post-focus-input"
 );
@@ -123,12 +146,47 @@ const messagesChatBubbleFocusInputEl = document.querySelector(
 );
 const messagesChatSettingsStatusEl = document.querySelector("#messages-chat-settings-status");
 
+const messagesWorldbookModalEl = document.querySelector("#messages-worldbook-modal");
+const messagesWorldbookCloseBtnEl = document.querySelector("#messages-worldbook-close-btn");
+const messagesWorldbookAddCategoryBtnEl = document.querySelector(
+  "#messages-worldbook-add-category-btn"
+);
+const messagesWorldbookAddEntryBtnEl = document.querySelector("#messages-worldbook-add-entry-btn");
+const messagesWorldbookStatusEl = document.querySelector("#messages-worldbook-status");
+const messagesWorldbookListEl = document.querySelector("#messages-worldbook-list");
+
+const messagesWorldbookEditorModalEl = document.querySelector("#messages-worldbook-editor-modal");
+const messagesWorldbookEditorCloseBtnEl = document.querySelector(
+  "#messages-worldbook-editor-close-btn"
+);
+const messagesWorldbookEditorTitleEl = document.querySelector(
+  "#messages-worldbook-editor-title"
+);
+const messagesWorldbookEditorFormEl = document.querySelector(
+  "#messages-worldbook-editor-form"
+);
+const messagesWorldbookNameFieldEl = document.querySelector("#messages-worldbook-name-field");
+const messagesWorldbookNameLabelEl = document.querySelector("#messages-worldbook-name-label");
+const messagesWorldbookNameInputEl = document.querySelector("#messages-worldbook-name-input");
+const messagesWorldbookCategoryFieldEl = document.querySelector(
+  "#messages-worldbook-category-field"
+);
+const messagesWorldbookCategorySelectEl = document.querySelector(
+  "#messages-worldbook-category-select"
+);
+const messagesWorldbookTextFieldEl = document.querySelector("#messages-worldbook-text-field");
+const messagesWorldbookTextInputEl = document.querySelector("#messages-worldbook-text-input");
+const messagesWorldbookEditorStatusEl = document.querySelector(
+  "#messages-worldbook-editor-status"
+);
+
 const memoryStorage = {};
 
 const state = {
   profile: loadProfile(),
   contacts: loadContacts(),
   conversations: loadConversations(),
+  worldbooks: loadWorldbooks(),
   chatPromptSettings: loadSettings().messagePromptSettings,
   activeTab: "chat",
   activeConversationId: "",
@@ -141,6 +199,11 @@ const state = {
   contactEditorAvatarImage: "",
   conversationPickerOpen: false,
   chatSettingsOpen: false,
+  worldbookManagerOpen: false,
+  worldbookEditorOpen: false,
+  worldbookEditorMode: "entry",
+  worldbookEditingEntryId: "",
+  worldbookCollapsedGroupIds: [],
   sendingConversationId: ""
 };
 
@@ -291,15 +354,47 @@ function normalizeMessagePromptSettings(source = {}) {
       1,
       MAX_MESSAGE_HISTORY_ROUNDS
     ),
+    replySentenceLimit: clampNumber(
+      normalizePositiveInteger(
+        resolved.replySentenceLimit,
+        DEFAULT_MESSAGE_REPLY_SENTENCE_LIMIT
+      ),
+      1,
+      MAX_MESSAGE_REPLY_SENTENCE_LIMIT
+    ),
     timeAwareness:
       typeof resolved.timeAwareness === "boolean"
         ? resolved.timeAwareness
         : legacyEventAwareness,
     hotTopicsEnabled: Boolean(resolved.hotTopicsEnabled),
     hotTopicsTabId: String(resolved.hotTopicsTabId || "").trim(),
+    hotTopicsIncludeDiscussionText:
+      typeof resolved.hotTopicsIncludeDiscussionText === "boolean"
+        ? resolved.hotTopicsIncludeDiscussionText
+        : true,
+    hotTopicsIncludeHotTopic: Boolean(resolved.hotTopicsIncludeHotTopic),
+    worldbookEnabled: Boolean(resolved.worldbookEnabled),
+    worldbookIds: Array.isArray(resolved.worldbookIds)
+      ? [...new Set(resolved.worldbookIds.map((item) => String(item || "").trim()).filter(Boolean))]
+      : [],
     forumPostFocusEnabled: Boolean(resolved.forumPostFocusEnabled),
     bubbleFocusEnabled: Boolean(resolved.bubbleFocusEnabled)
   };
+}
+
+function normalizeMountedIds(value) {
+  if (Array.isArray(value)) {
+    return [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))];
+  }
+  const single = String(value || "").trim();
+  return single ? [single] : [];
+}
+
+function normalizeContextFocusMinutes(value, fallback = DEFAULT_CONTEXT_FOCUS_MINUTES) {
+  return Math.min(
+    MAX_CONTEXT_FOCUS_MINUTES,
+    Math.max(1, normalizePositiveInteger(value, fallback))
+  );
 }
 
 function normalizeApiMode(mode) {
@@ -659,6 +754,92 @@ function persistContacts() {
   safeSetItem(MESSAGE_CONTACTS_KEY, JSON.stringify(state.contacts));
 }
 
+function normalizeWorldbookCategory(category, index = 0) {
+  const source = category && typeof category === "object" ? category : {};
+  const name = String(source.name || "").trim() || `分类 ${index + 1}`;
+  return {
+    id: String(source.id || `worldbook_category_${index}_${hashText(name)}`),
+    name: name.slice(0, 24),
+    createdAt: Number(source.createdAt) || Date.now(),
+    updatedAt: Number(source.updatedAt) || Date.now()
+  };
+}
+
+function normalizeWorldbookEntry(entry, categories = [], index = 0) {
+  const source = entry && typeof entry === "object" ? entry : {};
+  const name = String(source.name || "").trim() || `世界书 ${index + 1}`;
+  const categoryId = String(source.categoryId || "").trim();
+  const hasCategory = categories.some((item) => item.id === categoryId);
+  return {
+    id: String(source.id || `worldbook_entry_${index}_${hashText(name)}`),
+    name: name.slice(0, 40),
+    text: String(source.text || "").trim(),
+    categoryId: hasCategory ? categoryId : "",
+    createdAt: Number(source.createdAt) || Date.now(),
+    updatedAt: Number(source.updatedAt) || Date.now()
+  };
+}
+
+function loadWorldbooks() {
+  const raw = safeGetItem(WORLD_BOOKS_KEY);
+  if (!raw) {
+    return { categories: [], entries: [] };
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    const categories = Array.isArray(parsed?.categories)
+      ? parsed.categories.map((item, index) => normalizeWorldbookCategory(item, index))
+      : [];
+    const entries = Array.isArray(parsed?.entries)
+      ? parsed.entries
+          .map((item, index) => normalizeWorldbookEntry(item, categories, index))
+          .filter((item) => item.name && item.text)
+      : [];
+    return { categories, entries };
+  } catch (_error) {
+    return { categories: [], entries: [] };
+  }
+}
+
+function persistWorldbooks() {
+  safeSetItem(WORLD_BOOKS_KEY, JSON.stringify(state.worldbooks));
+}
+
+function getWorldbookCategoryById(categoryId = "") {
+  return state.worldbooks.categories.find((item) => item.id === categoryId) || null;
+}
+
+function getWorldbookEntryById(entryId = "") {
+  return state.worldbooks.entries.find((item) => item.id === entryId) || null;
+}
+
+function getWorldbookGroups() {
+  const uncategorizedEntries = state.worldbooks.entries
+    .filter((item) => !item.categoryId)
+    .sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0));
+
+  const categoryGroups = state.worldbooks.categories
+    .slice()
+    .sort((left, right) => (left.updatedAt || 0) - (right.updatedAt || 0))
+    .map((category) => ({
+      id: category.id,
+      name: category.name,
+      entries: state.worldbooks.entries
+        .filter((item) => item.categoryId === category.id)
+        .sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0))
+    }));
+
+  return [
+    {
+      id: "uncategorized",
+      name: "未分类",
+      entries: uncategorizedEntries
+    },
+    ...categoryGroups
+  ].filter((group) => group.entries.length || group.id === "uncategorized" || group.id !== "");
+}
+
 function normalizeConversationMessage(message, index = 0) {
   const role = message?.role === "assistant" ? "assistant" : "user";
   const text = String(message?.text || "").trim();
@@ -813,32 +994,94 @@ function normalizeCustomTabs(tabs = []) {
         return {
           id: `custom_${index}_${hashText(name)}`,
           name,
-          text: ""
+          audience: "",
+          discussionText: "",
+          hotTopic: "",
+          text: "",
+          timeAwareness: false,
+          worldbookIds: [],
+          bubbleFocusEnabled: false,
+          bubbleFocusMinutes: DEFAULT_CONTEXT_FOCUS_MINUTES,
+          insFocusEnabled: false,
+          insFocusMinutes: DEFAULT_CONTEXT_FOCUS_MINUTES
         };
       }
       if (!tab || typeof tab !== "object") {
         return null;
       }
       const rawName = tab.name || tab.label || tab.title || tab.tabName || tab.tabLabel || "";
-      const rawText =
+      const rawAudience =
+        tab.audience ||
+        tab.userPosition ||
+        tab.userProfile ||
+        tab.positioning ||
+        tab.targetAudience ||
+        tab.memberProfile ||
+        "";
+      const rawDiscussionText =
+        tab.discussionText ||
         tab.text ||
         tab.prompt ||
         tab.content ||
         tab.description ||
+        "";
+      const rawHotTopic =
+        tab.hotTopic ||
+        tab.hotspot ||
+        tab.hotText ||
         tab.topicText ||
         tab.topic ||
         "";
+      const rawWorldbookIds =
+        tab.worldbookIds ||
+        tab.mountedWorldbookIds ||
+        tab.worldbooks ||
+        tab.worldbookEntries ||
+        [];
       return {
         id:
           tab.id ||
           tab.feedId ||
           tab.key ||
-          `custom_${index}_${hashText(`${rawName || ""}-${rawText || ""}`)}`,
+          `custom_${index}_${hashText(`${rawName || ""}-${rawDiscussionText || ""}-${rawHotTopic || ""}`)}`,
         name: String(rawName || "自定义页签").trim().slice(0, 20) || "自定义页签",
-        text: String(rawText || "").trim()
+        audience: String(rawAudience || "").trim(),
+        discussionText: String(rawDiscussionText || "").trim(),
+        hotTopic: String(rawHotTopic || "").trim(),
+        text: String(rawDiscussionText || "").trim(),
+        timeAwareness:
+          typeof tab.timeAwareness === "boolean"
+            ? tab.timeAwareness
+            : Boolean(tab.enableTimeAwareness || tab.dateAwareness || tab.timeAware),
+        worldbookIds: normalizeMountedIds(rawWorldbookIds),
+        bubbleFocusEnabled: Boolean(
+          tab.bubbleFocusEnabled || tab.mountBubble || tab.bubbleMounted || tab.bubbleEnabled
+        ),
+        bubbleFocusMinutes: normalizeContextFocusMinutes(
+          tab.bubbleFocusMinutes || tab.bubbleMinutes || tab.bubbleFocusWindow
+        ),
+        insFocusEnabled: Boolean(
+          tab.insFocusEnabled ||
+            tab.mountIns ||
+            tab.profilePostFocusEnabled ||
+            tab.profileMounted ||
+            tab.insMounted
+        ),
+        insFocusMinutes: normalizeContextFocusMinutes(
+          tab.insFocusMinutes ||
+            tab.insMinutes ||
+            tab.profilePostFocusMinutes ||
+            tab.profileFocusWindow
+        )
       };
     })
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((tab) => ({
+      ...tab,
+      worldbookIds: normalizeMountedIds(tab.worldbookIds || []),
+      bubbleFocusMinutes: normalizeContextFocusMinutes(tab.bubbleFocusMinutes),
+      insFocusMinutes: normalizeContextFocusMinutes(tab.insFocusMinutes)
+    }));
 }
 
 function getAvailableCustomTabs(settings = loadSettings()) {
@@ -925,28 +1168,43 @@ function buildHotTopicsContext(settings, promptSettings) {
   if (!selectedTab) {
     return "";
   }
+  const sections = [`这个角色正在关注一个论坛讨论区「${selectedTab.name}」。`];
+  const audience = String(selectedTab.audience || "").trim();
+  const discussionText = String(selectedTab.discussionText || selectedTab.text || "").trim();
+  const hotTopic = String(selectedTab.hotTopic || "").trim();
 
-  const feeds = readStoredJson(POSTS_KEY, {});
-  const bucket = Array.isArray(feeds?.[selectedTab.id]) ? feeds[selectedTab.id] : [];
-  const tabIntro = String(selectedTab.text || "").trim();
-  const items = extractRecentEventItems(bucket, 3).map((item) =>
-    truncate(String(item || "").replace(/\s+/g, " "), 72)
-  );
-  const sections = [];
-
-  if (tabIntro) {
-    sections.push(`页签设定：${truncate(tabIntro.replace(/\s+/g, " "), 120)}`);
+  if (audience) {
+    sections.push(`这个讨论区里活跃用户的身份与情绪倾向：${audience}`);
+  }
+  if (promptSettings.hotTopicsIncludeDiscussionText && discussionText) {
+    sections.push(`这个讨论区长期讨论的背景与历史话题：${discussionText}`);
+  }
+  if (promptSettings.hotTopicsIncludeHotTopic && hotTopic) {
+    sections.push(`这个讨论区当前最主要的热点：${hotTopic}`);
   }
 
-  if (items.length) {
-    sections.push(`近期讨论：\n${items.map((item, index) => `${index + 1}. ${item}`).join("\n")}`);
-  }
+  return sections.length > 1 ? sections.join("\n\n") : "";
+}
 
-  if (!sections.length) {
+function buildWorldbookContext(promptSettings) {
+  if (!promptSettings.worldbookEnabled || !promptSettings.worldbookIds.length) {
     return "";
   }
 
-  return `论坛热点挂载页签「${selectedTab.name}」：\n${sections.join("\n\n")}`;
+  const entries = promptSettings.worldbookIds
+    .map((entryId) => getWorldbookEntryById(entryId))
+    .filter(Boolean)
+    .map((entry) => {
+      const category = entry.categoryId ? getWorldbookCategoryById(entry.categoryId) : null;
+      const categoryLabel = category?.name ? `（${category.name}）` : "（未分类）";
+      return `- ${entry.name}${categoryLabel}\n${String(entry.text || "").replace(/\r/g, "").trim()}`;
+    });
+
+  if (!entries.length) {
+    return "";
+  }
+
+  return `世界书挂载：\n${entries.join("\n\n")}`;
 }
 
 function stripHotTopicsPromptSettings(promptSettings = {}) {
@@ -1043,31 +1301,38 @@ function buildBubbleFocusContext(promptSettings) {
 function buildConversationSystemPrompt(profile, contact, settings, promptSettings) {
   const parts = [
     `你正在扮演一个即时聊天应用中的联系人：${contact.name}。`,
+    "这是一个一对一聊天场景。",
+    "如果背景信息之间出现冲突，请按以下优先级从低到高理解：热点挂载 < 世界书挂载 < INS 关注 < Bubble 关注 < 时间感知 < 人物设定 < 最近对话轮数消息 < 回复格式要求。"
+  ];
+
+  const awarenessSections = [
+    buildHotTopicsContext(settings, promptSettings),
+    buildWorldbookContext(promptSettings),
+    buildForumPostFocusContext(promptSettings),
+    buildBubbleFocusContext(promptSettings),
+    buildTimeAwarenessContext(promptSettings)
+  ].filter(Boolean);
+
+  if (awarenessSections.length) {
+    parts.push(
+      `补充语境信息（低于人物设定与最近对话优先级，仅用于感知背景）：\n${awarenessSections.join(
+        "\n\n"
+      )}`
+    );
+  }
+
+  parts.push(
     `你的角色人设：${contact.personaPrompt || "自然、友好、会根据设定稳定回应。"}。`,
     `正在和你聊天的用户昵称：${profile.username || DEFAULT_PROFILE.username}。`,
     `用户的人设设定：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt}。`,
-    "这是一个一对一聊天场景。",
     "请只输出联系人下一条回复，不要添加角色标签、前缀、旁白或解释。",
-    "回复要像真实聊天，简洁自然，可以带情绪，但不要超过4句话。",
+    `回复要像真实聊天，简洁自然，可以带情绪，总共不要超过${promptSettings.replySentenceLimit}行。`,
     "如果一句话里自然出现逗号或句号，请按分句拆成多行输出。",
     "每一行都会被视为一条单独发出的聊天消息。",
     "每一行结尾若原本是逗号或句号，请去掉这一枚逗号或句号。",
     "不要去掉感叹号、问号、波浪号、省略号等表达情绪的标点。",
     "不要输出编号、列表符号、引号包裹、解释说明或舞台指令。"
-  ];
-
-  const awarenessSections = [
-    buildTimeAwarenessContext(promptSettings),
-    buildHotTopicsContext(settings, promptSettings),
-    buildForumPostFocusContext(promptSettings),
-    buildBubbleFocusContext(promptSettings)
-  ].filter(Boolean);
-
-  if (awarenessSections.length) {
-    parts.push(
-      `补充语境信息（仅用于感知语气与背景，不要机械复述）：\n${awarenessSections.join("\n\n")}`
-    );
-  }
+  );
 
   return parts.join("\n\n");
 }
@@ -1178,6 +1443,27 @@ function splitReplyIntoMessageLines(text) {
   return lines.length ? lines : [resolved];
 }
 
+function limitReplyLines(lines = [], limit = DEFAULT_MESSAGE_REPLY_SENTENCE_LIMIT) {
+  const resolvedLimit = clampNumber(
+    normalizePositiveInteger(limit, DEFAULT_MESSAGE_REPLY_SENTENCE_LIMIT),
+    1,
+    MAX_MESSAGE_REPLY_SENTENCE_LIMIT
+  );
+  const normalized = Array.isArray(lines)
+    ? lines.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  if (normalized.length <= resolvedLimit) {
+    return normalized;
+  }
+
+  const limited = normalized.slice(0, resolvedLimit);
+  limited[resolvedLimit - 1] = [limited[resolvedLimit - 1], ...normalized.slice(resolvedLimit)]
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return limited.filter(Boolean);
+}
+
 async function requestChatReplyText(settings, profile, contact, history = [], promptSettings = {}) {
   const normalizedPromptSettings = normalizeMessagePromptSettings(promptSettings);
   const requestEndpoint = validateApiSettings(settings, "对话回复");
@@ -1265,7 +1551,12 @@ async function requestChatReplyText(settings, profile, contact, history = [], pr
         statusCode: response.status,
         responseText: rawResponse,
         responseBody: payload,
-        summary: `联系人：${contact.name} · 已生成 ${splitReplyIntoMessageLines(message).length || 1} 条分句${summarySuffix}`
+        summary: `联系人：${contact.name} · 已生成 ${
+          limitReplyLines(
+            splitReplyIntoMessageLines(message),
+            resolvedPromptSettings.replySentenceLimit
+          ).length || 1
+        } 行回复${summarySuffix}`
       });
       logged = true;
       return message;
@@ -1328,7 +1619,9 @@ function updateBodyModalState() {
     state.profileEditorOpen ||
     state.contactEditorOpen ||
     state.conversationPickerOpen ||
-    state.chatSettingsOpen;
+    state.chatSettingsOpen ||
+    state.worldbookManagerOpen ||
+    state.worldbookEditorOpen;
   document.body.classList.toggle("messages-modal-open", anyModalOpen);
 }
 
@@ -1913,16 +2206,347 @@ function focusConversationInput() {
   input?.focus();
 }
 
+function setWorldbookStatus(message = "", tone = "") {
+  setEditorStatus(messagesWorldbookStatusEl, message, tone);
+}
+
+function setWorldbookEditorStatus(message = "", tone = "") {
+  setEditorStatus(messagesWorldbookEditorStatusEl, message, tone);
+}
+
+function renderWorldbookCategoryOptions(selectedId = "") {
+  if (!messagesWorldbookCategorySelectEl) {
+    return;
+  }
+  const options = [
+    '<option value="">未分类</option>',
+    ...state.worldbooks.categories.map(
+      (category) =>
+        `<option value="${escapeHtml(category.id)}">${escapeHtml(category.name)}</option>`
+    )
+  ];
+  messagesWorldbookCategorySelectEl.innerHTML = options.join("");
+  messagesWorldbookCategorySelectEl.value = state.worldbooks.categories.some(
+    (item) => item.id === selectedId
+  )
+    ? selectedId
+    : "";
+}
+
+function renderWorldbookMountOptions(selectedIds = []) {
+  if (!messagesChatWorldbookListEl) {
+    return;
+  }
+  const validSelectedIds = [...new Set(selectedIds.filter((id) => getWorldbookEntryById(id)))];
+  const groups = getWorldbookGroups();
+
+  if (!state.worldbooks.entries.length) {
+    messagesChatWorldbookListEl.classList.toggle(
+      "is-disabled",
+      !Boolean(messagesChatWorldbookInputEl?.checked)
+    );
+    messagesChatWorldbookListEl.innerHTML =
+      '<p class="messages-worldbook-selector__empty">当前还没有世界书。先到“我 → 世界书”中创建一条内容，再回来挂载。</p>';
+    return;
+  }
+
+  messagesChatWorldbookListEl.classList.toggle(
+    "is-disabled",
+    !Boolean(messagesChatWorldbookInputEl?.checked)
+  );
+  messagesChatWorldbookListEl.innerHTML = groups
+    .map(
+      (group) => `
+        <section class="messages-worldbook-selector__group">
+          <strong>${escapeHtml(group.name)}</strong>
+          <div class="messages-worldbook-selector__items">
+            ${group.entries
+              .map(
+                (entry) => `
+                  <label class="messages-worldbook-selector__item">
+                    <input
+                      type="checkbox"
+                      value="${escapeHtml(entry.id)}"
+                      ${validSelectedIds.includes(entry.id) ? "checked" : ""}
+                      ${messagesChatWorldbookInputEl?.checked ? "" : "disabled"}
+                    />
+                    <span>${escapeHtml(entry.name)}</span>
+                  </label>
+                `
+              )
+              .join("")}
+          </div>
+        </section>
+      `
+    )
+    .join("");
+}
+
+function renderWorldbookManager() {
+  if (!messagesWorldbookListEl) {
+    return;
+  }
+  const groups = getWorldbookGroups();
+  const hasCategories = state.worldbooks.categories.length > 0;
+  const hasEntries = state.worldbooks.entries.length > 0;
+  if (!hasCategories && !hasEntries) {
+    messagesWorldbookListEl.innerHTML =
+      '<div class="messages-worldbook-empty">还没有世界书。<br />点击右上角两个加号，先创建分类或新增一条世界书。</div>';
+    return;
+  }
+
+  messagesWorldbookListEl.innerHTML = groups
+    .map((group) => {
+      const isCollapsed = state.worldbookCollapsedGroupIds.includes(group.id);
+      return `
+        <section class="messages-worldbook-group${isCollapsed ? " is-collapsed" : ""}">
+          <button
+            class="messages-worldbook-group__header"
+            type="button"
+            data-action="toggle-worldbook-group"
+            data-group-id="${escapeHtml(group.id)}"
+          >
+            <strong>${escapeHtml(group.name)}</strong>
+            <span class="messages-worldbook-group__count">${group.entries.length}</span>
+            <span class="messages-worldbook-group__arrow">⌄</span>
+          </button>
+          <div class="messages-worldbook-group__list">
+            ${
+              group.entries.length
+                ? group.entries
+                    .map(
+                      (entry) => `
+                        <article class="messages-worldbook-item">
+                          <button
+                            class="messages-worldbook-item__main"
+                            type="button"
+                            data-action="edit-worldbook-entry"
+                            data-entry-id="${escapeHtml(entry.id)}"
+                          >
+                            <span class="messages-worldbook-item__name">${escapeHtml(entry.name)}</span>
+                          </button>
+                          <button
+                            class="messages-worldbook-item__delete"
+                            type="button"
+                            data-action="delete-worldbook-entry"
+                            data-entry-id="${escapeHtml(entry.id)}"
+                            aria-label="删除世界书"
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path
+                                d="M8 7.5h8m-6 3v5m4-5v5M9 4.8h6l.8 1.7H19v2H5v-2h3.2ZM7 8.5h10l-.7 9.2a2 2 0 0 1-2 1.8H9.7a2 2 0 0 1-2-1.8Z"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="1.6"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                              />
+                            </svg>
+                          </button>
+                        </article>
+                      `
+                    )
+                    .join("")
+                : '<div class="messages-worldbook-empty">这个分类下还没有世界书。</div>'
+            }
+          </div>
+        </section>
+      `;
+    })
+    .join("");
+}
+
+function setWorldbookManagerOpen(isOpen) {
+  state.worldbookManagerOpen = Boolean(isOpen);
+  if (messagesWorldbookModalEl) {
+    messagesWorldbookModalEl.hidden = !state.worldbookManagerOpen;
+    messagesWorldbookModalEl.setAttribute("aria-hidden", String(!state.worldbookManagerOpen));
+  }
+  if (state.worldbookManagerOpen) {
+    renderWorldbookManager();
+    setWorldbookStatus("");
+  }
+  updateBodyModalState();
+}
+
+function applyWorldbookEditorToForm(mode = "entry", entryId = "") {
+  state.worldbookEditorMode = mode;
+  state.worldbookEditingEntryId = mode === "entry" ? String(entryId || "") : "";
+  const entry = getWorldbookEntryById(state.worldbookEditingEntryId);
+  const isCategoryMode = mode === "category";
+
+  if (messagesWorldbookEditorTitleEl) {
+    messagesWorldbookEditorTitleEl.textContent = isCategoryMode
+      ? "新增分类"
+      : entry
+        ? "编辑世界书"
+        : "新增世界书";
+  }
+  if (messagesWorldbookNameLabelEl) {
+    messagesWorldbookNameLabelEl.textContent = isCategoryMode ? "分类名称" : "世界书昵称";
+  }
+  if (messagesWorldbookNameInputEl) {
+    messagesWorldbookNameInputEl.placeholder = isCategoryMode ? "输入分类名称" : "输入世界书昵称";
+    messagesWorldbookNameInputEl.value = isCategoryMode ? "" : entry?.name || "";
+  }
+  if (messagesWorldbookTextInputEl) {
+    messagesWorldbookTextInputEl.value = entry?.text || "";
+  }
+  renderWorldbookCategoryOptions(entry?.categoryId || "");
+  if (messagesWorldbookCategoryFieldEl) {
+    messagesWorldbookCategoryFieldEl.hidden = isCategoryMode;
+  }
+  if (messagesWorldbookTextFieldEl) {
+    messagesWorldbookTextFieldEl.hidden = isCategoryMode;
+  }
+  setWorldbookEditorStatus("");
+}
+
+function setWorldbookEditorOpen(isOpen, mode = "entry", entryId = "") {
+  state.worldbookEditorOpen = Boolean(isOpen);
+  if (messagesWorldbookEditorModalEl) {
+    messagesWorldbookEditorModalEl.hidden = !state.worldbookEditorOpen;
+    messagesWorldbookEditorModalEl.setAttribute("aria-hidden", String(!state.worldbookEditorOpen));
+  }
+  if (state.worldbookEditorOpen) {
+    applyWorldbookEditorToForm(mode, entryId);
+    window.setTimeout(() => {
+      messagesWorldbookNameInputEl?.focus();
+    }, 0);
+  } else {
+    state.worldbookEditingEntryId = "";
+  }
+  updateBodyModalState();
+}
+
+function toggleWorldbookGroup(groupId = "") {
+  const resolvedId = String(groupId || "").trim();
+  if (!resolvedId) {
+    return;
+  }
+  if (state.worldbookCollapsedGroupIds.includes(resolvedId)) {
+    state.worldbookCollapsedGroupIds = state.worldbookCollapsedGroupIds.filter(
+      (item) => item !== resolvedId
+    );
+  } else {
+    state.worldbookCollapsedGroupIds = [...state.worldbookCollapsedGroupIds, resolvedId];
+  }
+  renderWorldbookManager();
+}
+
+function createWorldbookCategory(name) {
+  const normalizedName = String(name || "").trim();
+  if (!normalizedName) {
+    throw new Error("请输入分类名称。");
+  }
+  const duplicate = state.worldbooks.categories.find((item) => item.name === normalizedName);
+  if (duplicate) {
+    throw new Error("已存在同名分类。");
+  }
+  const category = normalizeWorldbookCategory(
+    {
+      id: `worldbook_category_${Date.now()}_${hashText(normalizedName)}`,
+      name: normalizedName,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    },
+    state.worldbooks.categories.length
+  );
+  state.worldbooks.categories = [...state.worldbooks.categories, category];
+  persistWorldbooks();
+  renderWorldbookManager();
+  renderWorldbookCategoryOptions();
+  renderWorldbookMountOptions(state.chatPromptSettings.worldbookIds || []);
+  return category;
+}
+
+function saveWorldbookEntry(draft) {
+  const normalizedName = String(draft?.name || "").trim();
+  const normalizedText = String(draft?.text || "").trim();
+  if (!normalizedName) {
+    throw new Error("请输入世界书昵称。");
+  }
+  if (!normalizedText) {
+    throw new Error("请输入世界书内容。");
+  }
+  const categoryId = String(draft?.categoryId || "").trim();
+  const existingIndex = state.worldbooks.entries.findIndex((item) => item.id === draft.id);
+  const entry = normalizeWorldbookEntry(
+    {
+      id: existingIndex >= 0 ? draft.id : `worldbook_entry_${Date.now()}_${hashText(normalizedName)}`,
+      name: normalizedName,
+      text: normalizedText,
+      categoryId,
+      createdAt:
+        existingIndex >= 0
+          ? state.worldbooks.entries[existingIndex].createdAt
+          : Date.now(),
+      updatedAt: Date.now()
+    },
+    state.worldbooks.categories,
+    existingIndex >= 0 ? existingIndex : state.worldbooks.entries.length
+  );
+
+  if (existingIndex >= 0) {
+    state.worldbooks.entries[existingIndex] = entry;
+  } else {
+    state.worldbooks.entries = [entry, ...state.worldbooks.entries];
+  }
+  persistWorldbooks();
+  renderWorldbookManager();
+  renderWorldbookCategoryOptions(entry.categoryId);
+  renderWorldbookMountOptions(state.chatPromptSettings.worldbookIds || []);
+  return entry;
+}
+
+function deleteWorldbookEntry(entryId = "") {
+  const entry = getWorldbookEntryById(entryId);
+  if (!entry) {
+    return;
+  }
+  const confirmed = window.confirm(`确定删除世界书“${entry.name}”吗？`);
+  if (!confirmed) {
+    return;
+  }
+  state.worldbooks.entries = state.worldbooks.entries.filter((item) => item.id !== entry.id);
+  persistWorldbooks();
+
+  const nextPromptSettings = normalizeMessagePromptSettings({
+    ...state.chatPromptSettings,
+    worldbookIds: (state.chatPromptSettings.worldbookIds || []).filter((id) => id !== entry.id)
+  });
+  state.chatPromptSettings = nextPromptSettings;
+  const nextSettings = loadSettings();
+  nextSettings.messagePromptSettings = nextPromptSettings;
+  persistSettings(nextSettings);
+
+  renderWorldbookManager();
+  renderWorldbookMountOptions(nextPromptSettings.worldbookIds || []);
+  setWorldbookStatus("世界书已删除。", "success");
+}
+
 function applyChatPromptSettingsToForm(promptSettings) {
   const resolved = normalizeMessagePromptSettings(promptSettings);
   if (messagesChatHistoryRoundsInputEl) {
     messagesChatHistoryRoundsInputEl.value = String(resolved.historyRounds);
+  }
+  if (messagesChatReplySentenceLimitInputEl) {
+    messagesChatReplySentenceLimitInputEl.value = String(resolved.replySentenceLimit);
   }
   if (messagesChatTimeAwarenessInputEl) {
     messagesChatTimeAwarenessInputEl.checked = resolved.timeAwareness;
   }
   if (messagesChatHotTopicsInputEl) {
     messagesChatHotTopicsInputEl.checked = resolved.hotTopicsEnabled;
+  }
+  if (messagesChatHotTopicsTextInputEl) {
+    messagesChatHotTopicsTextInputEl.checked = resolved.hotTopicsIncludeDiscussionText;
+  }
+  if (messagesChatHotTopicsTopicInputEl) {
+    messagesChatHotTopicsTopicInputEl.checked = resolved.hotTopicsIncludeHotTopic;
+  }
+  if (messagesChatWorldbookInputEl) {
+    messagesChatWorldbookInputEl.checked = resolved.worldbookEnabled;
   }
   if (messagesChatProfilePostFocusInputEl) {
     messagesChatProfilePostFocusInputEl.checked = resolved.forumPostFocusEnabled;
@@ -1931,6 +2555,7 @@ function applyChatPromptSettingsToForm(promptSettings) {
     messagesChatBubbleFocusInputEl.checked = resolved.bubbleFocusEnabled;
   }
   renderHotTopicsTabOptions(resolved.hotTopicsTabId);
+  renderWorldbookMountOptions(resolved.worldbookIds);
   updateChatSettingsFormState();
   setEditorStatus(messagesChatSettingsStatusEl);
 }
@@ -1962,16 +2587,46 @@ function updateChatSettingsFormState() {
     return;
   }
   messagesChatHotTopicsTabSelectEl.disabled = !Boolean(messagesChatHotTopicsInputEl?.checked);
+  [messagesChatHotTopicsTextInputEl, messagesChatHotTopicsTopicInputEl].forEach((input) => {
+    if (input instanceof HTMLInputElement) {
+      input.disabled = !Boolean(messagesChatHotTopicsInputEl?.checked);
+    }
+  });
+  if (messagesChatWorldbookListEl) {
+    messagesChatWorldbookListEl
+      .querySelectorAll("input[type='checkbox']")
+      .forEach((input) => {
+        if (input instanceof HTMLInputElement) {
+          input.disabled = !Boolean(messagesChatWorldbookInputEl?.checked);
+        }
+      });
+  }
+  messagesChatWorldbookListEl?.classList.toggle(
+    "is-disabled",
+    !Boolean(messagesChatWorldbookInputEl?.checked)
+  );
 }
 
 function getCurrentChatPromptSettingsDraft() {
   const tabs = getAvailableCustomTabs(loadSettings());
   const selectedTabId = String(messagesChatHotTopicsTabSelectEl?.value || "").trim();
+  const selectedWorldbookIds = messagesChatWorldbookListEl
+    ? [...messagesChatWorldbookListEl.querySelectorAll("input[type='checkbox']:checked")]
+        .map((input) =>
+          input instanceof HTMLInputElement ? String(input.value || "").trim() : ""
+        )
+        .filter((id) => getWorldbookEntryById(id))
+    : [];
   return normalizeMessagePromptSettings({
     historyRounds: messagesChatHistoryRoundsInputEl?.value,
+    replySentenceLimit: messagesChatReplySentenceLimitInputEl?.value,
     timeAwareness: Boolean(messagesChatTimeAwarenessInputEl?.checked),
     hotTopicsEnabled: Boolean(messagesChatHotTopicsInputEl?.checked),
     hotTopicsTabId: tabs.some((tab) => tab.id === selectedTabId) ? selectedTabId : "",
+    hotTopicsIncludeDiscussionText: Boolean(messagesChatHotTopicsTextInputEl?.checked),
+    hotTopicsIncludeHotTopic: Boolean(messagesChatHotTopicsTopicInputEl?.checked),
+    worldbookEnabled: Boolean(messagesChatWorldbookInputEl?.checked),
+    worldbookIds: selectedWorldbookIds,
     forumPostFocusEnabled: Boolean(messagesChatProfilePostFocusInputEl?.checked),
     bubbleFocusEnabled: Boolean(messagesChatBubbleFocusInputEl?.checked)
   });
@@ -2079,13 +2734,16 @@ async function requestConversationReply() {
       message.role === "user" && message.needsReply ? { ...message, needsReply: false } : message
     );
 
-    const replyLines = splitReplyIntoMessageLines(replyText);
+    const replyLines = limitReplyLines(
+      splitReplyIntoMessageLines(replyText),
+      promptSettings.replySentenceLimit
+    );
     const now = Date.now();
     const timeLabel = formatLocalTime();
     const createdMessages = [];
 
     for (let index = 0; index < replyLines.length; index += 1) {
-      await sleep(index === 0 ? 640 : 460);
+      await sleep(index === 0 ? 1640 : 1460);
       const line = replyLines[index];
       const replyMessage = normalizeConversationMessage(
         {
@@ -2121,6 +2779,7 @@ function refreshStateFromStorage() {
   state.profile = loadProfile();
   state.contacts = loadContacts();
   state.conversations = loadConversations();
+  state.worldbooks = loadWorldbooks();
   state.chatPromptSettings = normalizeMessagePromptSettings(loadSettings().messagePromptSettings);
 }
 
@@ -2248,6 +2907,11 @@ function attachEvents() {
       }
 
       if (actionEl.getAttribute("data-action") === "open-me-entry") {
+        const entryId = String(actionEl.getAttribute("data-entry-id") || "").trim();
+        if (entryId === "worldbook") {
+          setWorldbookManagerOpen(true);
+          return;
+        }
         const label = actionEl.textContent?.trim() || "该功能";
         setMessagesStatus(`${label}功能暂未开放。`);
       }
@@ -2427,6 +3091,60 @@ function attachEvents() {
         );
         return;
       }
+      if (
+        draft.hotTopicsEnabled &&
+        !draft.hotTopicsIncludeDiscussionText &&
+        !draft.hotTopicsIncludeHotTopic
+      ) {
+        setEditorStatus(
+          messagesChatSettingsStatusEl,
+          "热点挂载至少要选择“页签文本”或“页签热点”中的一项。",
+          "error"
+        );
+        return;
+      }
+      if (draft.hotTopicsEnabled) {
+        const selectedTab =
+          getAvailableCustomTabs(loadSettings()).find((tab) => tab.id === draft.hotTopicsTabId) ||
+          null;
+        const hasDiscussionText = Boolean(
+          String(selectedTab?.discussionText || selectedTab?.text || "").trim()
+        );
+        const hasHotTopic = Boolean(String(selectedTab?.hotTopic || "").trim());
+        if (
+          draft.hotTopicsIncludeDiscussionText &&
+          !draft.hotTopicsIncludeHotTopic &&
+          !hasDiscussionText
+        ) {
+          setEditorStatus(messagesChatSettingsStatusEl, "当前页签还没有填写“页签文本”。", "error");
+          return;
+        }
+        if (
+          draft.hotTopicsIncludeDiscussionText &&
+          draft.hotTopicsIncludeHotTopic &&
+          !hasDiscussionText &&
+          !hasHotTopic
+        ) {
+          setEditorStatus(
+            messagesChatSettingsStatusEl,
+            "当前页签的“页签文本”和“页签热点”都还是空的。",
+            "error"
+          );
+          return;
+        }
+        if (
+          draft.hotTopicsIncludeHotTopic &&
+          !draft.hotTopicsIncludeDiscussionText &&
+          !hasHotTopic
+        ) {
+          setEditorStatus(messagesChatSettingsStatusEl, "当前页签还没有填写“页签热点”。", "error");
+          return;
+        }
+      }
+      if (draft.worldbookEnabled && !draft.worldbookIds.length) {
+        setEditorStatus(messagesChatSettingsStatusEl, "请至少选择一条世界书。", "error");
+        return;
+      }
       const nextSettings = loadSettings();
       nextSettings.messagePromptSettings = draft;
       persistSettings(nextSettings);
@@ -2446,7 +3164,116 @@ function attachEvents() {
     });
   }
 
-  [messagesProfileModalEl, messagesContactModalEl, messagesPickerModalEl]
+  [messagesChatHotTopicsTextInputEl, messagesChatHotTopicsTopicInputEl].forEach((input) => {
+    if (!(input instanceof HTMLInputElement)) {
+      return;
+    }
+    input.addEventListener("change", () => {
+      setEditorStatus(messagesChatSettingsStatusEl);
+    });
+  });
+
+  if (messagesChatWorldbookInputEl) {
+    messagesChatWorldbookInputEl.addEventListener("change", () => {
+      updateChatSettingsFormState();
+      setEditorStatus(messagesChatSettingsStatusEl);
+    });
+  }
+
+  if (messagesChatWorldbookListEl) {
+    messagesChatWorldbookListEl.addEventListener("change", () => {
+      setEditorStatus(messagesChatSettingsStatusEl);
+    });
+  }
+
+  if (messagesWorldbookCloseBtnEl) {
+    messagesWorldbookCloseBtnEl.addEventListener("click", () => {
+      setWorldbookManagerOpen(false);
+    });
+  }
+
+  if (messagesWorldbookAddCategoryBtnEl) {
+    messagesWorldbookAddCategoryBtnEl.addEventListener("click", () => {
+      setWorldbookEditorOpen(true, "category");
+    });
+  }
+
+  if (messagesWorldbookAddEntryBtnEl) {
+    messagesWorldbookAddEntryBtnEl.addEventListener("click", () => {
+      setWorldbookEditorOpen(true, "entry");
+    });
+  }
+
+  if (messagesWorldbookListEl) {
+    messagesWorldbookListEl.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      const actionEl = target.closest("[data-action]");
+      if (!(actionEl instanceof Element)) {
+        return;
+      }
+      const action = String(actionEl.getAttribute("data-action") || "").trim();
+      if (action === "toggle-worldbook-group") {
+        toggleWorldbookGroup(String(actionEl.getAttribute("data-group-id") || ""));
+        return;
+      }
+      if (action === "edit-worldbook-entry") {
+        setWorldbookEditorOpen(
+          true,
+          "entry",
+          String(actionEl.getAttribute("data-entry-id") || "")
+        );
+        return;
+      }
+      if (action === "delete-worldbook-entry") {
+        deleteWorldbookEntry(String(actionEl.getAttribute("data-entry-id") || ""));
+      }
+    });
+  }
+
+  if (messagesWorldbookEditorCloseBtnEl) {
+    messagesWorldbookEditorCloseBtnEl.addEventListener("click", () => {
+      setWorldbookEditorOpen(false);
+    });
+  }
+
+  if (messagesWorldbookEditorFormEl) {
+    messagesWorldbookEditorFormEl.addEventListener("submit", (event) => {
+      event.preventDefault();
+      try {
+        if (state.worldbookEditorMode === "category") {
+          const category = createWorldbookCategory(messagesWorldbookNameInputEl?.value || "");
+          setWorldbookEditorStatus(`分类“${category.name}”已创建。`, "success");
+          setWorldbookStatus(`已创建分类“${category.name}”。`, "success");
+        } else {
+          const entry = saveWorldbookEntry({
+            id: state.worldbookEditingEntryId,
+            name: messagesWorldbookNameInputEl?.value || "",
+            categoryId: messagesWorldbookCategorySelectEl?.value || "",
+            text: messagesWorldbookTextInputEl?.value || ""
+          });
+          setWorldbookEditorStatus(`世界书“${entry.name}”已保存。`, "success");
+          setWorldbookStatus(`世界书“${entry.name}”已保存。`, "success");
+        }
+        renderWorldbookMountOptions(state.chatPromptSettings.worldbookIds || []);
+        window.setTimeout(() => {
+          setWorldbookEditorOpen(false);
+        }, 220);
+      } catch (error) {
+        setWorldbookEditorStatus(error?.message || "保存失败。", "error");
+      }
+    });
+  }
+
+  [
+    messagesProfileModalEl,
+    messagesContactModalEl,
+    messagesPickerModalEl,
+    messagesWorldbookModalEl,
+    messagesWorldbookEditorModalEl
+  ]
     .filter(Boolean)
     .forEach((modal) => {
       modal.addEventListener("click", (event) => {
@@ -2463,6 +3290,14 @@ function attachEvents() {
         }
         if (modal === messagesPickerModalEl) {
           setConversationPickerOpen(false);
+          return;
+        }
+        if (modal === messagesWorldbookModalEl) {
+          setWorldbookManagerOpen(false);
+          return;
+        }
+        if (modal === messagesWorldbookEditorModalEl) {
+          setWorldbookEditorOpen(false);
         }
       });
     });
@@ -2480,7 +3315,9 @@ function attachEvents() {
       state.profileEditorOpen ||
       state.contactEditorOpen ||
       state.conversationPickerOpen ||
-      state.chatSettingsOpen
+      state.chatSettingsOpen ||
+      state.worldbookManagerOpen ||
+      state.worldbookEditorOpen
     ) {
       return;
     }
@@ -2503,6 +3340,14 @@ function attachEvents() {
     }
     if (event.key === "Escape" && state.chatSettingsOpen) {
       setChatSettingsOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.worldbookEditorOpen) {
+      setWorldbookEditorOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.worldbookManagerOpen) {
+      setWorldbookManagerOpen(false);
       return;
     }
     if (event.key === "Escape" && state.activeConversationId) {

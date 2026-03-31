@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pulse Generator · Chat</title>
-    <link rel="stylesheet" href="./messages.css?v=20260330t" />
+    <link rel="stylesheet" href="./messages.css?v=20260331d" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -379,6 +379,22 @@
             </small>
           </label>
 
+          <label class="messages-form-field">
+            <span>单次最多分行</span>
+            <input
+              id="messages-chat-reply-sentence-limit-input"
+              type="number"
+              min="1"
+              max="20"
+              inputmode="numeric"
+              placeholder="默认 7 行"
+              autocomplete="off"
+            />
+            <small class="messages-form-field__hint">
+              AI 会尽量把一次回复拆成不超过 N 行；聊天页会按行逐条气泡弹出。
+            </small>
+          </label>
+
           <label class="messages-toggle-field">
             <div class="messages-toggle-field__body">
               <strong>时间感知</strong>
@@ -408,6 +424,42 @@
               请选择论坛中的一个自定义页签，作为“近期热点”来源。
             </small>
           </label>
+
+          <section class="messages-form-field">
+            <span>挂载内容</span>
+            <div class="messages-checkbox-group">
+              <label class="messages-checkbox-option">
+                <input id="messages-chat-hot-topics-text-input" type="checkbox" />
+                <span>页签文本</span>
+              </label>
+              <label class="messages-checkbox-option">
+                <input id="messages-chat-hot-topics-topic-input" type="checkbox" />
+                <span>页签热点</span>
+              </label>
+            </div>
+            <small class="messages-form-field__hint">
+              至少选择一项；两项可同时挂载。页签用户定位会作为论坛背景自动附带。
+            </small>
+          </section>
+
+          <label class="messages-toggle-field">
+            <div class="messages-toggle-field__body">
+              <strong>世界书挂载</strong>
+              <p>开启后，可从“世界书”里同时挂载多条纯文本设定给 AI。</p>
+            </div>
+            <span class="messages-switch">
+              <input id="messages-chat-worldbook-enabled-input" type="checkbox" />
+              <span class="messages-switch__slider"></span>
+            </span>
+          </label>
+
+          <section class="messages-form-field">
+            <span>挂载的世界书</span>
+            <div id="messages-chat-worldbook-list" class="messages-worldbook-selector"></div>
+            <small class="messages-form-field__hint">
+              可同时选择多条世界书；如果还没有内容，请先到“我 → 世界书”中创建。
+            </small>
+          </section>
 
           <label class="messages-toggle-field">
             <div class="messages-toggle-field__body">
@@ -440,7 +492,150 @@
       </div>
     </section>
 
-    <script src="./api-log.js?v=20260330t"></script>
-    <script src="./messages.js?v=20260330t"></script>
+    <section id="messages-worldbook-modal" class="messages-sheet-modal" hidden aria-hidden="true">
+      <div
+        class="messages-sheet-modal__panel messages-sheet-modal__panel--worldbook"
+        role="dialog"
+        aria-modal="true"
+        aria-label="世界书"
+      >
+        <header class="messages-sheet-modal__header">
+          <button
+            id="messages-worldbook-close-btn"
+            class="messages-sheet-modal__button"
+            type="button"
+            aria-label="关闭世界书"
+          >
+            返回
+          </button>
+          <strong>世界书</strong>
+          <div class="messages-worldbook-header__actions">
+            <button
+              id="messages-worldbook-add-category-btn"
+              class="messages-worldbook-header__button"
+              type="button"
+              aria-label="新增分类"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M4.5 7.5A2.5 2.5 0 0 1 7 5h3l1.4 1.6H17A2.5 2.5 0 0 1 19.5 9v8A2.5 2.5 0 0 1 17 19.5H7A2.5 2.5 0 0 1 4.5 17Z"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linejoin="round"
+                />
+                <path
+                  d="M12 10v6M9 13h6"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+            <button
+              id="messages-worldbook-add-entry-btn"
+              class="messages-worldbook-header__button"
+              type="button"
+              aria-label="新增世界书"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M7 4.8h7.5L18 8.3V18a2 2 0 0 1-2 2H7.8a2 2 0 0 1-2-2V6.8a2 2 0 0 1 2-2Z"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linejoin="round"
+                />
+                <path
+                  d="M14.5 4.8V8H18M12 11v5M9.5 13.5h5"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <p id="messages-worldbook-status" class="messages-editor-status messages-worldbook-status"></p>
+        <section id="messages-worldbook-list" class="messages-worldbook-list" aria-live="polite"></section>
+      </div>
+    </section>
+
+    <section
+      id="messages-worldbook-editor-modal"
+      class="messages-sheet-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div
+        class="messages-sheet-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="编辑世界书"
+      >
+        <header class="messages-sheet-modal__header">
+          <button
+            id="messages-worldbook-editor-close-btn"
+            class="messages-sheet-modal__button"
+            type="button"
+            aria-label="关闭世界书编辑"
+          >
+            取消
+          </button>
+          <strong id="messages-worldbook-editor-title">新增世界书</strong>
+          <button
+            id="messages-worldbook-editor-save-btn"
+            class="messages-sheet-modal__button messages-sheet-modal__button--primary"
+            type="submit"
+            form="messages-worldbook-editor-form"
+          >
+            保存
+          </button>
+        </header>
+
+        <form id="messages-worldbook-editor-form" class="messages-editor-form">
+          <label id="messages-worldbook-name-field" class="messages-form-field">
+            <span id="messages-worldbook-name-label">世界书昵称</span>
+            <input
+              id="messages-worldbook-name-input"
+              type="text"
+              maxlength="40"
+              placeholder="输入世界书昵称"
+              autocomplete="off"
+            />
+          </label>
+
+          <label id="messages-worldbook-category-field" class="messages-form-field">
+            <span>分类</span>
+            <select id="messages-worldbook-category-select"></select>
+          </label>
+
+          <label
+            id="messages-worldbook-text-field"
+            class="messages-form-field messages-form-field--textarea"
+          >
+            <span>世界书内容</span>
+            <textarea
+              id="messages-worldbook-text-input"
+              rows="7"
+              maxlength="4000"
+              placeholder="输入世界书内容，内容为纯文本，会作为对话的背景设定。"
+            ></textarea>
+          </label>
+
+          <p
+            id="messages-worldbook-editor-status"
+            class="messages-editor-status"
+            aria-live="polite"
+          ></p>
+        </form>
+      </div>
+    </section>
+
+    <script src="./api-log.js?v=20260331d"></script>
+    <script src="./messages.js?v=20260331d"></script>
   </body>
 </html>

@@ -551,6 +551,95 @@ body.embedded .embedded-close-btn {
   width: 100%;
 }
 
+#custom-tabs-settings-list input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+}
+
+#custom-tab-form input,
+#custom-tab-form textarea {
+  width: 100%;
+}
+
+#custom-tab-form input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+}
+
+.custom-tab-toggle-row {
+  display: flex !important;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(247, 249, 251, 0.72);
+}
+
+.custom-tab-toggle-row span {
+  display: grid;
+  gap: 4px;
+}
+
+.custom-tab-toggle-row strong {
+  font-size: 15px;
+}
+
+.custom-tab-toggle-row small,
+.custom-tab-settings-group__head small,
+.custom-tab-mount-option small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.custom-tab-settings-group {
+  margin-bottom: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(247, 249, 251, 0.72);
+}
+
+.custom-tab-settings-group__head {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.custom-tab-settings-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 220px);
+  gap: 12px;
+  align-items: end;
+}
+
+.custom-tab-mount-list {
+  display: grid;
+  gap: 10px;
+}
+
+.custom-tab-mount-option {
+  display: flex !important;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 0 !important;
+}
+
+.custom-tab-mount-option span {
+  display: grid;
+  gap: 2px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.custom-tab-mount-empty {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 #feed {
   flex: 0 0 auto;
   min-height: auto;
@@ -643,6 +732,39 @@ body.embedded .embedded-close-btn {
 
 .post-media {
   margin-top: 12px;
+}
+
+.repost-card {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(247, 249, 251, 0.86);
+}
+
+.repost-card__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.repost-card__text {
+  margin: 8px 0 0;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.repost-card__media {
+  margin-top: 10px;
+}
+
+.repost-card__tags {
+  margin: 10px 0 0;
+  color: #16639c;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .post-media__image,
@@ -1716,6 +1838,10 @@ textarea {
   .custom-tabs-modal__body {
     padding: 14px;
     gap: 12px;
+  }
+
+  .custom-tab-settings-grid {
+    grid-template-columns: 1fr;
   }
 
   .profile-detail-grid {
