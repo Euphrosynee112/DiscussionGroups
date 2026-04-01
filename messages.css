@@ -93,7 +93,7 @@ body.embedded .messages-app {
   min-height: min(860px, calc(var(--messages-app-height) - 60px));
   height: min(860px, calc(var(--messages-app-height) - 60px));
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   background: var(--shell);
   border-radius: 34px;
   overflow: hidden;
@@ -110,6 +110,7 @@ body.embedded .messages-shell {
 }
 
 .messages-topbar {
+  grid-row: 1;
   min-height: calc(56px + env(safe-area-inset-top, 0px));
   padding: calc(10px + env(safe-area-inset-top, 0px)) 14px 8px;
   display: grid;
@@ -163,6 +164,7 @@ body.embedded .messages-shell {
 }
 
 .messages-status {
+  grid-row: 2;
   margin: 0;
   padding: 0 14px 10px;
   color: var(--muted-strong);
@@ -178,6 +180,7 @@ body.embedded .messages-shell {
 }
 
 .messages-search-section {
+  grid-row: 3;
   padding: 0 12px 10px;
   background: var(--shell);
 }
@@ -212,6 +215,7 @@ body.embedded .messages-shell {
 }
 
 .messages-content {
+  grid-row: 4;
   min-height: 0;
   overflow-y: auto;
   background: var(--panel);
@@ -874,6 +878,7 @@ body.embedded {
 }
 
 .messages-tabbar {
+  grid-row: 5;
   min-height: calc(78px + env(safe-area-inset-bottom, 0px));
   padding: 8px 6px calc(10px + env(safe-area-inset-bottom, 0px));
   display: grid;
@@ -1232,6 +1237,44 @@ body.embedded {
   gap: 10px;
 }
 
+.messages-schedule-timeline {
+  display: grid;
+  gap: 0;
+}
+
+.messages-schedule-timeline__row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.messages-schedule-timeline__row + .messages-schedule-timeline__row {
+  margin-top: 2px;
+}
+
+.messages-schedule-timeline__label {
+  padding-top: 16px;
+  color: #98a0ac;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.messages-schedule-timeline__row--all-day .messages-schedule-timeline__label {
+  padding-top: 18px;
+}
+
+.messages-schedule-timeline__body {
+  min-height: 58px;
+  padding: 8px 0 12px 14px;
+  border-top: 1px solid rgba(17, 17, 17, 0.06);
+}
+
+.messages-schedule-timeline__entries {
+  display: grid;
+  gap: 8px;
+}
+
 .messages-schedule-card {
   padding: 14px 14px 15px;
   border-radius: 18px;
@@ -1277,6 +1320,12 @@ body.embedded {
   color: #8a93a2;
   font-size: 13px;
   line-height: 1.55;
+}
+
+.messages-schedule-card--continuation {
+  background: rgba(255, 255, 255, 0.84);
+  border: 1px dashed rgba(17, 17, 17, 0.08);
+  box-shadow: none;
 }
 
 .messages-schedule-empty {

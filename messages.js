@@ -1930,6 +1930,43 @@ function formatSchedulePreviewBadge(entry) {
   return "按时";
 }
 
+function getSchedulePreviewEntryVisibleEndHour(entry) {
+  const startMinutes = parseTimeToMinutes(entry.startTime);
+  const endMinutes = Math.max(startMinutes + 1, parseTimeToMinutes(entry.endTime));
+  return Math.max(
+    Number.parseInt(String(entry.startTime || "00:00").slice(0, 2), 10) || 0,
+    Math.min(23, Math.floor(endMinutes / 60))
+  );
+}
+
+function schedulePreviewEntryOccupiesHour(entry, hour) {
+  if (!entry || entry.scheduleType === "day") {
+    return false;
+  }
+  const startMinutes = parseTimeToMinutes(entry.startTime);
+  const endMinutes = Math.max(startMinutes + 1, parseTimeToMinutes(entry.endTime));
+  const slotStart = hour * 60;
+  const slotEnd = Math.min(24 * 60, (hour + 1) * 60);
+  return startMinutes < slotEnd && endMinutes >= slotStart;
+}
+
+function getSchedulePreviewEntrySlotState(entry, hour) {
+  if (!schedulePreviewEntryOccupiesHour(entry, hour)) {
+    return "hidden";
+  }
+  return String(entry.startTime || "").slice(0, 2) === padTimeUnit(hour) ? "start" : "continuation";
+}
+
+function padTimeUnit(value) {
+  return String(value).padStart(2, "0");
+}
+
+function getChatSchedulePreviewHours(entries = []) {
+  return Array.from({ length: 24 }, (_, index) => index).filter((hour) =>
+    entries.some((entry) => schedulePreviewEntryOccupiesHour(entry, hour))
+  );
+}
+
 function getTodayUserScheduleEntries(dateText = getTodayDateValue()) {
   const userName = state.profile.username || DEFAULT_PROFILE.username;
   return loadScheduleEntries()
@@ -2966,6 +3003,10 @@ function renderSchedulePreviewModal() {
     return;
   }
 
+  const allDayEntries = entries.filter((entry) => entry.scheduleType === "day");
+  const timedEntries = entries.filter((entry) => entry.scheduleType !== "day");
+  const timelineHours = getChatSchedulePreviewHours(timedEntries);
+
   messagesScheduleBodyEl.innerHTML = `
     <div class="messages-schedule-preview">
       <div class="messages-schedule-preview__hero">
@@ -2973,24 +3014,78 @@ function renderSchedulePreviewModal() {
         <strong>${escapeHtml(formatScheduleDateLabel(todayDate))}</strong>
         <span>${escapeHtml(`共 ${entries.length} 条安排`)}</span>
       </div>
-      <div class="messages-schedule-preview__list">
-        ${entries
-          .map(
-            (entry) => `
-              <article class="messages-schedule-card">
-                <div class="messages-schedule-card__top">
-                  <span class="messages-schedule-card__time">${escapeHtml(
-                    formatSchedulePreviewTime(entry)
-                  )}</span>
-                  <span class="messages-schedule-card__badge">${escapeHtml(
-                    formatSchedulePreviewBadge(entry)
-                  )}</span>
+      <div class="messages-schedule-timeline">
+        ${
+          allDayEntries.length
+            ? `
+                <div class="messages-schedule-timeline__row messages-schedule-timeline__row--all-day">
+                  <div class="messages-schedule-timeline__label">全天</div>
+                  <div class="messages-schedule-timeline__body">
+                    <div class="messages-schedule-timeline__entries">
+                      ${allDayEntries
+                        .map(
+                          (entry) => `
+                            <article class="messages-schedule-card messages-schedule-card--all-day">
+                              <div class="messages-schedule-card__top">
+                                <span class="messages-schedule-card__time">全天</span>
+                                <span class="messages-schedule-card__badge">${escapeHtml(
+                                  formatSchedulePreviewBadge(entry)
+                                )}</span>
+                              </div>
+                              <strong class="messages-schedule-card__title">${escapeHtml(entry.title)}</strong>
+                              <p class="messages-schedule-card__meta">${escapeHtml(
+                                entry.previewMeta || "用户日程"
+                              )}</p>
+                            </article>
+                          `
+                        )
+                        .join("")}
+                    </div>
+                  </div>
                 </div>
-                <strong class="messages-schedule-card__title">${escapeHtml(entry.title)}</strong>
-                <p class="messages-schedule-card__meta">${escapeHtml(entry.previewMeta || "用户日程")}</p>
-              </article>
-            `
-          )
+              `
+            : ""
+        }
+        ${timelineHours
+          .map((hour) => {
+            const rowEntries = timedEntries.filter((entry) => schedulePreviewEntryOccupiesHour(entry, hour));
+            return `
+              <div class="messages-schedule-timeline__row">
+                <div class="messages-schedule-timeline__label">${escapeHtml(
+                  `${padTimeUnit(hour)}:00`
+                )}</div>
+                <div class="messages-schedule-timeline__body">
+                  <div class="messages-schedule-timeline__entries">
+                    ${rowEntries
+                      .map((entry) => {
+                        const slotState = getSchedulePreviewEntrySlotState(entry, hour);
+                        return `
+                          <article class="messages-schedule-card messages-schedule-card--${escapeHtml(
+                            slotState
+                          )}">
+                            <div class="messages-schedule-card__top">
+                              <span class="messages-schedule-card__time">${escapeHtml(
+                                slotState === "continuation"
+                                  ? `延续至 ${entry.endTime}`
+                                  : formatSchedulePreviewTime(entry)
+                              )}</span>
+                              <span class="messages-schedule-card__badge">${escapeHtml(
+                                formatSchedulePreviewBadge(entry)
+                              )}</span>
+                            </div>
+                            <strong class="messages-schedule-card__title">${escapeHtml(entry.title)}</strong>
+                            <p class="messages-schedule-card__meta">${escapeHtml(
+                              entry.previewMeta || "用户日程"
+                            )}</p>
+                          </article>
+                        `;
+                      })
+                      .join("")}
+                  </div>
+                </div>
+              </div>
+            `;
+          })
           .join("")}
       </div>
     </div>

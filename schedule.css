@@ -958,11 +958,8 @@ body.embedded .schedule-shell {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
-  position: sticky;
-  bottom: calc(-16px - env(safe-area-inset-bottom, 0px));
-  margin: 2px -16px calc(-18px - env(safe-area-inset-bottom, 0px));
-  padding: 14px 16px calc(14px + env(safe-area-inset-bottom, 0px));
-  background: linear-gradient(180deg, rgba(247, 244, 239, 0.04) 0%, rgba(247, 244, 239, 0.92) 24%, #f7f4ef 100%);
+  margin-top: 2px;
+  padding-top: 4px;
 }
 
 .schedule-modal__button {

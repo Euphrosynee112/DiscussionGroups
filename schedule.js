@@ -609,6 +609,13 @@ function getVisibleTimelineHours(dateText) {
   return Array.from({ length: 24 }, (_, index) => index);
 }
 
+function getDefaultAddHourForDate(dateText) {
+  if (isSameDateValue(dateText, getTodayValue())) {
+    return Math.min(23, Math.max(0, new Date().getHours()));
+  }
+  return 9;
+}
+
 function getTimedEntriesForHour(dateText, hour) {
   return getDayEntryBuckets(dateText).timedEntries.filter((entry) => entryOccupiesHour(entry, hour));
 }
@@ -693,6 +700,7 @@ function renderMiniEntries(entries, maxCount = 2) {
 function renderDayView(dateText) {
   const { allDayEntries } = getDayEntryBuckets(dateText);
   const timelineHours = getVisibleTimelineHours(dateText);
+  const defaultAddHour = getDefaultAddHourForDate(dateText);
   return `
     <section class="schedule-day-view">
       <section class="schedule-timeline" aria-label="小时日程时间轴">
@@ -731,9 +739,10 @@ function renderDayView(dateText) {
                     <button
                       class="schedule-day-all-day-add"
                       type="button"
-                      data-action="add-day"
+                      data-action="add-hour-slot"
                       data-date="${escapeHtml(dateText)}"
-                      aria-label="新增全天日程"
+                      data-hour="${escapeHtml(padNumber(defaultAddHour))}"
+                      aria-label="默认按小时新增日程"
                     >
                       +
                     </button>
