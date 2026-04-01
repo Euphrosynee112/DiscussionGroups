@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <title>Pulse Generator · Chat</title>
-    <link rel="stylesheet" href="./messages.css?v=20260401j" />
+    <link rel="stylesheet" href="./messages.css?v=20260401l" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -1300,7 +1300,101 @@
       </div>
     </section>
 
+    <section
+      id="messages-location-modal"
+      class="messages-dialog-modal messages-location-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div
+        class="messages-dialog-modal__panel messages-location-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="分享位置"
+      >
+        <header class="messages-location-modal__header">
+          <strong>分享位置</strong>
+          <button
+            id="messages-location-close-btn"
+            class="messages-location-modal__close"
+            type="button"
+            aria-label="关闭位置弹窗"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M7 7l10 10M17 7 7 17"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </header>
+
+        <form id="messages-location-form" class="messages-location-modal__form">
+          <label class="messages-dialog-modal__field">
+            <span>位置名称</span>
+            <input
+              id="messages-location-name-input"
+              type="text"
+              maxlength="48"
+              placeholder="请输入位置名称，如：咖啡厅、学校、家..."
+              autocomplete="off"
+            />
+          </label>
+
+          <section class="messages-location-modal__recent">
+            <div class="messages-location-modal__recent-head">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 6.5v5l3 1.8M6 4.5v3M18 4.5v3M5 9.2h14"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+                <rect
+                  x="4.8"
+                  y="6.2"
+                  width="14.4"
+                  height="12.8"
+                  rx="2.3"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                />
+              </svg>
+              <span>最近使用</span>
+            </div>
+            <div id="messages-location-recent-list" class="messages-location-modal__chips"></div>
+          </section>
+
+          <section id="messages-location-preview" class="messages-location-modal__preview" aria-live="polite"></section>
+
+          <p id="messages-location-status" class="messages-editor-status" aria-live="polite"></p>
+
+          <div class="messages-dialog-modal__actions">
+            <button
+              id="messages-location-cancel-btn"
+              class="messages-dialog-modal__button"
+              type="button"
+            >
+              取消
+            </button>
+            <button
+              class="messages-dialog-modal__button messages-dialog-modal__button--primary"
+              type="submit"
+            >
+              发送位置
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
     <script src="./api-log.js?v=20260331k"></script>
-    <script src="./messages.js?v=20260401j"></script>
+    <script src="./messages.js?v=20260401l"></script>
   </body>
 </html>

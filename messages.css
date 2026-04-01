@@ -540,6 +540,150 @@ body.embedded .messages-shell {
   word-break: break-word;
 }
 
+.messages-message-row--location {
+  align-items: center;
+}
+
+.messages-message-row__bubble-wrap--location {
+  max-width: min(calc(100% - 52px), 78vw, 340px);
+}
+
+.messages-bubble-toggle--location {
+  width: 100%;
+}
+
+.messages-location-card {
+  width: 100%;
+  border-radius: 22px;
+  overflow: hidden;
+  background: #ffffff;
+  box-shadow:
+    0 16px 34px rgba(15, 23, 42, 0.08),
+    inset 0 0 0 1px rgba(186, 195, 207, 0.35);
+}
+
+.messages-location-map {
+  width: 100%;
+  display: grid;
+  gap: 0;
+  background: #ffffff;
+}
+
+.messages-location-map__header {
+  min-height: 68px;
+  padding: 14px 16px 12px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid rgba(17, 17, 17, 0.06);
+}
+
+.messages-location-map__pin-icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  color: #3b93f6;
+}
+
+.messages-location-map__pin-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.messages-location-map__meta {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.messages-location-map__meta strong {
+  font-size: 15px;
+  font-weight: 700;
+  color: #2a2a2a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.messages-location-map__meta small {
+  color: #8d9aa8;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.messages-location-map__canvas {
+  position: relative;
+  min-height: 168px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 18% 30%, rgba(187, 245, 143, 0.35), transparent 18%),
+    radial-gradient(circle at 72% 18%, rgba(186, 255, 204, 0.34), transparent 16%),
+    radial-gradient(circle at 66% 68%, rgba(226, 255, 176, 0.22), transparent 18%),
+    linear-gradient(180deg, #f8faf4 0%, #edf7ef 100%);
+}
+
+.messages-location-map__grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(203, 211, 220, 0.7) 0 0),
+    linear-gradient(90deg, rgba(203, 211, 220, 0.7) 0 0);
+  background-size: 100% 3px, 3px 100%;
+  background-position: 0 33%, 33% 0;
+  background-repeat: repeat-y, repeat-x;
+  opacity: 0.85;
+}
+
+.messages-location-map__road,
+.messages-location-map__dot,
+.messages-location-map__block,
+.messages-location-map__marker {
+  position: absolute;
+}
+
+.messages-location-map__road {
+  height: 6px;
+  border-radius: 999px;
+  opacity: 0.9;
+}
+
+.messages-location-map__dot {
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 35% 35%, rgba(152, 255, 117, 0.96), rgba(76, 191, 55, 0.96));
+  box-shadow: 0 0 0 4px rgba(188, 255, 172, 0.18);
+}
+
+.messages-location-map__block {
+  border: 2px solid rgba(181, 191, 208, 0.8);
+  border-radius: 4px;
+  box-shadow: 0 4px 8px rgba(133, 143, 161, 0.08);
+}
+
+.messages-location-map__marker {
+  width: 34px;
+  height: 34px;
+  transform: translate(-50%, -100%);
+  color: #2790ff;
+  filter: drop-shadow(0 8px 12px rgba(39, 144, 255, 0.24));
+}
+
+.messages-location-map__marker svg {
+  width: 100%;
+  height: 100%;
+}
+
+.messages-location-map.is-compact .messages-location-map__header {
+  min-height: 64px;
+  padding: 12px 14px 10px;
+}
+
+.messages-location-map.is-compact .messages-location-map__canvas {
+  min-height: 152px;
+}
+
 .messages-bubble__time {
   display: none;
   margin-top: 8px;
@@ -580,7 +724,7 @@ body.embedded .messages-shell {
   z-index: 5;
   flex-shrink: 0;
   margin-top: 0;
-  padding: 4px 10px calc(4px + env(safe-area-inset-bottom, 0px));
+  padding: 4px 10px calc(2px + env(safe-area-inset-bottom, 0px));
   display: grid;
   grid-template-columns: minmax(0, 1fr) 60px 40px 40px;
   gap: 8px;
@@ -754,6 +898,8 @@ body.embedded {
   .messages-form-field input,
   .messages-form-field textarea,
   .messages-form-field select,
+  .messages-dialog-modal__field input,
+  .messages-dialog-modal__field select,
   .messages-dialog-modal__field textarea {
     font-size: 16px;
   }
@@ -1134,6 +1280,109 @@ body.embedded {
 .messages-dialog-modal__button--primary {
   background: rgba(7, 193, 96, 0.12);
   color: #08944d;
+}
+
+.messages-location-modal {
+  background: rgba(15, 23, 42, 0.32);
+}
+
+.messages-location-modal__panel {
+  width: min(382px, 100%);
+  border-radius: 26px;
+  background: rgba(255, 255, 255, 0.98);
+}
+
+.messages-location-modal__header {
+  min-height: 58px;
+  padding: 14px 16px 12px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid rgba(17, 17, 17, 0.06);
+}
+
+.messages-location-modal__header strong {
+  font-size: 18px;
+  font-weight: 700;
+  color: #2a2a2a;
+}
+
+.messages-location-modal__close {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  color: #9b9b9b;
+  cursor: pointer;
+}
+
+.messages-location-modal__close svg {
+  width: 18px;
+  height: 18px;
+}
+
+.messages-location-modal__form {
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+
+.messages-location-modal__recent {
+  display: grid;
+  gap: 8px;
+}
+
+.messages-location-modal__recent-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #7d8c9f;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.messages-location-modal__recent-head svg {
+  width: 14px;
+  height: 14px;
+  color: #4d95ef;
+}
+
+.messages-location-modal__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.messages-location-chip {
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(238, 243, 249, 0.96);
+  color: #637488;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.messages-location-chip.is-active {
+  background: rgba(76, 149, 239, 0.16);
+  color: #2c7de0;
+}
+
+.messages-location-empty {
+  margin: 0;
+  color: #9ea8b4;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.messages-location-modal__preview {
+  border-radius: 22px;
+  overflow: hidden;
+  box-shadow:
+    0 16px 30px rgba(15, 23, 42, 0.06),
+    inset 0 0 0 1px rgba(187, 196, 207, 0.3);
 }
 
 .messages-memory-modal__panel {
@@ -2266,5 +2515,17 @@ body.embedded {
     left: 10px;
     right: 10px;
     padding: 16px 14px 14px;
+  }
+
+  .messages-location-modal {
+    padding: 16px;
+  }
+
+  .messages-location-modal__panel {
+    width: min(100%, 392px);
+  }
+
+  .messages-message-row__bubble-wrap--location {
+    max-width: min(calc(100% - 44px), 82vw, 360px);
   }
 }

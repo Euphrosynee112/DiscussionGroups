@@ -1046,6 +1046,26 @@ function loadProfile() {
 
 function syncProfileStateFromStorage() {
   state.profile = loadProfile();
+  let changed = false;
+  state.rooms = state.rooms.map((room) => {
+    const nextRoom = {
+      ...room,
+      name: String(state.profile.username || room.name || DEFAULT_PROFILE.username).trim(),
+      avatarImage: String(state.profile.avatarImage || "").trim(),
+      avatarText: getAvatarFallback(state.profile)
+    };
+    if (
+      nextRoom.name !== room.name ||
+      nextRoom.avatarImage !== room.avatarImage ||
+      nextRoom.avatarText !== room.avatarText
+    ) {
+      changed = true;
+    }
+    return nextRoom;
+  });
+  if (changed) {
+    persistBubbleRooms();
+  }
   return state.profile;
 }
 
@@ -1894,6 +1914,7 @@ function renderActiveChat() {
     return;
   }
 
+  syncProfileStateFromStorage();
   const room = getRoomById();
   const thread = ensureThread(state.activeRoomId);
   if (bubbleChatRoomNameEl) {

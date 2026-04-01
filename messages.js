@@ -15,6 +15,7 @@ const SCHEDULE_ENTRIES_KEY = "x_style_generator_schedule_entries_v1";
 const MESSAGE_JOURNAL_ENTRIES_KEY = "x_style_generator_message_journal_entries_v1";
 const MESSAGE_WEATHER_CACHE_KEY = "x_style_generator_message_weather_cache_v1";
 const MESSAGE_MEMORIES_KEY = "x_style_generator_message_memories_v1";
+const MESSAGE_RECENT_LOCATIONS_KEY = "x_style_generator_message_recent_locations_v1";
 const DEFAULT_TEMPERATURE = 0.85;
 const DEFAULT_MESSAGE_HISTORY_ROUNDS = 6;
 const MAX_MESSAGE_HISTORY_ROUNDS = 20;
@@ -243,6 +244,14 @@ const messagesRegenerateFormEl = document.querySelector("#messages-regenerate-fo
 const messagesRegenerateInstructionInputEl = document.querySelector(
   "#messages-regenerate-instruction-input"
 );
+const messagesLocationModalEl = document.querySelector("#messages-location-modal");
+const messagesLocationCloseBtnEl = document.querySelector("#messages-location-close-btn");
+const messagesLocationCancelBtnEl = document.querySelector("#messages-location-cancel-btn");
+const messagesLocationFormEl = document.querySelector("#messages-location-form");
+const messagesLocationNameInputEl = document.querySelector("#messages-location-name-input");
+const messagesLocationRecentListEl = document.querySelector("#messages-location-recent-list");
+const messagesLocationPreviewEl = document.querySelector("#messages-location-preview");
+const messagesLocationStatusEl = document.querySelector("#messages-location-status");
 const messagesJournalModalEl = document.querySelector("#messages-journal-modal");
 const messagesJournalCloseBtnEl = document.querySelector("#messages-journal-close-btn");
 const messagesJournalHistoryBtnEl = document.querySelector("#messages-journal-history-btn");
@@ -327,6 +336,7 @@ const state = {
   worldbooks: loadWorldbooks(),
   journalEntries: loadJournalEntries(),
   memories: loadMessageMemories(),
+  recentLocations: loadRecentLocations(),
   chatPromptSettings: loadSettings().messagePromptSettings,
   activeTab: "chat",
   activeConversationId: "",
@@ -349,6 +359,9 @@ const state = {
   messageActionMessageId: "",
   regenerateModalOpen: false,
   regenerateInstruction: "",
+  locationModalOpen: false,
+  locationDraftName: "",
+  locationDraftCoordinates: "",
   journalOpen: false,
   journalHistoryOpen: false,
   journalSettingsOpen: false,
@@ -476,6 +489,45 @@ function safeSetItem(key, value) {
   }
 }
 
+function normalizeRecentLocation(entry, index = 0) {
+  const source = entry && typeof entry === "object" ? entry : {};
+  const locationName = String(source.locationName || source.name || "").trim();
+  const coordinates = String(source.coordinates || "").trim();
+  if (!locationName || !coordinates) {
+    return null;
+  }
+  return {
+    id: String(source.id || `location_${index}_${hashText(`${locationName}_${coordinates}`)}`),
+    locationName: locationName.slice(0, 48),
+    coordinates,
+    updatedAt: Number(source.updatedAt) || Date.now()
+  };
+}
+
+function loadRecentLocations() {
+  const raw = safeGetItem(MESSAGE_RECENT_LOCATIONS_KEY);
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed
+          .map((item, index) => normalizeRecentLocation(item, index))
+          .filter(Boolean)
+          .sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0))
+          .slice(0, 5)
+      : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function persistRecentLocations() {
+  safeSetItem(MESSAGE_RECENT_LOCATIONS_KEY, JSON.stringify(state.recentLocations.slice(0, 5)));
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -510,6 +562,154 @@ function formatLocalTime(now = new Date()) {
   })
     .format(now)
     .replace(/^24:/, "00:");
+}
+
+function formatLocationCoordinates(longitude, latitude) {
+  const lngValue = Math.abs(Number(longitude) || 0).toFixed(3);
+  const latValue = Math.abs(Number(latitude) || 0).toFixed(4);
+  return `${lngValue}E, ${latValue}N`;
+}
+
+function buildRandomLocationCoordinates(seed = "") {
+  const hash = Number.parseInt(hashText(seed || Date.now()), 36) || Date.now();
+  const secondaryHash = Number.parseInt(hashText(`${seed}_lat`), 36) || hash * 7;
+  const longitude = 73 + ((hash % 62000) / 1000);
+  const latitude = 18 + ((secondaryHash % 35000) / 1000);
+  return formatLocationCoordinates(longitude, latitude);
+}
+
+function buildLocationMessageText(locationName, coordinates) {
+  return ["[定位消息]", `位置名称：${locationName}`, `坐标：${coordinates}`].join("\n");
+}
+
+function isLocationConversationMessage(message) {
+  const explicitType = String(message?.messageType || "").trim() === "location";
+  const hasPayload =
+    Boolean(String(message?.locationName || "").trim()) &&
+    Boolean(String(message?.coordinates || "").trim());
+  return explicitType || hasPayload;
+}
+
+function getConversationMessagePreviewText(message) {
+  if (isLocationConversationMessage(message)) {
+    return `📍 ${String(message.locationName || "").trim() || "分享了位置"}`;
+  }
+  return String(message?.text || "").trim();
+}
+
+function createSeededRandom(seedText = "") {
+  let seed = Number.parseInt(hashText(seedText), 36) || 1;
+  return () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+}
+
+function getLocationMapDecor(seedText = "") {
+  const random = createSeededRandom(seedText || "location");
+  const roads = Array.from({ length: 4 }, (_, index) => ({
+    left: 8 + random() * 72,
+    top: 12 + random() * 68,
+    width: 18 + random() * 18,
+    rotate: -32 + random() * 64,
+    color: index % 2 === 0 ? "#4ca2ff" : "#3d8be0"
+  }));
+  const dots = Array.from({ length: 5 }, () => ({
+    left: 8 + random() * 80,
+    top: 10 + random() * 74,
+    size: 6 + random() * 8
+  }));
+  const blocks = Array.from({ length: 5 }, (_, index) => ({
+    left: 10 + random() * 74,
+    top: 12 + random() * 70,
+    width: 12 + random() * 12,
+    height: 10 + random() * 14,
+    tone: index % 3
+  }));
+  const pin = {
+    left: 26 + random() * 46,
+    top: 18 + random() * 44
+  };
+  return { roads, dots, blocks, pin };
+}
+
+function renderLocationMapMarkup(locationName, coordinates, options = {}) {
+  const renderOptions = options && typeof options === "object" ? options : {};
+  const hasLocation = Boolean(String(locationName || "").trim());
+  const title = hasLocation ? String(locationName || "").trim() : "请输入位置名称";
+  const decor = getLocationMapDecor(`${title}_${coordinates}`);
+  return `
+    <div class="messages-location-map ${renderOptions.compact ? "is-compact" : ""}">
+      <div class="messages-location-map__header">
+        <span class="messages-location-map__pin-icon">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 19s5-4.3 5-8.4A5 5 0 0 0 7 10.6C7 14.7 12 19 12 19Z" fill="currentColor"></path>
+            <circle cx="12" cy="10.4" r="2.1" fill="#ffffff"></circle>
+          </svg>
+        </span>
+        <div class="messages-location-map__meta">
+          <strong>${escapeHtml(title)}</strong>
+          <small>${escapeHtml(coordinates || "11.451E, 17.1277N")}</small>
+        </div>
+      </div>
+      <div class="messages-location-map__canvas">
+        <div class="messages-location-map__grid"></div>
+        ${decor.roads
+          .map(
+            (road) => `
+              <span
+                class="messages-location-map__road"
+                style="left:${road.left.toFixed(2)}%;top:${road.top.toFixed(2)}%;width:${road.width.toFixed(
+                  2
+                )}%;transform:rotate(${road.rotate.toFixed(2)}deg);background:${road.color};"
+              ></span>
+            `
+          )
+          .join("")}
+        ${decor.dots
+          .map(
+            (dot) => `
+              <span
+                class="messages-location-map__dot"
+                style="left:${dot.left.toFixed(2)}%;top:${dot.top.toFixed(2)}%;width:${dot.size.toFixed(
+                  2
+                )}px;height:${dot.size.toFixed(2)}px;"
+              ></span>
+            `
+          )
+          .join("")}
+        ${decor.blocks
+          .map((block) => {
+            const palette = [
+              "rgba(255,255,255,0.92)",
+              "rgba(246,210,210,0.96)",
+              "rgba(214,238,255,0.96)"
+            ];
+            const borderPalette = ["rgba(188, 194, 209, 0.78)", "rgba(255, 158, 158, 0.82)", "rgba(114, 188, 255, 0.82)"];
+            return `
+              <span
+                class="messages-location-map__block"
+                style="left:${block.left.toFixed(2)}%;top:${block.top.toFixed(2)}%;width:${block.width.toFixed(
+                  2
+                )}%;height:${block.height.toFixed(2)}%;background:${palette[block.tone]};border-color:${
+                  borderPalette[block.tone]
+                };"
+              ></span>
+            `;
+          })
+          .join("")}
+        <span
+          class="messages-location-map__marker"
+          style="left:${decor.pin.left.toFixed(2)}%;top:${decor.pin.top.toFixed(2)}%;"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 22s7-5.8 7-11.3A7 7 0 0 0 5 10.7C5 16.2 12 22 12 22Z" fill="currentColor"></path>
+            <circle cx="12" cy="10.7" r="3" fill="#ffffff"></circle>
+          </svg>
+        </span>
+      </div>
+    </div>
+  `;
 }
 
 function formatTimelineTimestamp(value = Date.now()) {
@@ -1302,10 +1502,26 @@ function getWorldbookGroups() {
 
 function normalizeConversationMessage(message, index = 0) {
   const role = message?.role === "assistant" ? "assistant" : "user";
-  const text = String(message?.text || "").trim();
+  const messageType = isLocationConversationMessage(message) ? "location" : "text";
+  const locationName = String(message?.locationName || "").trim();
+  const coordinates = String(message?.coordinates || "").trim();
+  const text =
+    messageType === "location"
+      ? buildLocationMessageText(
+          locationName || "未命名位置",
+          coordinates || buildRandomLocationCoordinates(`${locationName}_${index}`)
+        )
+      : String(message?.text || "").trim();
   return {
     id: String(message?.id || `conversation_message_${Date.now()}_${index}`),
     role,
+    messageType,
+    locationName:
+      messageType === "location" ? locationName || "未命名位置" : "",
+    coordinates:
+      messageType === "location"
+        ? coordinates || buildRandomLocationCoordinates(`${locationName}_${index}`)
+        : "",
     text,
     needsReply: role === "user" ? Boolean(message?.needsReply) : false,
     time:
@@ -1396,7 +1612,7 @@ function getConversationMeta(conversation) {
 
 function getConversationPreview(conversation) {
   const latestMessage = conversation.messages[conversation.messages.length - 1] || null;
-  return latestMessage ? truncate(latestMessage.text, 46) : "";
+  return latestMessage ? truncate(getConversationMessagePreviewText(latestMessage), 46) : "";
 }
 
 function getConversationTime(conversation) {
@@ -2554,6 +2770,9 @@ function buildConversationSystemPrompt(
     "如果一句话里自然出现逗号或句号，请按分句拆成多行输出。",
     "每一行都会被视为一条单独发出的聊天消息。",
     "每一行结尾若原本是逗号或句号，请去掉这一枚逗号或句号。",
+    "如果聊天记录里出现“[定位消息]”，那代表对方真实发送了一条位置卡片，而不是普通文本。",
+    '如果你也要发送定位，必须单独输出一行严格 JSON，格式固定为：[{"type":"location","locationName":"位置名","coordinates":"116.417E, 40.1277N"}]。',
+    "定位 JSON 不要放进代码块，不要添加解释、前缀、序号或额外说明；它本身就算一行回复。",
     "不要去掉感叹号、问号、波浪号、省略号等表达情绪的标点。",
     "不要输出编号、列表符号、引号包裹、解释说明、舞台指令或心理活动旁白。"
   );
@@ -2885,6 +3104,33 @@ function parseJsonLikeContent(value) {
   return null;
 }
 
+function parseLocationMessagePayload(value) {
+  const parsed =
+    (Array.isArray(value) ? value : null) ||
+    parseJsonLikeContent(value) ||
+    parseJsonLikeContent(resolveMessage(value));
+
+  const items = Array.isArray(parsed) ? parsed : [];
+  return items
+    .map((item) => {
+      const source = item && typeof item === "object" ? item : {};
+      if (String(source.type || "").trim().toLowerCase() !== "location") {
+        return null;
+      }
+      const locationName = String(source.locationName || source.name || "").trim();
+      const coordinates = String(source.coordinates || "").trim();
+      if (!locationName || !coordinates) {
+        return null;
+      }
+      return {
+        messageType: "location",
+        locationName: locationName.slice(0, 48),
+        coordinates
+      };
+    })
+    .filter(Boolean);
+}
+
 function parseMemorySummaryPayload(payload, contactId = "") {
   const parsed =
     (payload && typeof payload === "object" && Array.isArray(payload.memories) ? payload : null) ||
@@ -3057,37 +3303,136 @@ function splitReplyIntoMessageLines(text) {
   return lines.length ? lines : [resolved];
 }
 
-function limitReplyLines(lines = [], limit = DEFAULT_MESSAGE_REPLY_SENTENCE_LIMIT) {
+function extractLocationReplyBlocks(text) {
+  let workingText = String(text || "").replace(/\r/g, "").trim();
+  if (!workingText) {
+    return { text: "", blocks: [] };
+  }
+
+  const blocks = [];
+  const replaceBlock = (candidate, parsedItems) => {
+    if (!candidate || !parsedItems.length) {
+      return;
+    }
+    const token = `__PULSE_LOCATION_BLOCK_${blocks.length}__`;
+    blocks.push({
+      token,
+      items: parsedItems
+    });
+    workingText = workingText.replace(candidate, `\n${token}\n`);
+  };
+
+  workingText = workingText.replace(/```(?:json)?\s*([\s\S]*?)```/gi, (match, inner) => {
+    const parsedItems = parseLocationMessagePayload(String(inner || "").trim());
+    if (!parsedItems.length) {
+      return match;
+    }
+    const token = `__PULSE_LOCATION_BLOCK_${blocks.length}__`;
+    blocks.push({ token, items: parsedItems });
+    return `\n${token}\n`;
+  });
+
+  const locationPattern = /\[\s*\{[\s\S]*?"type"\s*:\s*"location"[\s\S]*?\}\s*\]/i;
+  let guard = 0;
+  while (guard < 8) {
+    const match = locationPattern.exec(workingText);
+    if (!match || typeof match.index !== "number") {
+      break;
+    }
+    const candidate = match[0];
+    const parsedItems = parseLocationMessagePayload(candidate);
+    if (!parsedItems.length) {
+      break;
+    }
+    replaceBlock(candidate, parsedItems);
+    guard += 1;
+  }
+
+  return { text: workingText, blocks };
+}
+
+function limitReplyItems(items = [], limit = DEFAULT_MESSAGE_REPLY_SENTENCE_LIMIT) {
   const resolvedLimit = clampNumber(
     normalizePositiveInteger(limit, DEFAULT_MESSAGE_REPLY_SENTENCE_LIMIT),
     1,
     MAX_MESSAGE_REPLY_SENTENCE_LIMIT
   );
-  const normalized = Array.isArray(lines)
-    ? lines.map((item) => String(item || "").trim()).filter(Boolean)
+  const normalized = Array.isArray(items)
+    ? items.filter(Boolean)
     : [];
   if (normalized.length <= resolvedLimit) {
     return normalized;
   }
 
   const limited = normalized.slice(0, resolvedLimit);
-  limited[resolvedLimit - 1] = [limited[resolvedLimit - 1], ...normalized.slice(resolvedLimit)]
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const overflow = normalized.slice(resolvedLimit);
+  const lastItem = limited[resolvedLimit - 1];
+  if (lastItem && lastItem.messageType !== "location") {
+    const mergedText = [String(lastItem.text || "").trim()]
+      .concat(
+        overflow
+          .filter((item) => item.messageType !== "location")
+          .map((item) => String(item.text || "").trim())
+      )
+      .filter(Boolean)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    limited[resolvedLimit - 1] = {
+      ...lastItem,
+      text: mergedText
+    };
+  }
   return limited.filter(Boolean);
 }
 
-function buildReplyLines(replyText, promptSettings = {}) {
-  const lines = limitReplyLines(
-    splitReplyIntoMessageLines(replyText),
+function buildReplyItems(replyText, promptSettings = {}) {
+  const { text: textWithoutLocationBlocks, blocks } = extractLocationReplyBlocks(replyText);
+  const blockMap = new Map(blocks.map((block) => [block.token, block.items]));
+  const rawLines = String(textWithoutLocationBlocks || "")
+    .split("\n")
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+  const items = [];
+
+  rawLines.forEach((line) => {
+    if (blockMap.has(line)) {
+      blockMap.get(line).forEach((item) => {
+        items.push({
+          ...item,
+          text: buildLocationMessageText(item.locationName, item.coordinates)
+        });
+      });
+      return;
+    }
+    splitReplyIntoMessageLines(line).forEach((textLine) => {
+      const normalizedLine = String(textLine || "").trim();
+      if (!normalizedLine) {
+        return;
+      }
+      items.push({
+        messageType: "text",
+        text: normalizedLine
+      });
+    });
+  });
+
+  const limitedItems = limitReplyItems(
+    items,
     normalizeMessagePromptSettings(promptSettings).replySentenceLimit
   ).filter(Boolean);
-  if (lines.length) {
-    return lines;
+  if (limitedItems.length) {
+    return limitedItems;
   }
   const fallback = String(replyText || "").trim();
-  return fallback ? [fallback] : [];
+  return fallback
+    ? [
+        {
+          messageType: "text",
+          text: fallback
+        }
+      ]
+    : [];
 }
 
 function recalculateConversationUpdatedAt(conversation) {
@@ -3099,22 +3444,25 @@ function recalculateConversationUpdatedAt(conversation) {
 }
 
 async function appendAssistantReplyBatch(conversation, replyText, promptSettings = {}) {
-  const replyLines = buildReplyLines(replyText, promptSettings);
-  if (!replyLines.length) {
+  const replyItems = buildReplyItems(replyText, promptSettings);
+  if (!replyItems.length) {
     throw new Error("接口请求成功，但没有可展示的回复内容。");
   }
   const now = Date.now();
   const timeLabel = formatLocalTime();
   const createdMessages = [];
 
-  for (let index = 0; index < replyLines.length; index += 1) {
+  for (let index = 0; index < replyItems.length; index += 1) {
     await sleep(index === 0 ? 1640 : 1460);
-    const line = replyLines[index];
+    const item = replyItems[index];
     const replyMessage = normalizeConversationMessage(
       {
-        id: `message_${now}_${index}_${hashText(line)}`,
+        id: `message_${now}_${index}_${hashText(item.text || item.locationName || "")}`,
         role: "assistant",
-        text: line,
+        messageType: item.messageType || "text",
+        text: item.text || "",
+        locationName: item.locationName || "",
+        coordinates: item.coordinates || "",
         time: timeLabel,
         createdAt: now + index
       },
@@ -3264,10 +3612,7 @@ async function requestChatReplyText(
         responseText: rawResponse,
         responseBody: payload,
         summary: `联系人：${contact.name} · 已生成 ${
-          limitReplyLines(
-            splitReplyIntoMessageLines(message),
-            resolvedPromptSettings.replySentenceLimit
-          ).length || 1
+          buildReplyItems(message, resolvedPromptSettings).length || 1
         } 行回复${summarySuffix}`
       });
       logged = true;
@@ -3508,6 +3853,7 @@ function updateBodyModalState() {
     state.memoryEditorOpen ||
     state.memorySettingsOpen ||
     state.regenerateModalOpen ||
+    state.locationModalOpen ||
     state.schedulePreviewOpen ||
     state.journalOpen ||
     state.journalHistoryOpen ||
@@ -3518,6 +3864,100 @@ function updateBodyModalState() {
 function closeConversationTransientUi() {
   state.composerPanelOpen = false;
   state.messageActionMessageId = "";
+}
+
+function setLocationStatus(message = "", tone = "") {
+  setEditorStatus(messagesLocationStatusEl, message, tone);
+}
+
+function updateLocationDraft(name, coordinates = "") {
+  state.locationDraftName = String(name || "").trim();
+  state.locationDraftCoordinates =
+    String(coordinates || "").trim() ||
+    (state.locationDraftName ? buildRandomLocationCoordinates(state.locationDraftName) : "");
+  renderLocationModal();
+}
+
+function saveRecentLocation(locationName, coordinates) {
+  const normalized = normalizeRecentLocation({
+    locationName,
+    coordinates,
+    updatedAt: Date.now()
+  });
+  if (!normalized) {
+    return;
+  }
+  state.recentLocations = [normalized]
+    .concat(
+      state.recentLocations.filter(
+        (item) =>
+          String(item.locationName || "").trim().toLowerCase() !==
+          String(normalized.locationName || "").trim().toLowerCase()
+      )
+    )
+    .slice(0, 5);
+  persistRecentLocations();
+}
+
+function renderLocationModal() {
+  if (!messagesLocationRecentListEl || !messagesLocationPreviewEl) {
+    return;
+  }
+
+  const currentName = String(state.locationDraftName || "").trim();
+  const currentCoordinates =
+    String(state.locationDraftCoordinates || "").trim() ||
+    (currentName ? buildRandomLocationCoordinates(currentName) : "");
+
+  messagesLocationRecentListEl.innerHTML = state.recentLocations.length
+    ? state.recentLocations
+        .map(
+          (item) => `
+            <button
+              type="button"
+              class="messages-location-chip${
+                currentName === item.locationName && currentCoordinates === item.coordinates
+                  ? " is-active"
+                  : ""
+              }"
+              data-action="use-recent-location"
+              data-location-name="${escapeHtml(item.locationName)}"
+              data-location-coordinates="${escapeHtml(item.coordinates)}"
+            >
+              ${escapeHtml(item.locationName)}
+            </button>
+          `
+        )
+        .join("")
+    : '<p class="messages-location-empty">还没有最近使用的定位，发送一条后会保留最近 5 条。</p>';
+
+  messagesLocationPreviewEl.innerHTML = renderLocationMapMarkup(currentName, currentCoordinates, {
+    compact: false
+  });
+
+  if (messagesLocationNameInputEl && messagesLocationNameInputEl.value !== currentName) {
+    messagesLocationNameInputEl.value = currentName;
+  }
+}
+
+function setLocationModalOpen(isOpen) {
+  state.locationModalOpen = Boolean(isOpen);
+  if (messagesLocationModalEl) {
+    messagesLocationModalEl.hidden = !state.locationModalOpen;
+    messagesLocationModalEl.setAttribute("aria-hidden", String(!state.locationModalOpen));
+  }
+  if (state.locationModalOpen) {
+    renderLocationModal();
+    setLocationStatus("");
+    window.setTimeout(() => {
+      messagesLocationNameInputEl?.focus();
+    }, 0);
+  } else {
+    state.locationDraftName = "";
+    state.locationDraftCoordinates = "";
+    setLocationStatus("");
+  }
+  updateBodyModalState();
 }
 
 function setRegenerateModalOpen(isOpen) {
@@ -4238,49 +4678,87 @@ function renderConversationUtilityPanel() {
   `;
 }
 
+function renderConversationMessageMenu(message, isMenuOpen) {
+  if (!isMenuOpen) {
+    return "";
+  }
+  const actions = isLocationConversationMessage(message)
+    ? [
+        `
+          <button
+            type="button"
+            data-action="delete-conversation-message"
+            data-message-id="${escapeHtml(message.id)}"
+          >
+            删除
+          </button>
+        `
+      ]
+    : [
+        `
+          <button
+            type="button"
+            data-action="edit-conversation-message"
+            data-message-id="${escapeHtml(message.id)}"
+          >
+            编辑
+          </button>
+        `,
+        `
+          <button
+            type="button"
+            data-action="delete-conversation-message"
+            data-message-id="${escapeHtml(message.id)}"
+          >
+            删除
+          </button>
+        `
+      ];
+  return `
+    <div class="messages-message-row__menu" role="group" aria-label="消息操作">
+      ${actions.join("")}
+    </div>
+  `;
+}
+
+function renderConversationLocationCard(message) {
+  return `
+    <article class="messages-location-card">
+      ${renderLocationMapMarkup(message.locationName, message.coordinates, { compact: true })}
+    </article>
+  `;
+}
+
 function renderConversationMessage(message, conversation, promptSettings = state.chatPromptSettings) {
   const isUser = message.role === "user";
   const avatarMarkup = buildConversationDetailAvatarMarkup(message.role, conversation, promptSettings);
   const isMenuOpen = state.messageActionMessageId === message.id;
+  const isLocationMessage = isLocationConversationMessage(message);
+  const bubbleMarkup = isLocationMessage
+    ? renderConversationLocationCard(message)
+    : `
+      <article class="messages-bubble ${isUser ? "messages-bubble--user" : "messages-bubble--assistant"}">
+        <p>${escapeHtml(message.text)}</p>
+      </article>
+    `;
   return `
     <article class="messages-message-row messages-message-row--${isUser ? "user" : "assistant"}${
       avatarMarkup ? "" : " is-avatar-hidden"
-    }">
+    }${isLocationMessage ? " messages-message-row--location" : ""}">
       ${!isUser && avatarMarkup ? avatarMarkup : ""}
-      <div class="messages-message-row__bubble-wrap">
+      <div class="messages-message-row__bubble-wrap${
+        isLocationMessage ? " messages-message-row__bubble-wrap--location" : ""
+      }">
         <div class="messages-message-row__stack">
           <button
             type="button"
-            class="messages-bubble-toggle"
+            class="messages-bubble-toggle${isLocationMessage ? " messages-bubble-toggle--location" : ""}"
             data-action="toggle-message-menu"
             data-message-id="${escapeHtml(message.id)}"
           >
-            <article class="messages-bubble ${isUser ? "messages-bubble--user" : "messages-bubble--assistant"}">
-              <p>${escapeHtml(message.text)}</p>
-            </article>
+            ${bubbleMarkup}
           </button>
-          ${
-            isMenuOpen
-              ? `
-                <div class="messages-message-row__menu" role="group" aria-label="消息操作">
-                  <button
-                    type="button"
-                    data-action="edit-conversation-message"
-                    data-message-id="${escapeHtml(message.id)}"
-                  >
-                    编辑
-                  </button>
-                  <button
-                    type="button"
-                    data-action="delete-conversation-message"
-                    data-message-id="${escapeHtml(message.id)}"
-                  >
-                    删除
-                  </button>
-                </div>
-              `
-              : ""
-          }
+          ${renderConversationMessageMenu(message, isMenuOpen)}
         </div>
       </div>
       ${isUser && avatarMarkup ? avatarMarkup : ""}
@@ -4554,6 +5032,9 @@ function renderMeTab() {
 }
 
 function renderMessagesPage() {
+  if (!state.profileEditorOpen) {
+    syncProfileStateFromStorage();
+  }
   const inConversation = Boolean(state.activeConversationId && state.activeTab === "chat");
   if (messagesContentEl) {
     messagesContentEl.classList.toggle("is-conversation-view", inConversation);
@@ -5519,6 +6000,10 @@ function editConversationMessage(messageId = "") {
     setMessagesStatus("未找到要编辑的消息。", "error");
     return;
   }
+  if (isLocationConversationMessage(targetMessage)) {
+    setMessagesStatus("定位消息暂不支持直接编辑，请删除后重新发送。", "error");
+    return;
+  }
   const nextText = window.prompt(
     targetMessage.role === "user" ? "编辑你发送的消息" : "编辑角色回复",
     targetMessage.text
@@ -5593,6 +6078,18 @@ function handleConversationToolAction(toolId = "") {
     return;
   }
 
+  if (resolvedToolId === "location") {
+    const conversation = getConversationById();
+    if (!conversation) {
+      setMessagesStatus("请先进入一个聊天，再发送位置。", "error");
+      renderConversationDetail();
+      return;
+    }
+    renderConversationDetail();
+    setLocationModalOpen(true);
+    return;
+  }
+
   if (resolvedToolId === "regenerate") {
     const conversation = getConversationById();
     if (!conversation) {
@@ -5617,6 +6114,45 @@ function handleConversationToolAction(toolId = "") {
   renderConversationDetail();
   const entry = CHAT_UTILITY_ITEMS.find((item) => item.id === resolvedToolId);
   setMessagesStatus(`${entry?.label || "该"}功能暂未开放。`);
+}
+
+function sendConversationLocation(locationName, coordinates) {
+  const resolvedName = String(locationName || "").trim();
+  if (!resolvedName) {
+    setLocationStatus("请输入位置名称。", "error");
+    return;
+  }
+
+  const resolvedCoordinates =
+    String(coordinates || "").trim() || buildRandomLocationCoordinates(resolvedName);
+  const conversation = getConversationById();
+  if (!conversation) {
+    return;
+  }
+
+  closeConversationTransientUi();
+  const userMessage = normalizeConversationMessage(
+    {
+      id: `message_${Date.now()}_${hashText(`${resolvedName}_${resolvedCoordinates}`)}`,
+      role: "user",
+      messageType: "location",
+      locationName: resolvedName,
+      coordinates: resolvedCoordinates,
+      needsReply: true,
+      time: formatLocalTime(),
+      createdAt: Date.now()
+    },
+    conversation.messages.length
+  );
+
+  conversation.messages = [...conversation.messages, userMessage];
+  conversation.updatedAt = userMessage.createdAt;
+  saveRecentLocation(resolvedName, resolvedCoordinates);
+  persistConversations();
+  setLocationModalOpen(false);
+  renderMessagesPage();
+  focusConversationInput({ force: false });
+  setMessagesStatus("定位已加入对话，点击右侧圆标向 API 请求回复。", "success");
 }
 
 function sendConversationMessage(text) {
@@ -5775,6 +6311,7 @@ function refreshStateFromStorage() {
   state.worldbooks = loadWorldbooks();
   state.journalEntries = loadJournalEntries();
   state.memories = loadMessageMemories();
+  state.recentLocations = loadRecentLocations();
   state.chatPromptSettings = normalizeMessagePromptSettings(loadSettings().messagePromptSettings);
 }
 
@@ -6386,6 +6923,50 @@ function attachEvents() {
     });
   }
 
+  if (messagesLocationCloseBtnEl) {
+    messagesLocationCloseBtnEl.addEventListener("click", () => {
+      setLocationModalOpen(false);
+    });
+  }
+
+  if (messagesLocationCancelBtnEl) {
+    messagesLocationCancelBtnEl.addEventListener("click", () => {
+      setLocationModalOpen(false);
+    });
+  }
+
+  if (messagesLocationNameInputEl) {
+    messagesLocationNameInputEl.addEventListener("input", () => {
+      updateLocationDraft(messagesLocationNameInputEl.value || "");
+      setLocationStatus("");
+    });
+  }
+
+  if (messagesLocationRecentListEl) {
+    messagesLocationRecentListEl.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      const actionEl = target.closest("[data-action='use-recent-location']");
+      if (!(actionEl instanceof Element)) {
+        return;
+      }
+      updateLocationDraft(
+        String(actionEl.getAttribute("data-location-name") || ""),
+        String(actionEl.getAttribute("data-location-coordinates") || "")
+      );
+      setLocationStatus("已填入最近使用的位置。", "success");
+    });
+  }
+
+  if (messagesLocationFormEl) {
+    messagesLocationFormEl.addEventListener("submit", (event) => {
+      event.preventDefault();
+      sendConversationLocation(state.locationDraftName, state.locationDraftCoordinates);
+    });
+  }
+
   if (messagesJournalCloseBtnEl) {
     messagesJournalCloseBtnEl.addEventListener("click", () => {
       setJournalOpen(false);
@@ -6592,6 +7173,14 @@ function attachEvents() {
     });
   }
 
+  if (messagesLocationModalEl) {
+    messagesLocationModalEl.addEventListener("click", (event) => {
+      if (event.target === messagesLocationModalEl) {
+        setLocationModalOpen(false);
+      }
+    });
+  }
+
   if (messagesJournalModalEl) {
     messagesJournalModalEl.addEventListener("click", (event) => {
       if (event.target === messagesJournalModalEl) {
@@ -6656,6 +7245,7 @@ function attachEvents() {
       state.worldbookManagerOpen ||
       state.worldbookEditorOpen ||
       state.regenerateModalOpen ||
+      state.locationModalOpen ||
       state.schedulePreviewOpen ||
       state.journalOpen ||
       state.journalHistoryOpen ||
@@ -6665,6 +7255,20 @@ function attachEvents() {
     }
     refreshStateFromStorage();
     renderMessagesPage();
+  });
+
+  window.addEventListener("storage", (event) => {
+    if (event.key && ![PROFILE_KEY, MESSAGE_RECENT_LOCATIONS_KEY, MESSAGE_THREADS_KEY].includes(event.key)) {
+      return;
+    }
+    if (state.profileEditorOpen || state.contactEditorOpen) {
+      return;
+    }
+    refreshStateFromStorage();
+    renderMessagesPage();
+    if (state.locationModalOpen) {
+      renderLocationModal();
+    }
   });
 
   document.addEventListener("keydown", (event) => {
@@ -6706,6 +7310,10 @@ function attachEvents() {
     }
     if (event.key === "Escape" && state.regenerateModalOpen) {
       setRegenerateModalOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.locationModalOpen) {
+      setLocationModalOpen(false);
       return;
     }
     if (event.key === "Escape" && state.schedulePreviewOpen) {
