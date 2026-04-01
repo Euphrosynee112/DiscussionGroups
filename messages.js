@@ -14,6 +14,7 @@ const BUBBLE_THREADS_KEY = "x_style_generator_bubble_threads_v1";
 const SCHEDULE_ENTRIES_KEY = "x_style_generator_schedule_entries_v1";
 const MESSAGE_JOURNAL_ENTRIES_KEY = "x_style_generator_message_journal_entries_v1";
 const MESSAGE_WEATHER_CACHE_KEY = "x_style_generator_message_weather_cache_v1";
+const MESSAGE_MEMORIES_KEY = "x_style_generator_message_memories_v1";
 const DEFAULT_TEMPERATURE = 0.85;
 const DEFAULT_MESSAGE_HISTORY_ROUNDS = 6;
 const MAX_MESSAGE_HISTORY_ROUNDS = 20;
@@ -23,6 +24,10 @@ const DEFAULT_MESSAGE_JOURNAL_LENGTH = 320;
 const MAX_MESSAGE_JOURNAL_LENGTH = 1600;
 const DEFAULT_SCHEDULE_AWARENESS_WINDOW_MINUTES = 30;
 const MAX_SCHEDULE_AWARENESS_WINDOW_MINUTES = 720;
+const DEFAULT_MEMORY_SUMMARY_INTERVAL_ROUNDS = 4;
+const MAX_MEMORY_SUMMARY_INTERVAL_ROUNDS = 20;
+const DEFAULT_CORE_MEMORY_THRESHOLD = 80;
+const DEFAULT_SCENE_MEMORY_THRESHOLD = 65;
 const DEFAULT_CONTEXT_FOCUS_MINUTES = 60;
 const MAX_CONTEXT_FOCUS_MINUTES = 1440;
 const DEFAULT_WORLDVIEW =
@@ -35,11 +40,18 @@ const DEFAULT_SETTINGS = {
   model: DEFAULT_DEEPSEEK_MODEL,
   apiConfigs: [],
   activeApiConfigId: "",
+  translationApiEnabled: false,
+  translationApiConfigId: "",
+  summaryApiEnabled: false,
+  summaryApiConfigId: "",
   worldview: DEFAULT_WORLDVIEW,
   messagePromptSettings: {
     historyRounds: DEFAULT_MESSAGE_HISTORY_ROUNDS,
     replySentenceLimit: DEFAULT_MESSAGE_REPLY_SENTENCE_LIMIT,
     journalLength: DEFAULT_MESSAGE_JOURNAL_LENGTH,
+    memorySummaryIntervalRounds: DEFAULT_MEMORY_SUMMARY_INTERVAL_ROUNDS,
+    coreMemoryThreshold: DEFAULT_CORE_MEMORY_THRESHOLD,
+    sceneMemoryThreshold: DEFAULT_SCENE_MEMORY_THRESHOLD,
     timeAwareness: false,
     scheduleAwarenessWindowMinutes: DEFAULT_SCHEDULE_AWARENESS_WINDOW_MINUTES,
     hotTopicsEnabled: false,
@@ -76,6 +88,7 @@ const TAB_TITLES = {
 
 const CONTACT_ENTRY_GROUPS = [
   [
+    { id: "memory", label: "记忆", icon: "memory" },
     { id: "worldbook", label: "世界书", icon: "cube" },
     { id: "favorites", label: "收藏", icon: "star" },
     { id: "moments", label: "朋友圈", icon: "image" },
@@ -255,6 +268,51 @@ const messagesJournalSettingsStatusEl = document.querySelector(
 const messagesScheduleModalEl = document.querySelector("#messages-schedule-modal");
 const messagesScheduleCloseBtnEl = document.querySelector("#messages-schedule-close-btn");
 const messagesScheduleBodyEl = document.querySelector("#messages-schedule-body");
+const messagesMemoryModalEl = document.querySelector("#messages-memory-modal");
+const messagesMemoryCloseBtnEl = document.querySelector("#messages-memory-close-btn");
+const messagesMemoryAddBtnEl = document.querySelector("#messages-memory-add-btn");
+const messagesMemorySettingsBtnEl = document.querySelector("#messages-memory-settings-btn");
+const messagesMemoryContactSelectEl = document.querySelector("#messages-memory-contact-select");
+const messagesMemorySearchInputEl = document.querySelector("#messages-memory-search-input");
+const messagesMemorySearchBtnEl = document.querySelector("#messages-memory-search-btn");
+const messagesMemoryStatusEl = document.querySelector("#messages-memory-status");
+const messagesMemoryListEl = document.querySelector("#messages-memory-list");
+const messagesMemoryEditorModalEl = document.querySelector("#messages-memory-editor-modal");
+const messagesMemoryEditorCloseBtnEl = document.querySelector("#messages-memory-editor-close-btn");
+const messagesMemoryEditorCancelBtnEl = document.querySelector(
+  "#messages-memory-editor-cancel-btn"
+);
+const messagesMemoryEditorFormEl = document.querySelector("#messages-memory-editor-form");
+const messagesMemoryEditorContactSelectEl = document.querySelector(
+  "#messages-memory-editor-contact-select"
+);
+const messagesMemoryEditorContentInputEl = document.querySelector(
+  "#messages-memory-editor-content-input"
+);
+const messagesMemoryEditorImportanceInputEl = document.querySelector(
+  "#messages-memory-editor-importance-input"
+);
+const messagesMemoryEditorStatusEl = document.querySelector("#messages-memory-editor-status");
+const messagesMemorySettingsModalEl = document.querySelector("#messages-memory-settings-modal");
+const messagesMemorySettingsCloseBtnEl = document.querySelector(
+  "#messages-memory-settings-close-btn"
+);
+const messagesMemorySettingsCancelBtnEl = document.querySelector(
+  "#messages-memory-settings-cancel-btn"
+);
+const messagesMemorySettingsFormEl = document.querySelector("#messages-memory-settings-form");
+const messagesMemorySummaryIntervalInputEl = document.querySelector(
+  "#messages-memory-summary-interval-input"
+);
+const messagesMemoryCoreThresholdInputEl = document.querySelector(
+  "#messages-memory-core-threshold-input"
+);
+const messagesMemorySceneThresholdInputEl = document.querySelector(
+  "#messages-memory-scene-threshold-input"
+);
+const messagesMemorySettingsStatusEl = document.querySelector(
+  "#messages-memory-settings-status"
+);
 
 const memoryStorage = {};
 const initialWindowFocusPrimed =
@@ -268,6 +326,7 @@ const state = {
   conversations: loadConversations(),
   worldbooks: loadWorldbooks(),
   journalEntries: loadJournalEntries(),
+  memories: loadMessageMemories(),
   chatPromptSettings: loadSettings().messagePromptSettings,
   activeTab: "chat",
   activeConversationId: "",
@@ -294,6 +353,13 @@ const state = {
   journalHistoryOpen: false,
   journalSettingsOpen: false,
   schedulePreviewOpen: false,
+  memoryViewerOpen: false,
+  memoryEditorOpen: false,
+  memorySettingsOpen: false,
+  memoryStandaloneLaunch: false,
+  memorySelectedContactId: "",
+  memoryQuery: "",
+  memoryTab: "all",
   journalGenerating: false,
   journalWeatherDate: "",
   journalWeatherLabel: "",
@@ -322,6 +388,29 @@ function requestEmbeddedClose() {
     window.parent?.postMessage({ type: "pulse-generator-close-app" }, "*");
   } catch (_error) {
   }
+}
+
+function getMessagesLaunchView() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const view = String(params.get("view") || params.get("entry") || "").trim().toLowerCase();
+    if (view === "memory") {
+      return "memory";
+    }
+    if (params.get("memory") === "1") {
+      return "memory";
+    }
+  } catch (_error) {
+  }
+  return "";
+}
+
+function dismissMemoryViewer() {
+  if (state.memoryStandaloneLaunch && isEmbeddedView()) {
+    requestEmbeddedClose();
+    return;
+  }
+  setMemoryViewerOpen(false);
 }
 
 function notifyEmbeddedReady() {
@@ -509,6 +598,24 @@ function normalizeMessagePromptSettings(source = {}) {
       80,
       MAX_MESSAGE_JOURNAL_LENGTH
     ),
+    memorySummaryIntervalRounds: clampNumber(
+      normalizePositiveInteger(
+        resolved.memorySummaryIntervalRounds,
+        DEFAULT_MEMORY_SUMMARY_INTERVAL_ROUNDS
+      ),
+      1,
+      MAX_MEMORY_SUMMARY_INTERVAL_ROUNDS
+    ),
+    coreMemoryThreshold: clampNumber(
+      normalizePositiveInteger(resolved.coreMemoryThreshold, DEFAULT_CORE_MEMORY_THRESHOLD),
+      1,
+      100
+    ),
+    sceneMemoryThreshold: clampNumber(
+      normalizePositiveInteger(resolved.sceneMemoryThreshold, DEFAULT_SCENE_MEMORY_THRESHOLD),
+      1,
+      100
+    ),
     timeAwareness:
       typeof resolved.timeAwareness === "boolean"
         ? resolved.timeAwareness
@@ -677,6 +784,20 @@ function buildNormalizedSettingsSnapshot(source) {
         : String(activeConfig.model || getDefaultModelByMode(activeConfig.mode)).trim() ||
           getDefaultModelByMode(activeConfig.mode);
   }
+
+  if (!merged.apiConfigs.some((item) => item.id === merged.translationApiConfigId)) {
+    merged.translationApiConfigId = "";
+    merged.translationApiEnabled = false;
+  }
+  merged.translationApiEnabled = Boolean(
+    merged.translationApiEnabled && merged.translationApiConfigId
+  );
+
+  if (!merged.apiConfigs.some((item) => item.id === merged.summaryApiConfigId)) {
+    merged.summaryApiConfigId = "";
+    merged.summaryApiEnabled = false;
+  }
+  merged.summaryApiEnabled = Boolean(merged.summaryApiEnabled && merged.summaryApiConfigId);
 
   return merged;
 }
@@ -1008,6 +1129,140 @@ function persistJournalEntries() {
   safeSetItem(MESSAGE_JOURNAL_ENTRIES_KEY, JSON.stringify(state.journalEntries));
 }
 
+function normalizeMemoryType(type) {
+  const resolved = String(type || "").trim().toLowerCase();
+  if (resolved === "core" || resolved === "核心记忆") {
+    return "core";
+  }
+  return "scene";
+}
+
+function normalizeMemoryImportance(value, fallback = DEFAULT_SCENE_MEMORY_THRESHOLD) {
+  return clampNumber(normalizePositiveInteger(value, fallback), 1, 100);
+}
+
+function normalizeMessageMemory(memory, index = 0) {
+  const source = memory && typeof memory === "object" ? memory : {};
+  const content = String(source.content || source.text || "").trim();
+  return {
+    id: String(source.id || `message_memory_${Date.now()}_${index}`),
+    contactId: String(source.contactId || "").trim(),
+    type: normalizeMemoryType(source.type),
+    content,
+    importance: normalizeMemoryImportance(source.importance, DEFAULT_SCENE_MEMORY_THRESHOLD),
+    source: String(source.source || "summary").trim() === "manual" ? "manual" : "summary",
+    createdAt: Number(source.createdAt) || Date.now(),
+    updatedAt: Number(source.updatedAt) || Number(source.createdAt) || Date.now()
+  };
+}
+
+function loadMessageMemories() {
+  const raw = safeGetItem(MESSAGE_MEMORIES_KEY);
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed
+          .map((item, index) => normalizeMessageMemory(item, index))
+          .filter((item) => item.contactId && item.content)
+      : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function persistMessageMemories() {
+  safeSetItem(MESSAGE_MEMORIES_KEY, JSON.stringify(state.memories));
+}
+
+function canonicalizeMemoryContent(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[，。！？、,.!?；;:“”"'（）()【】\[\]《》<>—\-]/g, "");
+}
+
+function memoryLooksSimilar(left = "", right = "") {
+  const leftText = canonicalizeMemoryContent(left);
+  const rightText = canonicalizeMemoryContent(right);
+  if (!leftText || !rightText) {
+    return false;
+  }
+  if (leftText === rightText) {
+    return true;
+  }
+  const shorter = leftText.length <= rightText.length ? leftText : rightText;
+  const longer = shorter === leftText ? rightText : leftText;
+  return shorter.length >= 8 && longer.includes(shorter);
+}
+
+function mergeMemories(existing = [], incoming = []) {
+  const next = Array.isArray(existing) ? [...existing] : [];
+  incoming.forEach((candidate, index) => {
+    const entry = normalizeMessageMemory(candidate, index);
+    if (!entry.contactId || !entry.content) {
+      return;
+    }
+    const foundIndex = next.findIndex(
+      (item) =>
+        item.contactId === entry.contactId && memoryLooksSimilar(item.content, entry.content)
+    );
+    if (foundIndex < 0) {
+      next.unshift(entry);
+      return;
+    }
+    const current = next[foundIndex];
+    next[foundIndex] = {
+      ...current,
+      type: current.type === "core" || entry.type === "core" ? "core" : "scene",
+      importance: Math.max(Number(current.importance) || 0, Number(entry.importance) || 0),
+      source: current.source === "manual" ? "manual" : entry.source,
+      updatedAt: Math.max(Number(current.updatedAt) || 0, Number(entry.updatedAt) || 0) || Date.now(),
+      content:
+        String(current.content || "").trim().length >= String(entry.content || "").trim().length
+          ? current.content
+          : entry.content
+    };
+  });
+  return next
+    .filter((item) => item.contactId && item.content)
+    .sort(
+      (left, right) =>
+        (right.importance || 0) - (left.importance || 0) ||
+        (right.updatedAt || 0) - (left.updatedAt || 0)
+    );
+}
+
+function getMemoriesForContact(contactId = "") {
+  const resolvedContactId = String(contactId || "").trim();
+  if (!resolvedContactId) {
+    return [];
+  }
+  return state.memories
+    .filter((item) => item.contactId === resolvedContactId)
+    .slice()
+    .sort(
+      (left, right) =>
+        (right.importance || 0) - (left.importance || 0) ||
+        (right.updatedAt || 0) - (left.updatedAt || 0)
+    );
+}
+
+function formatMemoryDate(createdAt) {
+  const date = new Date(Number(createdAt) || Date.now());
+  return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, "0")}/${String(
+    date.getDate()
+  ).padStart(2, "0")}`;
+}
+
+function getMemoryStars(importance = 0) {
+  const count = clampNumber(Math.round((Number(importance) || 0) / 20), 1, 5);
+  return `${"★".repeat(count)}${"☆".repeat(5 - count)}`;
+}
+
 function loadWeatherCache() {
   const raw = readStoredJson(MESSAGE_WEATHER_CACHE_KEY, {});
   return raw && typeof raw === "object" ? raw : {};
@@ -1078,6 +1333,14 @@ function normalizeConversation(conversation, index = 0) {
     contactAvatarImageSnapshot: String(source.contactAvatarImageSnapshot || "").trim(),
     contactAvatarTextSnapshot: String(source.contactAvatarTextSnapshot || "").trim(),
     messages,
+    memorySummaryCounter: Math.max(
+      0,
+      Number.parseInt(String(source.memorySummaryCounter || 0), 10) || 0
+    ),
+    memorySummaryLastMessageCount: Math.max(
+      0,
+      Number.parseInt(String(source.memorySummaryLastMessageCount || 0), 10) || 0
+    ),
     updatedAt: Number(source.updatedAt) || messages[messages.length - 1]?.createdAt || Date.now()
   };
 }
@@ -1178,6 +1441,8 @@ function createConversation(contact) {
     contactAvatarImageSnapshot: contact.avatarImage,
     contactAvatarTextSnapshot: contact.avatarText || getContactAvatarFallback(contact),
     messages: [],
+    memorySummaryCounter: 0,
+    memorySummaryLastMessageCount: 0,
     updatedAt: Date.now()
   };
   state.conversations = [conversation, ...state.conversations];
@@ -1446,6 +1711,47 @@ function buildWorldbookContext(promptSettings) {
   }
 
   return `世界书背景资料（只做潜在参考，不要单独拎出来讲）：\n${entries.join("\n\n")}`;
+}
+
+function buildMemoryPromptContexts(contact, promptSettings) {
+  const memories = getMemoriesForContact(contact?.id || "");
+  if (!memories.length) {
+    return {
+      core: "",
+      scene: ""
+    };
+  }
+
+  const resolvedSettings = normalizeMessagePromptSettings(promptSettings);
+  const coreMemories = memories
+    .filter(
+      (item) => item.type === "core" && item.importance >= resolvedSettings.coreMemoryThreshold
+    )
+    .slice(0, 8);
+  const sceneMemories = memories
+    .filter(
+      (item) => item.type === "scene" && item.importance >= resolvedSettings.sceneMemoryThreshold
+    )
+    .slice(0, 10);
+
+  return {
+    core: coreMemories.length
+      ? [
+          "这些核心记忆会稳定影响你当下的心情、判断和对用户的态度，请像真的记得它们一样自然体现：",
+          ...coreMemories.map(
+            (item) => `- 重要度 ${item.importance}/100：${String(item.content || "").trim()}`
+          )
+        ].join("\n")
+      : "",
+    scene: sceneMemories.length
+      ? [
+          "这些情景记忆只在聊天内容自然触发时再想起来，不需要主动硬提：",
+          ...sceneMemories.map(
+            (item) => `- 重要度 ${item.importance}/100：${String(item.content || "").trim()}`
+          )
+        ].join("\n")
+      : ""
+  };
 }
 
 function stripHotTopicsPromptSettings(promptSettings = {}) {
@@ -2177,11 +2483,13 @@ function buildConversationSystemPrompt(
   options = {}
 ) {
   const requestOptions = options && typeof options === "object" ? options : {};
+  const memoryContexts = buildMemoryPromptContexts(contact, promptSettings);
   const parts = [
-    `你是即时聊天应用中的联系人：${contact.name}。`,
-    "这是一个一对一聊天场景。",
-    "请把下面的设定和背景当作长期记忆与当下处境，而不是待逐条执行的任务。",
-    "如果背景信息之间出现冲突，请按以下优先级从低到高理解：热点挂载 < 世界书挂载 < INS 关注 < Bubble 关注 < 日程感知 < 时间感知 < 人物设定 < 最近对话轮数消息 < 回复格式要求。"
+    `你叫 ${contact.name}。`,
+    `现在是你和 ${profile.username || DEFAULT_PROFILE.username} 在即时聊天软件里的一对一私聊。`,
+    "先像这个人本人一样去理解这段关系、语气和情绪，不要把自己当成解释设定或执行任务的助手。",
+    "下面的信息都是你已经拥有的长期记忆与当下语境；只有在自然相关时才轻轻带出，不需要像背资料一样复述。",
+    "如果信息之间出现冲突，请按以下优先级从低到高理解：热点挂载 < 世界书挂载 < INS 关注 < Bubble 关注 < 情景记忆 < 日程感知 < 时间感知 < 核心记忆与自身稳定心态 < 最近对话轮数消息 < 回复格式要求。"
   ];
 
   const awarenessSections = [
@@ -2189,22 +2497,34 @@ function buildConversationSystemPrompt(
     buildWorldbookContext(promptSettings),
     buildForumPostFocusContext(promptSettings),
     buildBubbleFocusContext(promptSettings),
+    memoryContexts.scene,
     buildScheduleAwarenessContext(contact, history, promptSettings),
     buildTimeAwarenessContext(promptSettings)
   ].filter(Boolean);
 
+  parts.push(
+    `你的稳定性格、表达习惯和关系底色：${
+      contact.personaPrompt || "自然、友好、会根据关系和语境稳定回应。"
+    }。`
+  );
+
+  if (memoryContexts.core) {
+    parts.push(memoryContexts.core);
+  }
+
   if (awarenessSections.length) {
     parts.push(
-      `补充语境信息（只在确实自然时轻微融入；不要为了贴设定而硬提名词、热点或资料，也不要像总结背景一样复述）：\n${awarenessSections.join(
+      `补充语境信息（相关时轻微融入；不相关就完全不提，也不要像总结背景一样复述）：\n${awarenessSections.join(
         "\n\n"
       )}`
     );
   }
 
   parts.push(
-    `你的人物设定与说话习惯：${contact.personaPrompt || "自然、友好、会根据关系与语境稳定回应。"}。`,
     `正在和你聊天的用户昵称：${profile.username || DEFAULT_PROFILE.username}。`,
-    `用户的设定：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt}。`
+    `你对这个用户已知的整体印象：${
+      profile.personaPrompt || DEFAULT_PROFILE.personaPrompt
+    }。`
   );
 
   if (requestOptions.regenerate) {
@@ -2222,11 +2542,11 @@ function buildConversationSystemPrompt(
   }
 
   parts.push(
-    "先回应这轮对话里最真实的情绪、关系和潜台词，再决定是否需要带出背景信息。",
+    "先接住这一轮对话里最真实的情绪、关系推进和潜台词，再决定是否需要带出任何背景信息。",
     "如果某些背景对这一句回复没有帮助，可以完全不提。",
-    "回复要像真人在聊天软件里即时回消息，可以有自然口语、省略、停顿和情绪，不要像客服、摘要、设定说明或任务执行结果。",
-    "不要为了显得记得很多背景，就生硬提论坛、世界书、Bubble、INS、日程或时间信息；只有真的会自然想到时才轻轻带过。",
-    "不要使用“根据设定”“你最近关注”“结合以上信息”“从背景来看”这类机械引入。",
+    "回复要像真人在聊天软件里即时回消息，可以有自然口语、省略、停顿、转折和情绪，不要像客服、摘要、设定说明或任务执行结果。",
+    "不要为了显得自己记得很多事，就生硬提论坛、世界书、Bubble、INS、日程、时间或记忆条目本身；只有真的会自然想到时才轻轻带过。",
+    "不要使用“根据设定”“结合以上信息”“从背景来看”“你最近关注”这类机械引入。",
     "请只输出联系人下一条回复，不要添加角色标签、前缀、旁白或解释。",
     `回复要像真实聊天，简洁自然，可以带情绪，总共不要超过${promptSettings.replySentenceLimit}行。`,
     "如果一句话里自然出现逗号或句号，请按分句拆成多行输出。",
@@ -2407,6 +2727,280 @@ function buildDiaryRequestBody(settings, systemPrompt, userInstruction) {
     prompt: [systemPrompt, userInstruction, "日记正文："].filter(Boolean).join("\n\n"),
     intent: "journal"
   };
+}
+
+function buildSingleInstructionRequestBody(
+  settings,
+  systemPrompt,
+  userInstruction,
+  intent = "utility"
+) {
+  const mode = normalizeApiMode(settings.mode);
+  if (mode === "openai") {
+    return {
+      model: settings.model || DEFAULT_DEEPSEEK_MODEL,
+      temperature: DEFAULT_TEMPERATURE,
+      messages: [
+        {
+          role: "system",
+          content: systemPrompt
+        },
+        {
+          role: "user",
+          content: userInstruction
+        }
+      ],
+      stream: false
+    };
+  }
+
+  if (mode === "gemini") {
+    return {
+      systemInstruction: {
+        parts: [{ text: systemPrompt }]
+      },
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: userInstruction }]
+        }
+      ],
+      generationConfig: {
+        temperature: DEFAULT_TEMPERATURE
+      }
+    };
+  }
+
+  return {
+    prompt: [systemPrompt, userInstruction].filter(Boolean).join("\n\n"),
+    intent
+  };
+}
+
+function resolveDedicatedApiSettings(settings, enabledKey, configIdKey) {
+  const normalizedSettings = buildNormalizedSettingsSnapshot(settings);
+  if (!normalizedSettings?.[enabledKey] || !normalizedSettings?.[configIdKey]) {
+    return normalizedSettings;
+  }
+  const config = normalizeApiConfigs(normalizedSettings.apiConfigs || []).find(
+    (item) => item.id === normalizedSettings[configIdKey]
+  );
+  if (!config) {
+    return buildNormalizedSettingsSnapshot({
+      ...normalizedSettings,
+      [enabledKey]: false,
+      [configIdKey]: ""
+    });
+  }
+  return buildNormalizedSettingsSnapshot({
+    ...normalizedSettings,
+    activeApiConfigId: config.id,
+    mode: config.mode,
+    endpoint: config.endpoint,
+    token: config.token,
+    model: config.mode === "generic" ? "" : config.model || getDefaultModelByMode(config.mode)
+  });
+}
+
+function buildMemorySummaryTranscript(messages = []) {
+  return collapseConversationMessagesByTurn(messages)
+    .map((message) => {
+      const roleLabel = message.role === "assistant" ? "联系人" : "用户";
+      const timestamp = resolveStoredTimestampLabel(message.createdAt, message.time || "");
+      return `${timestamp || "--:--"} ${roleLabel}：${String(message.text || "").trim()}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildExistingMemoryDigest(contactId = "") {
+  const memories = getMemoriesForContact(contactId).slice(0, 16);
+  if (!memories.length) {
+    return "暂无已有记忆。";
+  }
+  return memories
+    .map(
+      (item) =>
+        `- [${item.type === "core" ? "核心" : "情景"} ${item.importance}/100] ${String(
+          item.content || ""
+        ).trim()}`
+    )
+    .join("\n");
+}
+
+function buildMemorySummarySystemPrompt(profile, contact) {
+  return [
+    `你正在为联系人 ${contact.name} 整理一对一聊天里的长期记忆。`,
+    `这个联系人的稳定性格与表达底色：${
+      contact.personaPrompt || "自然、友好、会根据关系稳定回应。"
+    }。`,
+    `聊天对象昵称：${profile.username || DEFAULT_PROFILE.username}。`,
+    `用户整体画像：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt}。`,
+    "你的目标不是写摘要，而是从新对话中提取未来聊天真正值得记住的内容。",
+    "核心记忆的标准非常严格：只有会改变联系人对用户的态度、距离感、信任、期待、介意点，或改变联系人看待某个话题/事物的心境与立场，才算核心记忆。",
+    "除此之外，其他能在相关话题里帮助回想上下文的内容，都归为情景记忆。",
+    "不要把普通闲聊、礼貌回应、表层信息重复写成核心记忆。",
+    "输出必须是 JSON，对象格式固定为：{\"memories\":[{\"type\":\"core|scene\",\"content\":\"...\",\"importance\":1-100}]}",
+    "importance 使用整数。1 越低越不重要，100 越重要。",
+    "最多输出 6 条；如果没有值得保留的内容，就输出 {\"memories\":[]}。",
+    "不要输出 markdown，不要代码块，不要解释，不要额外字段。"
+  ].join("\n\n");
+}
+
+function parseJsonLikeContent(value) {
+  if (value && typeof value === "object") {
+    return null;
+  }
+
+  const text = String(value || "").trim();
+  if (!text) {
+    return null;
+  }
+
+  const candidates = [];
+  candidates.push(text);
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenceMatch?.[1]) {
+    candidates.push(fenceMatch[1].trim());
+  }
+  const objectStart = text.indexOf("{");
+  const objectEnd = text.lastIndexOf("}");
+  if (objectStart >= 0 && objectEnd > objectStart) {
+    candidates.push(text.slice(objectStart, objectEnd + 1));
+  }
+  const arrayStart = text.indexOf("[");
+  const arrayEnd = text.lastIndexOf("]");
+  if (arrayStart >= 0 && arrayEnd > arrayStart) {
+    candidates.push(text.slice(arrayStart, arrayEnd + 1));
+  }
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch (_error) {
+    }
+  }
+  return null;
+}
+
+function parseMemorySummaryPayload(payload, contactId = "") {
+  const parsed =
+    (payload && typeof payload === "object" && Array.isArray(payload.memories) ? payload : null) ||
+    parseJsonLikeContent(payload) ||
+    parseJsonLikeContent(resolveMessage(payload));
+
+  const rawMemories = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.memories)
+    ? parsed.memories
+    : [];
+
+  return rawMemories
+    .map((item, index) =>
+      normalizeMessageMemory(
+        {
+          id: `message_memory_${Date.now()}_${index}_${hashText(
+            `${contactId}-${item?.content || item?.text || item?.memory || ""}`
+          )}`,
+          contactId,
+          type: item?.type || item?.memoryType || item?.kind || item?.category,
+          content: item?.content || item?.text || item?.memory || item?.summary,
+          importance: item?.importance || item?.score || item?.weight,
+          source: "summary",
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        },
+        index
+      )
+    )
+    .filter((item) => item.contactId && item.content)
+    .slice(0, 6);
+}
+
+async function requestMemorySummaryItems(
+  settings,
+  profile,
+  contact,
+  messages = [],
+  promptSettings = {}
+) {
+  const apiSettings = resolveDedicatedApiSettings(settings, "summaryApiEnabled", "summaryApiConfigId");
+  const requestEndpoint = validateApiSettings(apiSettings, "记忆总结");
+  const transcript = buildMemorySummaryTranscript(messages);
+  const systemPrompt = buildMemorySummarySystemPrompt(profile, contact);
+  const userInstruction = [
+    "已有记忆（用于去重；如果语义重复，请不要重新生成）：",
+    buildExistingMemoryDigest(contact.id),
+    "",
+    "需要整理的新对话：",
+    transcript || "本次没有可用对话。",
+    "",
+    "请只输出 JSON。"
+  ].join("\n");
+  const requestBody = buildSingleInstructionRequestBody(
+    apiSettings,
+    systemPrompt,
+    userInstruction,
+    "memory_summary"
+  );
+  const logBase = buildMessageApiLogBase(
+    "chat_memory_summary",
+    apiSettings,
+    requestEndpoint,
+    [systemPrompt, userInstruction].join("\n\n"),
+    requestBody,
+    `联系人：${contact.name} · 记忆提取`
+  );
+  let logged = false;
+
+  try {
+    const response = await fetch(requestEndpoint, {
+      method: "POST",
+      headers: buildRequestHeaders(apiSettings),
+      body: JSON.stringify(requestBody)
+    });
+    const rawResponse = await response.text();
+    let payload = rawResponse;
+    try {
+      payload = JSON.parse(rawResponse);
+    } catch (_error) {
+      payload = rawResponse;
+    }
+
+    if (!response.ok) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: `接口请求失败：HTTP ${response.status}`
+      });
+      logged = true;
+      throw new Error(`接口请求失败：HTTP ${response.status}`);
+    }
+
+    const memoryItems = parseMemorySummaryPayload(payload, contact.id);
+    appendApiLog({
+      ...logBase,
+      status: "success",
+      statusCode: response.status,
+      responseText: rawResponse,
+      responseBody: payload,
+      summary: `联系人：${contact.name} · 已提取 ${memoryItems.length} 条记忆`
+    });
+    logged = true;
+    return memoryItems;
+  } catch (error) {
+    if (!logged) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        errorMessage: error?.message || "请求失败"
+      });
+    }
+    throw error;
+  }
 }
 
 function selectConversationHistory(messages = [], historyRounds = DEFAULT_MESSAGE_HISTORY_ROUNDS) {
@@ -2706,6 +3300,66 @@ async function requestChatReplyText(
   }
 }
 
+async function maybeExtractConversationMemories(conversationId, settings, promptSettings) {
+  const conversation = getConversationById(conversationId);
+  if (!conversation) {
+    return;
+  }
+  const resolvedPromptSettings = normalizeMessagePromptSettings(promptSettings);
+  if (conversation.memorySummaryCounter < resolvedPromptSettings.memorySummaryIntervalRounds) {
+    return;
+  }
+
+  const contact = getContactById(conversation.contactId);
+  if (!contact) {
+    return;
+  }
+
+  const startIndex = clampNumber(
+    Number.parseInt(String(conversation.memorySummaryLastMessageCount || 0), 10) || 0,
+    0,
+    conversation.messages.length
+  );
+  const messagesToSummarize = conversation.messages.slice(startIndex);
+  if (!messagesToSummarize.length) {
+    conversation.memorySummaryCounter = 0;
+    conversation.memorySummaryLastMessageCount = conversation.messages.length;
+    persistConversations();
+    return;
+  }
+
+  try {
+    const memoryItems = await requestMemorySummaryItems(
+      settings,
+      state.profile,
+      contact,
+      messagesToSummarize,
+      resolvedPromptSettings
+    );
+    if (memoryItems.length) {
+      state.memories = mergeMemories(state.memories, memoryItems);
+      persistMessageMemories();
+      if (state.memoryViewerOpen) {
+        renderMemoryViewer();
+        if (state.memorySelectedContactId === contact.id) {
+          setMemoryStatus(`已为 ${contact.name} 提取 ${memoryItems.length} 条记忆。`, "success");
+        }
+      }
+    }
+    const latestConversation = getConversationById(conversationId);
+    if (!latestConversation) {
+      return;
+    }
+    latestConversation.memorySummaryCounter = 0;
+    latestConversation.memorySummaryLastMessageCount = latestConversation.messages.length;
+    persistConversations();
+  } catch (error) {
+    if (state.memoryViewerOpen && state.memorySelectedContactId === contact.id) {
+      setMemoryStatus(error?.message || "记忆提取失败。", "error");
+    }
+  }
+}
+
 async function requestJournalEntryText(
   settings,
   profile,
@@ -2848,6 +3502,9 @@ function updateBodyModalState() {
     state.chatSettingsOpen ||
     state.worldbookManagerOpen ||
     state.worldbookEditorOpen ||
+    state.memoryViewerOpen ||
+    state.memoryEditorOpen ||
+    state.memorySettingsOpen ||
     state.regenerateModalOpen ||
     state.schedulePreviewOpen ||
     state.journalOpen ||
@@ -3761,6 +4418,15 @@ function renderConversationDetail() {
 }
 
 function buildContactIcon(icon) {
+  if (icon === "memory") {
+    return `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M7 6.2h10a2.3 2.3 0 0 1 2.3 2.3v7A2.3 2.3 0 0 1 17 17.8H7a2.3 2.3 0 0 1-2.3-2.3v-7A2.3 2.3 0 0 1 7 6.2Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
+        <path d="M8.7 10.1h6.6M8.7 13.4h4.3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+        <path d="M8 4.7v2.2M12 4.7v2.2M16 4.7v2.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+      </svg>
+    `;
+  }
   if (icon === "cube") {
     return `
       <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -4428,6 +5094,271 @@ function deleteWorldbookEntry(entryId = "") {
   setWorldbookStatus("世界书已删除。", "success");
 }
 
+function getMemorySortedContacts() {
+  return state.contacts
+    .slice()
+    .sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0));
+}
+
+function resolveSelectedMemoryContactId(preferredId = "") {
+  const contacts = getMemorySortedContacts();
+  const preferred = String(preferredId || state.memorySelectedContactId || "").trim();
+  const activeConversation = getConversationById();
+  const activeContactId =
+    state.activeConversationId && activeConversation ? String(activeConversation.contactId || "").trim() : "";
+  const resolved =
+    contacts.find((item) => item.id === preferred)?.id ||
+    contacts.find((item) => item.id === activeContactId)?.id ||
+    contacts[0]?.id ||
+    "";
+  state.memorySelectedContactId = resolved;
+  return resolved;
+}
+
+function setMemoryStatus(message = "", tone = "") {
+  setEditorStatus(messagesMemoryStatusEl, message, tone);
+}
+
+function setMemoryEditorStatus(message = "", tone = "") {
+  setEditorStatus(messagesMemoryEditorStatusEl, message, tone);
+}
+
+function setMemorySettingsStatus(message = "", tone = "") {
+  setEditorStatus(messagesMemorySettingsStatusEl, message, tone);
+}
+
+function renderMemoryContactOptions(selectedId = state.memorySelectedContactId) {
+  if (!messagesMemoryContactSelectEl) {
+    return;
+  }
+  const contacts = getMemorySortedContacts();
+  messagesMemoryContactSelectEl.innerHTML = contacts.length
+    ? contacts
+        .map(
+          (contact) =>
+            `<option value="${escapeHtml(contact.id)}">${escapeHtml(contact.name)}</option>`
+        )
+        .join("")
+    : '<option value="">暂无可选角色</option>';
+  messagesMemoryContactSelectEl.value = contacts.some((item) => item.id === selectedId)
+    ? selectedId
+    : contacts[0]?.id || "";
+}
+
+function renderMemoryEditorContactOptions(selectedId = state.memorySelectedContactId) {
+  if (!messagesMemoryEditorContactSelectEl) {
+    return;
+  }
+  const contacts = getMemorySortedContacts();
+  messagesMemoryEditorContactSelectEl.innerHTML = contacts.length
+    ? contacts
+        .map(
+          (contact) =>
+            `<option value="${escapeHtml(contact.id)}">${escapeHtml(contact.name)}</option>`
+        )
+        .join("")
+    : '<option value="">暂无可选角色</option>';
+  messagesMemoryEditorContactSelectEl.value = contacts.some((item) => item.id === selectedId)
+    ? selectedId
+    : contacts[0]?.id || "";
+}
+
+function getFilteredMemoryEntries() {
+  const contactId = resolveSelectedMemoryContactId();
+  if (!contactId) {
+    return [];
+  }
+  const keyword = String(state.memoryQuery || "").trim().toLowerCase();
+  return getMemoriesForContact(contactId).filter((item) => {
+    if (state.memoryTab !== "all" && item.type !== state.memoryTab) {
+      return false;
+    }
+    if (!keyword) {
+      return true;
+    }
+    return String(item.content || "").toLowerCase().includes(keyword);
+  });
+}
+
+function renderMemoryViewer() {
+  if (!messagesMemoryListEl) {
+    return;
+  }
+
+  const contacts = getMemorySortedContacts();
+  const selectedContactId = resolveSelectedMemoryContactId();
+  renderMemoryContactOptions(selectedContactId);
+  document.querySelectorAll("[data-memory-tab]").forEach((button) => {
+    if (!(button instanceof HTMLElement)) {
+      return;
+    }
+    const isActive = button.dataset.memoryTab === state.memoryTab;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-selected", String(isActive));
+  });
+
+  if (!contacts.length) {
+    messagesMemoryListEl.innerHTML =
+      '<div class="messages-memory-empty">还没有任何角色。<br />请先去通讯录创建联系人，再回来整理记忆。</div>';
+    return;
+  }
+
+  const entries = getFilteredMemoryEntries();
+  if (!entries.length) {
+    const selectedContact = getContactById(selectedContactId);
+    const emptyText = state.memoryQuery
+      ? "没有搜到匹配的记忆内容。"
+      : state.memoryTab === "core"
+      ? "当前还没有核心记忆。"
+      : state.memoryTab === "scene"
+      ? "当前还没有情景记忆。"
+      : "当前还没有任何记忆。";
+    messagesMemoryListEl.innerHTML = `<div class="messages-memory-empty">${
+      selectedContact ? `${escapeHtml(selectedContact.name)}：<br />` : ""
+    }${emptyText}</div>`;
+    return;
+  }
+
+  messagesMemoryListEl.innerHTML = entries
+    .map(
+      (entry) => `
+        <article class="messages-memory-card">
+          <div class="messages-memory-card__head">
+            <span class="messages-memory-card__badge messages-memory-card__badge--${escapeHtml(
+              entry.type
+            )}">
+              ${entry.type === "core" ? "核心记忆" : "情景记忆"}
+            </span>
+            <span class="messages-memory-card__date">${escapeHtml(
+              formatMemoryDate(entry.updatedAt || entry.createdAt)
+            )}</span>
+          </div>
+          <p class="messages-memory-card__content">${escapeHtml(entry.content)}</p>
+          <div class="messages-memory-card__meta">
+            <span>重要性：</span>
+            <span class="messages-memory-card__stars">${escapeHtml(
+              getMemoryStars(entry.importance)
+            )}</span>
+            <span>(${escapeHtml(`${entry.importance}%`)})</span>
+            <span class="messages-memory-card__source">${
+              entry.source === "manual" ? "手动添加" : "AI 提取"
+            }</span>
+          </div>
+        </article>
+      `
+    )
+    .join("");
+}
+
+function applyMemoryEditorToForm(preferredContactId = state.memorySelectedContactId) {
+  const selectedContactId = resolveSelectedMemoryContactId(preferredContactId);
+  renderMemoryEditorContactOptions(selectedContactId);
+  if (messagesMemoryEditorContentInputEl) {
+    messagesMemoryEditorContentInputEl.value = "";
+  }
+  if (messagesMemoryEditorImportanceInputEl) {
+    messagesMemoryEditorImportanceInputEl.value = String(DEFAULT_CORE_MEMORY_THRESHOLD);
+  }
+  setMemoryEditorStatus("");
+}
+
+function setMemoryViewerOpen(isOpen, preferredContactId = "") {
+  state.memoryViewerOpen = Boolean(isOpen);
+  if (messagesMemoryModalEl) {
+    messagesMemoryModalEl.hidden = !state.memoryViewerOpen;
+    messagesMemoryModalEl.setAttribute("aria-hidden", String(!state.memoryViewerOpen));
+  }
+  if (state.memoryViewerOpen) {
+    state.memoryTab = "all";
+    state.memoryQuery = "";
+    if (messagesMemorySearchInputEl) {
+      messagesMemorySearchInputEl.value = "";
+    }
+    resolveSelectedMemoryContactId(preferredContactId);
+    renderMemoryViewer();
+    setMemoryStatus("");
+  } else {
+    setMemoryEditorOpen(false);
+    setMemorySettingsOpen(false);
+  }
+  updateBodyModalState();
+}
+
+function setMemoryEditorOpen(isOpen, preferredContactId = state.memorySelectedContactId) {
+  state.memoryEditorOpen = Boolean(isOpen);
+  if (messagesMemoryEditorModalEl) {
+    messagesMemoryEditorModalEl.hidden = !state.memoryEditorOpen;
+    messagesMemoryEditorModalEl.setAttribute("aria-hidden", String(!state.memoryEditorOpen));
+  }
+  if (state.memoryEditorOpen) {
+    applyMemoryEditorToForm(preferredContactId);
+    window.setTimeout(() => {
+      messagesMemoryEditorContentInputEl?.focus();
+    }, 0);
+  } else {
+    setMemoryEditorStatus("");
+  }
+  updateBodyModalState();
+}
+
+function applyMemorySettingsToForm(promptSettings = state.chatPromptSettings) {
+  const resolved = normalizeMessagePromptSettings(promptSettings);
+  if (messagesMemorySummaryIntervalInputEl) {
+    messagesMemorySummaryIntervalInputEl.value = String(resolved.memorySummaryIntervalRounds);
+  }
+  if (messagesMemoryCoreThresholdInputEl) {
+    messagesMemoryCoreThresholdInputEl.value = String(resolved.coreMemoryThreshold);
+  }
+  if (messagesMemorySceneThresholdInputEl) {
+    messagesMemorySceneThresholdInputEl.value = String(resolved.sceneMemoryThreshold);
+  }
+  setMemorySettingsStatus("");
+}
+
+function setMemorySettingsOpen(isOpen) {
+  state.memorySettingsOpen = Boolean(isOpen);
+  if (messagesMemorySettingsModalEl) {
+    messagesMemorySettingsModalEl.hidden = !state.memorySettingsOpen;
+    messagesMemorySettingsModalEl.setAttribute("aria-hidden", String(!state.memorySettingsOpen));
+  }
+  if (state.memorySettingsOpen) {
+    applyMemorySettingsToForm(loadSettings().messagePromptSettings);
+    window.setTimeout(() => {
+      messagesMemorySummaryIntervalInputEl?.focus();
+    }, 0);
+  } else {
+    setMemorySettingsStatus("");
+  }
+  updateBodyModalState();
+}
+
+function saveManualCoreMemory(draft = {}) {
+  const contactId = String(draft.contactId || "").trim();
+  const content = String(draft.content || "").trim();
+  if (!contactId || !getContactById(contactId)) {
+    throw new Error("请先选择一个角色。");
+  }
+  if (!content) {
+    throw new Error("请输入记忆内容。");
+  }
+
+  const entry = normalizeMessageMemory({
+    id: `message_memory_${Date.now()}_${hashText(`${contactId}-${content}`)}`,
+    contactId,
+    type: "core",
+    content,
+    importance: draft.importance,
+    source: "manual",
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  });
+  state.memories = mergeMemories(state.memories, [entry]);
+  persistMessageMemories();
+  resolveSelectedMemoryContactId(contactId);
+  renderMemoryViewer();
+  return entry;
+}
+
 function applyChatPromptSettingsToForm(promptSettings) {
   const resolved = normalizeMessagePromptSettings(promptSettings);
   if (messagesChatHistoryRoundsInputEl) {
@@ -4531,6 +5462,7 @@ function updateChatHotTopicsWarning(promptSettings = getCurrentChatPromptSetting
 function getCurrentChatPromptSettingsDraft() {
   const tabs = getAvailableCustomTabs(loadSettings());
   const selectedTabId = String(messagesChatHotTopicsTabSelectEl?.value || "").trim();
+  const currentSettings = normalizeMessagePromptSettings(state.chatPromptSettings);
   const selectedWorldbookIds = messagesChatWorldbookListEl
     ? [...messagesChatWorldbookListEl.querySelectorAll("input[type='checkbox']:checked")]
         .map((input) =>
@@ -4541,7 +5473,10 @@ function getCurrentChatPromptSettingsDraft() {
   return normalizeMessagePromptSettings({
     historyRounds: messagesChatHistoryRoundsInputEl?.value,
     replySentenceLimit: messagesChatReplySentenceLimitInputEl?.value,
-    journalLength: normalizeMessagePromptSettings(state.chatPromptSettings).journalLength,
+    journalLength: currentSettings.journalLength,
+    memorySummaryIntervalRounds: currentSettings.memorySummaryIntervalRounds,
+    coreMemoryThreshold: currentSettings.coreMemoryThreshold,
+    sceneMemoryThreshold: currentSettings.sceneMemoryThreshold,
     timeAwareness: Boolean(messagesChatTimeAwarenessInputEl?.checked),
     scheduleAwarenessWindowMinutes: messagesChatScheduleWindowInputEl?.value,
     hotTopicsEnabled: Boolean(messagesChatHotTopicsInputEl?.checked),
@@ -4807,6 +5742,12 @@ async function requestConversationReply(options = {}) {
     }
 
     await appendAssistantReplyBatch(updatedConversation, replyText, promptSettings);
+    if (!isRegenerate) {
+      updatedConversation.memorySummaryCounter =
+        (Number(updatedConversation.memorySummaryCounter) || 0) + 1;
+      persistConversations();
+      void maybeExtractConversationMemories(updatedConversation.id, settings, promptSettings);
+    }
     setMessagesStatus(isRegenerate ? "已重新生成回复。" : "已收到回复。", "success");
   } catch (error) {
     if (isRegenerate) {
@@ -4831,6 +5772,7 @@ function refreshStateFromStorage() {
   state.conversations = loadConversations();
   state.worldbooks = loadWorldbooks();
   state.journalEntries = loadJournalEntries();
+  state.memories = loadMessageMemories();
   state.chatPromptSettings = normalizeMessagePromptSettings(loadSettings().messagePromptSettings);
 }
 
@@ -5025,6 +5967,10 @@ function attachEvents() {
 
       if (actionEl.getAttribute("data-action") === "open-me-entry") {
         const entryId = String(actionEl.getAttribute("data-entry-id") || "").trim();
+        if (entryId === "memory") {
+          setMemoryViewerOpen(true);
+          return;
+        }
         if (entryId === "worldbook") {
           setWorldbookManagerOpen(true);
           return;
@@ -5278,6 +6224,129 @@ function attachEvents() {
     });
   }
 
+  if (messagesMemoryCloseBtnEl) {
+    messagesMemoryCloseBtnEl.addEventListener("click", () => {
+      dismissMemoryViewer();
+    });
+  }
+
+  if (messagesMemoryAddBtnEl) {
+    messagesMemoryAddBtnEl.addEventListener("click", () => {
+      setMemoryEditorOpen(true);
+    });
+  }
+
+  if (messagesMemorySettingsBtnEl) {
+    messagesMemorySettingsBtnEl.addEventListener("click", () => {
+      setMemorySettingsOpen(true);
+    });
+  }
+
+  if (messagesMemoryContactSelectEl) {
+    messagesMemoryContactSelectEl.addEventListener("change", () => {
+      state.memorySelectedContactId = String(messagesMemoryContactSelectEl.value || "").trim();
+      renderMemoryViewer();
+    });
+  }
+
+  if (messagesMemorySearchInputEl) {
+    messagesMemorySearchInputEl.addEventListener("input", () => {
+      state.memoryQuery = String(messagesMemorySearchInputEl.value || "").trim();
+      renderMemoryViewer();
+    });
+  }
+
+  if (messagesMemorySearchBtnEl) {
+    messagesMemorySearchBtnEl.addEventListener("click", () => {
+      state.memoryQuery = String(messagesMemorySearchInputEl?.value || "").trim();
+      renderMemoryViewer();
+    });
+  }
+
+  if (messagesMemoryModalEl) {
+    messagesMemoryModalEl.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target === messagesMemoryModalEl) {
+        dismissMemoryViewer();
+        return;
+      }
+      if (!(target instanceof Element)) {
+        return;
+      }
+      const tabEl = target.closest("[data-memory-tab]");
+      if (!(tabEl instanceof HTMLElement)) {
+        return;
+      }
+      state.memoryTab = String(tabEl.dataset.memoryTab || "all").trim() || "all";
+      renderMemoryViewer();
+    });
+  }
+
+  if (messagesMemoryEditorCloseBtnEl) {
+    messagesMemoryEditorCloseBtnEl.addEventListener("click", () => {
+      setMemoryEditorOpen(false);
+    });
+  }
+
+  if (messagesMemoryEditorCancelBtnEl) {
+    messagesMemoryEditorCancelBtnEl.addEventListener("click", () => {
+      setMemoryEditorOpen(false);
+    });
+  }
+
+  if (messagesMemoryEditorFormEl) {
+    messagesMemoryEditorFormEl.addEventListener("submit", (event) => {
+      event.preventDefault();
+      try {
+        const entry = saveManualCoreMemory({
+          contactId: messagesMemoryEditorContactSelectEl?.value,
+          content: messagesMemoryEditorContentInputEl?.value,
+          importance: messagesMemoryEditorImportanceInputEl?.value
+        });
+        setMemoryEditorStatus(`已为 ${getContactById(entry.contactId)?.name || "该角色"} 保存核心记忆。`, "success");
+        setMemoryStatus("核心记忆已保存。", "success");
+        window.setTimeout(() => {
+          setMemoryEditorOpen(false);
+        }, 180);
+      } catch (error) {
+        setMemoryEditorStatus(error?.message || "保存失败。", "error");
+      }
+    });
+  }
+
+  if (messagesMemorySettingsCloseBtnEl) {
+    messagesMemorySettingsCloseBtnEl.addEventListener("click", () => {
+      setMemorySettingsOpen(false);
+    });
+  }
+
+  if (messagesMemorySettingsCancelBtnEl) {
+    messagesMemorySettingsCancelBtnEl.addEventListener("click", () => {
+      setMemorySettingsOpen(false);
+    });
+  }
+
+  if (messagesMemorySettingsFormEl) {
+    messagesMemorySettingsFormEl.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const nextSettings = loadSettings();
+      const nextPromptSettings = normalizeMessagePromptSettings({
+        ...nextSettings.messagePromptSettings,
+        memorySummaryIntervalRounds: messagesMemorySummaryIntervalInputEl?.value,
+        coreMemoryThreshold: messagesMemoryCoreThresholdInputEl?.value,
+        sceneMemoryThreshold: messagesMemorySceneThresholdInputEl?.value
+      });
+      nextSettings.messagePromptSettings = nextPromptSettings;
+      persistSettings(nextSettings);
+      state.chatPromptSettings = nextPromptSettings;
+      setMemorySettingsStatus("记忆设置已保存。", "success");
+      renderMemoryViewer();
+      window.setTimeout(() => {
+        setMemorySettingsOpen(false);
+      }, 180);
+    });
+  }
+
       if (messagesWorldbookCloseBtnEl) {
         messagesWorldbookCloseBtnEl.addEventListener("click", () => {
           setWorldbookManagerOpen(false);
@@ -5469,6 +6538,7 @@ function attachEvents() {
     messagesProfileModalEl,
     messagesContactModalEl,
     messagesPickerModalEl,
+    messagesMemoryModalEl,
     messagesWorldbookModalEl,
     messagesWorldbookEditorModalEl
   ]
@@ -5488,6 +6558,10 @@ function attachEvents() {
         }
         if (modal === messagesPickerModalEl) {
           setConversationPickerOpen(false);
+          return;
+        }
+        if (modal === messagesMemoryModalEl) {
+          setMemoryViewerOpen(false);
           return;
         }
         if (modal === messagesWorldbookModalEl) {
@@ -5548,6 +6622,22 @@ function attachEvents() {
     });
   }
 
+  if (messagesMemoryEditorModalEl) {
+    messagesMemoryEditorModalEl.addEventListener("click", (event) => {
+      if (event.target === messagesMemoryEditorModalEl) {
+        setMemoryEditorOpen(false);
+      }
+    });
+  }
+
+  if (messagesMemorySettingsModalEl) {
+    messagesMemorySettingsModalEl.addEventListener("click", (event) => {
+      if (event.target === messagesMemorySettingsModalEl) {
+        setMemorySettingsOpen(false);
+      }
+    });
+  }
+
   window.addEventListener("focus", () => {
     if (!state.windowFocusPrimed) {
       state.windowFocusPrimed = true;
@@ -5558,6 +6648,9 @@ function attachEvents() {
       state.contactEditorOpen ||
       state.conversationPickerOpen ||
       state.chatSettingsOpen ||
+      state.memoryViewerOpen ||
+      state.memoryEditorOpen ||
+      state.memorySettingsOpen ||
       state.worldbookManagerOpen ||
       state.worldbookEditorOpen ||
       state.regenerateModalOpen ||
@@ -5587,6 +6680,18 @@ function attachEvents() {
     }
     if (event.key === "Escape" && state.chatSettingsOpen) {
       setChatSettingsOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.memoryEditorOpen) {
+      setMemoryEditorOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.memorySettingsOpen) {
+      setMemorySettingsOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.memoryViewerOpen) {
+      dismissMemoryViewer();
       return;
     }
     if (event.key === "Escape" && state.worldbookEditorOpen) {
@@ -5636,13 +6741,21 @@ function attachEvents() {
 }
 
 function init() {
+  const launchView = getMessagesLaunchView();
   if (document.body) {
     document.body.classList.toggle("embedded", isEmbeddedView());
+  }
+  state.memoryStandaloneLaunch = launchView === "memory";
+  if (launchView === "memory") {
+    state.activeTab = "me";
   }
   bindMessagesViewportHeight();
   persistConversations();
   renderMessagesPage();
   attachEvents();
+  if (launchView === "memory") {
+    setMemoryViewerOpen(true);
+  }
   notifyEmbeddedReady();
 }
 

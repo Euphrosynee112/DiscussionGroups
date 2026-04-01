@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <title>Pulse Generator · Chat</title>
-    <link rel="stylesheet" href="./messages.css?v=20260401e" />
+    <link rel="stylesheet" href="./messages.css?v=20260401g" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -677,6 +677,336 @@
     </section>
 
     <section
+      id="messages-memory-modal"
+      class="messages-sheet-modal messages-memory-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div
+        class="messages-sheet-modal__panel messages-memory-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="记忆查看器"
+      >
+        <header class="messages-journal-modal__header messages-memory-modal__header">
+          <button
+            id="messages-memory-close-btn"
+            class="messages-journal-modal__icon"
+            type="button"
+            aria-label="关闭记忆查看器"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M15 6 9 12l6 6"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+          <strong>记忆查看器</strong>
+          <div class="messages-journal-modal__actions">
+            <button
+              id="messages-memory-add-btn"
+              class="messages-journal-modal__icon"
+              type="button"
+              aria-label="新增核心记忆"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 5v14M5 12h14"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+            <button
+              id="messages-memory-settings-btn"
+              class="messages-journal-modal__icon"
+              type="button"
+              aria-label="记忆设置"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 4.8 13.6 3l1.8 1.7 2.5.1.2 2.5L20 9l-1.8 1.8.1 2.5-2.5.2-1.8 1.8-1.8-1.8-2.5-.2.1-2.5L4 9l1.8-1.7.2-2.5 2.5-.1L10.4 3Z"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linejoin="round"
+                />
+                <circle
+                  cx="12"
+                  cy="9.1"
+                  r="2.35"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                />
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <section class="messages-memory-modal__controls">
+          <label class="messages-form-field">
+            <span>选择角色</span>
+            <select id="messages-memory-contact-select"></select>
+          </label>
+
+          <label class="messages-memory-search" for="messages-memory-search-input">
+            <input
+              id="messages-memory-search-input"
+              type="search"
+              placeholder="搜索记忆内容..."
+              autocomplete="off"
+            />
+            <button
+              id="messages-memory-search-btn"
+              class="messages-memory-search__button"
+              type="button"
+              aria-label="搜索记忆"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2" />
+                <path
+                  d="M16 16l4 4"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+          </label>
+
+          <div class="messages-memory-tabs" role="tablist" aria-label="记忆类型">
+            <button
+              id="messages-memory-tab-all"
+              class="messages-memory-tab is-active"
+              type="button"
+              data-memory-tab="all"
+              role="tab"
+              aria-selected="true"
+            >
+              全部
+            </button>
+            <button
+              id="messages-memory-tab-core"
+              class="messages-memory-tab"
+              type="button"
+              data-memory-tab="core"
+              role="tab"
+              aria-selected="false"
+            >
+              核心记忆
+            </button>
+            <button
+              id="messages-memory-tab-scene"
+              class="messages-memory-tab"
+              type="button"
+              data-memory-tab="scene"
+              role="tab"
+              aria-selected="false"
+            >
+              情景记忆
+            </button>
+          </div>
+        </section>
+
+        <p id="messages-memory-status" class="messages-editor-status messages-memory-status"></p>
+        <section id="messages-memory-list" class="messages-memory-list" aria-live="polite"></section>
+      </div>
+    </section>
+
+    <section
+      id="messages-memory-editor-modal"
+      class="messages-dialog-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div
+        class="messages-dialog-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="新增核心记忆"
+      >
+        <header class="messages-dialog-modal__header">
+          <strong>新增核心记忆</strong>
+          <button
+            id="messages-memory-editor-close-btn"
+            class="messages-dialog-modal__close"
+            type="button"
+            aria-label="关闭新增核心记忆"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M7 7l10 10M17 7 7 17"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </header>
+
+        <form id="messages-memory-editor-form" class="messages-dialog-modal__form">
+          <label class="messages-dialog-modal__field">
+            <span>角色</span>
+            <select id="messages-memory-editor-contact-select"></select>
+          </label>
+
+          <label class="messages-dialog-modal__field">
+            <span>记忆内容</span>
+            <textarea
+              id="messages-memory-editor-content-input"
+              rows="5"
+              maxlength="600"
+              placeholder="输入需要长期记住的核心记忆内容"
+            ></textarea>
+          </label>
+
+          <label class="messages-dialog-modal__field">
+            <span>重要性（1 - 100）</span>
+            <input
+              id="messages-memory-editor-importance-input"
+              type="number"
+              min="1"
+              max="100"
+              inputmode="numeric"
+              placeholder="默认 90"
+              autocomplete="off"
+            />
+          </label>
+
+          <p
+            id="messages-memory-editor-status"
+            class="messages-editor-status"
+            aria-live="polite"
+          ></p>
+
+          <div class="messages-dialog-modal__actions">
+            <button
+              id="messages-memory-editor-cancel-btn"
+              class="messages-dialog-modal__button"
+              type="button"
+            >
+              取消
+            </button>
+            <button
+              id="messages-memory-editor-save-btn"
+              class="messages-dialog-modal__button messages-dialog-modal__button--primary"
+              type="submit"
+            >
+              保存
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section
+      id="messages-memory-settings-modal"
+      class="messages-dialog-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div
+        class="messages-dialog-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="记忆设置"
+      >
+        <header class="messages-dialog-modal__header">
+          <strong>记忆设置</strong>
+          <button
+            id="messages-memory-settings-close-btn"
+            class="messages-dialog-modal__close"
+            type="button"
+            aria-label="关闭记忆设置"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M7 7l10 10M17 7 7 17"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </header>
+
+        <form id="messages-memory-settings-form" class="messages-dialog-modal__form">
+          <label class="messages-dialog-modal__field">
+            <span>AI 记忆提取间隔（回合）</span>
+            <input
+              id="messages-memory-summary-interval-input"
+              type="number"
+              min="1"
+              max="20"
+              inputmode="numeric"
+              placeholder="默认 4 回合"
+              autocomplete="off"
+            />
+          </label>
+
+          <label class="messages-dialog-modal__field">
+            <span>核心记忆重要性阈值</span>
+            <input
+              id="messages-memory-core-threshold-input"
+              type="number"
+              min="1"
+              max="100"
+              inputmode="numeric"
+              placeholder="默认 80"
+              autocomplete="off"
+            />
+          </label>
+
+          <label class="messages-dialog-modal__field">
+            <span>情景记忆重要性阈值</span>
+            <input
+              id="messages-memory-scene-threshold-input"
+              type="number"
+              min="1"
+              max="100"
+              inputmode="numeric"
+              placeholder="默认 65"
+              autocomplete="off"
+            />
+          </label>
+
+          <p
+            id="messages-memory-settings-status"
+            class="messages-editor-status"
+            aria-live="polite"
+          ></p>
+
+          <div class="messages-dialog-modal__actions">
+            <button
+              id="messages-memory-settings-cancel-btn"
+              class="messages-dialog-modal__button"
+              type="button"
+            >
+              取消
+            </button>
+            <button
+              class="messages-dialog-modal__button messages-dialog-modal__button--primary"
+              type="submit"
+            >
+              保存
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section
       id="messages-journal-modal"
       class="messages-sheet-modal messages-journal-modal"
       hidden
@@ -971,6 +1301,6 @@
     </section>
 
     <script src="./api-log.js?v=20260331k"></script>
-    <script src="./messages.js?v=20260401e"></script>
+    <script src="./messages.js?v=20260401g"></script>
   </body>
 </html>

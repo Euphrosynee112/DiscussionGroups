@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Pulse Generator v2.0</title>
-    <link rel="stylesheet" href="./home.css?v=20260401a" />
+    <link rel="stylesheet" href="./home.css?v=20260401c" />
   </head>
   <body>
     <main class="home-scene">
@@ -72,12 +72,17 @@
             <span class="app-shortcut__label">Bubble</span>
           </button>
 
-          <div class="app-shortcut app-shortcut--muted desk-item-memory" aria-hidden="true">
+          <button
+            class="app-shortcut desk-item-memory"
+            type="button"
+            data-open-app="memory"
+            aria-label="打开记忆查看器"
+          >
             <span class="app-shortcut__icon app-shortcut__icon--memory app-shortcut__icon--heart">
               ♥
             </span>
-            <span class="app-shortcut__label">纪念日</span>
-          </div>
+            <span class="app-shortcut__label">记忆</span>
+          </button>
 
           <button
             class="app-shortcut desk-item-x"
@@ -137,7 +142,12 @@
             <span class="dock-app__icon">⚙</span>
             <span class="dock-app__label">设置</span>
           </button>
-          <button class="dock-app dock-app--memory" type="button" aria-label="记忆">
+          <button
+            class="dock-app dock-app--memory"
+            type="button"
+            data-open-app="memory"
+            aria-label="记忆"
+          >
             <span class="dock-app__icon">◐</span>
             <span class="dock-app__label">记忆</span>
           </button>
@@ -246,6 +256,20 @@
             </label>
           </div>
 
+          <div class="home-translation-api-settings">
+            <label class="home-checkbox-row">
+              <input id="home-summary-api-enabled" type="checkbox" />
+              <span>启用内容总结专用 API</span>
+            </label>
+            <label class="home-field home-field--full">
+              <span>内容总结专用配置</span>
+              <select id="home-summary-api-config-select"></select>
+              <span class="home-field-hint">
+                启用后，对话记忆总结会优先使用这里选中的已缓存 API 配置；关闭后沿用当前内容生成配置。
+              </span>
+            </label>
+          </div>
+
           <div class="home-config-transfer">
             <div>
               <p class="home-settings-kicker">Config Transfer</p>
@@ -343,6 +367,6 @@
       </div>
     </section>
 
-    <script src="./home.js?v=20260401a"></script>
+    <script src="./home.js?v=20260401c"></script>
   </body>
 </html>

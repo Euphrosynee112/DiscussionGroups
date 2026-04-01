@@ -336,10 +336,6 @@ button {
   grid-row: auto;
 }
 
-.desk-item-memory {
-  display: none;
-}
-
 .dock {
   margin-top: auto;
   padding: 12px 14px;

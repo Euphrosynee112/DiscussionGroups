@@ -2,7 +2,7 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260401a";
+const APP_BUILD_VERSION = "20260401c";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -34,6 +34,8 @@ const homeTranslationApiEnabledEl = document.querySelector("#home-translation-ap
 const homeTranslationApiConfigSelectEl = document.querySelector(
   "#home-translation-api-config-select"
 );
+const homeSummaryApiEnabledEl = document.querySelector("#home-summary-api-enabled");
+const homeSummaryApiConfigSelectEl = document.querySelector("#home-summary-api-config-select");
 const homeConfigExportBtn = document.querySelector("#home-config-export-btn");
 const homeConfigImportBtn = document.querySelector("#home-config-import-btn");
 const homeConfigImportInput = document.querySelector("#home-config-import-input");
@@ -78,7 +80,9 @@ const DEFAULT_SETTINGS = {
   apiConfigs: [],
   activeApiConfigId: "",
   translationApiEnabled: false,
-  translationApiConfigId: ""
+  translationApiConfigId: "",
+  summaryApiEnabled: false,
+  summaryApiConfigId: ""
 };
 
 const homeState = {
@@ -321,6 +325,11 @@ function buildNormalizedSettingsSnapshot(source, options = {}) {
   merged.translationApiEnabled = Boolean(
     merged.translationApiEnabled && merged.translationApiConfigId
   );
+  if (!merged.apiConfigs.some((item) => item.id === merged.summaryApiConfigId)) {
+    merged.summaryApiConfigId = "";
+    merged.summaryApiEnabled = false;
+  }
+  merged.summaryApiEnabled = Boolean(merged.summaryApiEnabled && merged.summaryApiConfigId);
   return merged;
 }
 
@@ -440,7 +449,9 @@ function buildTransferPayloadFromCurrentState() {
               getDefaultModelByMode(settings.mode),
         activeApiConfigId: String(settings.activeApiConfigId || "").trim(),
         translationApiEnabled: Boolean(settings.translationApiEnabled),
-        translationApiConfigId: String(settings.translationApiConfigId || "").trim()
+        translationApiConfigId: String(settings.translationApiConfigId || "").trim(),
+        summaryApiEnabled: Boolean(settings.summaryApiEnabled),
+        summaryApiConfigId: String(settings.summaryApiConfigId || "").trim()
       },
       apiConfigs: apiConfigs.map(({ token, ...rest }) => ({ ...rest }))
     },
@@ -577,7 +588,9 @@ function normalizeTransferPayload(parsed) {
             model: settings.model,
             activeApiConfigId: settings.activeApiConfigId || "",
             translationApiEnabled: Boolean(settings.translationApiEnabled),
-            translationApiConfigId: settings.translationApiConfigId || ""
+            translationApiConfigId: settings.translationApiConfigId || "",
+            summaryApiEnabled: Boolean(settings.summaryApiEnabled),
+            summaryApiConfigId: settings.summaryApiConfigId || ""
           },
           apiConfigs: normalizeApiConfigs(settings.apiConfigs || []).map(({ token, ...rest }) => ({
             ...rest
@@ -1040,7 +1053,7 @@ function buildHomeConfigExportPayload(selection = homeState.exportTransferSelect
   const fullPayload = buildTransferPayloadFromCurrentState();
   return {
     schema: CONFIG_EXPORT_SCHEMA,
-    version: 3,
+    version: 4,
     exportedAt: new Date().toISOString(),
     data: buildSelectedTransferPayload(fullPayload, selection)
   };
@@ -1134,6 +1147,10 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
     nextSettings.translationApiEnabled = Boolean(imported.apiConfig.current?.translationApiEnabled);
     nextSettings.translationApiConfigId = String(
       imported.apiConfig.current?.translationApiConfigId || ""
+    ).trim();
+    nextSettings.summaryApiEnabled = Boolean(imported.apiConfig.current?.summaryApiEnabled);
+    nextSettings.summaryApiConfigId = String(
+      imported.apiConfig.current?.summaryApiConfigId || ""
     ).trim();
     nextSettings.token = "";
     nextSettings.apiConfigs = normalizeApiConfigs(
@@ -1324,6 +1341,13 @@ function saveCurrentHomeSettings(options = {}) {
     homeState.settings.translationApiConfigId = "";
     homeState.settings.translationApiEnabled = false;
   }
+  if (
+    homeState.settings.summaryApiConfigId &&
+    !homeState.settings.apiConfigs.some((item) => item.id === homeState.settings.summaryApiConfigId)
+  ) {
+    homeState.settings.summaryApiConfigId = "";
+    homeState.settings.summaryApiEnabled = false;
+  }
   persistSettings(homeState.settings);
   renderHomeApiConfigList();
   syncHomeActiveConfigSummary();
@@ -1388,6 +1412,46 @@ function renderHomeTranslationApiControls() {
   homeTranslationApiConfigSelectEl.value = homeState.settings.translationApiConfigId || "";
 }
 
+function renderHomeSummaryApiControls() {
+  if (!homeSummaryApiEnabledEl || !homeSummaryApiConfigSelectEl) {
+    return;
+  }
+
+  const configs = normalizeApiConfigs(homeState.settings.apiConfigs)
+    .slice()
+    .sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0));
+
+  if (
+    homeState.settings.summaryApiConfigId &&
+    !configs.some((item) => item.id === homeState.settings.summaryApiConfigId)
+  ) {
+    homeState.settings.summaryApiConfigId = "";
+    homeState.settings.summaryApiEnabled = false;
+  }
+
+  const hasConfigs = configs.length > 0;
+  if (!hasConfigs) {
+    homeState.settings.summaryApiEnabled = false;
+    homeState.settings.summaryApiConfigId = "";
+  }
+
+  homeSummaryApiEnabledEl.checked = Boolean(homeState.settings.summaryApiEnabled && hasConfigs);
+  homeSummaryApiEnabledEl.disabled = !hasConfigs;
+  homeSummaryApiConfigSelectEl.disabled = !hasConfigs || !homeSummaryApiEnabledEl.checked;
+  homeSummaryApiConfigSelectEl.innerHTML = hasConfigs
+    ? [
+        '<option value="">请选择一套已缓存的 API 配置</option>',
+        ...configs.map(
+          (item) =>
+            `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} · ${escapeHtml(
+              getApiModeLabel(item.mode)
+            )}</option>`
+        )
+      ].join("")
+    : '<option value="">暂无缓存配置</option>';
+  homeSummaryApiConfigSelectEl.value = homeState.settings.summaryApiConfigId || "";
+}
+
 function renderHomeApiConfigList() {
   if (!homeApiConfigListEl) {
     return;
@@ -1405,6 +1469,7 @@ function renderHomeApiConfigList() {
     homeApiConfigListEl.innerHTML =
       '<p class="home-empty-state">还没有缓存的 API 配置，可先填写参数后点击“保存当前 API 配置”。</p>';
     renderHomeTranslationApiControls();
+    renderHomeSummaryApiControls();
     return;
   }
 
@@ -1416,6 +1481,8 @@ function renderHomeApiConfigList() {
       const isTranslationSelected =
         homeState.settings.translationApiEnabled &&
         item.id === homeState.settings.translationApiConfigId;
+      const isSummarySelected =
+        homeState.settings.summaryApiEnabled && item.id === homeState.settings.summaryApiConfigId;
       const modelText = item.model ? `模型：${item.model}` : "模型：无";
       const tokenText = item.token ? "密钥：已保存" : "密钥：未保存";
       return `
@@ -1425,6 +1492,7 @@ function renderHomeApiConfigList() {
             <div class="home-api-badges">
               <span class="home-badge">${isActive ? "当前配置" : "已缓存"}</span>
               ${isTranslationSelected ? '<span class="home-badge">翻译专用</span>' : ""}
+              ${isSummarySelected ? '<span class="home-badge">总结专用</span>' : ""}
             </div>
           </div>
           <p class="home-api-item__meta">
@@ -1436,11 +1504,6 @@ function renderHomeApiConfigList() {
             <button class="home-chip" type="button" data-action="switch-home-api-config" data-config-id="${escapeHtml(
               item.id
             )}">一键切换</button>
-            <button class="home-chip" type="button" data-action="set-home-translation-api-config" data-config-id="${escapeHtml(
-              item.id
-            )}" ${isTranslationSelected ? "disabled" : ""}>
-              ${isTranslationSelected ? "已用于翻译" : "设为翻译专用"}
-            </button>
             <button class="home-chip home-chip--danger" type="button" data-action="delete-home-api-config" data-config-id="${escapeHtml(
               item.id
             )}">删除</button>
@@ -1451,6 +1514,7 @@ function renderHomeApiConfigList() {
     .join("");
 
   renderHomeTranslationApiControls();
+  renderHomeSummaryApiControls();
 }
 
 function saveCurrentHomeApiConfig() {
@@ -1530,22 +1594,6 @@ function switchHomeApiConfig(configId) {
   setHomeApiConfigStatus(`已一键切换到“${config.name}”。`, "success");
 }
 
-function setHomeTranslationApiConfig(configId) {
-  const config =
-    normalizeApiConfigs(homeState.settings.apiConfigs).find((item) => item.id === configId) ||
-    null;
-  if (!config) {
-    setHomeApiConfigStatus("未找到可用于翻译的缓存 API 配置。", "error");
-    return;
-  }
-
-  homeState.settings.translationApiEnabled = true;
-  homeState.settings.translationApiConfigId = config.id;
-  persistSettings(homeState.settings);
-  renderHomeApiConfigList();
-  setHomeApiConfigStatus(`翻译专用 API 已切换到“${config.name}”。`, "success");
-}
-
 function deleteHomeApiConfig(configId) {
   const configs = normalizeApiConfigs(homeState.settings.apiConfigs);
   const target = configs.find((item) => item.id === configId);
@@ -1565,6 +1613,10 @@ function deleteHomeApiConfig(configId) {
   if (homeState.settings.translationApiConfigId === configId) {
     homeState.settings.translationApiConfigId = "";
     homeState.settings.translationApiEnabled = false;
+  }
+  if (homeState.settings.summaryApiConfigId === configId) {
+    homeState.settings.summaryApiConfigId = "";
+    homeState.settings.summaryApiEnabled = false;
   }
   persistSettings(homeState.settings);
   renderHomeApiConfigList();
@@ -1645,6 +1697,13 @@ function getHomeAppMeta(tabName = "home") {
       tab: "schedule",
       kicker: "Schedule",
       title: "日程"
+    };
+  }
+  if (tabName === "memory") {
+    return {
+      tab: "memory",
+      kicker: "Memory",
+      title: "记忆"
     };
   }
   if (tabName === "logs") {
@@ -1770,6 +1829,15 @@ function openHomeApp(tabName) {
     return;
   }
 
+  if (tabName === "memory") {
+    setHomeBrowserModalOpen(
+      true,
+      `./messages.html?embed=1&view=memory&v=${APP_BUILD_VERSION}`,
+      getHomeAppMeta("memory")
+    );
+    return;
+  }
+
   if (tabName === "logs") {
     setHomeBrowserModalOpen(
       true,
@@ -1878,8 +1946,6 @@ function attachHomeSettingsEvents() {
       const { action } = actionEl.dataset;
       if (action === "switch-home-api-config") {
         switchHomeApiConfig(configId);
-      } else if (action === "set-home-translation-api-config") {
-        setHomeTranslationApiConfig(configId);
       } else if (action === "delete-home-api-config") {
         deleteHomeApiConfig(configId);
       }
@@ -1908,6 +1974,34 @@ function attachHomeSettingsEvents() {
       ).trim();
       homeState.settings.translationApiEnabled = Boolean(
         homeTranslationApiEnabledEl?.checked && homeState.settings.translationApiConfigId
+      );
+      persistSettings(homeState.settings);
+      renderHomeApiConfigList();
+    });
+  }
+
+  if (homeSummaryApiEnabledEl) {
+    homeSummaryApiEnabledEl.addEventListener("change", () => {
+      if (homeSummaryApiEnabledEl.checked && !homeState.settings.summaryApiConfigId) {
+        const configs = normalizeApiConfigs(homeState.settings.apiConfigs);
+        homeState.settings.summaryApiConfigId =
+          homeState.settings.activeApiConfigId || configs[0]?.id || "";
+      }
+      homeState.settings.summaryApiEnabled = Boolean(
+        homeSummaryApiEnabledEl.checked && homeState.settings.summaryApiConfigId
+      );
+      persistSettings(homeState.settings);
+      renderHomeSummaryApiControls();
+    });
+  }
+
+  if (homeSummaryApiConfigSelectEl) {
+    homeSummaryApiConfigSelectEl.addEventListener("change", () => {
+      homeState.settings.summaryApiConfigId = String(
+        homeSummaryApiConfigSelectEl.value || ""
+      ).trim();
+      homeState.settings.summaryApiEnabled = Boolean(
+        homeSummaryApiEnabledEl?.checked && homeState.settings.summaryApiConfigId
       );
       persistSettings(homeState.settings);
       renderHomeApiConfigList();
