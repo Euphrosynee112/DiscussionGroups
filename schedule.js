@@ -131,6 +131,26 @@ function requestEmbeddedClose() {
   }
 }
 
+function updateScheduleViewportHeight() {
+  const viewportHeight = Math.round(
+    Math.max(window.visualViewport?.height || 0, window.innerHeight || 0, 0)
+  );
+  if (!viewportHeight) {
+    return;
+  }
+  document.documentElement.style.setProperty("--schedule-app-height", `${viewportHeight}px`);
+}
+
+function bindScheduleViewportHeight() {
+  updateScheduleViewportHeight();
+  window.addEventListener("resize", updateScheduleViewportHeight);
+  window.addEventListener("orientationchange", updateScheduleViewportHeight);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", updateScheduleViewportHeight);
+    window.visualViewport.addEventListener("scroll", updateScheduleViewportHeight);
+  }
+}
+
 function loadProfile() {
   const raw = readStoredJson(PROFILE_KEY, null);
   return raw && typeof raw === "object"
@@ -556,7 +576,7 @@ function parseTimeToMinutes(timeText = "") {
 function getEntryVisibleEndHour(entry) {
   const startMinutes = parseTimeToMinutes(entry.startTime);
   const endMinutes = Math.max(startMinutes + 1, parseTimeToMinutes(entry.endTime));
-  return Math.max(parseTimeHour(entry.startTime), Math.ceil(endMinutes / 60) - 1);
+  return Math.max(parseTimeHour(entry.startTime), Math.min(23, Math.floor(endMinutes / 60)));
 }
 
 function entryOccupiesHour(entry, hour) {
@@ -567,7 +587,7 @@ function entryOccupiesHour(entry, hour) {
   const endMinutes = Math.max(startMinutes + 1, parseTimeToMinutes(entry.endTime));
   const slotStart = hour * 60;
   const slotEnd = Math.min(24 * 60, (hour + 1) * 60);
-  return startMinutes < slotEnd && endMinutes > slotStart;
+  return startMinutes < slotEnd && endMinutes >= slotStart;
 }
 
 function getTimedEntrySlotState(entry, hour) {
@@ -586,19 +606,7 @@ function getDayEntryBuckets(dateText) {
 }
 
 function getVisibleTimelineHours(dateText) {
-  const { timedEntries } = getDayEntryBuckets(dateText);
-  let minHour = 8;
-  let maxHour = 22;
-
-  timedEntries.forEach((entry) => {
-    minHour = Math.min(minHour, parseTimeHour(entry.startTime));
-    maxHour = Math.max(maxHour, getEntryVisibleEndHour(entry));
-  });
-
-  minHour = Math.max(0, minHour - 1);
-  maxHour = Math.min(23, maxHour + 1);
-
-  return Array.from({ length: maxHour - minHour + 1 }, (_, index) => minHour + index);
+  return Array.from({ length: 24 }, (_, index) => index);
 }
 
 function getTimedEntriesForHour(dateText, hour) {
@@ -687,55 +695,52 @@ function renderDayView(dateText) {
   const timelineHours = getVisibleTimelineHours(dateText);
   return `
     <section class="schedule-day-view">
-      <section class="schedule-day-summary">
-        <div class="schedule-day-summary__text">
-          <span class="schedule-day-summary__kicker">${escapeHtml(formatFullDate(dateText))}</span>
-          <strong class="schedule-day-summary__title">把当天安排挂进角色感知</strong>
-          <span class="schedule-day-summary__hint">支持全天、按小时、每周重复三种新增方式</span>
-        </div>
-        <div class="schedule-day-actions">
-          <button
-            class="schedule-quick-btn"
-            type="button"
-            data-action="add-day"
-            data-date="${escapeHtml(dateText)}"
-          >
-            新增全天
-          </button>
-          <button
-            class="schedule-quick-btn schedule-quick-btn--accent"
-            type="button"
-            data-action="add-hour-slot"
-            data-date="${escapeHtml(dateText)}"
-            data-hour="09"
-          >
-            新增小时
-          </button>
-        </div>
-      </section>
-
-      ${
-        allDayEntries.length
-          ? `
-              <section class="schedule-all-day">
-                <div class="schedule-all-day__head">
-                  <span>全天安排</span>
-                  <button
-                    class="schedule-all-day__add"
-                    type="button"
-                    data-action="add-day"
-                    data-date="${escapeHtml(dateText)}"
-                  >
-                    + 新增
-                  </button>
-                </div>
-                <div class="schedule-agenda">${allDayEntries.map((entry) => renderEntryCard(entry)).join("")}</div>
-              </section>
-            `
-          : ""
-      }
-
       <section class="schedule-timeline" aria-label="小时日程时间轴">
+        <div class="schedule-time-row schedule-time-row--all-day">
+          <div class="schedule-time-row__label schedule-time-row__label--all-day">全天</div>
+          <div class="schedule-time-row__body schedule-time-row__body--all-day${allDayEntries.length ? " has-entry" : ""}">
+            ${
+              allDayEntries.length
+                ? `
+                    <div class="schedule-time-row__entries">
+                      ${allDayEntries
+                        .map(
+                          (entry) => `
+                            <button
+                              class="schedule-time-entry schedule-time-entry--all-day"
+                              type="button"
+                              data-action="edit-entry"
+                              data-entry-id="${escapeHtml(entry.sourceEntryId || entry.id)}"
+                            >
+                              <span class="schedule-time-entry__title">${escapeHtml(entry.title)}</span>
+                              <span class="schedule-time-entry__meta">${escapeHtml(
+                                `${(entry.displayOwnerType || entry.ownerType) === "contact" ? "角色" : "用户"} ${
+                                  entry.displayOwnerName ||
+                                  ((entry.displayOwnerType || entry.ownerType) === "contact"
+                                    ? getContactName(entry.displayOwnerId || entry.ownerId)
+                                    : getUserDisplayName())
+                                }`
+                              )}</span>
+                            </button>
+                          `
+                        )
+                        .join("")}
+                    </div>
+                  `
+                : `
+                    <button
+                      class="schedule-day-all-day-add"
+                      type="button"
+                      data-action="add-day"
+                      data-date="${escapeHtml(dateText)}"
+                      aria-label="新增全天日程"
+                    >
+                      +
+                    </button>
+                  `
+            }
+          </div>
+        </div>
         ${timelineHours
           .map((hour) => {
             const entries = getTimedEntriesForHour(dateText, hour);
@@ -963,8 +968,8 @@ function renderRangeSummary() {
     }
     if (scheduleRangeSubtitleEl) {
       scheduleRangeSubtitleEl.textContent = entries.length
-        ? `当天共有 ${entries.length} 条日程；可用顶部按钮继续新增。${filterSuffix}`
-        : `这一天还没有安排；可用顶部按钮新增日程。${filterSuffix}`;
+        ? `当天共有 ${entries.length} 条日程；可用右上角 + 继续新增。${filterSuffix}`
+        : `这一天还没有安排；可用右上角 + 新增日程。${filterSuffix}`;
     }
     return;
   }
@@ -1633,6 +1638,7 @@ function attachEvents() {
 
 function init() {
   document.body.classList.toggle("embedded", isEmbeddedView());
+  bindScheduleViewportHeight();
   renderSchedulePage();
   attachEvents();
 }

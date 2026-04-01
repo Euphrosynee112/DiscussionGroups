@@ -346,6 +346,29 @@ function notifyEmbeddedReady() {
   window.setTimeout(sendReady, 0);
 }
 
+function updateMessagesViewportHeight() {
+  if (typeof document === "undefined") {
+    return;
+  }
+  const viewportHeight = Math.round(
+    Math.max(window.visualViewport?.height || 0, window.innerHeight || 0, 0)
+  );
+  if (!viewportHeight) {
+    return;
+  }
+  document.documentElement.style.setProperty("--messages-app-height", `${viewportHeight}px`);
+}
+
+function bindMessagesViewportHeight() {
+  updateMessagesViewportHeight();
+  window.addEventListener("resize", updateMessagesViewportHeight);
+  window.addEventListener("orientationchange", updateMessagesViewportHeight);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", updateMessagesViewportHeight);
+    window.visualViewport.addEventListener("scroll", updateMessagesViewportHeight);
+  }
+}
+
 function safeGetItem(key) {
   try {
     return window.localStorage.getItem(key);
@@ -3636,7 +3659,9 @@ function renderConversationDetail() {
 
   const historyEl = messagesContentEl.querySelector(".messages-conversation__history");
   if (historyEl) {
-    historyEl.scrollTop = historyEl.scrollHeight;
+    window.requestAnimationFrame(() => {
+      historyEl.scrollTop = historyEl.scrollHeight;
+    });
   }
 }
 
@@ -5519,6 +5544,7 @@ function init() {
   if (document.body) {
     document.body.classList.toggle("embedded", isEmbeddedView());
   }
+  bindMessagesViewportHeight();
   persistConversations();
   renderMessagesPage();
   attachEvents();
