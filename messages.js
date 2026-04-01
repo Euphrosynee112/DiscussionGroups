@@ -439,8 +439,10 @@ function updateMessagesViewportHeight() {
   if (typeof document === "undefined") {
     return;
   }
+  const visualViewportHeight = Number(window.visualViewport?.height) || 0;
+  const layoutViewportHeight = Number(window.innerHeight) || 0;
   const viewportHeight = Math.round(
-    Math.max(window.visualViewport?.height || 0, window.innerHeight || 0, 0)
+    visualViewportHeight > 0 ? visualViewportHeight : layoutViewportHeight
   );
   if (!viewportHeight) {
     return;
