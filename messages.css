@@ -401,7 +401,7 @@ body.embedded .messages-shell {
   height: auto;
   flex: 1 1 auto;
   overflow-y: auto;
-  padding: 14px 12px calc(18px + env(safe-area-inset-bottom, 0px));
+  padding: 14px 12px 8px;
   display: grid;
   align-content: start;
   gap: 10px;
@@ -463,7 +463,7 @@ body.embedded .messages-shell {
   min-width: 0;
   display: flex;
   flex: 0 1 auto;
-  max-width: min(calc(100% - 52px), 40vw, 340px);
+  max-width: min(calc(100% - 52px), 65vw, 520px);
 }
 
 .messages-message-row__stack {
@@ -578,7 +578,7 @@ body.embedded .messages-shell {
   z-index: 5;
   flex-shrink: 0;
   margin-top: auto;
-  padding: 8px 10px calc(12px + env(safe-area-inset-bottom, 0px));
+  padding: 8px 10px max(8px, env(safe-area-inset-bottom, 0px));
   display: grid;
   grid-template-columns: minmax(0, 1fr) 60px 40px 40px;
   gap: 8px;
@@ -595,7 +595,7 @@ body.embedded .messages-shell {
   border-radius: 999px;
   background: #ffffff;
   outline: none;
-  font-size: 16px;
+  font-size: 13px;
 }
 
 .messages-conversation__send {
@@ -754,6 +754,12 @@ body.embedded {
   .messages-form-field select,
   .messages-dialog-modal__field textarea {
     font-size: 16px;
+  }
+}
+
+@media (pointer: coarse) {
+  .messages-conversation__input {
+    font-size: 13px;
   }
 }
 
@@ -2214,7 +2220,7 @@ body.embedded {
   }
 
   .messages-message-row__bubble-wrap {
-    max-width: min(calc(100% - 48px), 40vw, 300px);
+    max-width: min(calc(100% - 48px), 65vw, 420px);
   }
 
   .messages-message-row__avatar {
