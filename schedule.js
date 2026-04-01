@@ -7,6 +7,7 @@ const DEFAULT_PROFILE = {
 };
 
 const scheduleBackBtnEl = document.querySelector("#schedule-back-btn");
+const scheduleFilterBtnEl = document.querySelector("#schedule-filter-btn");
 const scheduleAddBtnEl = document.querySelector("#schedule-add-btn");
 const scheduleStatusEl = document.querySelector("#schedule-status");
 const scheduleViewSwitchEl = document.querySelector("#schedule-view-switch");
@@ -30,6 +31,8 @@ const scheduleOwnerContactSelectEl = document.querySelector("#schedule-owner-con
 const scheduleVisibilityFieldEl = document.querySelector("#schedule-visibility-field");
 const scheduleVisibleAllInputEl = document.querySelector("#schedule-visible-all-input");
 const scheduleVisibleContactsEl = document.querySelector("#schedule-visible-contacts");
+const scheduleCompanionFieldEl = document.querySelector("#schedule-companion-field");
+const scheduleCompanionOptionsEl = document.querySelector("#schedule-companion-options");
 const scheduleDateInputEl = document.querySelector("#schedule-date-input");
 const scheduleTimeGridEl = document.querySelector("#schedule-time-grid");
 const scheduleStartTimeInputEl = document.querySelector("#schedule-start-time-input");
@@ -37,8 +40,17 @@ const scheduleEndTimeInputEl = document.querySelector("#schedule-end-time-input"
 const scheduleEditorStatusEl = document.querySelector("#schedule-editor-status");
 const scheduleEditorCancelBtnEl = document.querySelector("#schedule-editor-cancel-btn");
 const scheduleDeleteBtnEl = document.querySelector("#schedule-delete-btn");
+const scheduleFilterModalEl = document.querySelector("#schedule-filter-modal");
+const scheduleFilterCloseBtnEl = document.querySelector("#schedule-filter-close-btn");
+const scheduleFilterOptionsEl = document.querySelector("#schedule-filter-options");
+const scheduleFilterStatusEl = document.querySelector("#schedule-filter-status");
+const scheduleFilterCancelBtnEl = document.querySelector("#schedule-filter-cancel-btn");
+const scheduleFilterApplyBtnEl = document.querySelector("#schedule-filter-apply-btn");
+const scheduleFilterSelectAllBtnEl = document.querySelector("#schedule-filter-select-all-btn");
+const scheduleFilterClearBtnEl = document.querySelector("#schedule-filter-clear-btn");
 
 const memoryStorage = {};
+const USER_ACTOR_KEY = "user:self";
 
 const state = {
   profile: loadProfile(),
@@ -47,9 +59,12 @@ const state = {
   viewMode: "day",
   cursorDate: getTodayValue(),
   editorOpen: false,
+  filterOpen: false,
   editorMode: "create",
   editingEntryId: "",
-  draft: createDefaultDraft(getTodayValue())
+  draft: createDefaultDraft(getTodayValue()),
+  filterActorKeys: [],
+  filterDraftActorKeys: []
 };
 
 function safeGetItem(key) {
@@ -156,6 +171,10 @@ function normalizeScheduleEntry(entry, index = 0) {
     scheduleType,
     ownerType,
     ownerId: ownerType === "contact" ? String(source.ownerId || "").trim() : "",
+    companionIncludesUser: ownerType === "contact" ? Boolean(source.companionIncludesUser) : false,
+    companionContactIds: Array.isArray(source.companionContactIds)
+      ? [...new Set(source.companionContactIds.map((item) => String(item || "").trim()).filter(Boolean))]
+      : [],
     visibilityMode: source.visibilityMode === "selected" ? "selected" : "all",
     visibleContactIds: Array.isArray(source.visibleContactIds)
       ? [...new Set(source.visibleContactIds.map((item) => String(item || "").trim()).filter(Boolean))]
@@ -284,6 +303,8 @@ function createDefaultDraft(dateText = getTodayValue(), overrides = {}) {
     scheduleType: "day",
     ownerType: "user",
     ownerId: "",
+    companionIncludesUser: false,
+    companionContactIds: [],
     visibilityMode: "all",
     visibleContactIds: [],
     date: dateText,
@@ -291,6 +312,157 @@ function createDefaultDraft(dateText = getTodayValue(), overrides = {}) {
     endTime: "10:00",
     ...overrides
   };
+}
+
+function getUserDisplayName() {
+  return String(state.profile.username || DEFAULT_PROFILE.username).trim() || DEFAULT_PROFILE.username;
+}
+
+function getActorKey(actorType = "user", actorId = "") {
+  return actorType === "contact" && String(actorId || "").trim()
+    ? `contact:${String(actorId || "").trim()}`
+    : USER_ACTOR_KEY;
+}
+
+function getFilterActorOptions() {
+  return [
+    {
+      key: USER_ACTOR_KEY,
+      type: "user",
+      id: "",
+      label: getUserDisplayName()
+    },
+    ...state.contacts.map((contact) => ({
+      key: getActorKey("contact", contact.id),
+      type: "contact",
+      id: contact.id,
+      label: contact.name
+    }))
+  ];
+}
+
+function normalizeFilterActorKeys(actorKeys = []) {
+  const availableKeys = new Set(getFilterActorOptions().map((option) => option.key));
+  return [...new Set(actorKeys.map((item) => String(item || "").trim()).filter((item) => availableKeys.has(item)))];
+}
+
+function hasActiveOwnerFilter() {
+  return Array.isArray(state.filterActorKeys) && state.filterActorKeys.length > 0;
+}
+
+function getActiveOwnerFilterSummary() {
+  if (!hasActiveOwnerFilter()) {
+    return "全部";
+  }
+  const optionMap = new Map(getFilterActorOptions().map((option) => [option.key, option.label]));
+  const labels = state.filterActorKeys.map((key) => optionMap.get(key)).filter(Boolean);
+  if (!labels.length) {
+    return "全部";
+  }
+  if (labels.length === 1) {
+    return labels[0];
+  }
+  if (labels.length === 2) {
+    return labels.join("、");
+  }
+  return `${labels.slice(0, 2).join("、")} 等 ${labels.length} 位`;
+}
+
+function getAvailableCompanionOptions(draft = state.draft) {
+  const resolvedDraft = draft && typeof draft === "object" ? draft : state.draft;
+  const options = [];
+
+  if (resolvedDraft.ownerType === "contact") {
+    options.push({
+      key: USER_ACTOR_KEY,
+      type: "user",
+      id: "",
+      label: getUserDisplayName()
+    });
+  }
+
+  state.contacts.forEach((contact) => {
+    if (resolvedDraft.ownerType === "contact" && contact.id === resolvedDraft.ownerId) {
+      return;
+    }
+    options.push({
+      key: getActorKey("contact", contact.id),
+      type: "contact",
+      id: contact.id,
+      label: contact.name
+    });
+  });
+
+  return options;
+}
+
+function sanitizeDraftCompanions(draft = state.draft) {
+  const resolvedDraft = draft && typeof draft === "object" ? draft : state.draft;
+  const options = getAvailableCompanionOptions(resolvedDraft);
+  const contactIdSet = new Set(
+    options.filter((option) => option.type === "contact").map((option) => option.id)
+  );
+  return {
+    ...resolvedDraft,
+    companionIncludesUser:
+      resolvedDraft.ownerType === "contact" &&
+      options.some((option) => option.type === "user") &&
+      Boolean(resolvedDraft.companionIncludesUser),
+    companionContactIds: [...new Set(
+      (Array.isArray(resolvedDraft.companionContactIds) ? resolvedDraft.companionContactIds : [])
+        .map((item) => String(item || "").trim())
+        .filter((item) => contactIdSet.has(item))
+    )]
+  };
+}
+
+function getEntryParticipants(entry) {
+  const participants = [];
+  const pushParticipant = (actorType, actorId, label, relation = "companion") => {
+    const key = getActorKey(actorType, actorId);
+    if (participants.some((item) => item.key === key)) {
+      return;
+    }
+    participants.push({
+      key,
+      type: actorType,
+      id: actorType === "contact" ? String(actorId || "").trim() : "",
+      label: String(label || "").trim() || (actorType === "contact" ? "角色" : getUserDisplayName()),
+      relation
+    });
+  };
+
+  if (entry.ownerType === "contact" && entry.ownerId) {
+    pushParticipant("contact", entry.ownerId, getContactName(entry.ownerId), "owner");
+  } else {
+    pushParticipant("user", "", getUserDisplayName(), "owner");
+  }
+
+  if (entry.ownerType === "contact" && entry.companionIncludesUser) {
+    pushParticipant("user", "", getUserDisplayName(), "companion");
+  }
+
+  entry.companionContactIds.forEach((contactId) => {
+    pushParticipant("contact", contactId, getContactName(contactId), "companion");
+  });
+
+  return participants;
+}
+
+function expandScheduleEntryForDisplay(entry) {
+  const participants = getEntryParticipants(entry);
+  return participants.map((participant) => ({
+    ...entry,
+    sourceEntryId: entry.id,
+    displayOwnerKey: participant.key,
+    displayOwnerType: participant.type,
+    displayOwnerId: participant.id,
+    displayOwnerName: participant.label,
+    displayRelation: participant.relation,
+    displayCompanionNames: participants
+      .filter((item) => item.key !== participant.key)
+      .map((item) => item.label)
+  }));
 }
 
 function setStatus(message = "", tone = "") {
@@ -320,15 +492,22 @@ function entryOccursOnDate(entry, dateText) {
   return isSameDateValue(entry.date, dateText);
 }
 
+function isDisplayEntryVisible(entry) {
+  return !hasActiveOwnerFilter() || state.filterActorKeys.includes(entry.displayOwnerKey);
+}
+
 function getEntriesForDate(dateText) {
   return state.entries
     .filter((entry) => entryOccursOnDate(entry, dateText))
+    .flatMap((entry) => expandScheduleEntryForDisplay(entry))
+    .filter((entry) => isDisplayEntryVisible(entry))
     .sort((left, right) => {
       const leftTime = left.scheduleType === "day" ? "00:00" : left.startTime;
       const rightTime = right.scheduleType === "day" ? "00:00" : right.startTime;
       return (
         leftTime.localeCompare(rightTime) ||
         (left.scheduleType === "day" ? -1 : 1) - (right.scheduleType === "day" ? -1 : 1) ||
+        String(left.displayOwnerName || "").localeCompare(String(right.displayOwnerName || ""), "zh-CN") ||
         (right.updatedAt || 0) - (left.updatedAt || 0)
       );
     });
@@ -444,20 +623,41 @@ function formatVisibilityLabel(entry) {
 }
 
 function getOwnerChipClass(entry) {
-  return entry.ownerType === "contact" ? "schedule-chip schedule-chip--contact" : "schedule-chip schedule-chip--user";
+  return entry.displayOwnerType === "contact" || entry.ownerType === "contact"
+    ? "schedule-chip schedule-chip--contact"
+    : "schedule-chip schedule-chip--user";
+}
+
+function formatParticipantLabel(entry) {
+  const names = Array.isArray(entry.displayCompanionNames) ? entry.displayCompanionNames.filter(Boolean) : [];
+  if (!names.length) {
+    if (entry.ownerType === "user" && (entry.displayOwnerType || entry.ownerType) === "user") {
+      return formatVisibilityLabel(entry);
+    }
+    return "";
+  }
+  return `同行：${names.slice(0, 2).join("、")}${names.length > 2 ? ` 等 ${names.length} 位` : ""}`;
 }
 
 function renderEntryCard(entry) {
-  const ownerLabel = entry.ownerType === "contact" ? getContactName(entry.ownerId) : (state.profile.username || DEFAULT_PROFILE.username);
+  const ownerType = entry.displayOwnerType || entry.ownerType;
+  const ownerLabel =
+    entry.displayOwnerName ||
+    (ownerType === "contact" ? getContactName(entry.displayOwnerId || entry.ownerId) : getUserDisplayName());
+  const participantLabel = formatParticipantLabel(entry);
   return `
-    <button class="schedule-entry" type="button" data-action="edit-entry" data-entry-id="${escapeHtml(entry.id)}">
+    <button class="schedule-entry" type="button" data-action="edit-entry" data-entry-id="${escapeHtml(entry.sourceEntryId || entry.id)}">
       <div class="schedule-entry__top">
         <span class="schedule-entry__title">${escapeHtml(entry.title)}</span>
         <span class="schedule-entry__time">${escapeHtml(formatEntryTime(entry))}</span>
       </div>
       <div class="schedule-entry__meta">
-        <span class="${getOwnerChipClass(entry)}">${escapeHtml(entry.ownerType === "contact" ? "角色" : "用户")} · ${escapeHtml(ownerLabel)}</span>
-        <span class="schedule-chip schedule-chip--visibility">${escapeHtml(formatVisibilityLabel(entry))}</span>
+        <span class="${getOwnerChipClass(entry)}">${escapeHtml(ownerType === "contact" ? "角色" : "用户")} · ${escapeHtml(ownerLabel)}</span>
+        ${
+          participantLabel
+            ? `<span class="schedule-chip schedule-chip--visibility">${escapeHtml(participantLabel)}</span>`
+            : ""
+        }
       </div>
     </button>
   `;
@@ -556,7 +756,7 @@ function renderDayView(dateText) {
                                     )}"
                                     type="button"
                                     data-action="edit-entry"
-                                    data-entry-id="${escapeHtml(entry.id)}"
+                                    data-entry-id="${escapeHtml(entry.sourceEntryId || entry.id)}"
                                   >
                                     <span class="schedule-time-entry__title">${escapeHtml(entry.title)}</span>
                                     <span class="schedule-time-entry__meta">${escapeHtml(
@@ -564,9 +764,12 @@ function renderDayView(dateText) {
                                         ? `延续中 · 至 ${entry.endTime}`
                                         : formatEntryTime(entry)
                                     )} · ${escapeHtml(
-                                      entry.ownerType === "contact"
-                                        ? `角色 ${getContactName(entry.ownerId)}`
-                                        : `用户 ${state.profile.username || DEFAULT_PROFILE.username}`
+                                      `${(entry.displayOwnerType || entry.ownerType) === "contact" ? "角色" : "用户"} ${
+                                        entry.displayOwnerName ||
+                                        ((entry.displayOwnerType || entry.ownerType) === "contact"
+                                          ? getContactName(entry.displayOwnerId || entry.ownerId)
+                                          : getUserDisplayName())
+                                      }`
                                     )}</span>
                                   </button>
                                 `
@@ -574,26 +777,8 @@ function renderDayView(dateText) {
                               .join("")}
                           </div>
                         `
-                      : `<button
-                          class="schedule-time-row__slot"
-                          type="button"
-                          data-action="add-hour-slot"
-                          data-date="${escapeHtml(dateText)}"
-                          data-hour="${escapeHtml(padNumber(hour))}"
-                        >
-                          点击新增这一小时的安排
-                        </button>`
+                      : '<div class="schedule-time-row__empty" aria-hidden="true"></div>'
                   }
-                  <button
-                    class="schedule-time-row__add"
-                    type="button"
-                    data-action="add-hour-slot"
-                    data-date="${escapeHtml(dateText)}"
-                    data-hour="${escapeHtml(padNumber(hour))}"
-                    aria-label="新增 ${escapeHtml(getHourTimeText(hour))} 的小时日程"
-                  >
-                    +
-                  </button>
                 </div>
               </div>
             `;
@@ -644,7 +829,7 @@ function renderWeekView(dateText) {
                                 class="schedule-week-timeline__entry schedule-week-timeline__entry--all-day"
                                 type="button"
                                 data-action="edit-entry"
-                                data-entry-id="${escapeHtml(entry.id)}"
+                                data-entry-id="${escapeHtml(entry.sourceEntryId || entry.id)}"
                               >
                                 ${escapeHtml(entry.title)}
                               </button>
@@ -688,7 +873,7 @@ function renderWeekView(dateText) {
                                       )}"
                                       type="button"
                                       data-action="edit-entry"
-                                      data-entry-id="${escapeHtml(entry.id)}"
+                                      data-entry-id="${escapeHtml(entry.sourceEntryId || entry.id)}"
                                     >
                                       <span class="schedule-week-timeline__entry-title">${escapeHtml(entry.title)}</span>
                                       <span class="schedule-week-timeline__entry-meta">${escapeHtml(
@@ -770,6 +955,7 @@ function renderViewSwitch() {
 }
 
 function renderRangeSummary() {
+  const filterSuffix = hasActiveOwnerFilter() ? ` 当前筛选：${getActiveOwnerFilterSummary()}。` : "";
   if (state.viewMode === "day") {
     const entries = getEntriesForDate(state.cursorDate);
     if (scheduleRangeLabelEl) {
@@ -777,8 +963,8 @@ function renderRangeSummary() {
     }
     if (scheduleRangeSubtitleEl) {
       scheduleRangeSubtitleEl.textContent = entries.length
-        ? `当天共有 ${entries.length} 条日程；时间轴可直接点选新增小时安排。`
-        : "这一天还没有安排；可直接点选时间轴新增小时日程。";
+        ? `当天共有 ${entries.length} 条日程；可用顶部按钮继续新增。${filterSuffix}`
+        : `这一天还没有安排；可用顶部按钮新增日程。${filterSuffix}`;
     }
     return;
   }
@@ -791,7 +977,7 @@ function renderRangeSummary() {
       )}`;
     }
     if (scheduleRangeSubtitleEl) {
-      scheduleRangeSubtitleEl.textContent = `本周共 ${getEntriesCountInDateList(weekDates)} 条日程。`;
+      scheduleRangeSubtitleEl.textContent = `本周共 ${getEntriesCountInDateList(weekDates)} 条日程。${filterSuffix}`;
     }
     return;
   }
@@ -805,11 +991,12 @@ function renderRangeSummary() {
     scheduleRangeLabelEl.textContent = formatMonthTitle(state.cursorDate);
   }
   if (scheduleRangeSubtitleEl) {
-    scheduleRangeSubtitleEl.textContent = `本月共 ${getEntriesCountInDateList(monthDates)} 条日程。`;
+    scheduleRangeSubtitleEl.textContent = `本月共 ${getEntriesCountInDateList(monthDates)} 条日程。${filterSuffix}`;
   }
 }
 
 function renderSchedulePage() {
+  renderFilterButtonState();
   renderViewSwitch();
   renderRangeSummary();
   if (!scheduleContentEl) {
@@ -826,6 +1013,10 @@ function renderSchedulePage() {
   scheduleContentEl.innerHTML = renderDayView(state.cursorDate);
 }
 
+function refreshModalOpenState() {
+  document.body.classList.toggle("schedule-modal-open", state.editorOpen || state.filterOpen);
+}
+
 function setEditorOpen(isOpen, options = {}) {
   state.editorOpen = Boolean(isOpen);
   if (!scheduleEditorModalEl) {
@@ -833,7 +1024,7 @@ function setEditorOpen(isOpen, options = {}) {
   }
   scheduleEditorModalEl.hidden = !state.editorOpen;
   scheduleEditorModalEl.setAttribute("aria-hidden", String(!state.editorOpen));
-  document.body.classList.toggle("schedule-modal-open", state.editorOpen);
+  refreshModalOpenState();
 
   if (!state.editorOpen) {
     state.editorMode = "create";
@@ -853,6 +1044,8 @@ function setEditorOpen(isOpen, options = {}) {
         scheduleType: entry.scheduleType,
         ownerType: entry.ownerType,
         ownerId: entry.ownerId,
+        companionIncludesUser: Boolean(entry.companionIncludesUser),
+        companionContactIds: [...entry.companionContactIds],
         visibilityMode: entry.visibilityMode,
         visibleContactIds: [...entry.visibleContactIds],
         date: entry.date,
@@ -874,6 +1067,28 @@ function setEditorOpen(isOpen, options = {}) {
   window.setTimeout(() => {
     scheduleTitleInputEl?.focus();
   }, 0);
+}
+
+function setFilterOpen(isOpen) {
+  state.filterOpen = Boolean(isOpen);
+  if (!scheduleFilterModalEl) {
+    return;
+  }
+  scheduleFilterModalEl.hidden = !state.filterOpen;
+  scheduleFilterModalEl.setAttribute("aria-hidden", String(!state.filterOpen));
+  refreshModalOpenState();
+
+  if (!state.filterOpen) {
+    state.filterDraftActorKeys = [];
+    setFilterStatus("");
+    return;
+  }
+
+  state.filterDraftActorKeys = hasActiveOwnerFilter()
+    ? [...state.filterActorKeys]
+    : getFilterActorOptions().map((option) => option.key);
+  renderFilterOptions();
+  setFilterStatus("");
 }
 
 function renderOwnerContactOptions() {
@@ -924,7 +1139,103 @@ function renderVisibilityOptions() {
     .join("");
 }
 
+function renderCompanionOptions() {
+  if (!scheduleCompanionOptionsEl || !scheduleCompanionFieldEl) {
+    return;
+  }
+
+  state.draft = sanitizeDraftCompanions(state.draft);
+  const options = getAvailableCompanionOptions(state.draft);
+  scheduleCompanionFieldEl.toggleAttribute("hidden", !options.length);
+
+  if (!options.length) {
+    scheduleCompanionOptionsEl.innerHTML =
+      '<div class="schedule-visibility-empty">当前没有可选同行人。</div>';
+    return;
+  }
+
+  scheduleCompanionOptionsEl.innerHTML = options
+    .map((option) => {
+      if (option.type === "user") {
+        return `
+          <label class="schedule-visibility-option">
+            <input
+              type="checkbox"
+              data-role="companion-user"
+              ${state.draft.companionIncludesUser ? "checked" : ""}
+            />
+            <span>${escapeHtml(option.label)}</span>
+          </label>
+        `;
+      }
+
+      return `
+        <label class="schedule-visibility-option">
+          <input
+            type="checkbox"
+            value="${escapeHtml(option.id)}"
+            data-role="companion-contact"
+            ${state.draft.companionContactIds.includes(option.id) ? "checked" : ""}
+          />
+          <span>${escapeHtml(option.label)}</span>
+        </label>
+      `;
+    })
+    .join("");
+}
+
+function renderFilterButtonState() {
+  if (!scheduleFilterBtnEl) {
+    return;
+  }
+  const active = hasActiveOwnerFilter();
+  scheduleFilterBtnEl.classList.toggle("is-active", active);
+  scheduleFilterBtnEl.setAttribute(
+    "aria-label",
+    active ? `筛选查看对象（当前：${getActiveOwnerFilterSummary()}）` : "筛选查看对象"
+  );
+}
+
+function renderFilterOptions() {
+  if (!scheduleFilterOptionsEl) {
+    return;
+  }
+
+  const options = getFilterActorOptions();
+  if (!options.length) {
+    scheduleFilterOptionsEl.innerHTML =
+      '<div class="schedule-visibility-empty">当前没有可筛选的对象。</div>';
+    return;
+  }
+
+  const draftKeySet = new Set(state.filterDraftActorKeys);
+  scheduleFilterOptionsEl.innerHTML = options
+    .map(
+      (option) => `
+        <label class="schedule-visibility-option">
+          <input
+            type="checkbox"
+            value="${escapeHtml(option.key)}"
+            data-role="filter-actor"
+            ${draftKeySet.has(option.key) ? "checked" : ""}
+          />
+          <span>${escapeHtml(option.type === "user" ? `用户 · ${option.label}` : `角色 · ${option.label}`)}</span>
+        </label>
+      `
+    )
+    .join("");
+}
+
+function setFilterStatus(message = "", tone = "") {
+  if (!scheduleFilterStatusEl) {
+    return;
+  }
+  scheduleFilterStatusEl.textContent = message;
+  scheduleFilterStatusEl.className = `schedule-editor-status${tone ? ` ${tone}` : ""}`;
+}
+
 function renderEditor() {
+  state.draft = sanitizeDraftCompanions(state.draft);
   if (scheduleEditorTitleEl) {
     scheduleEditorTitleEl.textContent = state.editorMode === "edit" ? "编辑日程" : "新增日程";
   }
@@ -955,6 +1266,7 @@ function renderEditor() {
 
   renderOwnerContactOptions();
   renderVisibilityOptions();
+  renderCompanionOptions();
 
   const showContactField = state.draft.ownerType === "contact";
   scheduleOwnerContactFieldEl?.toggleAttribute("hidden", !showContactField);
@@ -979,17 +1291,27 @@ function collectEditorDraft() {
         .map((input) => (input instanceof HTMLInputElement ? String(input.value || "").trim() : ""))
         .filter(Boolean)
     : [];
-  return {
+  const companionContactIds = scheduleCompanionOptionsEl
+    ? [...scheduleCompanionOptionsEl.querySelectorAll("input[data-role='companion-contact']:checked")]
+        .map((input) => (input instanceof HTMLInputElement ? String(input.value || "").trim() : ""))
+        .filter(Boolean)
+    : [];
+  const companionIncludesUser = Boolean(
+    scheduleCompanionOptionsEl?.querySelector("input[data-role='companion-user']:checked")
+  );
+  return sanitizeDraftCompanions({
     title: String(scheduleTitleInputEl?.value || "").trim(),
     scheduleType: String(scheduleTypeSelectEl?.value || "day").trim(),
     ownerType: String(scheduleOwnerTypeSelectEl?.value || "user").trim(),
     ownerId: String(scheduleOwnerContactSelectEl?.value || "").trim(),
+    companionIncludesUser,
+    companionContactIds,
     visibilityMode: scheduleVisibleAllInputEl?.checked ? "all" : "selected",
     visibleContactIds,
     date: String(scheduleDateInputEl?.value || "").trim() || state.cursorDate,
     startTime: String(scheduleStartTimeInputEl?.value || "09:00").trim(),
     endTime: String(scheduleEndTimeInputEl?.value || "10:00").trim()
-  };
+  });
 }
 
 function saveDraft(draft) {
@@ -1088,6 +1410,10 @@ function attachEvents() {
     setEditorOpen(true, { date: state.cursorDate });
   });
 
+  scheduleFilterBtnEl?.addEventListener("click", () => {
+    setFilterOpen(true);
+  });
+
   scheduleViewSwitchEl?.addEventListener("click", (event) => {
     const target = event.target;
     if (!(target instanceof Element)) {
@@ -1180,18 +1506,22 @@ function attachEvents() {
 
   scheduleOwnerTypeSelectEl?.addEventListener("change", () => {
     const ownerType = String(scheduleOwnerTypeSelectEl.value || "user").trim();
-    state.draft = {
+    state.draft = sanitizeDraftCompanions({
       ...state.draft,
       ownerType,
       ownerId: ownerType === "contact" ? state.draft.ownerId : "",
       visibilityMode: ownerType === "user" ? state.draft.visibilityMode : "all"
-    };
+    });
     renderEditor();
     setEditorStatus("");
   });
 
   scheduleOwnerContactSelectEl?.addEventListener("change", () => {
-    state.draft = { ...state.draft, ownerId: String(scheduleOwnerContactSelectEl.value || "").trim() };
+    state.draft = sanitizeDraftCompanions({
+      ...state.draft,
+      ownerId: String(scheduleOwnerContactSelectEl.value || "").trim()
+    });
+    renderCompanionOptions();
     setEditorStatus("");
   });
 
@@ -1218,15 +1548,81 @@ function attachEvents() {
     setEditorStatus("");
   });
 
+  scheduleCompanionOptionsEl?.addEventListener("change", () => {
+    const draft = collectEditorDraft();
+    state.draft = {
+      ...state.draft,
+      companionIncludesUser: draft.companionIncludesUser,
+      companionContactIds: draft.companionContactIds
+    };
+    setEditorStatus("");
+  });
+
   [scheduleTitleInputEl, scheduleStartTimeInputEl, scheduleEndTimeInputEl].forEach((input) => {
     input?.addEventListener("input", () => {
       setEditorStatus("");
     });
   });
 
+  scheduleFilterCloseBtnEl?.addEventListener("click", () => {
+    setFilterOpen(false);
+  });
+
+  scheduleFilterCancelBtnEl?.addEventListener("click", () => {
+    setFilterOpen(false);
+  });
+
+  scheduleFilterSelectAllBtnEl?.addEventListener("click", () => {
+    state.filterDraftActorKeys = getFilterActorOptions().map((option) => option.key);
+    renderFilterOptions();
+    setFilterStatus("已选中全部对象。", "success");
+  });
+
+  scheduleFilterClearBtnEl?.addEventListener("click", () => {
+    state.filterDraftActorKeys = [];
+    renderFilterOptions();
+    setFilterStatus("未选择对象时会恢复查看全部日程。", "success");
+  });
+
+  scheduleFilterOptionsEl?.addEventListener("change", () => {
+    state.filterDraftActorKeys = normalizeFilterActorKeys(
+      [...scheduleFilterOptionsEl.querySelectorAll("input[data-role='filter-actor']:checked")]
+        .map((input) => (input instanceof HTMLInputElement ? input.value : ""))
+    );
+    setFilterStatus("");
+  });
+
+  scheduleFilterApplyBtnEl?.addEventListener("click", () => {
+    const nextKeys = normalizeFilterActorKeys(state.filterDraftActorKeys);
+    const allKeys = getFilterActorOptions().map((option) => option.key);
+    state.filterActorKeys =
+      nextKeys.length === 0 || nextKeys.length === allKeys.length ? [] : nextKeys;
+    setFilterOpen(false);
+    renderSchedulePage();
+    setStatus(
+      hasActiveOwnerFilter()
+        ? `已筛选：${getActiveOwnerFilterSummary()}。`
+        : "已恢复查看全部日程。",
+      "success"
+    );
+  });
+
+  scheduleFilterModalEl?.addEventListener("click", (event) => {
+    if (
+      event.target === scheduleFilterModalEl ||
+      event.target?.classList?.contains("schedule-modal__backdrop")
+    ) {
+      setFilterOpen(false);
+    }
+  });
+
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.editorOpen) {
       setEditorOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.filterOpen) {
+      setFilterOpen(false);
       return;
     }
     if (event.key === "Escape" && isEmbeddedView()) {

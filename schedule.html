@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pulse Generator · 日程</title>
-    <link rel="stylesheet" href="./schedule.css?v=20260331n" />
+    <link rel="stylesheet" href="./schedule.css?v=20260401b" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -33,22 +33,40 @@
             <p class="schedule-topbar__kicker">Calendar</p>
             <h1 class="schedule-topbar__title">日程</h1>
           </div>
-          <button
-            id="schedule-add-btn"
-            class="schedule-topbar__button"
-            type="button"
-            aria-label="新增日程"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d="M12 5v14M5 12h14"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-              />
-            </svg>
-          </button>
+          <div class="schedule-topbar__actions">
+            <button
+              id="schedule-filter-btn"
+              class="schedule-topbar__button"
+              type="button"
+              aria-label="筛选查看对象"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M4.5 6.5h15m-12 5h9m-6 5h3"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.9"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+            <button
+              id="schedule-add-btn"
+              class="schedule-topbar__button"
+              type="button"
+              aria-label="新增日程"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 5v14M5 12h14"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+          </div>
         </header>
 
         <p id="schedule-status" class="schedule-status" aria-live="polite"></p>
@@ -140,6 +158,16 @@
             </small>
           </section>
 
+          <section id="schedule-companion-field" class="schedule-field schedule-field--group">
+            <div class="schedule-field__head">
+              <span>同行人</span>
+            </div>
+            <div id="schedule-companion-options" class="schedule-visibility-list"></div>
+            <small class="schedule-field__hint">
+              被选中的同行人会同步拥有这一条同时间的日程；聊天时也会知道自己和谁同行。
+            </small>
+          </section>
+
           <label class="schedule-field">
             <span>日期</span>
             <input id="schedule-date-input" type="date" />
@@ -171,6 +199,47 @@
       </div>
     </section>
 
-    <script src="./schedule.js?v=20260331n"></script>
+    <section id="schedule-filter-modal" class="schedule-modal" hidden aria-hidden="true">
+      <div class="schedule-modal__backdrop"></div>
+      <div class="schedule-modal__panel" role="dialog" aria-modal="true" aria-label="筛选日程">
+        <div class="schedule-modal__head">
+          <strong>筛选查看对象</strong>
+          <button id="schedule-filter-close-btn" class="schedule-modal__close" type="button" aria-label="关闭">
+            ×
+          </button>
+        </div>
+
+        <div class="schedule-editor">
+          <section class="schedule-field schedule-field--group">
+            <div class="schedule-field__head">
+              <span>显示谁的日程</span>
+              <div class="schedule-filter-toolbar">
+                <button id="schedule-filter-select-all-btn" class="schedule-filter-chip" type="button">
+                  全选
+                </button>
+                <button id="schedule-filter-clear-btn" class="schedule-filter-chip" type="button">
+                  清空筛选
+                </button>
+              </div>
+            </div>
+            <div id="schedule-filter-options" class="schedule-visibility-list"></div>
+            <small class="schedule-field__hint">支持单选或多选；不改变日历样式，只筛选显示对象。</small>
+          </section>
+
+          <p id="schedule-filter-status" class="schedule-editor-status" aria-live="polite"></p>
+
+          <div class="schedule-modal__actions">
+            <button id="schedule-filter-cancel-btn" class="schedule-modal__button schedule-modal__button--ghost" type="button">
+              取消
+            </button>
+            <button id="schedule-filter-apply-btn" class="schedule-modal__button" type="button">
+              应用筛选
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <script src="./schedule.js?v=20260401b"></script>
   </body>
 </html>

@@ -2,7 +2,7 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260331n";
+const APP_BUILD_VERSION = "20260401a";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -54,7 +54,6 @@ const homeImportCancelBtn = document.querySelector("#home-import-cancel-btn");
 const homeAppTriggers = [...document.querySelectorAll("[data-open-app]")];
 const homeBrowserModalEl = document.querySelector("#home-browser-modal");
 const homeBrowserFrameEl = document.querySelector("#home-browser-frame");
-const homeBrowserLoadingEl = document.querySelector("#home-browser-loading");
 const homeBrowserKickerEl = document.querySelector("#home-browser-kicker");
 const homeBrowserTitleEl = document.querySelector("#home-browser-title");
 const homeBrowserCloseBtn = document.querySelector("#home-browser-close-btn");
@@ -86,9 +85,6 @@ const homeState = {
   settings: loadSettings(),
   modalOpen: false,
   browserOpen: false,
-  browserLoading: false,
-  browserLoadToken: 0,
-  browserLoadTimerId: 0,
   activeAppUrl: "",
   activeAppTab: "home",
   exportTransferSelection: [],
@@ -1669,52 +1665,6 @@ function refreshBodyModalState() {
   document.body.classList.toggle("modal-open", homeState.modalOpen || homeState.browserOpen);
 }
 
-function clearHomeBrowserLoadTimer() {
-  if (!homeState.browserLoadTimerId) {
-    return;
-  }
-  window.clearTimeout(homeState.browserLoadTimerId);
-  homeState.browserLoadTimerId = 0;
-}
-
-function setHomeBrowserLoading(isLoading, tabName = homeState.activeAppTab) {
-  homeState.browserLoading = Boolean(isLoading);
-  if (homeBrowserFrameEl) {
-    homeBrowserFrameEl.style.pointerEvents = homeState.browserLoading ? "none" : "auto";
-  }
-  if (!homeBrowserLoadingEl) {
-    return;
-  }
-
-  homeBrowserLoadingEl.classList.toggle("is-chat-splash", tabName === "messages");
-
-  if (homeState.browserLoading) {
-    homeBrowserLoadingEl.hidden = false;
-    homeBrowserLoadingEl.setAttribute("aria-hidden", "false");
-    homeBrowserLoadingEl.classList.add("is-visible");
-    return;
-  }
-
-  homeBrowserLoadingEl.setAttribute("aria-hidden", "true");
-  homeBrowserLoadingEl.classList.remove("is-visible");
-  window.setTimeout(() => {
-    if (homeState.browserLoading || !homeBrowserLoadingEl) {
-      return;
-    }
-    homeBrowserLoadingEl.hidden = true;
-  }, tabName === "messages" ? 220 : 120);
-}
-
-function scheduleHomeBrowserReady(delay = 160, expectedToken = homeState.browserLoadToken) {
-  clearHomeBrowserLoadTimer();
-  homeState.browserLoadTimerId = window.setTimeout(() => {
-    if (!homeState.browserOpen || expectedToken !== homeState.browserLoadToken) {
-      return;
-    }
-    setHomeBrowserLoading(false, homeState.activeAppTab);
-  }, delay);
-}
-
 function setHomeBrowserModalOpen(
   isOpen,
   url = homeState.activeAppUrl,
@@ -1726,16 +1676,14 @@ function setHomeBrowserModalOpen(
   }
 
   if (homeState.browserOpen) {
-    clearHomeBrowserLoadTimer();
     if (homeState.modalOpen) {
       setHomeSettingsModalOpen(false);
     }
     const resolvedAppMeta = appMeta || getHomeAppMeta(homeState.activeAppTab);
     homeState.activeAppUrl = url || homeState.activeAppUrl || "./discussion.html?tab=home";
     homeState.activeAppTab = resolvedAppMeta.tab;
-    homeState.browserLoadToken += 1;
     showHomeLayer(homeBrowserModalEl, "grid");
-    setHomeBrowserLoading(resolvedAppMeta.tab === "messages", resolvedAppMeta.tab);
+    homeBrowserFrameEl.style.pointerEvents = "auto";
     homeBrowserFrameEl.src = homeState.activeAppUrl;
     if (homeBrowserKickerEl) {
       homeBrowserKickerEl.textContent = resolvedAppMeta.kicker;
@@ -1747,10 +1695,9 @@ function setHomeBrowserModalOpen(
     return;
   }
 
-  clearHomeBrowserLoadTimer();
-  setHomeBrowserLoading(false, homeState.activeAppTab);
   hideHomeLayer(homeBrowserModalEl);
   homeBrowserFrameEl.src = "about:blank";
+  homeBrowserFrameEl.style.pointerEvents = "auto";
   homeState.activeAppUrl = "";
   homeState.activeAppTab = "home";
   refreshBodyModalState();
@@ -1880,19 +1827,6 @@ function attachHomeSettingsEvents() {
     });
   }
 
-  if (homeBrowserFrameEl) {
-    homeBrowserFrameEl.addEventListener("load", () => {
-      if (!homeState.browserOpen) {
-        return;
-      }
-      if (homeState.activeAppTab === "messages") {
-        scheduleHomeBrowserReady(900, homeState.browserLoadToken);
-        return;
-      }
-      scheduleHomeBrowserReady(80, homeState.browserLoadToken);
-    });
-  }
-
   window.addEventListener("message", (event) => {
     const frameWindow = homeBrowserFrameEl?.contentWindow || null;
     if (frameWindow && event.source && event.source !== frameWindow) {
@@ -1901,13 +1835,6 @@ function attachHomeSettingsEvents() {
     if (event.data?.type === "pulse-generator-close-app") {
       setHomeBrowserModalOpen(false);
       return;
-    }
-    if (
-      event.data?.type === "pulse-generator-app-ready" &&
-      homeState.browserOpen &&
-      event.data?.app === homeState.activeAppTab
-    ) {
-      scheduleHomeBrowserReady(120, homeState.browserLoadToken);
     }
   });
 

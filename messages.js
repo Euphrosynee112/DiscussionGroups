@@ -1530,6 +1530,10 @@ function normalizeScheduleEntry(entry, index = 0) {
     scheduleType,
     ownerType,
     ownerId: ownerType === "contact" ? String(source.ownerId || "").trim() : "",
+    companionIncludesUser: ownerType === "contact" ? Boolean(source.companionIncludesUser) : false,
+    companionContactIds: Array.isArray(source.companionContactIds)
+      ? [...new Set(source.companionContactIds.map((item) => String(item || "").trim()).filter(Boolean))]
+      : [],
     visibilityMode: source.visibilityMode === "selected" ? "selected" : "all",
     visibleContactIds: Array.isArray(source.visibleContactIds)
       ? [...new Set(source.visibleContactIds.map((item) => String(item || "").trim()).filter(Boolean))]
@@ -1553,6 +1557,45 @@ function loadScheduleEntries() {
   return Array.isArray(raw)
     ? raw.map((entry, index) => normalizeScheduleEntry(entry, index)).filter((entry) => entry.title && entry.date)
     : [];
+}
+
+function getScheduleContactName(contactId = "") {
+  return getContactById(String(contactId || "").trim())?.name || "角色";
+}
+
+function getScheduleParticipants(entry) {
+  const participants = [];
+  const pushParticipant = (actorType, actorId, label) => {
+    const key =
+      actorType === "contact" && String(actorId || "").trim()
+        ? `contact:${String(actorId || "").trim()}`
+        : "user:self";
+    if (participants.some((item) => item.key === key)) {
+      return;
+    }
+    participants.push({
+      key,
+      type: actorType,
+      id: actorType === "contact" ? String(actorId || "").trim() : "",
+      label: String(label || "").trim() || (actorType === "contact" ? "角色" : state.profile.username || DEFAULT_PROFILE.username)
+    });
+  };
+
+  if (entry.ownerType === "contact" && entry.ownerId) {
+    pushParticipant("contact", entry.ownerId, getScheduleContactName(entry.ownerId));
+  } else {
+    pushParticipant("user", "", state.profile.username || DEFAULT_PROFILE.username);
+  }
+
+  if (entry.ownerType === "contact" && entry.companionIncludesUser) {
+    pushParticipant("user", "", state.profile.username || DEFAULT_PROFILE.username);
+  }
+
+  entry.companionContactIds.forEach((contactId) => {
+    pushParticipant("contact", contactId, getScheduleContactName(contactId));
+  });
+
+  return participants;
 }
 
 function parseLocalDateValue(dateText) {
@@ -1818,14 +1861,39 @@ function getVisibleScheduleEntriesForContact(contactId = "") {
   if (!resolvedContactId) {
     return [];
   }
-  return loadScheduleEntries().filter((entry) => {
-    if (entry.ownerType === "contact") {
-      return entry.ownerId === resolvedContactId;
+  return loadScheduleEntries().flatMap((entry) => {
+    const participants = getScheduleParticipants(entry);
+    const directParticipant = participants.find(
+      (participant) => participant.type === "contact" && participant.id === resolvedContactId
+    );
+
+    if (directParticipant) {
+      return [
+        {
+          ...entry,
+          awarenessMode: "participant",
+          awarenessCompanionNames: participants
+            .filter((participant) => participant.key !== directParticipant.key)
+            .map((participant) => participant.label)
+        }
+      ];
     }
-    if (entry.visibilityMode === "all") {
-      return true;
+
+    if (entry.ownerType === "user") {
+      const isVisible =
+        entry.visibilityMode === "all" || entry.visibleContactIds.includes(resolvedContactId);
+      if (isVisible) {
+        return [
+          {
+            ...entry,
+            awarenessMode: "shared-user",
+            awarenessCompanionNames: []
+          }
+        ];
+      }
     }
-    return entry.visibleContactIds.includes(resolvedContactId);
+
+    return [];
   });
 }
 
@@ -1884,7 +1952,15 @@ function evaluateScheduleAwareness(
 }
 
 function buildScheduleAwarenessLine(entry, awareness) {
-  const ownerLabel = entry.ownerType === "contact" ? "你" : "用户";
+  const companionNames = Array.isArray(entry.awarenessCompanionNames)
+    ? entry.awarenessCompanionNames.filter(Boolean)
+    : [];
+  const companionText = companionNames.length
+    ? `和${companionNames.slice(0, 2).join("、")}${
+        companionNames.length > 2 ? `等${companionNames.length}位同行人` : ""
+      }一起`
+    : "";
+  const ownerLabel = entry.awarenessMode === "participant" ? `你${companionText}` : "用户";
   if (awareness.type === "current") {
     return `${ownerLabel}当前有行程「${entry.title}」正在进行。`;
   }

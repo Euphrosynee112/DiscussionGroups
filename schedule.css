@@ -111,11 +111,18 @@ body.embedded .schedule-shell {
   min-height: calc(58px + env(safe-area-inset-top, 0px));
   padding: calc(10px + env(safe-area-inset-top, 0px)) 12px 10px;
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
   background: rgba(255, 255, 255, 0.92);
   border-bottom: 1px solid var(--schedule-line);
+}
+
+.schedule-topbar__actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .schedule-topbar__button {
@@ -135,6 +142,11 @@ body.embedded .schedule-shell {
 
 .schedule-topbar__button:hover {
   background: rgba(47, 42, 36, 0.05);
+}
+
+.schedule-topbar__button.is-active {
+  background: rgba(204, 124, 89, 0.12);
+  color: var(--schedule-accent);
 }
 
 .schedule-topbar__body {
@@ -390,6 +402,11 @@ body.embedded .schedule-shell {
   flex: 1;
   display: grid;
   gap: 8px;
+}
+
+.schedule-time-row__empty {
+  min-height: 46px;
+  flex: 1;
 }
 
 .schedule-time-row__slot {
@@ -902,6 +919,24 @@ body.embedded .schedule-shell {
   justify-content: flex-start;
   border-radius: 14px;
   background: rgba(38, 33, 29, 0.03);
+}
+
+.schedule-filter-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.schedule-filter-chip {
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(38, 33, 29, 0.06);
+  color: var(--schedule-text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .schedule-time-grid {
