@@ -9,6 +9,9 @@
   --muted-strong: #7e7e7e;
   --green: #07c160;
   --shadow: 0 22px 48px rgba(15, 23, 42, 0.1);
+  --messages-app-height: 100vh;
+  --messages-app-height: 100svh;
+  --messages-app-height: 100dvh;
 }
 
 * {
@@ -32,10 +35,15 @@ body {
   background: linear-gradient(180deg, #eef0f3 0%, #e5e7eb 100%);
   color: var(--text);
   font-family: "SF Pro Display", "PingFang SC", "Noto Sans SC", sans-serif;
+  overflow: hidden;
 }
 
 body.embedded .desktop-entry {
   display: none;
+}
+
+body.embedded {
+  --messages-app-height: 100%;
 }
 
 body.messages-modal-open {
@@ -72,10 +80,8 @@ button {
 }
 
 .messages-app {
-  min-height: 100vh;
-  min-height: 100dvh;
-  height: 100vh;
-  height: 100dvh;
+  min-height: var(--messages-app-height);
+  height: var(--messages-app-height);
   display: grid;
   place-items: center;
   padding: 30px 16px;
@@ -88,9 +94,8 @@ body.embedded .messages-app {
 
 .messages-shell {
   width: min(430px, 100%);
-  min-height: min(860px, calc(100vh - 60px));
-  height: min(860px, calc(100vh - 60px));
-  height: min(860px, calc(100dvh - 60px));
+  min-height: min(860px, calc(var(--messages-app-height) - 60px));
+  height: min(860px, calc(var(--messages-app-height) - 60px));
   display: grid;
   grid-template-rows: auto auto 1fr auto;
   background: var(--shell);
@@ -100,11 +105,10 @@ body.embedded .messages-app {
 }
 
 body.embedded .messages-shell {
-  width: 100vw;
-  min-height: 100vh;
-  min-height: 100dvh;
-  height: 100vh;
-  height: 100dvh;
+  width: 100%;
+  min-height: 100%;
+  height: 100%;
+  max-height: 100%;
   border-radius: 0;
   box-shadow: none;
 }
@@ -395,7 +399,7 @@ body.embedded .messages-shell {
   min-height: 0;
   height: 100%;
   overflow-y: auto;
-  padding: 14px 12px 12px;
+  padding: 14px 12px calc(18px + env(safe-area-inset-bottom, 0px));
   display: grid;
   align-content: start;
   gap: 10px;
@@ -571,7 +575,7 @@ body.embedded .messages-shell {
   position: relative;
   z-index: 5;
   flex-shrink: 0;
-  padding: 8px 10px calc(10px + env(safe-area-inset-bottom, 0px));
+  padding: 8px 10px calc(12px + env(safe-area-inset-bottom, 0px));
   display: grid;
   grid-template-columns: minmax(0, 1fr) 60px 40px 40px;
   gap: 8px;
@@ -953,7 +957,7 @@ body.embedded {
 
 .messages-sheet-modal__panel {
   width: min(430px, 100%);
-  max-height: min(860px, calc(100vh - 36px));
+  max-height: min(860px, calc(var(--messages-app-height) - 36px));
   background: #f7f7f7;
   border-radius: 28px;
   overflow: hidden;
@@ -962,7 +966,7 @@ body.embedded {
 }
 
 .messages-sheet-modal__panel--picker {
-  max-height: min(640px, calc(100vh - 36px));
+  max-height: min(640px, calc(var(--messages-app-height) - 36px));
 }
 
 .messages-sheet-modal__header {
@@ -1115,7 +1119,7 @@ body.embedded {
 
 .messages-journal-modal__panel {
   width: min(430px, 100%);
-  max-height: min(860px, calc(100vh - 36px));
+  max-height: min(860px, calc(var(--messages-app-height) - 36px));
   background: #ffffff;
   border-radius: 30px;
   overflow: hidden;
@@ -1167,6 +1171,138 @@ body.embedded {
   background:
     linear-gradient(180deg, #ffffff 0%, #fcfcfc 34%, #f8fbff 100%);
   -webkit-overflow-scrolling: touch;
+}
+
+.messages-schedule-modal {
+  padding: 18px;
+  background: rgba(15, 23, 42, 0.18);
+}
+
+.messages-schedule-modal__panel {
+  width: min(430px, 100%);
+  max-height: min(860px, calc(var(--messages-app-height) - 36px));
+  background:
+    linear-gradient(180deg, #fcfcfc 0%, #f7f8fa 42%, #f2f5f9 100%);
+  border-radius: 30px;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.messages-schedule-preview {
+  min-height: 100%;
+  padding: 18px 16px calc(26px + env(safe-area-inset-bottom, 0px));
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.messages-schedule-preview__hero {
+  padding: 16px 16px 15px;
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.88), transparent 46%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(246, 249, 255, 0.98) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.94),
+    0 14px 30px rgba(15, 23, 42, 0.06);
+  display: grid;
+  gap: 6px;
+}
+
+.messages-schedule-preview__kicker {
+  color: #8d97a4;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+}
+
+.messages-schedule-preview__hero strong {
+  color: #1f2937;
+  font-size: 22px;
+  line-height: 1.18;
+  letter-spacing: -0.03em;
+}
+
+.messages-schedule-preview__hero span:last-child {
+  color: #8a92a0;
+  font-size: 13px;
+}
+
+.messages-schedule-preview__list {
+  display: grid;
+  gap: 10px;
+}
+
+.messages-schedule-card {
+  padding: 14px 14px 15px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.94),
+    0 12px 24px rgba(15, 23, 42, 0.05);
+  display: grid;
+  gap: 8px;
+}
+
+.messages-schedule-card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.messages-schedule-card__time {
+  color: #3f4b5c;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.messages-schedule-card__badge {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(7, 193, 96, 0.08);
+  color: #2c8d58;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.messages-schedule-card__title {
+  color: #202938;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.messages-schedule-card__meta {
+  margin: 0;
+  color: #8a93a2;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.messages-schedule-empty {
+  min-height: 100%;
+  padding: 28px 20px calc(48px + env(safe-area-inset-bottom, 0px));
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 10px;
+  text-align: center;
+}
+
+.messages-schedule-empty__title {
+  margin: 0;
+  color: #788395;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.messages-schedule-empty__meta,
+.messages-schedule-empty__sub {
+  margin: 0;
+  color: #a0a8b5;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .messages-journal-empty {
@@ -1815,10 +1951,8 @@ body.embedded {
 
   .messages-shell {
     width: 100vw;
-    min-height: 100vh;
-    min-height: 100dvh;
-    height: 100vh;
-    height: 100dvh;
+    min-height: var(--messages-app-height);
+    height: var(--messages-app-height);
     border-radius: 0;
     box-shadow: none;
   }
@@ -1850,6 +1984,17 @@ body.embedded {
   }
 
   .messages-journal-modal__panel {
+    width: 100vw;
+    max-height: 100vh;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+
+  .messages-schedule-modal {
+    padding: 0;
+  }
+
+  .messages-schedule-modal__panel {
     width: 100vw;
     max-height: 100vh;
     max-height: 100dvh;

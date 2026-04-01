@@ -95,6 +95,7 @@ const CHAT_UTILITY_ITEMS = [
   { id: "video", label: "视频", icon: "video" },
   { id: "location", label: "位置", icon: "pin" },
   { id: "journal", label: "日记", icon: "book" },
+  { id: "schedule", label: "日程", icon: "calendar" },
   { id: "game", label: "游戏", icon: "gamepad" },
   { id: "music", label: "听歌", icon: "headphones" },
   { id: "shopping", label: "购物", icon: "bag" },
@@ -251,6 +252,9 @@ const messagesJournalLengthInputEl = document.querySelector("#messages-journal-l
 const messagesJournalSettingsStatusEl = document.querySelector(
   "#messages-journal-settings-status"
 );
+const messagesScheduleModalEl = document.querySelector("#messages-schedule-modal");
+const messagesScheduleCloseBtnEl = document.querySelector("#messages-schedule-close-btn");
+const messagesScheduleBodyEl = document.querySelector("#messages-schedule-body");
 
 const memoryStorage = {};
 const initialWindowFocusPrimed =
@@ -289,6 +293,7 @@ const state = {
   journalOpen: false,
   journalHistoryOpen: false,
   journalSettingsOpen: false,
+  schedulePreviewOpen: false,
   journalGenerating: false,
   journalWeatherDate: "",
   journalWeatherLabel: "",
@@ -1667,6 +1672,15 @@ function formatJournalFullDateLabel(dateText = getTodayDateValue()) {
   }).format(date);
 }
 
+function formatScheduleDateLabel(dateText = getTodayDateValue()) {
+  const date = parseLocalDateValue(dateText) || new Date();
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "long",
+    day: "numeric",
+    weekday: "long"
+  }).format(date);
+}
+
 function getJournalEntriesForContact(contactId = "") {
   const resolvedContactId = String(contactId || "").trim();
   if (!resolvedContactId) {
@@ -1854,6 +1868,94 @@ function buildScheduleOccurrenceWindows(entry, now = new Date()) {
     ranges.push(nextRange);
   }
   return ranges;
+}
+
+function entryOccursOnDate(entry, dateText = getTodayDateValue()) {
+  if (!entry?.date) {
+    return false;
+  }
+  if (entry.scheduleType === "week") {
+    const sourceDate = parseLocalDateValue(entry.date);
+    const targetDate = parseLocalDateValue(dateText);
+    return Boolean(sourceDate && targetDate && sourceDate.getDay() === targetDate.getDay());
+  }
+  return entry.date === dateText;
+}
+
+function parseTimeToMinutes(timeText = "") {
+  const match = String(timeText || "").trim().match(/^(\d{2}):(\d{2})$/);
+  if (!match) {
+    return 0;
+  }
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function formatSchedulePreviewTime(entry) {
+  if (entry.scheduleType === "day") {
+    return "全天";
+  }
+  return `${entry.startTime}-${entry.endTime}`;
+}
+
+function formatSchedulePreviewBadge(entry) {
+  if (entry.scheduleType === "day") {
+    return "全天";
+  }
+  if (entry.scheduleType === "week") {
+    return "每周";
+  }
+  return "按时";
+}
+
+function getTodayUserScheduleEntries(dateText = getTodayDateValue()) {
+  const userName = state.profile.username || DEFAULT_PROFILE.username;
+  return loadScheduleEntries()
+    .filter((entry) => entryOccursOnDate(entry, dateText))
+    .flatMap((entry) => {
+      const participants = getScheduleParticipants(entry);
+      const companionNames = participants
+        .filter((participant) => participant.type !== "user")
+        .map((participant) => participant.label);
+
+      if (entry.ownerType === "user") {
+        return [
+          {
+            ...entry,
+            previewMeta:
+              companionNames.length > 0
+                ? `同行：${companionNames.slice(0, 3).join("、")}${companionNames.length > 3 ? ` 等 ${companionNames.length} 位` : ""}`
+                : `${userName} 的日程`
+          }
+        ];
+      }
+
+      if (entry.ownerType === "contact" && entry.companionIncludesUser) {
+        const ownerName = getScheduleContactName(entry.ownerId);
+        const coTravelerNames = companionNames.filter((name) => name !== ownerName);
+        return [
+          {
+            ...entry,
+            previewMeta: `与 ${ownerName} 同行${
+              coTravelerNames.length
+                ? ` · 同行人：${coTravelerNames.slice(0, 2).join("、")}${coTravelerNames.length > 2 ? ` 等 ${coTravelerNames.length} 位` : ""}`
+                : ""
+            }`
+          }
+        ];
+      }
+
+      return [];
+    })
+    .sort((left, right) => {
+      const leftWeight = left.scheduleType === "day" ? 0 : 1;
+      const rightWeight = right.scheduleType === "day" ? 0 : 1;
+      return (
+        leftWeight - rightWeight ||
+        parseTimeToMinutes(left.startTime) - parseTimeToMinutes(right.startTime) ||
+        String(left.title || "").localeCompare(String(right.title || ""), "zh-CN") ||
+        (right.updatedAt || 0) - (left.updatedAt || 0)
+      );
+    });
 }
 
 function getVisibleScheduleEntriesForContact(contactId = "") {
@@ -2687,6 +2789,7 @@ function updateBodyModalState() {
     state.worldbookManagerOpen ||
     state.worldbookEditorOpen ||
     state.regenerateModalOpen ||
+    state.schedulePreviewOpen ||
     state.journalOpen ||
     state.journalHistoryOpen ||
     state.journalSettingsOpen;
@@ -2822,6 +2925,55 @@ function renderJournalModal() {
   `;
 }
 
+function renderSchedulePreviewModal() {
+  if (!messagesScheduleBodyEl) {
+    return;
+  }
+
+  const todayDate = getTodayDateValue();
+  const entries = getTodayUserScheduleEntries(todayDate);
+  if (!entries.length) {
+    messagesScheduleBodyEl.innerHTML = `
+      <div class="messages-schedule-empty">
+        <p class="messages-schedule-empty__title">今天还没有安排</p>
+        <p class="messages-schedule-empty__meta">${escapeHtml(formatScheduleDateLabel(todayDate))}</p>
+        <p class="messages-schedule-empty__sub">这里只展示今日日程，不提供新增或编辑入口。</p>
+      </div>
+    `;
+    return;
+  }
+
+  messagesScheduleBodyEl.innerHTML = `
+    <div class="messages-schedule-preview">
+      <div class="messages-schedule-preview__hero">
+        <span class="messages-schedule-preview__kicker">今日日程</span>
+        <strong>${escapeHtml(formatScheduleDateLabel(todayDate))}</strong>
+        <span>${escapeHtml(`共 ${entries.length} 条安排`)}</span>
+      </div>
+      <div class="messages-schedule-preview__list">
+        ${entries
+          .map(
+            (entry) => `
+              <article class="messages-schedule-card">
+                <div class="messages-schedule-card__top">
+                  <span class="messages-schedule-card__time">${escapeHtml(
+                    formatSchedulePreviewTime(entry)
+                  )}</span>
+                  <span class="messages-schedule-card__badge">${escapeHtml(
+                    formatSchedulePreviewBadge(entry)
+                  )}</span>
+                </div>
+                <strong class="messages-schedule-card__title">${escapeHtml(entry.title)}</strong>
+                <p class="messages-schedule-card__meta">${escapeHtml(entry.previewMeta || "用户日程")}</p>
+              </article>
+            `
+          )
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
 function renderJournalHistoryModal() {
   if (!messagesJournalHistoryListEl) {
     return;
@@ -2876,6 +3028,18 @@ function setJournalOpen(isOpen) {
     state.journalStatusTone = "";
     renderJournalModal();
     ensureJournalWeather(getTodayDateValue());
+  }
+  updateBodyModalState();
+}
+
+function setSchedulePreviewOpen(isOpen) {
+  state.schedulePreviewOpen = Boolean(isOpen);
+  if (messagesScheduleModalEl) {
+    messagesScheduleModalEl.hidden = !state.schedulePreviewOpen;
+    messagesScheduleModalEl.setAttribute("aria-hidden", String(!state.schedulePreviewOpen));
+  }
+  if (state.schedulePreviewOpen) {
+    renderSchedulePreviewModal();
   }
   updateBodyModalState();
 }
@@ -3202,6 +3366,14 @@ function renderConversationUtilityIcon(icon) {
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M7 5.5h10a2 2 0 0 1 2 2V18a1.5 1.5 0 0 0-1.5-1.5H7.8A2.8 2.8 0 0 0 5 19.3V7.5a2 2 0 0 1 2-2Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
           <path d="M8.5 9.2h6M8.5 12.2h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+        </svg>
+      `;
+    case "calendar":
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="4.8" y="6.2" width="14.4" height="12.6" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.8" />
+          <path d="M8 4.5v3M16 4.5v3M4.8 9.6h14.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+          <path d="M8.5 12.7h.01M12 12.7h.01M15.5 12.7h.01M8.5 15.6h.01M12 15.6h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
         </svg>
       `;
     case "gamepad":
@@ -4352,6 +4524,18 @@ function handleConversationToolAction(toolId = "") {
     return;
   }
 
+  if (resolvedToolId === "schedule") {
+    const { conversation, contact } = getActiveConversationContext();
+    if (!conversation || !contact) {
+      setMessagesStatus("请先进入一个聊天，再查看今日日程。", "error");
+      renderConversationDetail();
+      return;
+    }
+    renderConversationDetail();
+    setSchedulePreviewOpen(true);
+    return;
+  }
+
   if (resolvedToolId === "regenerate") {
     const conversation = getConversationById();
     if (!conversation) {
@@ -5080,6 +5264,12 @@ function attachEvents() {
     });
   }
 
+  if (messagesScheduleCloseBtnEl) {
+    messagesScheduleCloseBtnEl.addEventListener("click", () => {
+      setSchedulePreviewOpen(false);
+    });
+  }
+
   if (messagesWorldbookAddCategoryBtnEl) {
     messagesWorldbookAddCategoryBtnEl.addEventListener("click", () => {
       setWorldbookEditorOpen(true, "category");
@@ -5214,6 +5404,14 @@ function attachEvents() {
     });
   }
 
+  if (messagesScheduleModalEl) {
+    messagesScheduleModalEl.addEventListener("click", (event) => {
+      if (event.target === messagesScheduleModalEl) {
+        setSchedulePreviewOpen(false);
+      }
+    });
+  }
+
   if (messagesJournalHistoryModalEl) {
     messagesJournalHistoryModalEl.addEventListener("click", (event) => {
       if (event.target === messagesJournalHistoryModalEl) {
@@ -5243,6 +5441,7 @@ function attachEvents() {
       state.worldbookManagerOpen ||
       state.worldbookEditorOpen ||
       state.regenerateModalOpen ||
+      state.schedulePreviewOpen ||
       state.journalOpen ||
       state.journalHistoryOpen ||
       state.journalSettingsOpen
@@ -5280,6 +5479,10 @@ function attachEvents() {
     }
     if (event.key === "Escape" && state.regenerateModalOpen) {
       setRegenerateModalOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.schedulePreviewOpen) {
+      setSchedulePreviewOpen(false);
       return;
     }
     if (event.key === "Escape" && state.journalSettingsOpen) {

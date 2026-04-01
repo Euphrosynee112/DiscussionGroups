@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <title>Pulse Generator · Chat</title>
-    <link rel="stylesheet" href="./messages.css?v=20260401b" />
+    <link rel="stylesheet" href="./messages.css?v=20260401c" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -765,6 +765,44 @@
     </section>
 
     <section
+      id="messages-schedule-modal"
+      class="messages-sheet-modal messages-schedule-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div
+        class="messages-sheet-modal__panel messages-schedule-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="今日日程"
+      >
+        <header class="messages-journal-modal__header messages-schedule-modal__header">
+          <button
+            id="messages-schedule-close-btn"
+            class="messages-journal-modal__icon"
+            type="button"
+            aria-label="关闭今日日程"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M15 6 9 12l6 6"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+          <strong>今日日程</strong>
+          <span class="messages-sheet-modal__button"></span>
+        </header>
+
+        <section id="messages-schedule-body" class="messages-journal-modal__body" aria-live="polite"></section>
+      </div>
+    </section>
+
+    <section
       id="messages-journal-history-modal"
       class="messages-sheet-modal"
       hidden
@@ -933,6 +971,6 @@
     </section>
 
     <script src="./api-log.js?v=20260331k"></script>
-    <script src="./messages.js?v=20260401b"></script>
+    <script src="./messages.js?v=20260401c"></script>
   </body>
 </html>
