@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <title>Pulse Generator · Chat</title>
-    <link rel="stylesheet" href="./messages.css?v=20260402a" />
+    <link rel="stylesheet" href="./messages.css?v=20260402b" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -405,6 +405,22 @@
             />
             <small class="messages-form-field__hint">
               AI 会尽量把一次回复拆成不超过 N 行；聊天页会按行逐条气泡弹出。
+            </small>
+          </label>
+
+          <label class="messages-form-field">
+            <span>察觉感知轮数</span>
+            <input
+              id="messages-chat-awareness-rounds-input"
+              type="number"
+              min="1"
+              max="200"
+              inputmode="numeric"
+              placeholder="默认 15 轮"
+              autocomplete="off"
+            />
+            <small class="messages-form-field__hint">
+              每成功获取满 N 次 API 回复后，会按“察觉”的灵敏度概率判断一次是否主动想起那条额外信息。
             </small>
           </label>
 
@@ -1404,7 +1420,102 @@
       </div>
     </section>
 
+    <section
+      id="messages-awareness-modal"
+      class="messages-dialog-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div
+        class="messages-dialog-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="察觉设置"
+      >
+        <header class="messages-dialog-modal__header">
+          <strong>察觉设置</strong>
+          <button
+            id="messages-awareness-close-btn"
+            class="messages-dialog-modal__close"
+            type="button"
+            aria-label="关闭察觉设置"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M7 7l10 10M17 7 7 17"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </header>
+
+        <form id="messages-awareness-form" class="messages-dialog-modal__form">
+          <label class="messages-dialog-modal__field">
+            <span>察觉文本</span>
+            <textarea
+              id="messages-awareness-text-input"
+              rows="5"
+              maxlength="600"
+              placeholder="输入角色会在未来某个时刻自己想起的一条额外信息"
+            ></textarea>
+            <small>这条信息不来自用户当前对话，而是角色自己后来意识到或联想到的内容。</small>
+          </label>
+
+          <label class="messages-dialog-modal__field">
+            <span>角色情绪转向（可选）</span>
+            <input
+              id="messages-awareness-emotion-input"
+              type="text"
+              maxlength="120"
+              placeholder="例如：忽然有点在意、变得更柔软、开始担心"
+              autocomplete="off"
+            />
+          </label>
+
+          <label class="messages-dialog-modal__field">
+            <span>感知灵敏度</span>
+            <select id="messages-awareness-sensitivity-input">
+              <option value="extremely_weak">极弱</option>
+              <option value="weak">弱</option>
+              <option value="medium" selected>中</option>
+              <option value="strong">强</option>
+              <option value="extremely_strong">极强</option>
+            </select>
+            <small>触发概率可在本地配置文件中修改：`messages-awareness-config.js`。</small>
+          </label>
+
+          <p
+            id="messages-awareness-status"
+            class="messages-editor-status"
+            aria-live="polite"
+          ></p>
+
+          <div class="messages-dialog-modal__actions">
+            <button
+              id="messages-awareness-cancel-btn"
+              class="messages-dialog-modal__button"
+              type="button"
+            >
+              取消
+            </button>
+            <button
+              class="messages-dialog-modal__button messages-dialog-modal__button--primary"
+              type="submit"
+            >
+              保存
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <input id="messages-image-file-input" type="file" accept="image/*" hidden />
+
     <script src="./api-log.js?v=20260331k"></script>
-    <script src="./messages.js?v=20260402a"></script>
+    <script src="./messages-awareness-config.js?v=20260402b"></script>
+    <script src="./messages.js?v=20260402b"></script>
   </body>
 </html>

@@ -2,7 +2,7 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260402a";
+const APP_BUILD_VERSION = "20260402b";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -691,7 +691,7 @@ function buildTransferSections(payload, options = {}) {
     {
       id: "forum",
       label: "论坛设置",
-      description: "内容生成配置与自定义页签；可按页签局部导入导出。",
+      description: "内容生成配置、自定义页签，以及页签内的时间感知 / 世界书 / Bubble / INS 挂载设置。",
       checked: Boolean(payload?.forum),
       disabled: !payload?.forum,
       items: [
@@ -752,13 +752,22 @@ function buildTransferSections(payload, options = {}) {
     {
       id: "contacts",
       label: "通讯录",
-      description: "支持按联系人局部导入导出。",
+      description: "支持按联系人局部导入导出；包含头像、人设、用户特别人设与察觉设置。",
       checked: contacts.length > 0,
       disabled: contacts.length === 0,
       items: contacts.map((contact) => ({
         id: String(contact.id || "").trim(),
         label: String(contact.name || "联系人").trim() || "联系人",
-        description: truncateText(String(contact.personaPrompt || "未设置人设。").trim(), 80),
+        description: truncateText(
+          [
+            String(contact.personaPrompt || "").trim(),
+            String(contact.specialUserPersona || "").trim(),
+            String(contact.awarenessText || "").trim()
+          ]
+            .filter(Boolean)
+            .join(" · ") || "未设置人设。",
+          80
+        ),
         checked: true
       }))
     },
@@ -1070,7 +1079,7 @@ function buildHomeConfigExportPayload(selection = homeState.exportTransferSelect
   const fullPayload = buildTransferPayloadFromCurrentState();
   return {
     schema: CONFIG_EXPORT_SCHEMA,
-    version: 4,
+    version: 5,
     exportedAt: new Date().toISOString(),
     data: buildSelectedTransferPayload(fullPayload, selection)
   };

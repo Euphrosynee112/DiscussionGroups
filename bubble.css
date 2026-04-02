@@ -236,11 +236,15 @@ body.embedded .bubble-embedded-close {
   transition:
     transform 180ms ease,
     background-color 180ms ease;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.bubble-room:hover {
-  transform: translateY(-1px);
-  background: rgba(17, 17, 17, 0.015);
+@media (hover: hover) and (pointer: fine) {
+  .bubble-room:hover {
+    transform: translateY(-1px);
+    background: rgba(17, 17, 17, 0.015);
+  }
 }
 
 .bubble-avatar {

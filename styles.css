@@ -250,16 +250,25 @@ body.embedded .embedded-close-btn {
   border-bottom: 1px solid var(--line);
 }
 
+.main-header > :first-child {
+  flex: 0 0 auto;
+  min-width: max-content;
+}
+
 .main-header h1 {
   margin: 6px 0 0;
   font-size: 34px;
   line-height: 1;
+  white-space: nowrap;
 }
 
 .header-actions {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
 }
 
 .ghost-button,
@@ -278,6 +287,7 @@ body.embedded .embedded-close-btn {
 .ghost-button {
   padding: 12px 18px;
   border-radius: 999px;
+  white-space: nowrap;
 }
 
 .ghost-button--small {
@@ -865,7 +875,7 @@ body.embedded .embedded-close-btn {
 
 .translation-tags {
   margin: 0 0 8px;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.65;
   white-space: pre-wrap;
   word-break: break-word;
@@ -874,7 +884,7 @@ body.embedded .embedded-close-btn {
 
 .translation-text {
   margin: 0;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.65;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1735,15 +1745,18 @@ textarea {
   }
 
   .header-actions {
-    width: 100%;
-    flex-wrap: wrap;
+    width: auto;
+    max-width: calc(100% - 74px);
+    flex-wrap: nowrap;
     gap: 8px;
+    margin-left: auto;
   }
 
   .ghost-button,
   .ghost-chip,
   .solid-button {
-    padding: 10px 14px;
+    padding: 10px 12px;
+    font-size: 13px;
   }
 
   .main-header h1 {
@@ -1839,7 +1852,7 @@ textarea {
 
   .translation-text,
   .translation-tags {
-    font-size: 13px;
+    font-size: 12px;
     line-height: 1.58;
   }
 

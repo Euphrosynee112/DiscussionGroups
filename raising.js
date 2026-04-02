@@ -296,11 +296,15 @@ function loadSettings() {
 
 function loadProfile() {
   const profile = readStoredJson(PROFILE_KEY, {});
+  const chatProfileInitialized = Boolean(profile?.chatProfileInitialized);
   return {
-    username: String(profile?.username || "你").trim() || "你",
-    avatarImage: String(profile?.avatarImage || "").trim(),
+    username: String(profile?.chatUsername || profile?.username || "你").trim() || "你",
+    avatarImage: chatProfileInitialized
+      ? String(profile?.chatAvatarImage || "").trim()
+      : String(profile?.chatAvatarImage || profile?.avatarImage || "").trim(),
     personaPrompt:
-      String(profile?.personaPrompt || "").trim() || "温柔、细腻、会认真照顾孩子。"
+      String(profile?.chatPersonaPrompt || profile?.personaPrompt || "").trim() ||
+      "温柔、细腻、会认真照顾孩子。"
   };
 }
 
@@ -318,6 +322,7 @@ function normalizeContact(contact, index = 0) {
     avatarImage: String(source.avatarImage || "").trim(),
     avatarText: String(source.avatarText || "").trim() || getContactAvatarFallback({ name }),
     personaPrompt: String(source.personaPrompt || "").trim(),
+    specialUserPersona: String(source.specialUserPersona || "").trim(),
     updatedAt: Number(source.updatedAt) || Date.now()
   };
 }
@@ -1243,10 +1248,15 @@ function buildKidArchivePrompt(profile, partner, record) {
     `用户人设：${profile.personaPrompt || "温柔、细腻、会认真照顾孩子。"}`,
     `共同抚养人：${partner.name}`,
     `共同抚养人人设：${partner.personaPrompt || "有鲜明性格，会把自己的气质投射到孩子身上。"}`,
+    partner.specialUserPersona
+      ? `这个共同抚养人对用户的特别认知：${partner.specialUserPersona}。这部分比用户通用人设更私人、更贴近两人的相处感受，请适度提高参考权重。`
+      : "",
     `宝宝名字：${record.childName}`,
     `宝宝性别：${getGenderLabel(record.childGender)}`,
     "请根据双方人设混合后的气质来推演这位宝宝的成长档案。"
-  ].join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 async function requestKidArchive(settings, profile, partner, record) {
