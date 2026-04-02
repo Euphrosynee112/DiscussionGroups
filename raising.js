@@ -1135,6 +1135,34 @@ function resolveMessage(payload) {
   );
 }
 
+function buildGeminiSafetySettings() {
+  return [
+    "HARM_CATEGORY_HARASSMENT",
+    "HARM_CATEGORY_HATE_SPEECH",
+    "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+    "HARM_CATEGORY_DANGEROUS_CONTENT",
+    "HARM_CATEGORY_CIVIC_INTEGRITY"
+  ].map((category) => ({
+    category,
+    threshold: "BLOCK_NONE"
+  }));
+}
+
+function getGeminiFinishReason(payload) {
+  return String(payload?.candidates?.[0]?.finishReason || payload?.candidates?.[0]?.finish_reason || "").trim();
+}
+
+function buildGeminiLogFields(settings, payload) {
+  if (normalizeApiMode(settings?.mode) !== "gemini") {
+    return {};
+  }
+  const finishReason = getGeminiFinishReason(payload);
+  return {
+    geminiFinishReason: finishReason,
+    gemini_finish_reason: finishReason
+  };
+}
+
 function validateApiSettings(settings, purpose = "请求") {
   const requestEndpoint = resolveApiRequestEndpoint(settings);
   settings.endpoint = requestEndpoint;
@@ -1181,6 +1209,7 @@ function buildJsonObjectRequestBody(settings, prompt) {
           parts: [{ text: prompt }]
         }
       ],
+      safetySettings: buildGeminiSafetySettings(),
       generationConfig: {
         temperature: DEFAULT_TEMPERATURE
       }
@@ -1290,6 +1319,7 @@ async function requestKidArchive(settings, profile, partner, record) {
     if (response.status === 404 && requestEndpoint.includes("api.deepseek.com")) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -1306,6 +1336,7 @@ async function requestKidArchive(settings, profile, partner, record) {
     if (!response.ok) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -1321,6 +1352,7 @@ async function requestKidArchive(settings, profile, partner, record) {
     if (!jsonText) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -1336,6 +1368,7 @@ async function requestKidArchive(settings, profile, partner, record) {
     if (!archive.appearanceSummary || !archive.hobbies.length || !archive.habits.length) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -1348,6 +1381,7 @@ async function requestKidArchive(settings, profile, partner, record) {
 
     appendApiLog({
       ...logBase,
+      ...buildGeminiLogFields(settings, payload),
       status: "success",
       statusCode: response.status,
       responseText: rawResponse,

@@ -4891,6 +4891,34 @@ function buildGeminiParts(prompt, images = []) {
   return parts;
 }
 
+function buildGeminiSafetySettings() {
+  return [
+    "HARM_CATEGORY_HARASSMENT",
+    "HARM_CATEGORY_HATE_SPEECH",
+    "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+    "HARM_CATEGORY_DANGEROUS_CONTENT",
+    "HARM_CATEGORY_CIVIC_INTEGRITY"
+  ].map((category) => ({
+    category,
+    threshold: "BLOCK_NONE"
+  }));
+}
+
+function getGeminiFinishReason(payload) {
+  return String(payload?.candidates?.[0]?.finishReason || payload?.candidates?.[0]?.finish_reason || "").trim();
+}
+
+function buildGeminiLogFields(settings, payload) {
+  if (normalizeApiMode(settings?.mode) !== "gemini") {
+    return {};
+  }
+  const finishReason = getGeminiFinishReason(payload);
+  return {
+    geminiFinishReason: finishReason,
+    gemini_finish_reason: finishReason
+  };
+}
+
 function buildRequestBody(settings, prompt, count = DEFAULT_POST_COUNT, options = {}) {
   const images = Array.isArray(options?.images) ? options.images : [];
   if (normalizeApiMode(settings.mode) === "openai") {
@@ -4922,6 +4950,7 @@ function buildRequestBody(settings, prompt, count = DEFAULT_POST_COUNT, options 
           parts: buildGeminiParts(prompt, images)
         }
       ],
+      safetySettings: buildGeminiSafetySettings(),
       generationConfig: {
         temperature: normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE)
       }
@@ -5227,6 +5256,7 @@ async function requestGeneratedPosts(
     if (response.status === 404 && requestEndpoint.includes("api.deepseek.com")) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -5243,6 +5273,7 @@ async function requestGeneratedPosts(
     if (!response.ok) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -5257,6 +5288,7 @@ async function requestGeneratedPosts(
     if (!message) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -5269,6 +5301,7 @@ async function requestGeneratedPosts(
 
     appendApiLog({
       ...logBase,
+      ...buildGeminiLogFields(settings, payload),
       status: "success",
       statusCode: response.status,
       responseText: rawResponse,
@@ -5333,6 +5366,7 @@ function buildTranslateRequestBody(settings, prompt) {
           parts: [{ text: prompt }]
         }
       ],
+      safetySettings: buildGeminiSafetySettings(),
       generationConfig: {
         temperature: 0.2
       }
@@ -5424,6 +5458,7 @@ async function requestTranslatedPostContent(settings, post) {
     if (!response.ok) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -5438,6 +5473,7 @@ async function requestTranslatedPostContent(settings, post) {
     if (!message) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -5452,6 +5488,7 @@ async function requestTranslatedPostContent(settings, post) {
     if (!jsonText) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -5467,6 +5504,7 @@ async function requestTranslatedPostContent(settings, post) {
     if (!translatedPost || typeof translatedPost !== "object") {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -5483,6 +5521,7 @@ async function requestTranslatedPostContent(settings, post) {
     };
     appendApiLog({
       ...logBase,
+      ...buildGeminiLogFields(settings, payload),
       status: "success",
       statusCode: response.status,
       responseText: rawResponse,
@@ -5550,6 +5589,7 @@ async function requestTranslatedText(settings, sourceText) {
     if (!response.ok) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -5564,6 +5604,7 @@ async function requestTranslatedText(settings, sourceText) {
     if (!message) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -5577,6 +5618,7 @@ async function requestTranslatedText(settings, sourceText) {
     const translated = normalizeTranslatedText(message, originalText);
     appendApiLog({
       ...logBase,
+      ...buildGeminiLogFields(settings, payload),
       status: "success",
       statusCode: response.status,
       responseText: rawResponse,
@@ -5719,6 +5761,7 @@ async function requestGeneratedReplies(
     if (!response.ok) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -5733,6 +5776,7 @@ async function requestGeneratedReplies(
     if (!message) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -5745,6 +5789,7 @@ async function requestGeneratedReplies(
 
     appendApiLog({
       ...logBase,
+      ...buildGeminiLogFields(settings, payload),
       status: "success",
       statusCode: response.status,
       responseText: rawResponse,

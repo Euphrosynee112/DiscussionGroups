@@ -117,6 +117,7 @@ function renderApiLogList() {
       const responseBodyText = JSON.stringify(entry.responseBody || {}, null, 2);
       const responseText = entry.responseText || "";
       const promptText = entry.prompt || "";
+      const geminiFinishReason = entry.gemini_finish_reason || entry.geminiFinishReason || "";
       return `
         <article class="api-log-card">
           <div class="api-log-card__head">
@@ -132,6 +133,7 @@ function renderApiLogList() {
               <span>时间：${escapeHtml(timestamp)}</span>
               <span>模式：${escapeHtml(entry.mode || "未记录")} ${entry.model ? `· 模型：${escapeHtml(entry.model)}` : ""}</span>
               <span>接口：${escapeHtml(entry.endpoint || "未记录")}</span>
+              ${geminiFinishReason ? `<span>Gemini finish_reason：${escapeHtml(geminiFinishReason)}</span>` : ""}
             </div>
             ${
               entry.summary

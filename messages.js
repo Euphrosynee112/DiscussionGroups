@@ -33,6 +33,10 @@ const DEFAULT_CORE_MEMORY_THRESHOLD = 80;
 const DEFAULT_SCENE_MEMORY_THRESHOLD = 65;
 const DEFAULT_CONTEXT_FOCUS_MINUTES = 60;
 const MAX_CONTEXT_FOCUS_MINUTES = 1440;
+const CONVERSATION_SOFT_MESSAGE_LIMIT = 240;
+const CONVERSATION_MIN_MESSAGE_LIMIT = 80;
+const CONVERSATION_STORAGE_TARGET_CHARS = 1400000;
+const CONVERSATION_IMAGE_PAYLOAD_KEEP_COUNT = 20;
 const DEFAULT_WORLDVIEW =
   "这是一个强调长期主义、产品洞察和公共讨论质量的中文社交世界。用户习惯像在 X 上一样快速表达观点，但会天然追问效率、增长、AI 和平台变迁。整体语气要真实、犀利、能引发跟帖，不要写成官方通稿。";
 
@@ -511,7 +515,9 @@ function safeSetItem(key, value) {
   memoryStorage[key] = value;
   try {
     window.localStorage.setItem(key, value);
+    return true;
   } catch (_error) {
+    return false;
   }
 }
 
@@ -1294,6 +1300,100 @@ function resolveMessage(payload) {
   );
 }
 
+function buildGeminiSafetySettings() {
+  return [
+    "HARM_CATEGORY_HARASSMENT",
+    "HARM_CATEGORY_HATE_SPEECH",
+    "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+    "HARM_CATEGORY_DANGEROUS_CONTENT",
+    "HARM_CATEGORY_CIVIC_INTEGRITY"
+  ].map((category) => ({
+    category,
+    threshold: "BLOCK_NONE"
+  }));
+}
+
+function getGeminiFinishReason(payload) {
+  return String(payload?.candidates?.[0]?.finishReason || payload?.candidates?.[0]?.finish_reason || "").trim();
+}
+
+function buildGeminiLogFields(settings, payload) {
+  if (normalizeApiMode(settings?.mode) !== "gemini") {
+    return {};
+  }
+  const finishReason = getGeminiFinishReason(payload);
+  return {
+    geminiFinishReason: finishReason,
+    gemini_finish_reason: finishReason
+  };
+}
+
+function getGeminiResponseDiagnostics(payload) {
+  const candidate = payload?.candidates?.[0] || null;
+  const promptFeedback = payload?.promptFeedback || payload?.prompt_feedback || null;
+  const finishReason = getGeminiFinishReason(payload);
+  const finishMessage = String(
+    candidate?.finishMessage || candidate?.finish_message || ""
+  ).trim();
+  const blockReason = String(
+    promptFeedback?.blockReason || promptFeedback?.block_reason || ""
+  ).trim();
+  const promptSafety = Array.isArray(promptFeedback?.safetyRatings)
+    ? promptFeedback.safetyRatings
+    : Array.isArray(promptFeedback?.safety_ratings)
+      ? promptFeedback.safety_ratings
+      : [];
+  const candidateSafety = Array.isArray(candidate?.safetyRatings)
+    ? candidate.safetyRatings
+    : Array.isArray(candidate?.safety_ratings)
+      ? candidate.safety_ratings
+      : [];
+  return {
+    hasCandidates: Array.isArray(payload?.candidates) && payload.candidates.length > 0,
+    finishReason,
+    finishMessage,
+    blockReason,
+    promptSafety,
+    candidateSafety,
+    usageMetadata: payload?.usageMetadata || payload?.usage_metadata || null
+  };
+}
+
+function buildGeminiEmptyResponseErrorMessage(payload) {
+  const diagnostics = getGeminiResponseDiagnostics(payload);
+  const detailParts = [];
+  if (diagnostics.blockReason) {
+    detailParts.push(`promptFeedback.blockReason=${diagnostics.blockReason}`);
+  }
+  if (diagnostics.finishReason) {
+    detailParts.push(`finishReason=${diagnostics.finishReason}`);
+  }
+  if (diagnostics.finishMessage) {
+    detailParts.push(`finishMessage=${diagnostics.finishMessage}`);
+  }
+  const details = detailParts.length ? `（${detailParts.join("，")}）` : "";
+  return `Gemini 返回了空内容${details}。`;
+}
+
+function shouldRetryGeminiEmptyResponse(payload) {
+  const diagnostics = getGeminiResponseDiagnostics(payload);
+  if (diagnostics.blockReason) {
+    return false;
+  }
+  const blockedReasons = new Set([
+    "SAFETY",
+    "RECITATION",
+    "PROHIBITED_CONTENT",
+    "SPII",
+    "BLOCKLIST",
+    "MODEL_ARMOR"
+  ]);
+  if (blockedReasons.has(String(diagnostics.finishReason || "").toUpperCase())) {
+    return false;
+  }
+  return true;
+}
+
 function validateApiSettings(settings, purpose = "请求") {
   const requestEndpoint = resolveApiRequestEndpoint(settings);
   settings.endpoint = requestEndpoint;
@@ -1805,8 +1905,113 @@ function loadConversations() {
   }
 }
 
+function cloneConversationsForStorage(conversations = []) {
+  return (Array.isArray(conversations) ? conversations : []).map((conversation) => ({
+    ...conversation,
+    messages: Array.isArray(conversation?.messages)
+      ? conversation.messages.map((message) => ({ ...message }))
+      : []
+  }));
+}
+
+function trimConversationMessagesForStorage(conversations = []) {
+  return cloneConversationsForStorage(conversations).map((conversation) => {
+    if (conversation.messages.length > CONVERSATION_SOFT_MESSAGE_LIMIT) {
+      conversation.messages = conversation.messages.slice(-CONVERSATION_SOFT_MESSAGE_LIMIT);
+      recalculateConversationUpdatedAt(conversation);
+    }
+    return conversation;
+  });
+}
+
+function stripOldConversationImagePayloads(conversations = []) {
+  return cloneConversationsForStorage(conversations).map((conversation) => {
+    const imageIndexes = conversation.messages.reduce((indexes, message, index) => {
+      if (String(message?.imageDataUrl || "").trim()) {
+        indexes.push(index);
+      }
+      return indexes;
+    }, []);
+    if (imageIndexes.length <= CONVERSATION_IMAGE_PAYLOAD_KEEP_COUNT) {
+      return conversation;
+    }
+    const keepIndexes = new Set(
+      imageIndexes.slice(-CONVERSATION_IMAGE_PAYLOAD_KEEP_COUNT)
+    );
+    conversation.messages = conversation.messages.map((message, index) => {
+      if (!String(message?.imageDataUrl || "").trim() || keepIndexes.has(index)) {
+        return message;
+      }
+      return {
+        ...message,
+        imageDataUrl: "",
+        text: buildImageMessageText()
+      };
+    });
+    return conversation;
+  });
+}
+
+function pruneOldestConversationBatch(conversations = []) {
+  const candidates = (Array.isArray(conversations) ? conversations : [])
+    .filter((conversation) => Array.isArray(conversation?.messages))
+    .filter((conversation) => conversation.messages.length > CONVERSATION_MIN_MESSAGE_LIMIT)
+    .sort((left, right) => {
+      const leftIsActive = left.id === state.activeConversationId ? 1 : 0;
+      const rightIsActive = right.id === state.activeConversationId ? 1 : 0;
+      return (
+        leftIsActive - rightIsActive ||
+        (left.updatedAt || 0) - (right.updatedAt || 0) ||
+        left.messages.length - right.messages.length
+      );
+    });
+
+  const target = candidates[0] || null;
+  if (!target) {
+    return false;
+  }
+
+  const removableCount = Math.max(
+    1,
+    Math.min(
+      12,
+      target.messages.length - CONVERSATION_MIN_MESSAGE_LIMIT,
+      Math.ceil(target.messages.length / 12)
+    )
+  );
+  target.messages = target.messages.slice(removableCount);
+  recalculateConversationUpdatedAt(target);
+  return true;
+}
+
 function persistConversations() {
-  safeSetItem(MESSAGE_THREADS_KEY, JSON.stringify(state.conversations));
+  let nextConversations = trimConversationMessagesForStorage(state.conversations);
+  let payload = JSON.stringify(nextConversations);
+
+  if (payload.length > CONVERSATION_STORAGE_TARGET_CHARS) {
+    nextConversations = stripOldConversationImagePayloads(nextConversations);
+    payload = JSON.stringify(nextConversations);
+  }
+
+  while (payload.length > CONVERSATION_STORAGE_TARGET_CHARS) {
+    const changed = pruneOldestConversationBatch(nextConversations);
+    if (!changed) {
+      break;
+    }
+    payload = JSON.stringify(nextConversations);
+  }
+
+  while (!safeSetItem(MESSAGE_THREADS_KEY, payload)) {
+    const changed = pruneOldestConversationBatch(nextConversations);
+    if (!changed) {
+      break;
+    }
+    payload = JSON.stringify(nextConversations);
+  }
+
+  state.conversations = nextConversations
+    .map((conversation, index) => normalizeConversation(conversation, index))
+    .filter(Boolean);
 }
 
 function getContactById(contactId) {
@@ -3127,6 +3332,7 @@ function buildChatRequestBody(settings, systemPrompt, history = []) {
                 Array.isArray(message.imageDataUrls) ? message.imageDataUrls : []
               )
       })),
+      safetySettings: buildGeminiSafetySettings(),
       generationConfig: {
         temperature: DEFAULT_TEMPERATURE
       }
@@ -3206,6 +3412,7 @@ function buildDiaryRequestBody(settings, systemPrompt, userInstruction) {
           parts: [{ text: userInstruction }]
         }
       ],
+      safetySettings: buildGeminiSafetySettings(),
       generationConfig: {
         temperature: DEFAULT_TEMPERATURE
       }
@@ -3254,6 +3461,7 @@ function buildSingleInstructionRequestBody(
           parts: [{ text: userInstruction }]
         }
       ],
+      safetySettings: buildGeminiSafetySettings(),
       generationConfig: {
         temperature: DEFAULT_TEMPERATURE
       }
@@ -3486,6 +3694,7 @@ async function requestMemorySummaryItems(
     if (!response.ok) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(apiSettings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -3499,6 +3708,7 @@ async function requestMemorySummaryItems(
     const memoryItems = parseMemorySummaryPayload(payload, contact.id);
     appendApiLog({
       ...logBase,
+      ...buildGeminiLogFields(apiSettings, payload),
       status: "success",
       statusCode: response.status,
       responseText: rawResponse,
@@ -3791,6 +4001,7 @@ async function requestChatReplyText(
   const normalizedPromptSettings = normalizeMessagePromptSettings(promptSettings);
   const requestOptions = options && typeof options === "object" ? options : {};
   const requestEndpoint = validateApiSettings(settings, "对话回复");
+  const requestMode = normalizeApiMode(settings.mode);
 
   async function executeChatRequest(resolvedPromptSettings, summarySuffix = "") {
     const systemPrompt = buildConversationSystemPrompt(
@@ -3831,6 +4042,7 @@ async function requestChatReplyText(
       if (response.status === 404 && requestEndpoint.includes("api.deepseek.com")) {
         appendApiLog({
           ...logBase,
+          ...buildGeminiLogFields(settings, payload),
           status: "error",
           statusCode: response.status,
           responseText: rawResponse,
@@ -3847,6 +4059,7 @@ async function requestChatReplyText(
       if (!response.ok) {
         appendApiLog({
           ...logBase,
+          ...buildGeminiLogFields(settings, payload),
           status: "error",
           statusCode: response.status,
           responseText: rawResponse,
@@ -3861,20 +4074,30 @@ async function requestChatReplyText(
         .replace(/^(?:联系人|对方|assistant|AI)[:：]\s*/i, "")
         .trim();
       if (!message) {
+        const errorMessage =
+          requestMode === "gemini"
+            ? buildGeminiEmptyResponseErrorMessage(payload)
+            : "接口请求成功，但响应中没有可解析的文本。";
         appendApiLog({
           ...logBase,
+          ...buildGeminiLogFields(settings, payload),
           status: "error",
           statusCode: response.status,
           responseText: rawResponse,
           responseBody: payload,
-          errorMessage: "接口请求成功，但响应中没有可解析的文本。"
+          errorMessage
         });
         logged = true;
-        throw new Error("接口请求成功，但响应中没有可解析的文本。");
+        const error = new Error(errorMessage);
+        error.code =
+          requestMode === "gemini" ? "gemini_empty_response" : "empty_response";
+        error.responsePayload = payload;
+        throw error;
       }
 
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "success",
         statusCode: response.status,
         responseText: rawResponse,
@@ -3900,9 +4123,25 @@ async function requestChatReplyText(
   try {
     return await executeChatRequest(normalizedPromptSettings);
   } catch (error) {
+    const shouldRetryGeminiDirectly =
+      requestMode === "gemini" &&
+      error?.code === "gemini_empty_response" &&
+      shouldRetryGeminiEmptyResponse(error?.responsePayload);
+
+    if (shouldRetryGeminiDirectly) {
+      try {
+        await sleep(420);
+        return await executeChatRequest(normalizedPromptSettings, " · Gemini 空响应重试");
+      } catch (retryError) {
+        error = retryError;
+      }
+    }
+
     const shouldRetryWithoutHotTopics =
       normalizedPromptSettings.hotTopicsEnabled &&
-      /没有可解析的文本|HTTP 400|HTTP 413/.test(String(error?.message || ""));
+      /没有可解析的文本|Gemini 返回了空内容|HTTP 400|HTTP 413|finishReason=MAX_TOKENS/i.test(
+        String(error?.message || "")
+      );
 
     if (!shouldRetryWithoutHotTopics) {
       throw error;
@@ -4023,6 +4262,7 @@ async function requestJournalEntryText(
     if (response.status === 404 && requestEndpoint.includes("api.deepseek.com")) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -4039,6 +4279,7 @@ async function requestJournalEntryText(
     if (!response.ok) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -4053,6 +4294,7 @@ async function requestJournalEntryText(
     if (!message) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -4065,6 +4307,7 @@ async function requestJournalEntryText(
 
     appendApiLog({
       ...logBase,
+      ...buildGeminiLogFields(settings, payload),
       status: "success",
       statusCode: response.status,
       responseText: rawResponse,

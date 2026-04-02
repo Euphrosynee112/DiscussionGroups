@@ -4,32 +4,36 @@
   }
 
   const API_LOG_KEY = "x_style_generator_api_logs_v1";
-  const API_LOG_LIMIT = 180;
+  const API_LOG_LIMIT = 120;
+  const API_LOG_MIN_LIMIT = 24;
   const memoryStorage = {};
 
   function safeGetItem(key) {
+    if (Object.prototype.hasOwnProperty.call(memoryStorage, key)) {
+      return memoryStorage[key];
+    }
     try {
       return window.localStorage.getItem(key);
     } catch (_error) {
-      return Object.prototype.hasOwnProperty.call(memoryStorage, key)
-        ? memoryStorage[key]
-        : null;
+      return null;
     }
   }
 
   function safeSetItem(key, value) {
+    memoryStorage[key] = value;
     try {
       window.localStorage.setItem(key, value);
+      return true;
     } catch (_error) {
-      memoryStorage[key] = value;
+      return false;
     }
   }
 
   function safeRemoveItem(key) {
+    delete memoryStorage[key];
     try {
       window.localStorage.removeItem(key);
     } catch (_error) {
-      delete memoryStorage[key];
     }
   }
 
@@ -72,8 +76,8 @@
       return `[image data omitted, ${text.length} chars]`;
     }
 
-    if (text.length > 12000) {
-      return `${text.slice(0, 12000)}\n…[已截断 ${text.length - 12000} 个字符]`;
+    if (text.length > 4000) {
+      return `${text.slice(0, 4000)}\n…[已截断 ${text.length - 4000} 个字符]`;
     }
 
     return text;
@@ -137,8 +141,90 @@
     }
   }
 
+  function compactEntryForQuota(entry = {}, level = 0) {
+    const promptLimit = level === 0 ? 4000 : level === 1 ? 2200 : 1200;
+    const responseLimit = level === 0 ? 4000 : level === 1 ? 2200 : 1200;
+    const bodyStringLimit = level === 0 ? 1600 : level === 1 ? 900 : 420;
+    const compactString = (value, limit) => {
+      const text = String(value || "");
+      if (!text || text.length <= limit) {
+        return text;
+      }
+      return `${text.slice(0, limit)}\n…[已截断 ${text.length - limit} 个字符]`;
+    };
+    const compactValue = (value, depth = 0) => {
+      if (depth > 4) {
+        return "[max depth]";
+      }
+      if (value == null || typeof value === "number" || typeof value === "boolean") {
+        return value;
+      }
+      if (typeof value === "string") {
+        return compactString(value, bodyStringLimit);
+      }
+      if (Array.isArray(value)) {
+        const next = value.slice(0, level === 0 ? 24 : level === 1 ? 12 : 6).map((item) => compactValue(item, depth + 1));
+        if (value.length > next.length) {
+          next.push(`[+${value.length - next.length} items omitted]`);
+        }
+        return next;
+      }
+      if (typeof value === "object") {
+        const entries = Object.entries(value).slice(0, level === 0 ? 30 : level === 1 ? 18 : 10);
+        const result = {};
+        entries.forEach(([key, itemValue]) => {
+          result[key] = compactValue(itemValue, depth + 1);
+        });
+        if (Object.keys(value).length > entries.length) {
+          result.__truncated__ = `[+${Object.keys(value).length - entries.length} keys omitted]`;
+        }
+        return result;
+      }
+      return compactString(String(value), bodyStringLimit);
+    };
+
+    return {
+      ...entry,
+      prompt: compactString(entry.prompt || "", promptLimit),
+      responseText: compactString(entry.responseText || "", responseLimit),
+      requestBody: compactValue(entry.requestBody),
+      responseBody: compactValue(entry.responseBody),
+      geminiFinishReason: compactString(
+        entry.geminiFinishReason || entry.gemini_finish_reason || "",
+        120
+      ),
+      gemini_finish_reason: compactString(
+        entry.gemini_finish_reason || entry.geminiFinishReason || "",
+        120
+      ),
+      errorMessage: compactString(entry.errorMessage || "", 1000),
+      summary: compactString(entry.summary || "", 800)
+    };
+  }
+
   function write(entries) {
-    safeSetItem(API_LOG_KEY, JSON.stringify(entries.slice(-API_LOG_LIMIT)));
+    let nextEntries = entries.slice(-API_LOG_LIMIT);
+    let serialized = JSON.stringify(nextEntries);
+    if (safeSetItem(API_LOG_KEY, serialized)) {
+      return;
+    }
+
+    for (const level of [1, 2]) {
+      nextEntries = nextEntries.map((entry) => compactEntryForQuota(entry, level));
+      serialized = JSON.stringify(nextEntries);
+      if (safeSetItem(API_LOG_KEY, serialized)) {
+        return;
+      }
+    }
+
+    let limit = nextEntries.length;
+    while (limit > API_LOG_MIN_LIMIT && !safeSetItem(API_LOG_KEY, serialized)) {
+      limit = Math.max(API_LOG_MIN_LIMIT, Math.floor(limit * 0.75));
+      nextEntries = nextEntries.slice(-limit);
+      serialized = JSON.stringify(nextEntries.map((entry) => compactEntryForQuota(entry, 2)));
+    }
+
+    safeSetItem(API_LOG_KEY, serialized);
   }
 
   function downloadJson(filename, payload) {
@@ -173,6 +259,12 @@
       requestBody: sanitizeValue(entry.requestBody),
       responseText: sanitizeString(entry.responseText || ""),
       responseBody: sanitizeValue(entry.responseBody),
+      geminiFinishReason: sanitizeString(
+        entry.geminiFinishReason || entry.gemini_finish_reason || ""
+      ),
+      gemini_finish_reason: sanitizeString(
+        entry.gemini_finish_reason || entry.geminiFinishReason || ""
+      ),
       status: String(entry.status || "success").trim() || "success",
       statusCode: Number.isFinite(Number(entry.statusCode)) ? Number(entry.statusCode) : 0,
       errorMessage: sanitizeString(entry.errorMessage || "")

@@ -639,6 +639,7 @@ function buildJsonArrayRequestBody(settings, prompt, count = FAN_DETAIL_REPLY_CO
           parts: [{ text: prompt }]
         }
       ],
+      safetySettings: buildGeminiSafetySettings(),
       generationConfig: {
         temperature: DEFAULT_TEMPERATURE
       }
@@ -684,6 +685,7 @@ function buildTranslateRequestBody(settings, prompt) {
           parts: [{ text: prompt }]
         }
       ],
+      safetySettings: buildGeminiSafetySettings(),
       generationConfig: {
         temperature: 0.2
       }
@@ -693,6 +695,34 @@ function buildTranslateRequestBody(settings, prompt) {
   return {
     prompt,
     intent: "translate_to_zh"
+  };
+}
+
+function buildGeminiSafetySettings() {
+  return [
+    "HARM_CATEGORY_HARASSMENT",
+    "HARM_CATEGORY_HATE_SPEECH",
+    "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+    "HARM_CATEGORY_DANGEROUS_CONTENT",
+    "HARM_CATEGORY_CIVIC_INTEGRITY"
+  ].map((category) => ({
+    category,
+    threshold: "BLOCK_NONE"
+  }));
+}
+
+function getGeminiFinishReason(payload) {
+  return String(payload?.candidates?.[0]?.finishReason || payload?.candidates?.[0]?.finish_reason || "").trim();
+}
+
+function buildGeminiLogFields(settings, payload) {
+  if (normalizeApiMode(settings?.mode) !== "gemini") {
+    return {};
+  }
+  const finishReason = getGeminiFinishReason(payload);
+  return {
+    geminiFinishReason: finishReason,
+    gemini_finish_reason: finishReason
   };
 }
 
@@ -886,6 +916,7 @@ async function requestJsonArrayText(settings, prompt, count = FAN_DETAIL_REPLY_C
     if (response.status === 404 && requestEndpoint.includes("api.deepseek.com")) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -902,6 +933,7 @@ async function requestJsonArrayText(settings, prompt, count = FAN_DETAIL_REPLY_C
     if (!response.ok) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -916,6 +948,7 @@ async function requestJsonArrayText(settings, prompt, count = FAN_DETAIL_REPLY_C
     if (!message) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -928,6 +961,7 @@ async function requestJsonArrayText(settings, prompt, count = FAN_DETAIL_REPLY_C
 
     appendApiLog({
       ...logBase,
+      ...buildGeminiLogFields(settings, payload),
       status: "success",
       statusCode: response.status,
       responseText: rawResponse,
@@ -984,6 +1018,7 @@ async function requestTranslatedText(settings, sourceText) {
     if (!response.ok) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -998,6 +1033,7 @@ async function requestTranslatedText(settings, sourceText) {
     if (!message) {
       appendApiLog({
         ...logBase,
+        ...buildGeminiLogFields(settings, payload),
         status: "error",
         statusCode: response.status,
         responseText: rawResponse,
@@ -1011,6 +1047,7 @@ async function requestTranslatedText(settings, sourceText) {
     const translated = normalizeTranslatedText(message, originalText);
     appendApiLog({
       ...logBase,
+      ...buildGeminiLogFields(settings, payload),
       status: "success",
       statusCode: response.status,
       responseText: rawResponse,
