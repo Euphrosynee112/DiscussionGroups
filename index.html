@@ -4,15 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Pulse Generator v2.0</title>
-    <link rel="stylesheet" href="./home.css?v=20260402-163711" />
+    <link rel="stylesheet" href="./home.css?v=20260402-202646" />
   </head>
   <body>
     <main class="home-scene">
       <section class="phone-home" aria-label="手机首页">
         <header class="status-bar" aria-label="前端版本信息">
           <div class="status-build">
-            <span id="status-version" class="status-build__version">FE v20260402-163711</span>
-            <span id="status-updated" class="status-build__updated">更新于 2026-04-02 16:37:11</span>
+            <span id="status-version" class="status-build__version">FE v20260402-202646</span>
+            <span id="status-updated" class="status-build__updated">更新于 2026-04-02 20:26:46</span>
           </div>
         </header>
 
@@ -108,9 +108,14 @@
         </section>
 
         <footer class="dock" aria-label="底部快捷入口">
-          <button class="dock-app dock-app--mail" type="button" aria-label="短信">
-            <span class="dock-app__icon">✉</span>
-            <span class="dock-app__label">短信</span>
+          <button
+            class="dock-app dock-app--mail"
+            type="button"
+            data-open-app="privacy"
+            aria-label="白名单"
+          >
+            <span class="dock-app__icon">盾</span>
+            <span class="dock-app__label">白名单</span>
           </button>
           <button
             id="home-settings-trigger"
@@ -251,36 +256,6 @@
 
           <div class="home-config-transfer">
             <div>
-              <p class="home-settings-kicker">Privacy Cover</p>
-              <h3 class="home-config-transfer__title">手动隐私白名单</h3>
-            </div>
-            <p class="home-field-hint">
-              这里填写“始终需要在 prompt 中匿名化的文本”，适合名字、公司名、地址片段、作品名或圈内黑话。每行一个词，和本地配置文件内的默认白名单一起生效。
-            </p>
-            <label class="home-field home-field--full">
-              <span>手动隐私白名单</span>
-              <textarea
-                id="home-privacy-allowlist-input"
-                rows="6"
-                placeholder="每行一个词，例如：&#10;某某娱乐&#10;《某作品》&#10;某小区 3 栋"
-              ></textarea>
-              <span class="home-field-hint">
-                白名单是强制匿名化名单，不是跳过匿名化。这里保存的是你手动补充的词，代码里的默认白名单不会被导出覆盖。
-              </span>
-            </label>
-            <div class="home-config-transfer__actions">
-              <button id="home-privacy-scan-btn" class="home-chip" type="button">
-                一键扫描当前配置
-              </button>
-            </div>
-            <p class="home-field-hint">
-              扫描范围包括角色人设、用户人设、用户特别人设、世界书与论坛设置。会自动补充当前规则能识别的公司、作品名、地址、坐标、@handle 等词；普通昵称若未命中规则，仍可继续手动补充。
-            </p>
-            <p id="home-privacy-scan-status" class="home-settings-status" aria-live="polite"></p>
-          </div>
-
-          <div class="home-config-transfer">
-            <div>
               <p class="home-settings-kicker">Config Transfer</p>
               <h3 class="home-config-transfer__title">导入 / 导出配置</h3>
             </div>
@@ -356,6 +331,87 @@
       </div>
     </section>
 
+    <section id="privacy-app-screen" class="privacy-app" hidden>
+      <div class="privacy-app__panel">
+        <header class="privacy-app__header">
+          <button id="privacy-app-close-btn" class="privacy-app__icon-button" type="button" aria-label="返回">
+            ←
+          </button>
+          <div class="privacy-app__title-group">
+            <p class="home-settings-kicker">Privacy Cover</p>
+            <h1 class="privacy-app__title">白名单</h1>
+          </div>
+          <button id="privacy-app-add-btn" class="privacy-app__icon-button privacy-app__icon-button--primary" type="button">
+            ＋
+          </button>
+        </header>
+
+        <main class="privacy-app__body">
+          <section class="home-import-review">
+            <div class="home-import-review__head">
+              <div>
+                <p class="home-settings-kicker">Confirmed</p>
+                <h4 class="home-import-review__title">全部白名单预览</h4>
+              </div>
+            </div>
+            <p id="privacy-app-whitelist-summary" class="home-field-hint">
+              所有已确认进入白名单的词条都在这里；支持直接改名、删除，改动会自动生效。
+            </p>
+            <div id="privacy-app-whitelist-list" class="home-transfer-options"></div>
+          </section>
+
+          <section class="home-import-review">
+            <div class="home-import-review__head">
+              <div>
+                <p class="home-settings-kicker">Scan Queue</p>
+                <h4 class="home-import-review__title">待确认扫描候选</h4>
+              </div>
+              <button id="privacy-app-scan-btn" class="home-chip" type="button">一键扫描当前配置</button>
+            </div>
+            <p id="privacy-app-pending-summary" class="home-field-hint">
+              扫描只会把新词放到待确认区；已在白名单里的词会自动跳过。每条候选都可以直接加入或删除。
+            </p>
+            <div id="privacy-app-pending-list" class="home-transfer-options"></div>
+          </section>
+          <p id="privacy-app-status" class="home-settings-status" aria-live="polite"></p>
+        </main>
+      </div>
+    </section>
+
+    <section id="privacy-app-add-modal" class="home-settings-modal" aria-hidden="true" hidden style="display: none">
+      <div class="home-settings-modal__backdrop" data-close-privacy-add></div>
+      <div class="home-settings-modal__panel privacy-app-add-modal__panel" role="dialog" aria-modal="true" aria-label="新增白名单">
+        <div class="home-settings-modal__head">
+          <div>
+            <p class="home-settings-kicker">Manual Add</p>
+            <h2 class="home-settings-title">新增白名单</h2>
+          </div>
+          <button id="privacy-app-add-close-btn" class="home-settings-close" type="button" aria-label="关闭新增白名单">
+            ×
+          </button>
+        </div>
+        <div class="home-settings-modal__body">
+          <label class="home-field home-field--full">
+            <span>每行一个词</span>
+            <textarea
+              id="privacy-app-add-textarea"
+              rows="8"
+              placeholder="例如：&#10;Jessie&#10;洁宝&#10;J宝&#10;西米露"
+            ></textarea>
+            <span class="home-field-hint">换行会被识别为不同词条，确认后会直接加入上方白名单预览。</span>
+          </label>
+          <div class="home-config-transfer__actions">
+            <button id="privacy-app-add-apply-btn" class="home-primary-button" type="button">
+              确认添加
+            </button>
+            <button id="privacy-app-add-cancel-btn" class="home-chip" type="button">
+              取消
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section
       id="home-browser-modal"
       class="home-browser-modal"
@@ -376,8 +432,8 @@
       </div>
     </section>
 
-    <script src="./privacy-allowlist.js?v=20260402-163711"></script>
-    <script src="./pulse-privacy-cover.js?v=20260402-163711"></script>
-    <script src="./home.js?v=20260402-163711"></script>
+    <script src="./privacy-allowlist.js?v=20260402-202646"></script>
+    <script src="./pulse-privacy-cover.js?v=20260402-202646"></script>
+    <script src="./home.js?v=20260402-202646"></script>
   </body>
 </html>

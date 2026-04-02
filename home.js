@@ -2,8 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260402-163711";
-const APP_BUILD_UPDATED_AT = "2026-04-02 16:37:11";
+const APP_BUILD_VERSION = "20260402-202646";
+const APP_BUILD_UPDATED_AT = "2026-04-02 20:26:46";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -13,10 +13,13 @@ const DISCUSSIONS_KEY = "x_style_generator_discussions_v1";
 const WORLD_BOOKS_KEY = "x_style_generator_message_worldbooks_v1";
 const MESSAGE_CONTACTS_KEY = "x_style_generator_message_contacts_v1";
 const SCHEDULE_ENTRIES_KEY = "x_style_generator_schedule_entries_v1";
+const PRIVACY_ALLOWLIST_META_KEY = "x_style_generator_privacy_allowlist_meta_v1";
+const PRIVACY_PENDING_SCAN_KEY = "x_style_generator_privacy_scan_pending_v1";
 const API_CONFIG_LIMIT = 12;
 const CONFIG_EXPORT_SCHEMA = "pulse-generator-config";
 const TRANSFER_FORUM_BASE_ITEM_ID = "__forum_base__";
 
+const homeSceneEl = document.querySelector(".home-scene");
 const phoneDateEl = document.querySelector("#phone-date");
 const phoneClockEl = document.querySelector("#phone-clock");
 const statusVersionEl = document.querySelector("#status-version");
@@ -39,9 +42,6 @@ const homeTranslationApiConfigSelectEl = document.querySelector(
 );
 const homeSummaryApiEnabledEl = document.querySelector("#home-summary-api-enabled");
 const homeSummaryApiConfigSelectEl = document.querySelector("#home-summary-api-config-select");
-const homePrivacyAllowlistInput = document.querySelector("#home-privacy-allowlist-input");
-const homePrivacyScanBtn = document.querySelector("#home-privacy-scan-btn");
-const homePrivacyScanStatusEl = document.querySelector("#home-privacy-scan-status");
 const homeConfigExportBtn = document.querySelector("#home-config-export-btn");
 const homeConfigImportBtn = document.querySelector("#home-config-import-btn");
 const homeConfigImportInput = document.querySelector("#home-config-import-input");
@@ -65,6 +65,23 @@ const homeBrowserFrameEl = document.querySelector("#home-browser-frame");
 const homeBrowserKickerEl = document.querySelector("#home-browser-kicker");
 const homeBrowserTitleEl = document.querySelector("#home-browser-title");
 const homeBrowserCloseBtn = document.querySelector("#home-browser-close-btn");
+const privacyAppScreenEl = document.querySelector("#privacy-app-screen");
+const privacyAppCloseBtn = document.querySelector("#privacy-app-close-btn");
+const privacyAppAddBtn = document.querySelector("#privacy-app-add-btn");
+const privacyAppWhitelistSummaryEl = document.querySelector("#privacy-app-whitelist-summary");
+const privacyAppWhitelistListEl = document.querySelector("#privacy-app-whitelist-list");
+const privacyAppPendingSummaryEl = document.querySelector("#privacy-app-pending-summary");
+const privacyAppPendingListEl = document.querySelector("#privacy-app-pending-list");
+const privacyAppPendingSelectAllBtn = document.querySelector("#privacy-app-pending-select-all-btn");
+const privacyAppPendingClearBtn = document.querySelector("#privacy-app-pending-clear-btn");
+const privacyAppPendingApplyBtn = document.querySelector("#privacy-app-pending-apply-btn");
+const privacyAppScanBtn = document.querySelector("#privacy-app-scan-btn");
+const privacyAppStatusEl = document.querySelector("#privacy-app-status");
+const privacyAppAddModalEl = document.querySelector("#privacy-app-add-modal");
+const privacyAppAddCloseBtn = document.querySelector("#privacy-app-add-close-btn");
+const privacyAppAddCancelBtn = document.querySelector("#privacy-app-add-cancel-btn");
+const privacyAppAddApplyBtn = document.querySelector("#privacy-app-add-apply-btn");
+const privacyAppAddTextareaEl = document.querySelector("#privacy-app-add-textarea");
 
 const weekdayLabels = [
   "星期日",
@@ -100,7 +117,10 @@ const homeState = {
   activeAppTab: "home",
   exportTransferSelection: [],
   pendingImportTransferPayload: null,
-  importTransferSelection: []
+  importTransferSelection: [],
+  privacyAllowlistItems: [],
+  privacyPendingCandidates: [],
+  privacyAddModalOpen: false
 };
 
 function showHomeLayer(element, displayValue = "block") {
@@ -413,17 +433,6 @@ function setHomeTransferStatus(message, tone = "") {
   }
 }
 
-function setHomePrivacyScanStatus(message, tone = "") {
-  if (!homePrivacyScanStatusEl) {
-    return;
-  }
-  homePrivacyScanStatusEl.textContent = String(message || "").trim();
-  homePrivacyScanStatusEl.className = "home-settings-status";
-  if (tone) {
-    homePrivacyScanStatusEl.classList.add(tone);
-  }
-}
-
 function readStoredJson(key, fallback = null) {
   const raw = safeGetItem(key);
   if (!raw) {
@@ -587,11 +596,190 @@ function buildTransferPayloadFromCurrentState() {
   };
 }
 
-function collectPrivacyScanTexts() {
-  const settings = buildNormalizedSettingsSnapshot({
-    ...homeState.settings,
-    ...readHomeSettingsFromForm()
+function getCurrentHomeQuery() {
+  try {
+    return new URLSearchParams(window.location.search);
+  } catch (_error) {
+    return new URLSearchParams();
+  }
+}
+
+function isPrivacyAppView() {
+  return getCurrentHomeQuery().get("view") === "privacy";
+}
+
+function isEmbeddedHomeView() {
+  return getCurrentHomeQuery().get("embed") === "1";
+}
+
+function requestEmbeddedClose() {
+  if (isEmbeddedHomeView()) {
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: "pulse-generator-close-app" }, "*");
+        return;
+      }
+    } catch (_error) {
+    }
+  }
+  window.location.href = "./index.html";
+}
+
+function normalizePrivacyAllowlistItemSource(value) {
+  return value === "scan" ? "scan" : "manual";
+}
+
+function buildPrivacyItemId(value, prefix = "privacy_item") {
+  const text = String(value || "").trim();
+  return `${prefix}_${hashText(text || `${prefix}_${Date.now()}`)}`;
+}
+
+function setPrivacyAppStatus(message = "", tone = "") {
+  if (!privacyAppStatusEl) {
+    return;
+  }
+  privacyAppStatusEl.textContent = String(message || "").trim();
+  privacyAppStatusEl.className = "home-settings-status";
+  if (tone) {
+    privacyAppStatusEl.classList.add(tone);
+  }
+}
+
+function normalizePrivacyAllowlistMetaItems(value = []) {
+  const items = normalizeObjectArray(value);
+  const unique = new Set();
+  return items
+    .map((item) => ({
+      text: String(item.text || "").trim(),
+      source: normalizePrivacyAllowlistItemSource(item.source)
+    }))
+    .filter((item) => {
+      if (!item.text || unique.has(item.text)) {
+        return false;
+      }
+      unique.add(item.text);
+      return true;
+    });
+}
+
+function loadPrivacyAllowlistMetaItems() {
+  return normalizePrivacyAllowlistMetaItems(readStoredJson(PRIVACY_ALLOWLIST_META_KEY, []));
+}
+
+function persistPrivacyAllowlistMetaItems(items = []) {
+  safeSetItem(PRIVACY_ALLOWLIST_META_KEY, JSON.stringify(normalizePrivacyAllowlistMetaItems(items)));
+}
+
+function loadPrivacyAllowlistItems() {
+  const settings = loadSettings({ forceActiveConfig: false });
+  const terms = normalizePrivacyAllowlist(settings.privacyAllowlist || []);
+  const metaMap = new Map(
+    loadPrivacyAllowlistMetaItems().map((item) => [item.text, item.source])
+  );
+  return terms.map((text) => ({
+    id: buildPrivacyItemId(text, "privacy_allowlist"),
+    text,
+    source: normalizePrivacyAllowlistItemSource(metaMap.get(text) || "manual")
+  }));
+}
+
+function normalizePrivacyAllowlistItems(items = []) {
+  const result = [];
+  const indexMap = new Map();
+  normalizeObjectArray(items).forEach((item) => {
+    const text = String(item.text || "").trim();
+    if (!text) {
+      return;
+    }
+    const source = normalizePrivacyAllowlistItemSource(item.source);
+    if (indexMap.has(text)) {
+      const existingIndex = indexMap.get(text);
+      if (source === "manual") {
+        result[existingIndex].source = "manual";
+      }
+      return;
+    }
+    indexMap.set(text, result.length);
+    result.push({
+      id: String(item.id || buildPrivacyItemId(text, "privacy_allowlist")).trim(),
+      text,
+      source
+    });
   });
+  return result;
+}
+
+function normalizePrivacyPendingCandidates(candidates = [], allowlistTerms = []) {
+  const allowlist = new Set(normalizePrivacyAllowlist(allowlistTerms));
+  const merged = [];
+  const indexMap = new Map();
+  normalizeObjectArray(candidates).forEach((item, index) => {
+    const text = String(item.text || "").trim();
+    if (!text || allowlist.has(text)) {
+      return;
+    }
+    const normalized = {
+      id: String(item.id || buildPrivacyItemId(`${text}_${index}`, "privacy_pending")).trim(),
+      text,
+      category: String(item.category || "TERM").trim() || "TERM",
+      sources: normalizePrivacyAllowlist(item.sources || []),
+      sample: String(item.sample || "").trim(),
+      selected: item.selected !== false
+    };
+    if (indexMap.has(text)) {
+      const target = merged[indexMap.get(text)];
+      target.sources = normalizePrivacyAllowlist([...target.sources, ...normalized.sources]);
+      if (target.category === "TERM" && normalized.category !== "TERM") {
+        target.category = normalized.category;
+      }
+      if (!target.sample && normalized.sample) {
+        target.sample = normalized.sample;
+      }
+      target.selected = Boolean(target.selected || normalized.selected);
+      return;
+    }
+    indexMap.set(text, merged.length);
+    merged.push(normalized);
+  });
+  return merged;
+}
+
+function loadPrivacyPendingCandidates(allowlistTerms = []) {
+  return normalizePrivacyPendingCandidates(
+    readStoredJson(PRIVACY_PENDING_SCAN_KEY, []),
+    allowlistTerms
+  );
+}
+
+function persistPrivacyPendingCandidates(candidates = [], allowlistTerms = []) {
+  const normalized = normalizePrivacyPendingCandidates(candidates, allowlistTerms);
+  safeSetItem(PRIVACY_PENDING_SCAN_KEY, JSON.stringify(normalized));
+  homeState.privacyPendingCandidates = normalized;
+}
+
+function persistPrivacyAllowlistItems(items = []) {
+  const normalizedItems = normalizePrivacyAllowlistItems(items);
+  const nextSettings = loadSettings({ forceActiveConfig: false });
+  nextSettings.privacyAllowlist = normalizedItems.map((item) => item.text);
+  persistSettings(nextSettings);
+  persistPrivacyAllowlistMetaItems(
+    normalizedItems.map((item) => ({
+      text: item.text,
+      source: item.source
+    }))
+  );
+  homeState.settings = buildNormalizedSettingsSnapshot(nextSettings, {
+    forceActiveConfig: false
+  });
+  homeState.privacyAllowlistItems = normalizedItems;
+  persistPrivacyPendingCandidates(
+    homeState.privacyPendingCandidates,
+    normalizedItems.map((item) => item.text)
+  );
+}
+
+function collectPrivacyScanTexts() {
+  const settings = loadSettings({ forceActiveConfig: false });
   const profile = readStoredJson(PROFILE_KEY, {}) || {};
   const worldbooks = readStoredJson(WORLD_BOOKS_KEY, { categories: [], entries: [] }) || {};
   const contacts = normalizeObjectArray(readStoredJson(MESSAGE_CONTACTS_KEY, []));
@@ -604,71 +792,313 @@ function collectPrivacyScanTexts() {
     forum: 0
   };
 
-  function pushText(bucket, value) {
+  function pushText(bucket, value, source) {
     const text = String(value || "").trim();
     if (!text) {
       return;
     }
-    texts.push(text);
+    texts.push({
+      text,
+      source: String(source || "未分类").trim() || "未分类"
+    });
     if (Object.prototype.hasOwnProperty.call(counts, bucket)) {
       counts[bucket] += 1;
     }
   }
 
-  pushText("userPersona", profile.chatPersonaPrompt || profile.personaPrompt || "");
+  pushText("userPersona", profile.chatPersonaPrompt || profile.personaPrompt || "", "用户人设");
 
   contacts.forEach((contact) => {
-    pushText("rolePersona", contact.personaPrompt);
-    pushText("specialUserPersona", contact.specialUserPersona);
+    const contactName = String(contact.name || "未命名角色").trim() || "未命名角色";
+    pushText("rolePersona", contact.personaPrompt, `角色人设 · ${contactName}`);
+    pushText("specialUserPersona", contact.specialUserPersona, `用户特别人设 · ${contactName}`);
   });
 
   normalizeObjectArray(worldbooks.categories).forEach((category) => {
-    pushText("worldbook", category.name);
+    const categoryName = String(category.name || "未分类").trim() || "未分类";
+    pushText("worldbook", category.name, `世界书分类 · ${categoryName}`);
   });
   normalizeObjectArray(worldbooks.entries).forEach((entry) => {
-    pushText("worldbook", entry.name);
-    pushText("worldbook", entry.text);
+    const entryName = String(entry.name || "未命名世界书").trim() || "未命名世界书";
+    pushText("worldbook", entry.name, `世界书标题 · ${entryName}`);
+    pushText("worldbook", entry.text, `世界书正文 · ${entryName}`);
   });
 
-  pushText("forum", settings.worldview);
+  pushText("forum", settings.worldview, "论坛设置 · 世界观");
   normalizeObjectArray(settings.customTabs).forEach((tab) => {
-    pushText("forum", tab.name);
-    pushText("forum", tab.audience);
-    pushText("forum", tab.discussionText || tab.text);
-    pushText("forum", tab.hotTopic);
+    const tabName = String(tab.name || "未命名页签").trim() || "未命名页签";
+    pushText("forum", tab.name, `论坛页签 · ${tabName} · 名称`);
+    pushText("forum", tab.audience, `论坛页签 · ${tabName} · 用户定位`);
+    pushText("forum", tab.discussionText || tab.text, `论坛页签 · ${tabName} · 页签文本`);
+    pushText("forum", tab.hotTopic, `论坛页签 · ${tabName} · 页签热点`);
   });
 
   return { texts, counts };
 }
 
-function scanCurrentPrivacyAllowlistCandidates() {
-  const { texts, counts } = collectPrivacyScanTexts();
-  if (!texts.length) {
-    setHomePrivacyScanStatus("当前没有可扫描的人设、世界书或论坛文本。", "error");
-    return;
+function summarizePrivacyCandidateSources(sources = []) {
+  const normalized = normalizePrivacyAllowlist(sources);
+  if (normalized.length <= 3) {
+    return normalized.join(" · ");
   }
+  return `${normalized.slice(0, 3).join(" · ")} · +${normalized.length - 3}`;
+}
 
+function buildPrivacyScanCandidates(texts = []) {
+  const allowlistTerms = homeState.privacyAllowlistItems.map((item) => item.text);
+  const pendingTerms = new Set(homeState.privacyPendingCandidates.map((item) => item.text));
   const scannedEntries = window.PulsePrivacyCover?.scanTerms
     ? window.PulsePrivacyCover.scanTerms(texts)
     : [];
-  const scannedTerms = normalizePrivacyAllowlist(scannedEntries.map((item) => item?.text || item));
-  if (!scannedTerms.length) {
-    setHomePrivacyScanStatus(
-      "扫描完成，但当前规则没有识别到可自动补充的隐私词；你仍可继续手动补充昵称或圈内黑话。",
-      ""
-    );
+  return normalizePrivacyPendingCandidates(
+    scannedEntries
+      .filter((entry) => {
+        const text = String(entry?.text || "").trim();
+        return (
+          text &&
+          !allowlistTerms.includes(text) &&
+          !pendingTerms.has(text)
+        );
+      })
+      .map((entry) => ({
+        id: buildPrivacyItemId(entry?.text || "", "privacy_pending"),
+        text: String(entry?.text || "").trim(),
+        category: String(entry?.category || "TERM").trim() || "TERM",
+        sources: normalizePrivacyAllowlist(entry?.sources || []),
+        sample: String(entry?.sample || "").trim(),
+        selected: true
+      })),
+    allowlistTerms
+  );
+}
+
+function renderPrivacyAllowlistSummary() {
+  if (!privacyAppWhitelistSummaryEl) {
+    return;
+  }
+  const total = homeState.privacyAllowlistItems.length;
+  const manualCount = homeState.privacyAllowlistItems.filter((item) => item.source === "manual").length;
+  const scanCount = total - manualCount;
+  privacyAppWhitelistSummaryEl.textContent = total
+    ? `共 ${total} 个白名单词条，其中手动 ${manualCount} 个、扫描确认 ${scanCount} 个；直接修改输入框会自动生效。`
+    : "当前还没有白名单词条。点击右上角新增，或先扫描配置后确认加入。";
+}
+
+function renderPrivacyAllowlistItems() {
+  if (!privacyAppWhitelistListEl) {
+    return;
+  }
+  if (!homeState.privacyAllowlistItems.length) {
+    privacyAppWhitelistListEl.innerHTML =
+      '<div class="privacy-app__empty">当前还没有白名单词条。你可以先手动新增，或先扫描当前配置。</div>';
+    renderPrivacyAllowlistSummary();
     return;
   }
 
-  const existingTerms = normalizePrivacyAllowlist(homePrivacyAllowlistInput?.value || "");
-  const mergedTerms = normalizePrivacyAllowlist([...existingTerms, ...scannedTerms]);
-  const addedCount = Math.max(0, mergedTerms.length - existingTerms.length);
-  const duplicateCount = Math.max(0, scannedTerms.length - addedCount);
+  privacyAppWhitelistListEl.innerHTML = homeState.privacyAllowlistItems
+    .map(
+      (item) => `
+        <section class="home-transfer-group privacy-app-item${
+          item.source === "manual" ? " privacy-app-item--manual" : ""
+        }">
+          <div class="privacy-app-item__head">
+            <div class="privacy-app-item__meta">
+              <span class="home-badge">${escapeHtml(item.source === "manual" ? "手动" : "扫描确认")}</span>
+            </div>
+            <button
+              class="home-chip home-chip--danger"
+              type="button"
+              data-action="remove-privacy-allowlist-item"
+              data-item-id="${escapeHtml(item.id)}"
+            >
+              删除
+            </button>
+          </div>
+          <div class="privacy-app-item__editor">
+            <input
+              class="privacy-app-item__input"
+              type="text"
+              value="${escapeHtml(item.text)}"
+              data-role="privacy-allowlist-text"
+              data-item-id="${escapeHtml(item.id)}"
+              placeholder="输入白名单词条"
+            />
+            <p class="privacy-app-item__hint">
+              ${escapeHtml(
+                item.source === "manual"
+                  ? "这是手动加入的词条，会在扫描预览中高亮区分。"
+                  : "这是从扫描候选确认加入的词条。"
+              )}
+            </p>
+          </div>
+        </section>
+      `
+    )
+    .join("");
 
-  if (homePrivacyAllowlistInput) {
-    homePrivacyAllowlistInput.value = mergedTerms.join("\n");
+  renderPrivacyAllowlistSummary();
+}
+
+function renderPrivacyPendingSummary() {
+  if (!privacyAppPendingSummaryEl) {
+    return;
   }
-  saveCurrentHomeSettings({ silent: true });
+  const total = homeState.privacyPendingCandidates.length;
+  privacyAppPendingSummaryEl.textContent = total
+    ? `当前有 ${total} 个待确认候选词；每条都可以直接加入白名单或删除，确认后会立刻从这里移除。`
+    : "当前没有待确认候选词；点击上方按钮可重新扫描当前配置。";
+}
+
+function renderPrivacyPendingCandidates() {
+  if (!privacyAppPendingListEl) {
+    return;
+  }
+  if (!homeState.privacyPendingCandidates.length) {
+    privacyAppPendingListEl.innerHTML =
+      '<div class="privacy-app__empty">当前没有待确认扫描候选。重新扫描时，已在白名单里的词会自动跳过。</div>';
+    renderPrivacyPendingSummary();
+    return;
+  }
+
+  privacyAppPendingListEl.innerHTML = homeState.privacyPendingCandidates
+    .map(
+      (item) => `
+        <section class="home-transfer-group privacy-app-item">
+          <div class="privacy-app-item__head">
+            <div class="home-transfer-group__meta">
+              <span>${escapeHtml(item.text)}</span>
+              <span class="home-transfer-group__desc">${escapeHtml(
+                summarizePrivacyCandidateSources(item.sources)
+              )}</span>
+            </div>
+            <div class="privacy-app-item__actions">
+              <button
+                class="home-chip"
+                type="button"
+                data-action="confirm-privacy-pending-item"
+                data-item-id="${escapeHtml(item.id)}"
+              >
+                加入白名单
+              </button>
+              <button
+                class="home-chip home-chip--danger"
+                type="button"
+                data-action="remove-privacy-pending-item"
+                data-item-id="${escapeHtml(item.id)}"
+              >
+                删除
+              </button>
+            </div>
+          </div>
+          <div class="privacy-app-item__editor">
+            <input
+              class="privacy-app-item__input"
+              type="text"
+              value="${escapeHtml(item.text)}"
+              data-role="privacy-pending-text"
+              data-item-id="${escapeHtml(item.id)}"
+              placeholder="可直接编辑待确认词条"
+            />
+            <div class="privacy-app-item__meta">
+              <span class="home-badge">${escapeHtml(item.category)}</span>
+              <span class="home-field-hint">来源：${escapeHtml(item.sources.join(" · ")) || "未记录"}</span>
+            </div>
+            <p class="privacy-app-item__hint">样例：${escapeHtml(item.sample || "未记录")}</p>
+          </div>
+        </section>
+      `
+    )
+    .join("");
+  renderPrivacyPendingSummary();
+}
+
+function renderPrivacyApp() {
+  renderPrivacyAllowlistItems();
+  renderPrivacyPendingCandidates();
+}
+
+function setPrivacyAppAddModalOpen(isOpen) {
+  homeState.privacyAddModalOpen = Boolean(isOpen);
+  if (!privacyAppAddModalEl) {
+    return;
+  }
+  if (homeState.privacyAddModalOpen) {
+    showHomeLayer(privacyAppAddModalEl, "grid");
+    window.setTimeout(() => {
+      privacyAppAddTextareaEl?.focus();
+    }, 0);
+  } else {
+    hideHomeLayer(privacyAppAddModalEl);
+    if (privacyAppAddTextareaEl) {
+      privacyAppAddTextareaEl.value = "";
+    }
+  }
+  refreshBodyModalState();
+}
+
+function addPrivacyAllowlistItemsByLines(value, source = "manual") {
+  const nextItems = normalizePrivacyAllowlistItems([
+    ...homeState.privacyAllowlistItems,
+    ...normalizePrivacyAllowlist(value).map((text) => ({
+      text,
+      source
+    }))
+  ]);
+  persistPrivacyAllowlistItems(nextItems);
+  renderPrivacyApp();
+}
+
+function applyPrivacyPendingCandidates() {
+  const selectedCandidates = homeState.privacyPendingCandidates
+    .filter((item) => item.selected)
+    .map((item) => ({
+      text: String(item.text || "").trim(),
+      source: "scan"
+    }))
+    .filter((item) => item.text);
+
+  if (!selectedCandidates.length) {
+    setPrivacyAppStatus("请至少勾选一个非空的候选词。", "error");
+    return;
+  }
+
+  addPrivacyAllowlistItemsByLines(selectedCandidates.map((item) => item.text), "scan");
+  const selectedTexts = new Set(selectedCandidates.map((item) => item.text));
+  homeState.privacyPendingCandidates = homeState.privacyPendingCandidates.filter(
+    (item) => !selectedTexts.has(String(item.text || "").trim())
+  );
+  persistPrivacyPendingCandidates(
+    homeState.privacyPendingCandidates,
+    homeState.privacyAllowlistItems.map((item) => item.text)
+  );
+  renderPrivacyApp();
+  setPrivacyAppStatus(`已确认 ${selectedCandidates.length} 个候选词，已加入白名单。`, "success");
+}
+
+function scanCurrentPrivacyAllowlistCandidates() {
+  const { texts, counts } = collectPrivacyScanTexts();
+  if (!texts.length) {
+    renderPrivacyPendingCandidates();
+    setPrivacyAppStatus("当前没有可扫描的人设、世界书或论坛文本。", "error");
+    return;
+  }
+
+  const nextCandidates = buildPrivacyScanCandidates(texts);
+  if (!nextCandidates.length) {
+    renderPrivacyPendingCandidates();
+    setPrivacyAppStatus("扫描完成，但没有新的候选词进入待确认区。", "");
+    return;
+  }
+
+  homeState.privacyPendingCandidates = normalizePrivacyPendingCandidates(
+    [...homeState.privacyPendingCandidates, ...nextCandidates],
+    homeState.privacyAllowlistItems.map((item) => item.text)
+  );
+  persistPrivacyPendingCandidates(
+    homeState.privacyPendingCandidates,
+    homeState.privacyAllowlistItems.map((item) => item.text)
+  );
+  renderPrivacyPendingCandidates();
 
   const sourceCount =
     counts.rolePersona +
@@ -676,13 +1106,153 @@ function scanCurrentPrivacyAllowlistCandidates() {
     counts.specialUserPersona +
     counts.worldbook +
     counts.forum;
-  const summaryParts = [
-    `已扫描 ${sourceCount} 段配置文本`,
-    `识别 ${scannedTerms.length} 个候选词`,
-    addedCount > 0 ? `新增 ${addedCount} 个到手动白名单` : "没有新增词",
-    duplicateCount > 0 ? `${duplicateCount} 个已存在` : ""
-  ].filter(Boolean);
-  setHomePrivacyScanStatus(`${summaryParts.join("，")}。`, addedCount > 0 ? "success" : "");
+  setPrivacyAppStatus(
+    `已扫描 ${sourceCount} 段配置文本，新增 ${nextCandidates.length} 个候选词到待确认区。`,
+    "success"
+  );
+}
+
+function removePrivacyAllowlistItem(itemId) {
+  homeState.privacyAllowlistItems = homeState.privacyAllowlistItems.filter((item) => item.id !== itemId);
+  persistPrivacyAllowlistItems(homeState.privacyAllowlistItems);
+  renderPrivacyApp();
+  setPrivacyAppStatus("已从白名单中删除该词条。", "success");
+}
+
+function removePrivacyPendingItem(itemId) {
+  homeState.privacyPendingCandidates = homeState.privacyPendingCandidates.filter(
+    (item) => item.id !== itemId
+  );
+  persistPrivacyPendingCandidates(
+    homeState.privacyPendingCandidates,
+    homeState.privacyAllowlistItems.map((item) => item.text)
+  );
+  renderPrivacyPendingCandidates();
+}
+
+function confirmPrivacyPendingItem(itemId) {
+  const targetItem =
+    homeState.privacyPendingCandidates.find((item) => item.id === itemId) || null;
+  const nextText = String(targetItem?.text || "").trim();
+  if (!nextText) {
+    setPrivacyAppStatus("这个候选词为空，无法加入白名单。", "error");
+    return;
+  }
+
+  homeState.privacyPendingCandidates = homeState.privacyPendingCandidates.filter(
+    (item) => item.id !== itemId
+  );
+  addPrivacyAllowlistItemsByLines([nextText], "scan");
+  persistPrivacyPendingCandidates(
+    homeState.privacyPendingCandidates,
+    homeState.privacyAllowlistItems.map((item) => item.text)
+  );
+  renderPrivacyApp();
+  setPrivacyAppStatus(`已将“${nextText}”加入白名单。`, "success");
+}
+
+function handlePrivacyAllowlistInput(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement) || target.dataset.role !== "privacy-allowlist-text") {
+    return;
+  }
+  const itemId = String(target.dataset.itemId || "").trim();
+  if (!itemId) {
+    return;
+  }
+  homeState.privacyAllowlistItems = homeState.privacyAllowlistItems.map((item) =>
+    item.id === itemId ? { ...item, text: String(target.value || "") } : item
+  );
+  persistPrivacyAllowlistItems(homeState.privacyAllowlistItems);
+}
+
+function handlePrivacyAllowlistChange(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement) || target.dataset.role !== "privacy-allowlist-text") {
+    return;
+  }
+  persistPrivacyAllowlistItems(homeState.privacyAllowlistItems);
+  renderPrivacyApp();
+  setPrivacyAppStatus("白名单修改已生效。", "success");
+}
+
+function handlePrivacyPendingChange(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) {
+    return;
+  }
+  const itemId = String(target.dataset.itemId || "").trim();
+  if (!itemId) {
+    return;
+  }
+
+  if (target.dataset.role === "privacy-pending-select") {
+    if (event.type !== "change") {
+      return;
+    }
+    homeState.privacyPendingCandidates = homeState.privacyPendingCandidates.map((item) =>
+      item.id === itemId ? { ...item, selected: target.checked } : item
+    );
+    persistPrivacyPendingCandidates(
+      homeState.privacyPendingCandidates,
+      homeState.privacyAllowlistItems.map((item) => item.text)
+    );
+    renderPrivacyPendingCandidates();
+    return;
+  }
+
+  if (target.dataset.role === "privacy-pending-text") {
+    homeState.privacyPendingCandidates = homeState.privacyPendingCandidates.map((item) =>
+      item.id === itemId ? { ...item, text: String(target.value || "") } : item
+    );
+    persistPrivacyPendingCandidates(
+      homeState.privacyPendingCandidates,
+      homeState.privacyAllowlistItems.map((item) => item.text)
+    );
+    if (event.type === "change") {
+      renderPrivacyPendingCandidates();
+    }
+  }
+}
+
+function handlePrivacyAppClick(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+  const actionEl = target.closest("[data-action]");
+  if (!(actionEl instanceof HTMLElement)) {
+    return;
+  }
+  const itemId = String(actionEl.dataset.itemId || "").trim();
+  if (!itemId) {
+    return;
+  }
+  if (actionEl.dataset.action === "remove-privacy-allowlist-item") {
+    removePrivacyAllowlistItem(itemId);
+  } else if (actionEl.dataset.action === "confirm-privacy-pending-item") {
+    confirmPrivacyPendingItem(itemId);
+  } else if (actionEl.dataset.action === "remove-privacy-pending-item") {
+    removePrivacyPendingItem(itemId);
+  }
+}
+
+function initPrivacyAppState() {
+  homeState.settings = loadSettings({ forceActiveConfig: false });
+  homeState.privacyAllowlistItems = loadPrivacyAllowlistItems();
+  homeState.privacyPendingCandidates = loadPrivacyPendingCandidates(
+    homeState.privacyAllowlistItems.map((item) => item.text)
+  );
+}
+
+function setPrivacyAppVisible(isVisible) {
+  if (isVisible) {
+    hideHomeLayer(homeSceneEl);
+    showHomeLayer(privacyAppScreenEl);
+    return;
+  }
+  showHomeLayer(homeSceneEl);
+  hideHomeLayer(privacyAppScreenEl);
 }
 
 function resolveLegacyImportedConfigPayload(parsed) {
@@ -1576,11 +2146,6 @@ function applySettingsToHomeForm(settings) {
         ? ""
         : settings.model || getDefaultModelByMode(settings.mode);
   }
-  if (homePrivacyAllowlistInput) {
-    homePrivacyAllowlistInput.value = normalizePrivacyAllowlist(
-      settings.privacyAllowlist || []
-    ).join("\n");
-  }
   updateHomeModeUI();
   renderHomeApiConfigList();
   syncHomeActiveConfigSummary();
@@ -1597,7 +2162,7 @@ function readHomeSettingsFromForm() {
       mode === "generic"
         ? ""
         : String(homeApiModelInput?.value || "").trim() || getDefaultModelByMode(mode),
-    privacyAllowlist: normalizePrivacyAllowlist(homePrivacyAllowlistInput?.value || ""),
+    privacyAllowlist: normalizePrivacyAllowlist(homeState.settings.privacyAllowlist || []),
     apiConfigs: normalizeApiConfigs(homeState.settings.apiConfigs)
   };
 }
@@ -1949,6 +2514,13 @@ function setHomeSettingsModalOpen(isOpen) {
 }
 
 function getHomeAppMeta(tabName = "home") {
+  if (tabName === "privacy") {
+    return {
+      tab: "privacy",
+      kicker: "Privacy",
+      title: "白名单"
+    };
+  }
   if (tabName === "messages") {
     return {
       tab: "messages",
@@ -1999,7 +2571,10 @@ function getHomeAppMeta(tabName = "home") {
 }
 
 function refreshBodyModalState() {
-  document.body.classList.toggle("modal-open", homeState.modalOpen || homeState.browserOpen);
+  document.body.classList.toggle(
+    "modal-open",
+    homeState.modalOpen || homeState.browserOpen || homeState.privacyAddModalOpen
+  );
 }
 
 function setHomeBrowserModalOpen(
@@ -2071,6 +2646,15 @@ function handleTransferSelectionChange(event) {
 }
 
 function openHomeApp(tabName) {
+  if (tabName === "privacy") {
+    setHomeBrowserModalOpen(
+      true,
+      `./index.html?view=privacy&embed=1&v=${APP_BUILD_VERSION}`,
+      getHomeAppMeta("privacy")
+    );
+    return;
+  }
+
   if (tabName === "messages") {
     setHomeBrowserModalOpen(
       true,
@@ -2184,7 +2768,7 @@ function attachHomeSettingsEvents() {
     }
   });
 
-  [homeApiModeSelect, homeApiEndpointInput, homeApiTokenInput, homeApiModelInput, homePrivacyAllowlistInput]
+  [homeApiModeSelect, homeApiEndpointInput, homeApiTokenInput, homeApiModelInput]
     .filter(Boolean)
     .forEach((field) => {
       field.addEventListener("input", () => {
@@ -2207,9 +2791,104 @@ function attachHomeSettingsEvents() {
     });
   }
 
-  if (homePrivacyScanBtn) {
-    homePrivacyScanBtn.addEventListener("click", () => {
+  if (privacyAppScanBtn) {
+    privacyAppScanBtn.addEventListener("click", () => {
       scanCurrentPrivacyAllowlistCandidates();
+    });
+  }
+
+  if (privacyAppPendingSelectAllBtn) {
+    privacyAppPendingSelectAllBtn.addEventListener("click", () => {
+      homeState.privacyPendingCandidates = homeState.privacyPendingCandidates.map((item) => ({
+        ...item,
+        selected: true
+      }));
+      persistPrivacyPendingCandidates(
+        homeState.privacyPendingCandidates,
+        homeState.privacyAllowlistItems.map((item) => item.text)
+      );
+      renderPrivacyPendingCandidates();
+    });
+  }
+
+  if (privacyAppPendingClearBtn) {
+    privacyAppPendingClearBtn.addEventListener("click", () => {
+      homeState.privacyPendingCandidates = homeState.privacyPendingCandidates.map((item) => ({
+        ...item,
+        selected: false
+      }));
+      persistPrivacyPendingCandidates(
+        homeState.privacyPendingCandidates,
+        homeState.privacyAllowlistItems.map((item) => item.text)
+      );
+      renderPrivacyPendingCandidates();
+    });
+  }
+
+  if (privacyAppPendingApplyBtn) {
+    privacyAppPendingApplyBtn.addEventListener("click", () => {
+      applyPrivacyPendingCandidates();
+    });
+  }
+
+  if (privacyAppWhitelistListEl) {
+    privacyAppWhitelistListEl.addEventListener("input", handlePrivacyAllowlistInput);
+    privacyAppWhitelistListEl.addEventListener("change", handlePrivacyAllowlistChange);
+    privacyAppWhitelistListEl.addEventListener("click", handlePrivacyAppClick);
+  }
+
+  if (privacyAppPendingListEl) {
+    privacyAppPendingListEl.addEventListener("input", handlePrivacyPendingChange);
+    privacyAppPendingListEl.addEventListener("change", handlePrivacyPendingChange);
+    privacyAppPendingListEl.addEventListener("click", handlePrivacyAppClick);
+  }
+
+  if (privacyAppAddBtn) {
+    privacyAppAddBtn.addEventListener("click", () => {
+      setPrivacyAppAddModalOpen(true);
+    });
+  }
+
+  if (privacyAppCloseBtn) {
+    privacyAppCloseBtn.addEventListener("click", () => {
+      requestEmbeddedClose();
+    });
+  }
+
+  if (privacyAppAddCloseBtn) {
+    privacyAppAddCloseBtn.addEventListener("click", () => {
+      setPrivacyAppAddModalOpen(false);
+    });
+  }
+
+  if (privacyAppAddCancelBtn) {
+    privacyAppAddCancelBtn.addEventListener("click", () => {
+      setPrivacyAppAddModalOpen(false);
+    });
+  }
+
+  if (privacyAppAddApplyBtn) {
+    privacyAppAddApplyBtn.addEventListener("click", () => {
+      const values = normalizePrivacyAllowlist(privacyAppAddTextareaEl?.value || "");
+      if (!values.length) {
+        setPrivacyAppStatus("请至少填写一个词条后再确认添加。", "error");
+        return;
+      }
+      addPrivacyAllowlistItemsByLines(values, "manual");
+      setPrivacyAppAddModalOpen(false);
+      setPrivacyAppStatus(`已手动加入 ${values.length} 个词条到白名单。`, "success");
+    });
+  }
+
+  if (privacyAppAddModalEl) {
+    privacyAppAddModalEl.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      if (target.hasAttribute("data-close-privacy-add")) {
+        setPrivacyAppAddModalOpen(false);
+      }
     });
   }
 
@@ -2381,6 +3060,10 @@ function attachHomeSettingsEvents() {
   }
 
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && homeState.privacyAddModalOpen) {
+      setPrivacyAppAddModalOpen(false);
+      return;
+    }
     if (event.key === "Escape" && homeState.modalOpen) {
       setHomeSettingsModalOpen(false);
       return;
@@ -2394,12 +3077,24 @@ function attachHomeSettingsEvents() {
 function initHome() {
   hideHomeLayer(homeSettingsModalEl);
   hideHomeLayer(homeBrowserModalEl);
+  hideHomeLayer(privacyAppAddModalEl);
   setHomeExportReviewOpen(false);
   setHomeImportReviewOpen(false);
   updateLocalClock();
   renderBuildBadge();
   setInterval(updateLocalClock, 1000);
   attachHomeSettingsEvents();
+
+  if (isPrivacyAppView()) {
+    setPrivacyAppVisible(true);
+    initPrivacyAppState();
+    renderPrivacyApp();
+    setPrivacyAppStatus("");
+    refreshBodyModalState();
+    return;
+  }
+
+  setPrivacyAppVisible(false);
   syncHomeActiveConfigSummary();
   refreshHomeTransferExportSelection();
 }

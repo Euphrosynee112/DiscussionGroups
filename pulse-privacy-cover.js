@@ -28,6 +28,68 @@
     /(?:[A-Za-z0-9\u4e00-\u9fa5·&（）()\-_\s]{2,60}(?:有限责任公司|株式会社|公司|集团|工作室|研究院|实验室|事务所|出版社|大学|学院|学校|医院|银行|资本|娱乐|传媒|影业|科技|网络|Inc\.?|Ltd\.?|LLC|Corp\.?|Company))/gi;
   const ADDRESS_REGEX =
     /(?:[\u4e00-\u9fa5A-Za-z0-9·-]{2,24}(?:省|市|区|县|镇|乡|村|路|街|道|巷|号|栋|楼|室)[\u4e00-\u9fa5A-Za-z0-9·-]{0,24})/g;
+  const QUOTED_TERM_REGEX =
+    /(?:“([^”\n]{1,60})”|‘([^’\n]{1,60})’|「([^」\n]{1,60})」|『([^』\n]{1,60})』|"([^"\n]{1,60})"|'([^'\n]{1,60})')/g;
+  const BRACKET_TERM_REGEX =
+    /(?:（([^）\n]{1,60})）|\(([^)\n]{1,60})\)|【([^】\n]{1,60})】|\[([^\]\n]{1,60})\])/g;
+  const HANDLE_SCAN_REGEX = /@[\w.\-_]{2,32}/g;
+  const MIXED_SCAN_SEGMENT_REGEX = /[\u4e00-\u9fffA-Za-z0-9@._-]{2,36}/g;
+  const SCAN_SEPARATOR_REGEX = /[\/｜|、,，·&＋+]+/g;
+  const SCAN_CONNECTOR_SPLIT_REGEX =
+    /发帖和回帖|发帖|回帖|用户皆为|用户都是|用户|大家|今天|最近|目前|当前|昵称|别名|本名|名叫|叫做|叫|称为|都是|皆为|皆是|粉丝团|粉丝|后援会|超话|论坛|页签|讨论区|设定|人设|背景|文本|内容|信息|消息|的|和|与|及|或/g;
+  const SCAN_STOP_WORDS = new Set([
+    "粉丝",
+    "用户",
+    "发帖",
+    "回帖",
+    "大家",
+    "今天",
+    "最近",
+    "目前",
+    "当前",
+    "论坛",
+    "页签",
+    "讨论区",
+    "文本",
+    "内容",
+    "信息",
+    "消息",
+    "设定",
+    "人设",
+    "背景",
+    "角色",
+    "用户设定",
+    "世界书",
+    "帖子",
+    "回复",
+    "昵称",
+    "别名",
+    "本名",
+    "名叫",
+    "叫做",
+    "叫",
+    "称为",
+    "and",
+    "the",
+    "this",
+    "that",
+    "today",
+    "recent",
+    "user",
+    "users",
+    "fan",
+    "fans",
+    "forum",
+    "post",
+    "reply",
+    "content",
+    "text",
+    "persona",
+    "setting",
+    "background"
+  ]);
+  const SCAN_WEAK_FRAGMENT_REGEX =
+    /(?:发帖|回帖|用户|粉丝|大家|今天|最近|目前|当前|论坛|页签|讨论区|帖子|回复|文本|内容|信息|消息)/;
 
   function normalizeAllowlist(value) {
     const lines = Array.isArray(value)
@@ -58,6 +120,14 @@
 
   function trimText(value) {
     return String(value || "").trim();
+  }
+
+  function truncatePreviewText(value, limit = 52) {
+    const text = trimText(value);
+    if (text.length <= limit) {
+      return text;
+    }
+    return `${text.slice(0, Math.max(0, limit - 1))}…`;
   }
 
   function detectCategory(term, explicitCategory = "") {
@@ -392,22 +462,284 @@
     };
   }
 
-  function scanTerms(value, options = {}) {
-    const resolvedOptions = options && typeof options === "object" ? options : {};
-    const settings =
-      resolvedOptions.includeExistingAllowlist && resolvedOptions.settings
-        ? resolvedOptions.settings
-        : { privacyAllowlist: [] };
-    const session = createSession({
-      settings,
-      scanSource: value,
-      extraTerms: Array.isArray(resolvedOptions.extraTerms) ? resolvedOptions.extraTerms : []
+  function extractCapturedValue(match = []) {
+    for (let index = 1; index < match.length; index += 1) {
+      if (match[index]) {
+        return match[index];
+      }
+    }
+    return match[0] || "";
+  }
+
+  function hasCjk(value) {
+    return /[\u4e00-\u9fff]/.test(String(value || ""));
+  }
+
+  function hasLatinOrDigit(value) {
+    return /[A-Za-z0-9]/.test(String(value || ""));
+  }
+
+  function stripScanWrapping(value, options = {}) {
+    const keepTitle = Boolean(options.keepTitle);
+    let text = trimText(value);
+    if (!text) {
+      return "";
+    }
+    if (!keepTitle) {
+      text = text.replace(/^[\s"'“”‘’「」『』()（）[\]【】{}]+|[\s"'“”‘’「」『』()（）[\]【】{}]+$/g, "");
+    }
+    text = text.replace(/^[,，.。:：;；!?！？、/｜|·&＋+\-]+|[,，.。:：;；!?！？、/｜|·&＋+\-]+$/g, "");
+    return trimText(text);
+  }
+
+  function splitScanParts(value) {
+    return String(value || "")
+      .split(SCAN_SEPARATOR_REGEX)
+      .map((item) => stripScanWrapping(item))
+      .filter(Boolean);
+  }
+
+  function splitScanByScriptBoundary(value) {
+    return String(value || "").match(/@[\w.\-_]+|[A-Za-z0-9._-]+|[\u4e00-\u9fff]{1,8}/g) || [];
+  }
+
+  function removeScanConnectorFragments(value) {
+    return String(value || "").replace(SCAN_CONNECTOR_SPLIT_REGEX, "");
+  }
+
+  function isWeakScanCandidate(value, category = "") {
+    const text = trimText(value);
+    if (!text || isDataLikeString(text) || /^\d+$/.test(text)) {
+      return true;
+    }
+
+    const resolvedCategory = detectCategory(text, category);
+    const lowered = text.toLowerCase();
+    if (SCAN_STOP_WORDS.has(text) || SCAN_STOP_WORDS.has(lowered)) {
+      return true;
+    }
+    if (!removeScanConnectorFragments(text)) {
+      return true;
+    }
+    if (/[\n\r\t]/.test(text)) {
+      return true;
+    }
+
+    if (resolvedCategory === "TITLE") {
+      return !/^《[^》\n]{1,120}》$/.test(text);
+    }
+    if (resolvedCategory === "HANDLE" || resolvedCategory === "COORD") {
+      return false;
+    }
+    if (resolvedCategory === "ORG") {
+      return text.length > 36 || (SCAN_WEAK_FRAGMENT_REGEX.test(text) && text.length > 12);
+    }
+    if (resolvedCategory === "ADDR") {
+      return text.length > 32 || (SCAN_WEAK_FRAGMENT_REGEX.test(text) && text.length > 10);
+    }
+
+    if ((resolvedCategory === "TERM" || resolvedCategory === "NAME") && SCAN_SEPARATOR_REGEX.test(text)) {
+      SCAN_SEPARATOR_REGEX.lastIndex = 0;
+      return true;
+    }
+    SCAN_SEPARATOR_REGEX.lastIndex = 0;
+
+    if (/\s/.test(text)) {
+      return true;
+    }
+    if (hasCjk(text) && !hasLatinOrDigit(text)) {
+      return text.length < 2 || text.length > 8;
+    }
+    if (!hasCjk(text) && hasLatinOrDigit(text)) {
+      return text.length < 2 || text.length > 24;
+    }
+    if (hasCjk(text) && hasLatinOrDigit(text)) {
+      return text.length < 2 || text.length > 6;
+    }
+    return text.length > 24;
+  }
+
+  function buildScanSample(text, term) {
+    const sourceText = trimText(text);
+    if (!sourceText) {
+      return "";
+    }
+    const normalizedTerm = trimText(term);
+    const index = normalizedTerm ? sourceText.indexOf(normalizedTerm) : -1;
+    if (index < 0) {
+      return truncatePreviewText(sourceText, 56);
+    }
+    const start = Math.max(0, index - 12);
+    const end = Math.min(sourceText.length, index + normalizedTerm.length + 16);
+    const snippet = sourceText.slice(start, end);
+    return `${start > 0 ? "…" : ""}${snippet}${end < sourceText.length ? "…" : ""}`;
+  }
+
+  function normalizeScanSourceEntries(value) {
+    const items = Array.isArray(value) ? value : [value];
+    return items
+      .map((item, index) => {
+        if (typeof item === "string") {
+          return {
+            id: `scan_source_${index}`,
+            source: "未分类",
+            text: trimText(item)
+          };
+        }
+        if (!item || typeof item !== "object") {
+          return null;
+        }
+        const text = trimText(item.text || item.value || "");
+        if (!text) {
+          return null;
+        }
+        return {
+          id: trimText(item.id || `scan_source_${index}`),
+          source: trimText(item.source || item.sourceLabel || item.label || "未分类"),
+          text
+        };
+      })
+      .filter((item) => item?.text);
+  }
+
+  function pushScanToken(target, token) {
+    const normalized = stripScanWrapping(token);
+    if (!normalized) {
+      return;
+    }
+    target.push(normalized);
+  }
+
+  function expandAggressiveScanToken(value) {
+    const cleaned = stripScanWrapping(value);
+    if (!cleaned) {
+      return [];
+    }
+
+    const shouldSplitByConnector =
+      cleaned.length > 4 ||
+      /^(?:的|粉丝|用户|发帖|回帖|大家|今天|最近|论坛|页签|讨论区)/.test(cleaned) ||
+      /(?:粉丝|用户|发帖|回帖|论坛|页签|讨论区)$/.test(cleaned);
+    const connectorParts = shouldSplitByConnector
+      ? cleaned
+          .split(SCAN_CONNECTOR_SPLIT_REGEX)
+          .map((item) => stripScanWrapping(item))
+          .filter(Boolean)
+      : [cleaned];
+
+    const results = [];
+    connectorParts.forEach((part) => {
+      const separatorParts = splitScanParts(part);
+      const fragments = separatorParts.length ? separatorParts : [part];
+      fragments.forEach((fragment) => {
+        const normalized = stripScanWrapping(fragment);
+        if (!normalized) {
+          return;
+        }
+        if (hasCjk(normalized) && hasLatinOrDigit(normalized) && normalized.length > 4) {
+          splitScanByScriptBoundary(normalized).forEach((chunk) => {
+            pushScanToken(results, chunk);
+          });
+          return;
+        }
+        pushScanToken(results, normalized);
+      });
     });
-    return getSortedReplacements(session).map((entry) => ({
-      text: entry.raw,
-      category: entry.category,
-      placeholder: entry.placeholder
-    }));
+    return results;
+  }
+
+  function addScanCandidate(candidateMap, rawTerm, sourceEntry, explicitCategory = "") {
+    const normalized = stripScanWrapping(rawTerm, {
+      keepTitle: detectCategory(rawTerm, explicitCategory) === "TITLE"
+    });
+    if (!normalized) {
+      return;
+    }
+
+    const category = detectCategory(normalized, explicitCategory);
+    if (isWeakScanCandidate(normalized, category)) {
+      return;
+    }
+
+    const key = normalized;
+    const sourceLabel = trimText(sourceEntry?.source || "未分类");
+    if (candidateMap.has(key)) {
+      const existing = candidateMap.get(key);
+      if (sourceLabel && !existing.sources.includes(sourceLabel)) {
+        existing.sources.push(sourceLabel);
+      }
+      if (existing.category === "TERM" && category !== "TERM") {
+        existing.category = category;
+      }
+      return;
+    }
+
+    candidateMap.set(key, {
+      text: normalized,
+      category,
+      sources: sourceLabel ? [sourceLabel] : [],
+      sample: buildScanSample(sourceEntry?.text || "", normalized),
+      selected: true
+    });
+  }
+
+  function collectRegexScanCandidates(candidateMap, sourceEntry) {
+    const text = trimText(sourceEntry?.text || "");
+    if (!text) {
+      return;
+    }
+
+    const scanWithRegex = (regex, category, mapper = (match) => match[0]) => {
+      let match;
+      while ((match = regex.exec(text))) {
+        addScanCandidate(candidateMap, mapper(match), sourceEntry, category);
+      }
+      regex.lastIndex = 0;
+    };
+
+    scanWithRegex(BOOK_TITLE_REGEX, "TITLE");
+    scanWithRegex(COORD_REGEX, "COORD");
+    scanWithRegex(HANDLE_SCAN_REGEX, "HANDLE");
+    scanWithRegex(ADDRESS_LABEL_REGEX, "ADDR", (match) => match[1] || "");
+    scanWithRegex(ORG_REGEX, "ORG");
+    scanWithRegex(ADDRESS_REGEX, "ADDR");
+    scanWithRegex(QUOTED_TERM_REGEX, "", (match) => extractCapturedValue(match));
+    scanWithRegex(BRACKET_TERM_REGEX, "", (match) => extractCapturedValue(match));
+  }
+
+  function collectAggressiveScanCandidates(candidateMap, sourceEntry) {
+    const text = trimText(sourceEntry?.text || "");
+    if (!text) {
+      return;
+    }
+
+    let match;
+    while ((match = MIXED_SCAN_SEGMENT_REGEX.exec(text))) {
+      expandAggressiveScanToken(match[0]).forEach((token) => {
+        addScanCandidate(candidateMap, token, sourceEntry);
+      });
+    }
+    MIXED_SCAN_SEGMENT_REGEX.lastIndex = 0;
+  }
+
+  function scanTerms(value, options = {}) {
+    const candidateMap = new Map();
+    normalizeScanSourceEntries(value).forEach((sourceEntry) => {
+      collectRegexScanCandidates(candidateMap, sourceEntry);
+      collectAggressiveScanCandidates(candidateMap, sourceEntry);
+    });
+    return [...candidateMap.values()].sort((left, right) => {
+      if ((right.sources?.length || 0) !== (left.sources?.length || 0)) {
+        return (right.sources?.length || 0) - (left.sources?.length || 0);
+      }
+      if (left.category !== right.category) {
+        return CATEGORY_ORDER.indexOf(left.category) - CATEGORY_ORDER.indexOf(right.category);
+      }
+      if (left.text.length !== right.text.length) {
+        return left.text.length - right.text.length;
+      }
+      return left.text.localeCompare(right.text, "zh-CN");
+    });
   }
 
   function decodeWithSerializedSession(value, serialized) {
