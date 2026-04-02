@@ -1,9 +1,35 @@
 const PROFILE_KEY = "x_style_generator_profile_v1";
 const MESSAGE_CONTACTS_KEY = "x_style_generator_message_contacts_v1";
 const SCHEDULE_ENTRIES_KEY = "x_style_generator_schedule_entries_v1";
+const SETTINGS_KEY = "x_style_generator_settings_v2";
+const MESSAGE_THREADS_KEY = "x_style_generator_message_threads_v1";
+const DIRECT_MESSAGES_KEY = "x_style_generator_direct_messages_v1";
+const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
+const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
+const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
+const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
+const DEFAULT_TEMPERATURE = 0.85;
+const GLOBAL_PROMPT_GUARD =
+  "虚拟世界观，与真实世界无关。禁止搜索未提供的任何其他信息。";
+const MAX_SCHEDULE_INVITE_CONCURRENCY = 3;
+const DEFAULT_MESSAGE_HISTORY_ROUNDS = 6;
 
 const DEFAULT_PROFILE = {
-  username: "用户"
+  username: "用户",
+  personaPrompt: ""
+};
+
+const DEFAULT_SETTINGS = {
+  mode: "openai",
+  endpoint: DEFAULT_OPENAI_ENDPOINT,
+  token: "",
+  model: DEFAULT_DEEPSEEK_MODEL,
+  apiConfigs: [],
+  activeApiConfigId: "",
+  privacyAllowlist: [],
+  messagePromptSettings: {
+    historyRounds: DEFAULT_MESSAGE_HISTORY_ROUNDS
+  }
 };
 
 const scheduleBackBtnEl = document.querySelector("#schedule-back-btn");
@@ -33,6 +59,8 @@ const scheduleVisibleAllInputEl = document.querySelector("#schedule-visible-all-
 const scheduleVisibleContactsEl = document.querySelector("#schedule-visible-contacts");
 const scheduleCompanionFieldEl = document.querySelector("#schedule-companion-field");
 const scheduleCompanionOptionsEl = document.querySelector("#schedule-companion-options");
+const scheduleNotifyCompanionsFieldEl = document.querySelector("#schedule-notify-companions-field");
+const scheduleNotifyCompanionsInputEl = document.querySelector("#schedule-notify-companions-input");
 const scheduleDateInputEl = document.querySelector("#schedule-date-input");
 const scheduleTimeGridEl = document.querySelector("#schedule-time-grid");
 const scheduleStartTimeInputEl = document.querySelector("#schedule-start-time-input");
@@ -113,6 +141,337 @@ function readStoredJson(key, fallback = null) {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function appendApiLog(entry) {
+  try {
+    window.PulseApiLog?.append?.(entry);
+  } catch (_error) {
+  }
+}
+
+function normalizeApiMode(mode) {
+  if (mode === "gemini" || mode === "generic") {
+    return mode;
+  }
+  return "openai";
+}
+
+function getDefaultModelByMode(mode) {
+  return normalizeApiMode(mode) === "gemini" ? DEFAULT_GEMINI_MODEL : DEFAULT_DEEPSEEK_MODEL;
+}
+
+function normalizeApiConfigToken(token) {
+  return String(token || "").trim();
+}
+
+function normalizeOpenAICompatibleEndpoint(endpoint) {
+  const trimmed = String(endpoint || "").trim();
+  if (!trimmed) {
+    return DEFAULT_OPENAI_ENDPOINT;
+  }
+
+  try {
+    const url = new URL(trimmed);
+    if (url.hostname !== "api.deepseek.com") {
+      return trimmed.replace(/\/+$/, "");
+    }
+    if (
+      url.pathname === "/" ||
+      url.pathname === "/v1" ||
+      url.pathname === "/v1/" ||
+      url.pathname === "/v1/chat/completions" ||
+      url.pathname === "/v1/chat/completions/" ||
+      url.pathname === "/chat/completions/"
+    ) {
+      return DEFAULT_OPENAI_ENDPOINT;
+    }
+    return trimmed.replace(/\/+$/, "");
+  } catch (_error) {
+    return trimmed;
+  }
+}
+
+function normalizeGeminiEndpoint(endpoint) {
+  const trimmed = String(endpoint || "").trim();
+  if (!trimmed) {
+    return DEFAULT_GEMINI_ENDPOINT;
+  }
+  return trimmed.replace(/\/+$/, "");
+}
+
+function normalizeSettingsEndpointByMode(mode, endpoint) {
+  const resolvedMode = normalizeApiMode(mode);
+  if (resolvedMode === "openai") {
+    return normalizeOpenAICompatibleEndpoint(endpoint);
+  }
+  if (resolvedMode === "gemini") {
+    return normalizeGeminiEndpoint(endpoint);
+  }
+  return String(endpoint || "").trim();
+}
+
+function normalizeApiConfigs(configs = []) {
+  if (!Array.isArray(configs)) {
+    return [];
+  }
+
+  return configs
+    .filter((item) => item && typeof item === "object")
+    .slice(0, 12)
+    .map((item, index) => {
+      const mode = normalizeApiMode(item.mode);
+      const fallbackName = `接口配置 ${index + 1}`;
+      return {
+        id: item.id || `api_cfg_${index}_${hashText(`${item.name || ""}-${item.endpoint || ""}`)}`,
+        name: String(item.name || fallbackName).trim().slice(0, 20) || fallbackName,
+        mode,
+        endpoint: normalizeSettingsEndpointByMode(mode, item.endpoint || ""),
+        token: normalizeApiConfigToken(item.token),
+        model:
+          mode === "generic"
+            ? ""
+            : String(item.model || getDefaultModelByMode(mode)).trim() || getDefaultModelByMode(mode),
+        updatedAt: Number(item.updatedAt) || Date.now()
+      };
+    });
+}
+
+function buildNormalizedSettingsSnapshot(source) {
+  const merged = {
+    ...DEFAULT_SETTINGS,
+    ...(source && typeof source === "object" ? source : {})
+  };
+  merged.mode = normalizeApiMode(merged.mode);
+  merged.endpoint = normalizeSettingsEndpointByMode(merged.mode, merged.endpoint);
+  merged.token = normalizeApiConfigToken(merged.token);
+  merged.model =
+    merged.mode === "generic"
+      ? ""
+      : String(merged.model || getDefaultModelByMode(merged.mode)).trim() ||
+        getDefaultModelByMode(merged.mode);
+  merged.apiConfigs = normalizeApiConfigs(merged.apiConfigs || []);
+  const activeConfig =
+    merged.apiConfigs.find((item) => item.id === merged.activeApiConfigId) || null;
+  if (!activeConfig) {
+    merged.activeApiConfigId = "";
+  } else {
+    merged.mode = normalizeApiMode(activeConfig.mode);
+    merged.endpoint = normalizeSettingsEndpointByMode(activeConfig.mode, activeConfig.endpoint);
+    merged.token = normalizeApiConfigToken(activeConfig.token);
+    merged.model =
+      merged.mode === "generic"
+        ? ""
+        : String(activeConfig.model || getDefaultModelByMode(activeConfig.mode)).trim() ||
+          getDefaultModelByMode(activeConfig.mode);
+  }
+  return merged;
+}
+
+function loadSettings() {
+  const raw = safeGetItem(SETTINGS_KEY);
+  if (!raw) {
+    return buildNormalizedSettingsSnapshot(DEFAULT_SETTINGS);
+  }
+
+  try {
+    return buildNormalizedSettingsSnapshot(JSON.parse(raw));
+  } catch (_error) {
+    return buildNormalizedSettingsSnapshot(DEFAULT_SETTINGS);
+  }
+}
+
+function resolveGeminiGenerateEndpoint(endpoint, model) {
+  const normalizedEndpoint = normalizeGeminiEndpoint(endpoint);
+  const normalizedModel = String(model || DEFAULT_GEMINI_MODEL).trim() || DEFAULT_GEMINI_MODEL;
+  if (normalizedEndpoint.includes(":generateContent")) {
+    return normalizedEndpoint;
+  }
+  if (/\/models\/[^/]+$/.test(normalizedEndpoint)) {
+    return `${normalizedEndpoint}:generateContent`;
+  }
+  if (normalizedEndpoint.endsWith("/models")) {
+    return `${normalizedEndpoint}/${normalizedModel}:generateContent`;
+  }
+  return `${normalizedEndpoint}/models/${normalizedModel}:generateContent`;
+}
+
+function resolveApiRequestEndpoint(settings) {
+  const resolvedMode = normalizeApiMode(settings.mode);
+  if (resolvedMode === "openai") {
+    return normalizeOpenAICompatibleEndpoint(settings.endpoint);
+  }
+  if (resolvedMode === "gemini") {
+    return resolveGeminiGenerateEndpoint(settings.endpoint, settings.model);
+  }
+  return String(settings.endpoint || "").trim();
+}
+
+function buildRequestHeaders(settings) {
+  const headers = {
+    "Content-Type": "application/json"
+  };
+  const token = normalizeApiConfigToken(settings.token);
+  if (!token) {
+    return headers;
+  }
+  if (normalizeApiMode(settings.mode) === "gemini") {
+    headers["x-goog-api-key"] = token;
+    return headers;
+  }
+  headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
+function validateApiSettings(settings, purpose = "请求") {
+  const requestEndpoint = resolveApiRequestEndpoint(settings);
+  settings.endpoint = requestEndpoint;
+  if (!requestEndpoint) {
+    throw new Error(`未配置 API 地址，无法执行${purpose}。`);
+  }
+  if (normalizeApiMode(settings.mode) === "openai" && !settings.model) {
+    throw new Error("DeepSeek / OpenAI 兼容模式需要填写模型名称。");
+  }
+  if (normalizeApiMode(settings.mode) === "gemini" && !settings.token) {
+    throw new Error("Gemini 模式需要填写 API Key。");
+  }
+  return requestEndpoint;
+}
+
+function buildGeminiSafetySettings() {
+  return [
+    "HARM_CATEGORY_HARASSMENT",
+    "HARM_CATEGORY_HATE_SPEECH",
+    "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+    "HARM_CATEGORY_DANGEROUS_CONTENT",
+    "HARM_CATEGORY_CIVIC_INTEGRITY"
+  ].map((category) => ({
+    category,
+    threshold: "BLOCK_NONE"
+  }));
+}
+
+function buildChatRequestBody(settings, systemPrompt, history = []) {
+  const mode = normalizeApiMode(settings.mode);
+  if (mode === "openai") {
+    return {
+      model: settings.model || DEFAULT_DEEPSEEK_MODEL,
+      temperature: DEFAULT_TEMPERATURE,
+      messages: [
+        {
+          role: "system",
+          content: systemPrompt
+        },
+        ...history.map((message) => ({
+          role: message.role === "assistant" ? "assistant" : "user",
+          content: String(message.text || "").trim()
+        }))
+      ],
+      stream: false
+    };
+  }
+
+  if (mode === "gemini") {
+    return {
+      systemInstruction: {
+        parts: [{ text: systemPrompt }]
+      },
+      contents: history.map((message) => ({
+        role: message.role === "assistant" ? "model" : "user",
+        parts: [{ text: String(message.text || "").trim() }]
+      })),
+      safetySettings: buildGeminiSafetySettings(),
+      generationConfig: {
+        temperature: DEFAULT_TEMPERATURE
+      }
+    };
+  }
+
+  return {
+    prompt: [
+      systemPrompt,
+      "请根据以下聊天记录继续回复。",
+      ...history.map((message) => `${message.role === "assistant" ? "角色" : "用户"}：${message.text}`)
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+    intent: "schedule_invite"
+  };
+}
+
+function resolveMessage(payload) {
+  if (typeof payload === "string") {
+    return payload.trim();
+  }
+  const geminiParts = payload?.candidates?.[0]?.content?.parts;
+  if (Array.isArray(geminiParts)) {
+    const merged = geminiParts
+      .map((item) => item?.text || "")
+      .join("\n")
+      .trim();
+    if (merged) {
+      return merged;
+    }
+  }
+  const content = payload?.choices?.[0]?.message?.content;
+  if (typeof content === "string" && content.trim()) {
+    return content.trim();
+  }
+  if (Array.isArray(content)) {
+    const merged = content
+      .map((item) => item?.text || item?.content || "")
+      .join("\n")
+      .trim();
+    if (merged) {
+      return merged;
+    }
+  }
+  return (
+    payload?.message ||
+    payload?.text ||
+    payload?.content ||
+    payload?.data?.message ||
+    payload?.output?.[0]?.content?.[0]?.text ||
+    ""
+  );
+}
+
+function createPrivacySession(options = {}) {
+  return window.PulsePrivacyCover?.createSession?.(options) || null;
+}
+
+function preparePromptWithPrivacy(value, session) {
+  if (!session || !window.PulsePrivacyCover?.preparePrompt) {
+    return String(value || "");
+  }
+  return window.PulsePrivacyCover.preparePrompt(value, session);
+}
+
+function encodeTextWithPrivacy(value, session) {
+  if (!session || !window.PulsePrivacyCover?.encodeText) {
+    return String(value || "");
+  }
+  return window.PulsePrivacyCover.encodeText(value, session);
+}
+
+function encodeValueWithPrivacy(value, session) {
+  if (!session || !window.PulsePrivacyCover?.encodeValue) {
+    return value;
+  }
+  return window.PulsePrivacyCover.encodeValue(value, session);
+}
+
+function applyPrivacyToLogEntry(entry, session) {
+  if (!session || !window.PulsePrivacyCover?.applyPrivacyToLogEntry) {
+    return entry;
+  }
+  return window.PulsePrivacyCover.applyPrivacyToLogEntry(entry, session);
+}
+
 function isEmbeddedView() {
   try {
     return new URLSearchParams(window.location.search).get("embed") === "1";
@@ -163,13 +522,158 @@ function normalizeContact(contact, index = 0) {
   const name = String(source.name || "").trim() || `角色 ${index + 1}`;
   return {
     id: String(source.id || `contact_${index}_${hashText(name)}`),
-    name
+    name,
+    avatarImage: String(source.avatarImage || "").trim(),
+    avatarText: String(source.avatarText || "").trim() || name.slice(0, 2) || "角色",
+    personaPrompt: String(source.personaPrompt || "").trim(),
+    specialUserPersona: String(source.specialUserPersona || "").trim()
   };
 }
 
 function loadContacts() {
   const raw = readStoredJson(MESSAGE_CONTACTS_KEY, []);
   return Array.isArray(raw) ? raw.map((contact, index) => normalizeContact(contact, index)) : [];
+}
+
+function getContactById(contactId = "") {
+  const resolvedId = String(contactId || "").trim();
+  return state.contacts.find((contact) => contact.id === resolvedId) || null;
+}
+
+function buildScheduleInviteTimeLabel(entry) {
+  if (!entry || entry.scheduleType === "day") {
+    return `${entry?.date || getTodayValue()} · 全天`;
+  }
+  if (entry.scheduleType === "week") {
+    return `每周${formatWeekday(entry.date, "long")} · ${entry.startTime}-${entry.endTime}`;
+  }
+  return `${entry.date} · ${entry.startTime}-${entry.endTime}`;
+}
+
+function buildScheduleInviteMessageText(entry) {
+  const safeEntry = entry && typeof entry === "object" ? entry : {};
+  return [
+    "[日程邀请]",
+    `日程名称：${String(safeEntry.title || "").trim()}`,
+    `日程时间：${buildScheduleInviteTimeLabel(safeEntry)}`
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function normalizeConversationMessage(message, index = 0) {
+  const source = message && typeof message === "object" ? message : {};
+  const isInvite = String(source.messageType || "").trim() === "schedule_invite";
+  const inviteEntry = {
+    title: String(source.scheduleInviteTitle || "").trim(),
+    date: String(source.scheduleInviteDate || "").trim(),
+    startTime: String(source.scheduleInviteStartTime || "").trim(),
+    endTime: String(source.scheduleInviteEndTime || "").trim(),
+    scheduleType: ["day", "hour", "week"].includes(source.scheduleInviteType)
+      ? source.scheduleInviteType
+      : "day"
+  };
+  const text = isInvite
+    ? buildScheduleInviteMessageText(inviteEntry)
+    : String(source.text || "").trim();
+  return {
+    id: String(source.id || `conversation_message_${Date.now()}_${index}`),
+    role: source.role === "assistant" ? "assistant" : "user",
+    messageType: isInvite ? "schedule_invite" : "text",
+    text,
+    scheduleInviteTitle: isInvite ? inviteEntry.title : "",
+    scheduleInviteDate: isInvite ? inviteEntry.date : "",
+    scheduleInviteStartTime: isInvite ? inviteEntry.startTime : "",
+    scheduleInviteEndTime: isInvite ? inviteEntry.endTime : "",
+    scheduleInviteType: isInvite ? inviteEntry.scheduleType : "",
+    needsReply: source.role === "assistant" ? false : Boolean(source.needsReply),
+    time:
+      /^\d{1,2}:\d{2}$/.test(String(source.time || "").trim())
+        ? String(source.time).trim()
+        : formatTimeLabel(Date.now()),
+    createdAt: Number(source.createdAt) || Date.now() + index
+  };
+}
+
+function normalizeConversation(conversation, index = 0) {
+  const source = conversation && typeof conversation === "object" ? conversation : {};
+  if (!source.contactId) {
+    return null;
+  }
+  const messages = Array.isArray(source.messages)
+    ? source.messages
+        .map((item, messageIndex) => normalizeConversationMessage(item, messageIndex))
+        .filter((item) => item.text)
+    : [];
+  return {
+    id: String(source.id || `conversation_${index}_${hashText(source.contactId)}`),
+    contactId: String(source.contactId || "").trim(),
+    contactNameSnapshot: String(source.contactNameSnapshot || "").trim(),
+    contactAvatarImageSnapshot: String(source.contactAvatarImageSnapshot || "").trim(),
+    contactAvatarTextSnapshot: String(source.contactAvatarTextSnapshot || "").trim(),
+    messages,
+    awarenessCounter: Math.max(0, Number.parseInt(String(source.awarenessCounter || 0), 10) || 0),
+    memorySummaryCounter: Math.max(
+      0,
+      Number.parseInt(String(source.memorySummaryCounter || 0), 10) || 0
+    ),
+    memorySummaryLastMessageCount: Math.max(
+      0,
+      Number.parseInt(String(source.memorySummaryLastMessageCount || 0), 10) || 0
+    ),
+    updatedAt: Number(source.updatedAt) || messages[messages.length - 1]?.createdAt || Date.now()
+  };
+}
+
+function loadConversations() {
+  const raw = safeGetItem(MESSAGE_THREADS_KEY) || safeGetItem(DIRECT_MESSAGES_KEY);
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.map((item, index) => normalizeConversation(item, index)).filter(Boolean)
+      : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function persistConversations(conversations = []) {
+  safeSetItem(MESSAGE_THREADS_KEY, JSON.stringify(conversations));
+}
+
+function getConversationByContactId(contactId = "") {
+  const conversations = loadConversations();
+  return conversations.find((item) => item.contactId === String(contactId || "").trim()) || null;
+}
+
+function createConversation(contact) {
+  const normalizedContact = contact && typeof contact === "object" ? contact : null;
+  if (!normalizedContact?.id) {
+    return null;
+  }
+  const existingConversation = getConversationByContactId(normalizedContact.id);
+  if (existingConversation) {
+    return existingConversation;
+  }
+  return normalizeConversation(
+    {
+      id: `conversation_${Date.now()}_${hashText(normalizedContact.id)}`,
+      contactId: normalizedContact.id,
+      contactNameSnapshot: normalizedContact.name,
+      contactAvatarImageSnapshot: normalizedContact.avatarImage || "",
+      contactAvatarTextSnapshot: normalizedContact.avatarText || normalizedContact.name.slice(0, 2),
+      messages: [],
+      awarenessCounter: 0,
+      memorySummaryCounter: 0,
+      memorySummaryLastMessageCount: 0,
+      updatedAt: Date.now()
+    },
+    0
+  );
 }
 
 function normalizeScheduleEntry(entry, index = 0) {
@@ -202,6 +706,10 @@ function normalizeScheduleEntry(entry, index = 0) {
     date,
     startTime: normalizeTimeValue(source.startTime, "09:00"),
     endTime: normalizeTimeValue(source.endTime, "10:00"),
+    inviteDecisions:
+      source.inviteDecisions && typeof source.inviteDecisions === "object"
+        ? { ...source.inviteDecisions }
+        : {},
     createdAt: Number(source.createdAt) || Date.now(),
     updatedAt: Number(source.updatedAt) || Date.now()
   };
@@ -216,6 +724,400 @@ function loadScheduleEntries() {
 
 function persistScheduleEntries() {
   safeSetItem(SCHEDULE_ENTRIES_KEY, JSON.stringify(state.entries));
+}
+
+function formatTimeLabel(timestamp = Date.now()) {
+  const date = new Date(Number(timestamp) || Date.now());
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function prependGlobalPromptGuard(text) {
+  const resolvedText = String(text || "").trim();
+  if (!resolvedText) {
+    return GLOBAL_PROMPT_GUARD;
+  }
+  if (resolvedText.startsWith(GLOBAL_PROMPT_GUARD)) {
+    return resolvedText;
+  }
+  return `${GLOBAL_PROMPT_GUARD}\n\n${resolvedText}`;
+}
+
+function parseJsonLikeContent(value) {
+  if (value && typeof value === "object") {
+    return null;
+  }
+
+  const text = String(value || "").trim();
+  if (!text) {
+    return null;
+  }
+
+  const candidates = [text];
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenceMatch?.[1]) {
+    candidates.push(fenceMatch[1].trim());
+  }
+  const objectStart = text.indexOf("{");
+  const objectEnd = text.lastIndexOf("}");
+  if (objectStart >= 0 && objectEnd > objectStart) {
+    candidates.push(text.slice(objectStart, objectEnd + 1));
+  }
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch (_error) {
+    }
+  }
+  return null;
+}
+
+function collapseConversationMessagesByTurn(messages = []) {
+  if (!Array.isArray(messages) || !messages.length) {
+    return [];
+  }
+
+  return messages.reduce((collapsed, message) => {
+    const text = String(message?.text || "").trim();
+    if (!text) {
+      return collapsed;
+    }
+
+    const role = message?.role === "assistant" ? "assistant" : "user";
+    const lastMessage = collapsed[collapsed.length - 1] || null;
+    if (lastMessage && lastMessage.role === role) {
+      lastMessage.text = `${lastMessage.text}\n${text}`;
+      lastMessage.createdAt = Math.max(
+        Number(lastMessage.createdAt) || 0,
+        Number(message?.createdAt) || 0
+      );
+      if (message?.time) {
+        lastMessage.time = message.time;
+      }
+      return collapsed;
+    }
+
+    collapsed.push({
+      role,
+      text,
+      time: message?.time || "",
+      createdAt: Number(message?.createdAt) || Date.now()
+    });
+    return collapsed;
+  }, []);
+}
+
+function selectConversationHistory(messages = [], rounds = DEFAULT_MESSAGE_HISTORY_ROUNDS) {
+  const collapsed = collapseConversationMessagesByTurn(messages);
+  if (!collapsed.length) {
+    return [];
+  }
+
+  const resolvedRounds = Math.max(
+    1,
+    Number.parseInt(String(rounds || DEFAULT_MESSAGE_HISTORY_ROUNDS), 10) || DEFAULT_MESSAGE_HISTORY_ROUNDS
+  );
+  const maxTurns = resolvedRounds * 2;
+  return collapsed.slice(-maxTurns);
+}
+
+function saveConversation(conversation) {
+  const normalized = normalizeConversation(conversation, 0);
+  if (!normalized) {
+    return null;
+  }
+  const conversations = loadConversations();
+  const existingIndex = conversations.findIndex(
+    (item) => item.id === normalized.id || item.contactId === normalized.contactId
+  );
+  if (existingIndex >= 0) {
+    conversations[existingIndex] = normalized;
+  } else {
+    conversations.unshift(normalized);
+  }
+  const sorted = conversations
+    .map((item, index) => normalizeConversation(item, index))
+    .filter(Boolean)
+    .sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0));
+  persistConversations(sorted);
+  return sorted.find((item) => item.id === normalized.id || item.contactId === normalized.contactId) || null;
+}
+
+function appendMessagesToConversation(contact, messages = []) {
+  const targetContact = contact && typeof contact === "object" ? contact : null;
+  if (!targetContact?.id) {
+    return null;
+  }
+
+  const existingConversation = getConversationByContactId(targetContact.id) || createConversation(targetContact);
+  if (!existingConversation) {
+    return null;
+  }
+
+  const normalizedMessages = (Array.isArray(messages) ? messages : [])
+    .map((message, index) => normalizeConversationMessage(message, existingConversation.messages.length + index))
+    .filter((message) => message.text);
+  const nextConversation = {
+    ...existingConversation,
+    contactNameSnapshot: targetContact.name,
+    contactAvatarImageSnapshot: targetContact.avatarImage || "",
+    contactAvatarTextSnapshot: targetContact.avatarText || targetContact.name.slice(0, 2),
+    messages: [...existingConversation.messages, ...normalizedMessages]
+  };
+  nextConversation.updatedAt =
+    normalizedMessages[normalizedMessages.length - 1]?.createdAt ||
+    nextConversation.updatedAt ||
+    Date.now();
+  return saveConversation(nextConversation);
+}
+
+function getScheduleInviteCompanionNames(entry, inviteeId = "") {
+  return getEntryParticipants(entry)
+    .filter((participant) => participant.type === "contact")
+    .filter((participant) => participant.id !== String(inviteeId || "").trim())
+    .map((participant) => participant.label)
+    .filter(Boolean);
+}
+
+function doEntriesOverlap(left, right) {
+  if (!left || !right) {
+    return false;
+  }
+  const leftAllDay = left.scheduleType === "day";
+  const rightAllDay = right.scheduleType === "day";
+  if (leftAllDay || rightAllDay) {
+    return true;
+  }
+  const leftStart = parseLocalDateTimeValue(left.date, left.startTime);
+  const leftEnd = parseLocalDateTimeValue(left.date, left.endTime);
+  const rightStart = parseLocalDateTimeValue(right.date, right.startTime);
+  const rightEnd = parseLocalDateTimeValue(right.date, right.endTime);
+  if (!leftStart || !leftEnd || !rightStart || !rightEnd) {
+    return false;
+  }
+  return leftStart < rightEnd && rightStart < leftEnd;
+}
+
+function getEntriesVisibleToContact(contactId = "", dateText = "") {
+  const resolvedContactId = String(contactId || "").trim();
+  return state.entries.filter((entry) => {
+    if (dateText && !entryOccursOnDate(entry, dateText)) {
+      return false;
+    }
+    if (entry.companionContactIds.includes(resolvedContactId)) {
+      return true;
+    }
+    if (entry.ownerType === "contact") {
+      return entry.ownerId === resolvedContactId || entry.companionContactIds.includes(resolvedContactId);
+    }
+    if (entry.visibilityMode === "all") {
+      return true;
+    }
+    return entry.visibleContactIds.includes(resolvedContactId);
+  });
+}
+
+function buildInviteConflictContext(contact, inviteEntry) {
+  const relevantEntries = getEntriesVisibleToContact(contact?.id || "", inviteEntry.date)
+    .filter((entry) => entry.id !== inviteEntry.id)
+    .filter((entry) => doEntriesOverlap(entry, inviteEntry))
+    .slice(0, 4);
+
+  if (!relevantEntries.length) {
+    return "你当前没有明确冲突的已知行程。";
+  }
+
+  return [
+    "你当前已知的同时间段相关行程：",
+    ...relevantEntries.map((entry) => `- ${entry.title} · ${buildScheduleInviteTimeLabel(entry)}`)
+  ].join("\n");
+}
+
+function buildScheduleInviteSystemPrompt(profile, contact, inviteEntry, options = {}) {
+  const companionNames = Array.isArray(options.companionNames) ? options.companionNames : [];
+  return prependGlobalPromptGuard([
+    `你叫 ${contact.name}。`,
+    `现在是你和 ${profile.username || DEFAULT_PROFILE.username} 在即时聊天软件里的一对一私聊。`,
+    "这不是任务扮演，而是你本人正在收到对方发来的一个日程邀请。",
+    `你的稳定性格、表达习惯和关系底色：${
+      contact.personaPrompt || "自然、友好，会根据关系和现实安排做决定。"
+    }。`,
+    `正在和你聊天的用户昵称：${profile.username || DEFAULT_PROFILE.username}。`,
+    `用户整体画像：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt || "用户有自己稳定的人设和表达方式。"}。`,
+    contact.specialUserPersona
+      ? `你对这个用户的特别认知：${contact.specialUserPersona}。`
+      : "",
+    [
+      "你需要先判断是否接受这个邀请，再给出一条自然聊天式回复。",
+      "接受时要显得像真的愿意赴约；拒绝时要像真实生活中的婉拒，可以简短带一点理由，但不要冷冰冰。",
+      "优先考虑你的人设、和用户的关系、你当前已知的行程冲突，以及这个邀请本身是否合理。",
+      "如果没有明显冲突且关系允许，默认更偏向接受；如果确实撞时间、明显不合适，或以你的性格不想去，就拒绝。"
+    ].join(" "),
+    buildInviteConflictContext(contact, inviteEntry),
+    companionNames.length
+      ? `除你之外，这次同行人还有：${companionNames.join("、")}。`
+      : "这次邀请没有其他角色同行人。",
+    '输出必须是严格 JSON：{"decision":"accept|reject","reply":"自然回复"}。',
+    "reply 只写你真正会发出去的话，不要解释 JSON，不要加 markdown，不要附加其他字段。"
+  ]
+    .filter(Boolean)
+    .join("\n\n"));
+}
+
+function buildScheduleInviteUserInstruction(inviteEntry, companionNames = []) {
+  return [
+    "这是用户刚刚发给你的日程邀请卡片：",
+    `- 日程名称：${inviteEntry.title}`,
+    `- 日程时间：${buildScheduleInviteTimeLabel(inviteEntry)}`,
+    companionNames.length ? `- 其他同行人：${companionNames.join("、")}` : "",
+    "请按要求返回 JSON。"
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function parseScheduleInviteDecision(payload) {
+  const parsed =
+    (payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null) ||
+    parseJsonLikeContent(payload) ||
+    parseJsonLikeContent(resolveMessage(payload));
+  const decision = String(parsed?.decision || "").trim().toLowerCase();
+  const reply = String(parsed?.reply || "").trim();
+  if (!["accept", "reject"].includes(decision) || !reply) {
+    throw new Error("日程邀请响应格式错误：缺少有效的 accept/reject 决策或回复文本。");
+  }
+  return {
+    decision,
+    reply
+  };
+}
+
+function splitAssistantReplyText(replyText = "") {
+  return String(replyText || "")
+    .split(/\n+/)
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+}
+
+async function requestScheduleInviteDecision(settings, profile, contact, inviteEntry, history = []) {
+  const requestEndpoint = validateApiSettings(settings, "日程邀请");
+  const companionNames = getScheduleInviteCompanionNames(inviteEntry, contact.id);
+  const systemPrompt = buildScheduleInviteSystemPrompt(profile, contact, inviteEntry, {
+    companionNames
+  });
+  const userInstruction = buildScheduleInviteUserInstruction(inviteEntry, companionNames);
+  const collapsedHistory = selectConversationHistory(history, settings.messagePromptSettings?.historyRounds);
+  const requestHistory = collapsedHistory.concat([
+    {
+      role: "user",
+      text: buildScheduleInviteMessageText(inviteEntry)
+    },
+    {
+      role: "user",
+      text: userInstruction
+    }
+  ]);
+  const privacySession = createPrivacySession({
+    settings,
+    profile,
+    contact,
+    inviteEntry,
+    history: requestHistory,
+    companionNames,
+    systemPrompt,
+    userInstruction,
+    relatedScheduleEntries: getEntriesVisibleToContact(contact.id, inviteEntry.date)
+  });
+  const encodedSystemPrompt = preparePromptWithPrivacy(systemPrompt, privacySession);
+  const encodedHistory = encodeValueWithPrivacy(requestHistory, privacySession);
+  const requestBody = buildChatRequestBody(settings, encodedSystemPrompt, encodedHistory);
+  const logEntry = applyPrivacyToLogEntry(
+    {
+      source: "schedule",
+      action: "schedule_invite",
+      summary: `角色：${contact.name} · 日程邀请「${inviteEntry.title}」`,
+      endpoint: requestEndpoint,
+      mode: normalizeApiMode(settings.mode),
+      prompt: encodedSystemPrompt,
+      requestBody
+    },
+    privacySession
+  );
+  let logged = false;
+
+  try {
+    const response = await fetch(requestEndpoint, {
+      method: "POST",
+      headers: buildRequestHeaders(settings),
+      body: JSON.stringify(requestBody)
+    });
+    const rawResponse = await response.text();
+    let payload = rawResponse;
+    try {
+      payload = JSON.parse(rawResponse);
+    } catch (_error) {
+      payload = rawResponse;
+    }
+
+    if (!response.ok) {
+      appendApiLog({
+        ...logEntry,
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: `接口请求失败：HTTP ${response.status}`
+      });
+      logged = true;
+      throw new Error(`接口请求失败：HTTP ${response.status}`);
+    }
+
+    const decision = parseScheduleInviteDecision(payload);
+    appendApiLog({
+      ...logEntry,
+      status: "success",
+      statusCode: response.status,
+      responseText: rawResponse,
+      responseBody: payload
+    });
+    logged = true;
+    return decision;
+  } catch (error) {
+    if (!logged) {
+      appendApiLog({
+        ...logEntry,
+        status: "error",
+        errorMessage: error?.message || "请求失败"
+      });
+    }
+    throw error;
+  }
+}
+
+async function runTasksWithConcurrency(items = [], limit = MAX_SCHEDULE_INVITE_CONCURRENCY, worker) {
+  const queue = Array.isArray(items) ? items.slice() : [];
+  const results = [];
+  const resolvedLimit = Math.max(1, Math.min(MAX_SCHEDULE_INVITE_CONCURRENCY, Number(limit) || 1));
+
+  async function consume() {
+    while (queue.length) {
+      const item = queue.shift();
+      if (typeof worker !== "function") {
+        results.push({ item, status: "error", error: new Error("缺少任务处理函数。") });
+        continue;
+      }
+      try {
+        const value = await worker(item);
+        results.push({ item, status: "success", value });
+      } catch (error) {
+        results.push({ item, status: "error", error });
+      }
+      await sleep(120);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(resolvedLimit, queue.length || 1) }, () => consume()));
+  return results;
 }
 
 function getTodayValue() {
@@ -330,6 +1232,7 @@ function createDefaultDraft(dateText = getTodayValue(), overrides = {}) {
     date: dateText,
     startTime: "09:00",
     endTime: "10:00",
+    notifyCompanions: false,
     ...overrides
   };
 }
@@ -502,7 +1405,7 @@ function setEditorStatus(message = "", tone = "") {
 }
 
 function getContactName(contactId = "") {
-  return state.contacts.find((contact) => contact.id === contactId)?.name || "角色";
+  return getContactById(contactId)?.name || "角色";
 }
 
 function entryOccursOnDate(entry, dateText) {
@@ -1064,7 +1967,8 @@ function setEditorOpen(isOpen, options = {}) {
         visibleContactIds: [...entry.visibleContactIds],
         date: entry.date,
         startTime: entry.startTime,
-        endTime: entry.endTime
+        endTime: entry.endTime,
+        notifyCompanions: false
       };
     }
   } else {
@@ -1277,6 +2181,9 @@ function renderEditor() {
   if (scheduleEndTimeInputEl) {
     scheduleEndTimeInputEl.value = state.draft.endTime || "10:00";
   }
+  if (scheduleNotifyCompanionsInputEl) {
+    scheduleNotifyCompanionsInputEl.checked = Boolean(state.draft.notifyCompanions);
+  }
 
   renderOwnerContactOptions();
   renderVisibilityOptions();
@@ -1285,6 +2192,10 @@ function renderEditor() {
   const showContactField = state.draft.ownerType === "contact";
   scheduleOwnerContactFieldEl?.toggleAttribute("hidden", !showContactField);
   scheduleVisibilityFieldEl?.toggleAttribute("hidden", showContactField);
+  scheduleNotifyCompanionsFieldEl?.toggleAttribute(
+    "hidden",
+    state.editorMode !== "create" || !state.draft.companionContactIds.length
+  );
 
   const showTimeGrid = state.draft.scheduleType !== "day";
   scheduleTimeGridEl?.toggleAttribute("hidden", !showTimeGrid);
@@ -1324,16 +2235,18 @@ function collectEditorDraft() {
     visibleContactIds,
     date: String(scheduleDateInputEl?.value || "").trim() || state.cursorDate,
     startTime: String(scheduleStartTimeInputEl?.value || "09:00").trim(),
-    endTime: String(scheduleEndTimeInputEl?.value || "10:00").trim()
+    endTime: String(scheduleEndTimeInputEl?.value || "10:00").trim(),
+    notifyCompanions: Boolean(scheduleNotifyCompanionsInputEl?.checked)
   });
 }
 
 function saveDraft(draft) {
+  const existingEntry = state.entries.find((entry) => entry.id === state.editingEntryId);
   const base = {
     ...draft,
     id: state.editingEntryId || `schedule_${Date.now()}_${hashText(`${draft.title}-${draft.date}`)}`,
-    createdAt:
-      state.entries.find((entry) => entry.id === state.editingEntryId)?.createdAt || Date.now(),
+    inviteDecisions: existingEntry?.inviteDecisions || {},
+    createdAt: existingEntry?.createdAt || Date.now(),
     updatedAt: Date.now()
   };
   const normalized = normalizeScheduleEntry(base, state.entries.length);
@@ -1344,9 +2257,134 @@ function saveDraft(draft) {
   }
   persistScheduleEntries();
   renderSchedulePage();
+  return normalized;
 }
 
-function handleEditorSubmit(event) {
+async function notifyCompanionsForEntry(entry) {
+  const inviteEntry = normalizeScheduleEntry(entry, 0);
+  const inviteeIds = [...new Set(inviteEntry.companionContactIds.map((item) => String(item || "").trim()).filter(Boolean))];
+  if (!inviteeIds.length) {
+    return {
+      total: 0,
+      acceptedCount: 0,
+      rejectedCount: 0,
+      failedCount: 0
+    };
+  }
+
+  const settings = loadSettings();
+  const results = await runTasksWithConcurrency(
+    inviteeIds,
+    MAX_SCHEDULE_INVITE_CONCURRENCY,
+    async (contactId) => {
+      const contact = getContactById(contactId);
+      if (!contact) {
+        throw new Error("未找到同行人角色。");
+      }
+      const existingConversation = getConversationByContactId(contact.id) || createConversation(contact);
+      const historyMessages = Array.isArray(existingConversation?.messages)
+        ? existingConversation.messages.map((message) => ({ ...message }))
+        : [];
+      const inviteTimestamp = Date.now();
+      appendMessagesToConversation(contact, [
+        {
+          id: `message_${inviteTimestamp}_${hashText(`${inviteEntry.id}_${contact.id}`)}`,
+          role: "user",
+          messageType: "schedule_invite",
+          scheduleInviteTitle: inviteEntry.title,
+          scheduleInviteDate: inviteEntry.date,
+          scheduleInviteStartTime: inviteEntry.startTime,
+          scheduleInviteEndTime: inviteEntry.endTime,
+          scheduleInviteType: inviteEntry.scheduleType,
+          needsReply: false,
+          time: formatTimeLabel(inviteTimestamp),
+          createdAt: inviteTimestamp
+        }
+      ]);
+      const decision = await requestScheduleInviteDecision(
+        settings,
+        state.profile,
+        contact,
+        inviteEntry,
+        historyMessages
+      );
+      const replyLines = splitAssistantReplyText(decision.reply);
+      if (replyLines.length) {
+        appendMessagesToConversation(
+          contact,
+          replyLines.map((line, index) => ({
+            id: `message_${Date.now()}_${index}_${hashText(`${contact.id}_${line}`)}`,
+            role: "assistant",
+            text: line,
+            time: formatTimeLabel(Date.now()),
+            createdAt: Date.now() + index
+          }))
+        );
+      }
+      return {
+        contactId: contact.id,
+        contactName: contact.name,
+        decision: decision.decision
+      };
+    }
+  );
+
+  const resultMap = {};
+  let acceptedCount = 0;
+  let rejectedCount = 0;
+  let failedCount = 0;
+  results.forEach((result) => {
+    const contactId = String(result?.item || "").trim();
+    if (result.status !== "success") {
+      failedCount += 1;
+      return;
+    }
+    const decision = String(result.value?.decision || "").trim();
+    if (!contactId || !decision) {
+      failedCount += 1;
+      return;
+    }
+    resultMap[contactId] = decision;
+    if (decision === "accept") {
+      acceptedCount += 1;
+    } else if (decision === "reject") {
+      rejectedCount += 1;
+    }
+  });
+
+  state.entries = state.entries.map((currentEntry, index) => {
+    if (currentEntry.id !== inviteEntry.id) {
+      return currentEntry;
+    }
+    const nextInviteDecisions = {
+      ...(currentEntry.inviteDecisions || {}),
+      ...resultMap
+    };
+    const nextCompanionIds = currentEntry.companionContactIds.filter(
+      (contactId) => nextInviteDecisions[contactId] !== "reject"
+    );
+    return normalizeScheduleEntry(
+      {
+        ...currentEntry,
+        companionContactIds: nextCompanionIds,
+        inviteDecisions: nextInviteDecisions,
+        updatedAt: Date.now()
+      },
+      index
+    );
+  });
+  persistScheduleEntries();
+  renderSchedulePage();
+
+  return {
+    total: inviteeIds.length,
+    acceptedCount,
+    rejectedCount,
+    failedCount
+  };
+}
+
+async function handleEditorSubmit(event) {
   event.preventDefault();
   const draft = collectEditorDraft();
 
@@ -1376,8 +2414,33 @@ function handleEditorSubmit(event) {
   }
 
   const actionMode = state.editorMode;
-  saveDraft(draft);
+  const savedEntry = saveDraft(draft);
   setEditorOpen(false);
+  if (actionMode === "create" && draft.notifyCompanions && savedEntry?.companionContactIds.length) {
+    setStatus("日程已新增，正在通知同行人…", "success");
+    try {
+      const summary = await notifyCompanionsForEntry(savedEntry);
+      const summaryParts = [];
+      if (summary.acceptedCount) {
+        summaryParts.push(`${summary.acceptedCount} 位接受`);
+      }
+      if (summary.rejectedCount) {
+        summaryParts.push(`${summary.rejectedCount} 位拒绝`);
+      }
+      if (summary.failedCount) {
+        summaryParts.push(`${summary.failedCount} 位失败`);
+      }
+      setStatus(
+        summary.total
+          ? `日程已新增，同行人邀请结果：${summaryParts.join("，") || "暂无返回结果"}。`
+          : "日程已新增，没有可通知的角色同行人。",
+        summary.failedCount && !summary.acceptedCount && !summary.rejectedCount ? "error" : "success"
+      );
+    } catch (error) {
+      setStatus(`日程已新增，但通知同行人失败：${error?.message || "请求失败"}`, "error");
+    }
+    return;
+  }
   setStatus(actionMode === "edit" ? "日程已更新。" : "日程已新增。", "success");
 }
 
@@ -1535,7 +2598,7 @@ function attachEvents() {
       ...state.draft,
       ownerId: String(scheduleOwnerContactSelectEl.value || "").trim()
     });
-    renderCompanionOptions();
+    renderEditor();
     setEditorStatus("");
   });
 
@@ -1567,7 +2630,18 @@ function attachEvents() {
     state.draft = {
       ...state.draft,
       companionIncludesUser: draft.companionIncludesUser,
-      companionContactIds: draft.companionContactIds
+      companionContactIds: draft.companionContactIds,
+      notifyCompanions:
+        draft.companionContactIds.length > 0 && Boolean(scheduleNotifyCompanionsInputEl?.checked)
+    };
+    renderEditor();
+    setEditorStatus("");
+  });
+
+  scheduleNotifyCompanionsInputEl?.addEventListener("change", () => {
+    state.draft = {
+      ...state.draft,
+      notifyCompanions: Boolean(scheduleNotifyCompanionsInputEl.checked)
     };
     setEditorStatus("");
   });

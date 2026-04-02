@@ -620,6 +620,36 @@ function buildLocationMessageText(locationName, coordinates) {
   return ["[定位消息]", `位置名称：${locationName}`, `坐标：${coordinates}`].join("\n");
 }
 
+function buildScheduleInviteTimeText(
+  dateText = "",
+  startTime = "",
+  endTime = "",
+  scheduleType = "day"
+) {
+  const resolvedDate = String(dateText || "").trim();
+  if (scheduleType === "week") {
+    return `每周${formatWeekday(resolvedDate, "long")} · ${startTime || "--:--"}-${endTime || "--:--"}`;
+  }
+  if (scheduleType === "day") {
+    return `${resolvedDate || "--"} · 全天`;
+  }
+  return `${resolvedDate || "--"} · ${startTime || "--:--"}-${endTime || "--:--"}`;
+}
+
+function buildScheduleInviteMessageText(
+  title = "",
+  dateText = "",
+  startTime = "",
+  endTime = "",
+  scheduleType = "day"
+) {
+  return [
+    "[日程邀请]",
+    `日程名称：${title}`,
+    `日程时间：${buildScheduleInviteTimeText(dateText, startTime, endTime, scheduleType)}`
+  ].join("\n");
+}
+
 function buildImageMessageText() {
   return "[图片消息]";
 }
@@ -632,6 +662,14 @@ function isLocationConversationMessage(message) {
   return explicitType || hasPayload;
 }
 
+function isScheduleInviteConversationMessage(message) {
+  const explicitType = String(message?.messageType || "").trim() === "schedule_invite";
+  const hasPayload =
+    Boolean(String(message?.scheduleInviteTitle || "").trim()) &&
+    Boolean(String(message?.scheduleInviteDate || "").trim());
+  return explicitType || hasPayload;
+}
+
 function isImageConversationMessage(message) {
   const explicitType = String(message?.messageType || "").trim() === "image";
   const hasPayload = Boolean(String(message?.imageDataUrl || "").trim());
@@ -639,6 +677,9 @@ function isImageConversationMessage(message) {
 }
 
 function getConversationMessagePreviewText(message) {
+  if (isScheduleInviteConversationMessage(message)) {
+    return `🗓️ 日程邀请：${String(message.scheduleInviteTitle || "").trim() || "新的安排"}`;
+  }
   if (isLocationConversationMessage(message)) {
     return `📍 ${String(message.locationName || "").trim() || "分享了位置"}`;
   }
@@ -1106,6 +1147,54 @@ function normalizeMessagePromptSettings(source = {}) {
       typeof resolved.showContactAvatar === "boolean" ? resolved.showContactAvatar : true,
     showUserAvatar: typeof resolved.showUserAvatar === "boolean" ? resolved.showUserAvatar : true
   };
+}
+
+function normalizeWorldbookSelectionIds(ids = []) {
+  return [...new Set((Array.isArray(ids) ? ids : []).map((item) => String(item || "").trim()))].filter(
+    (id) => getWorldbookEntryById(id)
+  );
+}
+
+function repairPersistedChatWorldbookMounts(promptSettings = {}) {
+  const usedPromptSettings = normalizeMessagePromptSettings(promptSettings);
+  const usedWorldbookIds = normalizeWorldbookSelectionIds(usedPromptSettings.worldbookIds);
+  if (!usedPromptSettings.worldbookEnabled || !usedWorldbookIds.length) {
+    return usedPromptSettings;
+  }
+
+  const nextSettings = loadSettings();
+  const rawStoredPromptSettings =
+    nextSettings?.messagePromptSettings && typeof nextSettings.messagePromptSettings === "object"
+      ? nextSettings.messagePromptSettings
+      : {};
+  const storedPromptSettings = normalizeMessagePromptSettings(rawStoredPromptSettings);
+  const hasStoredWorldbookEnabled = Object.prototype.hasOwnProperty.call(
+    rawStoredPromptSettings,
+    "worldbookEnabled"
+  );
+  const hasStoredWorldbookIds = Object.prototype.hasOwnProperty.call(
+    rawStoredPromptSettings,
+    "worldbookIds"
+  );
+  const storedWorldbookIds = normalizeWorldbookSelectionIds(storedPromptSettings.worldbookIds);
+  const storedCoversUsedWorldbooks =
+    storedPromptSettings.worldbookEnabled &&
+    usedWorldbookIds.every((id) => storedWorldbookIds.includes(id));
+
+  if (hasStoredWorldbookEnabled && hasStoredWorldbookIds && storedCoversUsedWorldbooks) {
+    state.chatPromptSettings = storedPromptSettings;
+    return storedPromptSettings;
+  }
+
+  const repairedPromptSettings = normalizeMessagePromptSettings({
+    ...storedPromptSettings,
+    worldbookEnabled: true,
+    worldbookIds: usedWorldbookIds
+  });
+  nextSettings.messagePromptSettings = repairedPromptSettings;
+  persistSettings(nextSettings);
+  state.chatPromptSettings = repairedPromptSettings;
+  return repairedPromptSettings;
 }
 
 function normalizeMountedIds(value) {
@@ -1909,7 +1998,16 @@ function getWorldbookGroups() {
 
 function normalizeConversationMessage(message, index = 0) {
   const role = message?.role === "assistant" ? "assistant" : "user";
-  const messageType = isLocationConversationMessage(message)
+  const scheduleInviteTitle = String(message?.scheduleInviteTitle || "").trim();
+  const scheduleInviteDate = String(message?.scheduleInviteDate || "").trim();
+  const scheduleInviteStartTime = String(message?.scheduleInviteStartTime || "").trim();
+  const scheduleInviteEndTime = String(message?.scheduleInviteEndTime || "").trim();
+  const scheduleInviteType = ["day", "hour", "week"].includes(message?.scheduleInviteType)
+    ? message.scheduleInviteType
+    : "day";
+  const messageType = isScheduleInviteConversationMessage(message)
+    ? "schedule_invite"
+    : isLocationConversationMessage(message)
     ? "location"
     : isImageConversationMessage(message)
       ? "image"
@@ -1918,7 +2016,15 @@ function normalizeConversationMessage(message, index = 0) {
   const coordinates = String(message?.coordinates || "").trim();
   const imageDataUrl = String(message?.imageDataUrl || "").trim();
   const text =
-    messageType === "location"
+    messageType === "schedule_invite"
+      ? buildScheduleInviteMessageText(
+          scheduleInviteTitle || "未命名日程",
+          scheduleInviteDate || "",
+          scheduleInviteStartTime || "",
+          scheduleInviteEndTime || "",
+          scheduleInviteType
+        )
+      : messageType === "location"
       ? buildLocationMessageText(
           locationName || "未命名位置",
           coordinates || buildRandomLocationCoordinates(`${locationName}_${index}`)
@@ -1930,6 +2036,13 @@ function normalizeConversationMessage(message, index = 0) {
     id: String(message?.id || `conversation_message_${Date.now()}_${index}`),
     role,
     messageType,
+    scheduleInviteTitle:
+      messageType === "schedule_invite" ? scheduleInviteTitle || "未命名日程" : "",
+    scheduleInviteDate: messageType === "schedule_invite" ? scheduleInviteDate || "" : "",
+    scheduleInviteStartTime:
+      messageType === "schedule_invite" ? scheduleInviteStartTime || "" : "",
+    scheduleInviteEndTime: messageType === "schedule_invite" ? scheduleInviteEndTime || "" : "",
+    scheduleInviteType: messageType === "schedule_invite" ? scheduleInviteType : "",
     locationName:
       messageType === "location" ? locationName || "未命名位置" : "",
     coordinates:
@@ -4140,6 +4253,7 @@ async function requestChatReplyText(
       profile,
       contact,
       history,
+      scheduleEntries: getVisibleScheduleEntriesForContact(contact.id),
       promptSettings: resolvedPromptSettings,
       requestOptions,
       systemPrompt
@@ -4382,6 +4496,7 @@ async function requestJournalEntryText(
     profile,
     contact,
     conversation,
+    scheduleEntries: getVisibleScheduleEntriesForContact(contact.id),
     promptSettings: normalizedPromptSettings,
     journalOptions,
     systemPrompt,
@@ -5037,7 +5152,13 @@ async function requestJournalEntry() {
   }
 
   const settings = loadSettings();
-  const promptSettings = normalizeMessagePromptSettings(settings.messagePromptSettings);
+  const storedPromptSettings = normalizeMessagePromptSettings(settings.messagePromptSettings);
+  const currentPromptSettings = normalizeMessagePromptSettings(state.chatPromptSettings);
+  const promptSettings = normalizeMessagePromptSettings({
+    ...storedPromptSettings,
+    worldbookEnabled: currentPromptSettings.worldbookEnabled,
+    worldbookIds: currentPromptSettings.worldbookIds
+  });
   state.chatPromptSettings = promptSettings;
   state.journalGenerating = true;
   setJournalStatus("", "");
@@ -5405,7 +5526,10 @@ function renderConversationMessageMenu(message, isMenuOpen) {
   if (!isMenuOpen) {
     return "";
   }
-  const actions = isLocationConversationMessage(message) || isImageConversationMessage(message)
+  const actions =
+    isScheduleInviteConversationMessage(message) ||
+    isLocationConversationMessage(message) ||
+    isImageConversationMessage(message)
     ? [
         `
           <button
@@ -5452,6 +5576,23 @@ function renderConversationLocationCard(message) {
   `;
 }
 
+function renderConversationScheduleInviteCard(message) {
+  const title = String(message?.scheduleInviteTitle || "").trim() || "未命名日程";
+  const timeText = buildScheduleInviteTimeText(
+    message?.scheduleInviteDate || "",
+    message?.scheduleInviteStartTime || "",
+    message?.scheduleInviteEndTime || "",
+    message?.scheduleInviteType || "day"
+  );
+  return `
+    <article class="messages-schedule-invite-card">
+      <div class="messages-schedule-invite-card__kicker">日程邀请</div>
+      <strong class="messages-schedule-invite-card__title">${escapeHtml(title)}</strong>
+      <p class="messages-schedule-invite-card__time">${escapeHtml(timeText)}</p>
+    </article>
+  `;
+}
+
 function renderConversationImageCard(message) {
   const imageDataUrl = String(message?.imageDataUrl || "").trim();
   if (!imageDataUrl) {
@@ -5472,9 +5613,12 @@ function renderConversationMessage(message, conversation, promptSettings = state
   const isUser = message.role === "user";
   const avatarMarkup = buildConversationDetailAvatarMarkup(message.role, conversation, promptSettings);
   const isMenuOpen = state.messageActionMessageId === message.id;
+  const isScheduleInviteMessage = isScheduleInviteConversationMessage(message);
   const isLocationMessage = isLocationConversationMessage(message);
   const isImageMessage = isImageConversationMessage(message);
-  const bubbleMarkup = isLocationMessage
+  const bubbleMarkup = isScheduleInviteMessage
+    ? renderConversationScheduleInviteCard(message)
+    : isLocationMessage
     ? renderConversationLocationCard(message)
     : isImageMessage
       ? renderConversationImageCard(message)
@@ -5486,17 +5630,29 @@ function renderConversationMessage(message, conversation, promptSettings = state
   return `
     <article class="messages-message-row messages-message-row--${isUser ? "user" : "assistant"}${
       avatarMarkup ? "" : " is-avatar-hidden"
-    }${isLocationMessage ? " messages-message-row--location" : ""}${
+    }${isScheduleInviteMessage ? " messages-message-row--schedule-invite" : ""}${
+      isLocationMessage ? " messages-message-row--location" : ""
+    }${
       isImageMessage ? " messages-message-row--image" : ""
     }">
       ${!isUser && avatarMarkup ? avatarMarkup : ""}
       <div class="messages-message-row__bubble-wrap${
-        isLocationMessage ? " messages-message-row__bubble-wrap--location" : ""
+        isScheduleInviteMessage
+          ? " messages-message-row__bubble-wrap--schedule-invite"
+          : isLocationMessage
+            ? " messages-message-row__bubble-wrap--location"
+            : ""
       }">
         <div class="messages-message-row__stack">
           <button
             type="button"
-            class="messages-bubble-toggle${isLocationMessage ? " messages-bubble-toggle--location" : ""}"
+            class="messages-bubble-toggle${
+              isScheduleInviteMessage
+                ? " messages-bubble-toggle--schedule-invite"
+                : isLocationMessage
+                  ? " messages-bubble-toggle--location"
+                  : ""
+            }"
             data-action="toggle-message-menu"
             data-message-id="${escapeHtml(message.id)}"
           >
@@ -6843,6 +6999,10 @@ function editConversationMessage(messageId = "") {
     setMessagesStatus("未找到要编辑的消息。", "error");
     return;
   }
+  if (isScheduleInviteConversationMessage(targetMessage)) {
+    setMessagesStatus("日程邀请卡片暂不支持直接编辑，请删除后重新发送。", "error");
+    return;
+  }
   if (isLocationConversationMessage(targetMessage)) {
     setMessagesStatus("定位消息暂不支持直接编辑，请删除后重新发送。", "error");
     return;
@@ -7200,7 +7360,13 @@ async function requestConversationReply(options = {}) {
   }
 
   const settings = loadSettings();
-  const promptSettings = normalizeMessagePromptSettings(settings.messagePromptSettings);
+  const storedPromptSettings = normalizeMessagePromptSettings(settings.messagePromptSettings);
+  const currentPromptSettings = normalizeMessagePromptSettings(state.chatPromptSettings);
+  const promptSettings = normalizeMessagePromptSettings({
+    ...storedPromptSettings,
+    worldbookEnabled: currentPromptSettings.worldbookEnabled,
+    worldbookIds: currentPromptSettings.worldbookIds
+  });
   state.chatPromptSettings = promptSettings;
   let history = [];
   let removedReplyBatch = [];
@@ -7293,6 +7459,7 @@ async function requestConversationReply(options = {}) {
       promptSettings,
       replyResult.privacySession
     );
+    repairPersistedChatWorldbookMounts(promptSettings);
     if (!isRegenerate) {
       updatedConversation.awarenessCounter = shouldEvaluateAwareness
         ? 0

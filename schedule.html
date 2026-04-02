@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <title>Pulse Generator · 日程</title>
-    <link rel="stylesheet" href="./schedule.css?v=20260401d" />
+    <link rel="stylesheet" href="./schedule.css?v=20260402-230812" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -171,6 +171,23 @@
             </small>
           </section>
 
+          <section
+            id="schedule-notify-companions-field"
+            class="schedule-field schedule-field--group"
+            hidden
+          >
+            <div class="schedule-field__head">
+              <span>邀请同行人</span>
+            </div>
+            <label class="schedule-inline-check schedule-inline-check--stacked">
+              <input id="schedule-notify-companions-input" type="checkbox" />
+              <span>是否通知同行人</span>
+            </label>
+            <small class="schedule-field__hint">
+              勾选后会向已选同行人发送日程邀请卡片，并调用 API 让角色决定接受或拒绝；最多同时发起 3 个邀请请求。
+            </small>
+          </section>
+
           <label class="schedule-field">
             <span>日期</span>
             <input id="schedule-date-input" type="date" />
@@ -243,6 +260,9 @@
       </div>
     </section>
 
-    <script src="./schedule.js?v=20260401d"></script>
+    <script src="./privacy-allowlist.js?v=20260402-230812"></script>
+    <script src="./pulse-privacy-cover.js?v=20260402-230812"></script>
+    <script src="./api-log.js?v=20260402-164825"></script>
+    <script src="./schedule.js?v=20260402-230812"></script>
   </body>
 </html>

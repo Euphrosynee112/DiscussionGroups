@@ -874,6 +874,11 @@ body.embedded .schedule-shell {
   white-space: nowrap;
 }
 
+.schedule-inline-check--stacked {
+  width: fit-content;
+  white-space: normal;
+}
+
 .schedule-inline-check input,
 .schedule-visibility-option input {
   width: 18px;
