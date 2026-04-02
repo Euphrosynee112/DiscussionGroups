@@ -2,8 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260402-204733";
-const APP_BUILD_UPDATED_AT = "2026-04-02 20:47:33";
+const APP_BUILD_VERSION = "20260402-211238";
+const APP_BUILD_UPDATED_AT = "2026-04-02 21:12:38";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -709,6 +709,11 @@ function loadPrivacyAllowlistItems() {
   }));
 }
 
+function syncPrivacyAllowlistItemsFromStorage() {
+  homeState.privacyAllowlistItems = loadPrivacyAllowlistItems();
+  return homeState.privacyAllowlistItems;
+}
+
 function normalizePrivacyAllowlistItems(items = []) {
   const result = [];
   const indexMap = new Map();
@@ -903,8 +908,9 @@ function renderPrivacyAllowlistSummary() {
   if (!privacyAppWhitelistSummaryEl) {
     return;
   }
-  const total = homeState.privacyAllowlistItems.length;
-  const manualCount = homeState.privacyAllowlistItems.filter((item) => item.source === "manual").length;
+  const items = syncPrivacyAllowlistItemsFromStorage();
+  const total = items.length;
+  const manualCount = items.filter((item) => item.source === "manual").length;
   const scanCount = total - manualCount;
   privacyAppWhitelistSummaryEl.textContent = total
     ? `共 ${total} 个白名单词条，其中手动 ${manualCount} 个、扫描确认 ${scanCount} 个；直接修改输入框会自动生效。`
@@ -915,14 +921,15 @@ function renderPrivacyAllowlistItems() {
   if (!privacyAppWhitelistListEl) {
     return;
   }
-  if (!homeState.privacyAllowlistItems.length) {
+  const items = syncPrivacyAllowlistItemsFromStorage();
+  if (!items.length) {
     privacyAppWhitelistListEl.innerHTML =
       '<div class="privacy-app__empty">当前还没有白名单词条。你可以先手动新增，或先扫描当前配置。</div>';
     renderPrivacyAllowlistSummary();
     return;
   }
 
-  privacyAppWhitelistListEl.innerHTML = homeState.privacyAllowlistItems
+  privacyAppWhitelistListEl.innerHTML = items
     .map(
       (item) => `
         <section class="home-transfer-group privacy-app-item${

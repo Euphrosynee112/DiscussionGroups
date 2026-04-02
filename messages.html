@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <title>Pulse Generator · Chat</title>
-    <link rel="stylesheet" href="./messages.css?v=20260402-164825" />
+    <link rel="stylesheet" href="./messages.css?v=20260402-211238" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -555,6 +555,31 @@
             class="messages-editor-status"
             aria-live="polite"
           ></p>
+
+          <section class="messages-form-field">
+            <div class="messages-form-field__head">
+              <span>快捷清理</span>
+            </div>
+            <div class="messages-form-field__actions">
+              <button
+                id="messages-chat-clear-history-btn"
+                class="messages-text-button messages-text-button--danger"
+                type="button"
+              >
+                一键清除聊天记录
+              </button>
+              <button
+                id="messages-chat-clear-memory-btn"
+                class="messages-text-button messages-text-button--danger"
+                type="button"
+              >
+                一键清除记忆
+              </button>
+            </div>
+            <small class="messages-form-field__hint">
+              仅作用于当前聊天对象；聊天记录与记忆会分别独立清理。
+            </small>
+          </section>
         </form>
       </div>
     </section>
@@ -1514,10 +1539,10 @@
 
     <input id="messages-image-file-input" type="file" accept="image/*" hidden />
 
-    <script src="./privacy-allowlist.js?v=20260402-204733"></script>
-    <script src="./pulse-privacy-cover.js?v=20260402-204733"></script>
+    <script src="./privacy-allowlist.js?v=20260402-211238"></script>
+    <script src="./pulse-privacy-cover.js?v=20260402-211238"></script>
     <script src="./api-log.js?v=20260402-164825"></script>
     <script src="./messages-awareness-config.js?v=20260402b"></script>
-    <script src="./messages.js?v=20260402-164825"></script>
+    <script src="./messages.js?v=20260402-211238"></script>
   </body>
 </html>

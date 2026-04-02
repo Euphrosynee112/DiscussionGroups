@@ -219,6 +219,8 @@ const messagesChatShowContactAvatarInputEl = document.querySelector(
 const messagesChatShowUserAvatarInputEl = document.querySelector(
   "#messages-chat-show-user-avatar-input"
 );
+const messagesChatClearHistoryBtnEl = document.querySelector("#messages-chat-clear-history-btn");
+const messagesChatClearMemoryBtnEl = document.querySelector("#messages-chat-clear-memory-btn");
 const messagesChatSettingsStatusEl = document.querySelector("#messages-chat-settings-status");
 
 const messagesWorldbookModalEl = document.querySelector("#messages-worldbook-modal");
@@ -410,7 +412,8 @@ const state = {
   journalWeatherError: "",
   journalStatusMessage: "",
   journalStatusTone: "",
-  windowFocusPrimed: initialWindowFocusPrimed
+  windowFocusPrimed: initialWindowFocusPrimed,
+  pendingConversationRenderOptions: null
 };
 
 function isEmbeddedView() {
@@ -5548,7 +5551,7 @@ function renderChatList() {
   `;
 }
 
-function renderConversationDetail() {
+function renderConversationDetail(options = {}) {
   if (!messagesContentEl) {
     return;
   }
@@ -5567,6 +5570,7 @@ function renderConversationDetail() {
     (message) => message.role === "user" && message.needsReply
   );
   const promptSettings = normalizeMessagePromptSettings(state.chatPromptSettings);
+  const renderOptions = options && typeof options === "object" ? options : {};
   messagesContentEl.innerHTML = `
     <section class="messages-conversation">
       <div class="messages-conversation__history">
@@ -5633,7 +5637,21 @@ function renderConversationDetail() {
   const historyEl = messagesContentEl.querySelector(".messages-conversation__history");
   if (historyEl) {
     window.requestAnimationFrame(() => {
-      historyEl.scrollTop = historyEl.scrollHeight;
+      if (renderOptions.scrollBehavior === "preserve" && renderOptions.scrollSnapshot) {
+        const maxScrollTop = Math.max(0, historyEl.scrollHeight - historyEl.clientHeight);
+        historyEl.scrollTop = Math.min(
+          Math.max(0, Number(renderOptions.scrollSnapshot.top) || 0),
+          maxScrollTop
+        );
+      } else {
+        historyEl.scrollTop = historyEl.scrollHeight;
+      }
+      if (renderOptions.focusInput) {
+        focusConversationInput({
+          force: true,
+          preventScroll: true
+        });
+      }
     });
   }
 }
@@ -5785,7 +5803,7 @@ function renderMessagesPage() {
   renderTabbar();
 
   if (state.activeConversationId && state.activeTab === "chat") {
-    renderConversationDetail();
+    renderConversationDetail(consumeConversationRenderOptions());
     return;
   }
 
@@ -5999,13 +6017,83 @@ function shouldAutoFocusConversationInput() {
   return !window.matchMedia("(pointer: coarse)").matches;
 }
 
+function isCoarsePointerDevice() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return false;
+  }
+  return window.matchMedia("(pointer: coarse)").matches;
+}
+
+function getConversationInputElement() {
+  const input = messagesContentEl?.querySelector(".messages-conversation__input");
+  return input instanceof HTMLInputElement ? input : null;
+}
+
 function focusConversationInput(options = {}) {
   const focusOptions = options && typeof options === "object" ? options : {};
   if (!focusOptions.force && !shouldAutoFocusConversationInput()) {
     return;
   }
-  const input = messagesContentEl?.querySelector(".messages-conversation__input");
-  input?.focus();
+  const input = getConversationInputElement();
+  if (!input) {
+    return;
+  }
+  try {
+    input.focus({
+      preventScroll: focusOptions.preventScroll !== false
+    });
+  } catch (_error) {
+    input.focus();
+  }
+  try {
+    const cursor = input.value.length;
+    input.setSelectionRange(cursor, cursor);
+  } catch (_error) {
+  }
+}
+
+function blurConversationInput() {
+  const input = getConversationInputElement();
+  if (input && document.activeElement === input) {
+    input.blur();
+  }
+}
+
+function shouldDismissConversationKeyboardFromTarget(target) {
+  if (!isCoarsePointerDevice()) {
+    return false;
+  }
+  if (!(target instanceof Element)) {
+    return false;
+  }
+  const activeInput = getConversationInputElement();
+  if (!activeInput || document.activeElement !== activeInput) {
+    return false;
+  }
+  return !target.closest(".messages-conversation__composer");
+}
+
+function captureConversationScrollSnapshot() {
+  const historyEl = messagesContentEl?.querySelector(".messages-conversation__history");
+  if (!(historyEl instanceof HTMLElement)) {
+    return null;
+  }
+  return {
+    top: historyEl.scrollTop
+  };
+}
+
+function queueConversationRenderOptions(options = {}) {
+  state.pendingConversationRenderOptions = {
+    ...(state.pendingConversationRenderOptions || {}),
+    ...(options && typeof options === "object" ? options : {})
+  };
+}
+
+function consumeConversationRenderOptions() {
+  const options = state.pendingConversationRenderOptions || {};
+  state.pendingConversationRenderOptions = null;
+  return options;
 }
 
 function setWorldbookStatus(message = "", tone = "") {
@@ -6749,6 +6837,7 @@ function editConversationMessage(messageId = "") {
   if (!conversation) {
     return;
   }
+  const scrollSnapshot = captureConversationScrollSnapshot();
   const targetMessage = conversation.messages.find((message) => message.id === messageId) || null;
   if (!targetMessage) {
     setMessagesStatus("未找到要编辑的消息。", "error");
@@ -6777,6 +6866,10 @@ function editConversationMessage(messageId = "") {
   recalculateConversationUpdatedAt(conversation);
   state.messageActionMessageId = "";
   persistConversations();
+  queueConversationRenderOptions({
+    scrollBehavior: "preserve",
+    scrollSnapshot
+  });
   renderMessagesPage();
   setMessagesStatus("消息已更新。", "success");
 }
@@ -6786,6 +6879,7 @@ function deleteConversationMessage(messageId = "") {
   if (!conversation) {
     return;
   }
+  const scrollSnapshot = captureConversationScrollSnapshot();
   const targetMessage = conversation.messages.find((message) => message.id === messageId) || null;
   if (!targetMessage) {
     setMessagesStatus("未找到要删除的消息。", "error");
@@ -6800,8 +6894,67 @@ function deleteConversationMessage(messageId = "") {
   recalculateConversationUpdatedAt(conversation);
   state.messageActionMessageId = "";
   persistConversations();
+  queueConversationRenderOptions({
+    scrollBehavior: "preserve",
+    scrollSnapshot
+  });
   renderMessagesPage();
   setMessagesStatus("消息已删除。", "success");
+}
+
+function clearCurrentConversationHistory() {
+  const conversation = getConversationById();
+  if (!conversation) {
+    setEditorStatus(messagesChatSettingsStatusEl, "未找到当前会话。", "error");
+    return;
+  }
+  const confirmed = window.confirm("确定清空当前角色的全部聊天记录吗？");
+  if (!confirmed) {
+    return;
+  }
+
+  conversation.messages = [];
+  conversation.memorySummaryCounter = 0;
+  conversation.memorySummaryLastMessageCount = 0;
+  conversation.updatedAt = Date.now();
+  state.messageActionMessageId = "";
+  state.composerPanelOpen = false;
+  persistConversations();
+  queueConversationRenderOptions({
+    scrollBehavior: "bottom"
+  });
+  renderMessagesPage();
+  setEditorStatus(messagesChatSettingsStatusEl, "当前聊天记录已清空。", "success");
+  setMessagesStatus("当前聊天记录已清空。", "success");
+}
+
+function clearCurrentConversationMemories() {
+  const conversation = getConversationById();
+  if (!conversation) {
+    setEditorStatus(messagesChatSettingsStatusEl, "未找到当前会话。", "error");
+    return;
+  }
+  const contact = getContactById(conversation.contactId);
+  const contactName = contact?.name || "当前角色";
+  const confirmed = window.confirm(`确定清空 ${contactName} 的全部记忆吗？`);
+  if (!confirmed) {
+    return;
+  }
+
+  const nextMemories = state.memories.filter((item) => item.contactId !== conversation.contactId);
+  if (nextMemories.length === state.memories.length) {
+    setEditorStatus(messagesChatSettingsStatusEl, "当前角色还没有可清理的记忆。", "success");
+    setMessagesStatus("当前角色还没有可清理的记忆。", "success");
+    return;
+  }
+
+  state.memories = nextMemories;
+  persistMessageMemories();
+  if (state.memoryViewerOpen) {
+    renderMemoryViewer();
+  }
+  setEditorStatus(messagesChatSettingsStatusEl, "当前角色记忆已清空。", "success");
+  setMessagesStatus("当前角色记忆已清空。", "success");
 }
 
 function handleConversationToolAction(toolId = "") {
@@ -6935,8 +7088,10 @@ async function sendConversationImage(file) {
   conversation.messages = [...conversation.messages, userMessage];
   conversation.updatedAt = userMessage.createdAt;
   persistConversations();
+  queueConversationRenderOptions({
+    scrollBehavior: "bottom"
+  });
   renderMessagesPage();
-  focusConversationInput({ force: false });
   setMessagesStatus("图片已加入对话，点击右侧圆标向 API 请求回复。", "success");
 }
 
@@ -6974,8 +7129,10 @@ function sendConversationLocation(locationName, coordinates) {
   saveRecentLocation(resolvedName, resolvedCoordinates);
   persistConversations();
   setLocationModalOpen(false);
+  queueConversationRenderOptions({
+    scrollBehavior: "bottom"
+  });
   renderMessagesPage();
-  focusConversationInput({ force: false });
   setMessagesStatus("定位已加入对话，点击右侧圆标向 API 请求回复。", "success");
 }
 
@@ -7013,8 +7170,11 @@ function sendConversationMessage(text) {
   conversation.messages = [...conversation.messages, userMessage];
   conversation.updatedAt = userMessage.createdAt;
   persistConversations();
+  queueConversationRenderOptions({
+    scrollBehavior: "bottom",
+    focusInput: true
+  });
   renderMessagesPage();
-  focusConversationInput({ force: false });
   setMessagesStatus("消息已加入对话，点击右侧圆标向 API 请求回复。", "success");
 }
 
@@ -7284,9 +7444,13 @@ function attachEvents() {
         !target.closest(".messages-message-row__menu") &&
         !target.closest("[data-action='toggle-message-menu']")
       ) {
+        const scrollSnapshot = captureConversationScrollSnapshot();
         state.messageActionMessageId = "";
         if (!(actionEl instanceof Element)) {
-          renderConversationDetail();
+          renderConversationDetail({
+            scrollBehavior: "preserve",
+            scrollSnapshot
+          });
           return;
         }
       }
@@ -7295,15 +7459,23 @@ function attachEvents() {
       }
 
       if (actionEl.getAttribute("data-action") === "toggle-composer-panel") {
+        const scrollSnapshot = captureConversationScrollSnapshot();
         state.composerPanelOpen = !state.composerPanelOpen;
         state.messageActionMessageId = "";
-        renderConversationDetail();
+        renderConversationDetail({
+          scrollBehavior: "preserve",
+          scrollSnapshot
+        });
         return;
       }
 
       if (actionEl.getAttribute("data-action") === "close-composer-panel") {
+        const scrollSnapshot = captureConversationScrollSnapshot();
         state.composerPanelOpen = false;
-        renderConversationDetail();
+        renderConversationDetail({
+          scrollBehavior: "preserve",
+          scrollSnapshot
+        });
         return;
       }
 
@@ -7320,9 +7492,13 @@ function attachEvents() {
         actionEl.getAttribute("data-message-id")
       ) {
         const messageId = String(actionEl.getAttribute("data-message-id") || "");
+        const scrollSnapshot = captureConversationScrollSnapshot();
         state.composerPanelOpen = false;
         state.messageActionMessageId = state.messageActionMessageId === messageId ? "" : messageId;
-        renderConversationDetail();
+        renderConversationDetail({
+          scrollBehavior: "preserve",
+          scrollSnapshot
+        });
         return;
       }
 
@@ -7398,7 +7574,6 @@ function attachEvents() {
       event.preventDefault();
       const formData = new FormData(target);
       const message = String(formData.get("message") || "");
-      target.reset();
       sendConversationMessage(message);
     });
   }
@@ -7610,6 +7785,18 @@ function attachEvents() {
       window.setTimeout(() => {
         setChatSettingsOpen(false);
       }, 220);
+    });
+  }
+
+  if (messagesChatClearHistoryBtnEl) {
+    messagesChatClearHistoryBtnEl.addEventListener("click", () => {
+      clearCurrentConversationHistory();
+    });
+  }
+
+  if (messagesChatClearMemoryBtnEl) {
+    messagesChatClearMemoryBtnEl.addEventListener("click", () => {
+      clearCurrentConversationMemories();
     });
   }
 
@@ -8299,13 +8486,21 @@ function attachEvents() {
       return;
     }
     if (event.key === "Escape" && state.composerPanelOpen) {
+      const scrollSnapshot = captureConversationScrollSnapshot();
       state.composerPanelOpen = false;
-      renderConversationDetail();
+      renderConversationDetail({
+        scrollBehavior: "preserve",
+        scrollSnapshot
+      });
       return;
     }
     if (event.key === "Escape" && state.messageActionMessageId) {
+      const scrollSnapshot = captureConversationScrollSnapshot();
       state.messageActionMessageId = "";
-      renderConversationDetail();
+      renderConversationDetail({
+        scrollBehavior: "preserve",
+        scrollSnapshot
+      });
       return;
     }
     if (event.key === "Escape" && state.activeConversationId) {
@@ -8314,6 +8509,18 @@ function attachEvents() {
       renderMessagesPage();
     }
   });
+
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (shouldDismissConversationKeyboardFromTarget(event.target)) {
+        window.setTimeout(() => {
+          blurConversationInput();
+        }, 0);
+      }
+    },
+    true
+  );
 }
 
 function init() {
