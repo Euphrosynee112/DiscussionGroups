@@ -2,6 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
+const GLOBAL_PROMPT_GUARD =
+  "虚拟世界观，与真实世界无关。禁止搜索未提供的任何其他信息。";
 const DEFAULT_TEMPERATURE = 0.85;
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const PROFILE_KEY = "x_style_generator_profile_v1";
@@ -28,6 +30,17 @@ const raisingArchiveContentEl = document.querySelector("#raising-archive-content
 const raisingCreateModalEl = document.querySelector("#raising-create-modal");
 const raisingCreateFormEl = document.querySelector("#raising-create-form");
 const raisingCreateOptionsEl = document.querySelector("#raising-create-options");
+
+function prependGlobalPromptGuard(text) {
+  const resolvedText = String(text || "").trim();
+  if (!resolvedText) {
+    return GLOBAL_PROMPT_GUARD;
+  }
+  if (resolvedText.startsWith(GLOBAL_PROMPT_GUARD)) {
+    return resolvedText;
+  }
+  return `${GLOBAL_PROMPT_GUARD}\n\n${resolvedText}`;
+}
 const raisingCreateStatusEl = document.querySelector("#raising-create-status");
 const raisingCreateCancelBtnEl = document.querySelector("#raising-create-cancel-btn");
 const raisingCreateConfirmBtnEl = document.querySelector("#raising-create-confirm-btn");
@@ -1283,7 +1296,7 @@ function parseJsonObjectWithRepair(jsonText, errorMessage) {
 }
 
 function buildKidArchivePrompt(profile, partner, record) {
-  return [
+  return prependGlobalPromptGuard([
     "你正在为一个“养崽”文字游戏生成宝宝的成长档案。",
     "请只输出一个 JSON 对象，不要输出额外解释，也不要用 markdown。",
     "字段必须严格包含：appearanceRating, appearanceSummary, hobbies, habits。",
@@ -1305,7 +1318,7 @@ function buildKidArchivePrompt(profile, partner, record) {
     "请根据双方人设混合后的气质来推演这位宝宝的成长档案。"
   ]
     .filter(Boolean)
-    .join("\n\n");
+    .join("\n\n"));
 }
 
 async function requestKidArchive(settings, profile, partner, record) {

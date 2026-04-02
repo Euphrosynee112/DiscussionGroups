@@ -2,8 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260402f";
-const APP_BUILD_UPDATED_AT = "2026-04-02 14:02:38";
+const APP_BUILD_VERSION = "20260402g";
+const APP_BUILD_UPDATED_AT = "2026-04-02 14:15:08";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -12,6 +12,7 @@ const PROFILE_POSTS_KEY = "x_style_generator_profile_posts_v1";
 const DISCUSSIONS_KEY = "x_style_generator_discussions_v1";
 const WORLD_BOOKS_KEY = "x_style_generator_message_worldbooks_v1";
 const MESSAGE_CONTACTS_KEY = "x_style_generator_message_contacts_v1";
+const SCHEDULE_ENTRIES_KEY = "x_style_generator_schedule_entries_v1";
 const API_CONFIG_LIMIT = 12;
 const CONFIG_EXPORT_SCHEMA = "pulse-generator-config";
 const TRANSFER_FORUM_BASE_ITEM_ID = "__forum_base__";
@@ -456,12 +457,31 @@ function hasAnyTextValue(source = {}) {
   return Object.values(source).some((value) => String(value || "").trim());
 }
 
+function buildScheduleTransferLabel(entry = {}) {
+  const title = String(entry.title || "").trim() || "未命名日程";
+  const date = String(entry.date || "").trim();
+  return date ? `${date} · ${title}` : title;
+}
+
+function buildScheduleTransferDescription(entry = {}) {
+  const scheduleType = String(entry.scheduleType || "").trim();
+  const ownerType = entry.ownerType === "contact" ? "角色" : "用户";
+  const timeText =
+    scheduleType === "day"
+      ? "全天"
+      : entry.startTime && entry.endTime
+        ? `${entry.startTime}-${entry.endTime}`
+        : "未设时间";
+  return `${ownerType} · ${timeText}`;
+}
+
 function buildTransferPayloadFromCurrentState() {
   const settings = loadSettings();
   const profile = readStoredJson(PROFILE_KEY, {}) || {};
   const chatProfile = pickChatProfilePayload(profile);
   const worldbooks = readStoredJson(WORLD_BOOKS_KEY, { categories: [], entries: [] }) || {};
   const contacts = readStoredJson(MESSAGE_CONTACTS_KEY, []) || [];
+  const scheduleEntries = readStoredJson(SCHEDULE_ENTRIES_KEY, []) || [];
   const apiConfigs = normalizeApiConfigs(settings.apiConfigs || []);
 
   return {
@@ -509,6 +529,11 @@ function buildTransferPayloadFromCurrentState() {
     },
     contacts: {
       contacts: normalizeObjectArray(contacts).filter((item) => String(item.name || "").trim())
+    },
+    schedules: {
+      entries: normalizeObjectArray(scheduleEntries).filter(
+        (item) => String(item.title || "").trim() && String(item.date || "").trim()
+      )
     },
     contactChatSettings:
       settings.messagePromptSettings && typeof settings.messagePromptSettings === "object"
@@ -587,6 +612,7 @@ function normalizeTransferPayload(parsed) {
       worldbooks:
         source.worldbooks && typeof source.worldbooks === "object" ? source.worldbooks : null,
       contacts: source.contacts && typeof source.contacts === "object" ? source.contacts : null,
+      schedules: source.schedules && typeof source.schedules === "object" ? source.schedules : null,
       contactChatSettings:
         source.contactChatSettings && typeof source.contactChatSettings === "object"
           ? source.contactChatSettings
@@ -651,6 +677,7 @@ function normalizeTransferPayload(parsed) {
       : null,
     worldbooks: parsed.worldbooks && typeof parsed.worldbooks === "object" ? parsed.worldbooks : null,
     contacts: parsed.contacts && typeof parsed.contacts === "object" ? parsed.contacts : null,
+    schedules: parsed.schedules && typeof parsed.schedules === "object" ? parsed.schedules : null,
     contactChatSettings:
       settings?.messagePromptSettings && typeof settings.messagePromptSettings === "object"
         ? { ...settings.messagePromptSettings }
@@ -670,6 +697,9 @@ function buildTransferSections(payload, options = {}) {
   );
   const contacts = normalizeObjectArray(payload?.contacts?.contacts).filter((item) =>
     String(item.name || "").trim()
+  );
+  const scheduleEntries = normalizeObjectArray(payload?.schedules?.entries).filter(
+    (item) => String(item.title || "").trim() && String(item.date || "").trim()
   );
   const hasApiSecrets = Boolean(
     payload?.apiSecrets &&
@@ -776,6 +806,19 @@ function buildTransferSections(payload, options = {}) {
             .join(" · ") || "未设置人设。",
           80
         ),
+        checked: true
+      }))
+    },
+    {
+      id: "schedules",
+      label: "日程",
+      description: "支持按日程局部导入导出；包含用户 / 角色日程、可见范围与同行人信息。",
+      checked: scheduleEntries.length > 0,
+      disabled: scheduleEntries.length === 0,
+      items: scheduleEntries.map((entry) => ({
+        id: String(entry.id || "").trim(),
+        label: buildScheduleTransferLabel(entry),
+        description: buildScheduleTransferDescription(entry),
         checked: true
       }))
     },
@@ -1070,6 +1113,16 @@ function buildSelectedTransferPayload(payload, selection) {
     };
   }
 
+  const schedulesSection = sectionMap.get("schedules");
+  if (schedulesSection?.checked && payload.schedules) {
+    const selectedIds = new Set(schedulesSection.items.filter((item) => item.checked).map((item) => item.id));
+    selected.schedules = {
+      entries: normalizeObjectArray(payload.schedules.entries).filter((entry) =>
+        selectedIds.has(String(entry.id || "").trim())
+      )
+    };
+  }
+
   const contactChatSettingsSection = sectionMap.get("contactChatSettings");
   if (contactChatSettingsSection?.checked && payload.contactChatSettings) {
     selected.contactChatSettings = payload.contactChatSettings;
@@ -1087,7 +1140,7 @@ function buildHomeConfigExportPayload(selection = homeState.exportTransferSelect
   const fullPayload = buildTransferPayloadFromCurrentState();
   return {
     schema: CONFIG_EXPORT_SCHEMA,
-    version: 5,
+    version: 6,
     exportedAt: new Date().toISOString(),
     data: buildSelectedTransferPayload(fullPayload, selection)
   };
@@ -1164,6 +1217,7 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
       entries: []
     }) || { categories: [], entries: [] };
   let nextContacts = normalizeObjectArray(readStoredJson(MESSAGE_CONTACTS_KEY, []));
+  let nextSchedules = normalizeObjectArray(readStoredJson(SCHEDULE_ENTRIES_KEY, []));
 
   if (imported.apiConfig) {
     nextSettings.mode = normalizeApiMode(imported.apiConfig.current?.mode);
@@ -1267,6 +1321,10 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
     nextContacts = mergeById(nextContacts, imported.contacts.contacts);
   }
 
+  if (imported.schedules) {
+    nextSchedules = mergeById(nextSchedules, imported.schedules.entries);
+  }
+
   if (imported.contactChatSettings && typeof imported.contactChatSettings === "object") {
     nextSettings.messagePromptSettings = {
       ...imported.contactChatSettings
@@ -1287,6 +1345,7 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
   safeSetItem(PROFILE_KEY, JSON.stringify(nextProfile));
   safeSetItem(WORLD_BOOKS_KEY, JSON.stringify(nextWorldbooks));
   safeSetItem(MESSAGE_CONTACTS_KEY, JSON.stringify(nextContacts));
+  safeSetItem(SCHEDULE_ENTRIES_KEY, JSON.stringify(nextSchedules));
 
   homeState.settings = loadSettings();
   persistSettings(homeState.settings);

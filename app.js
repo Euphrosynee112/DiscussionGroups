@@ -22,6 +22,8 @@ const CUSTOM_TAB_LIMIT = 4;
 const API_CONFIG_LIMIT = 12;
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
+const GLOBAL_PROMPT_GUARD =
+  "虚拟世界观，与真实世界无关。禁止搜索未提供的任何其他信息。";
 const HOME_FEED_LABELS = {
   entertainment: "系统内容",
   tags: "热门标签"
@@ -81,6 +83,17 @@ const pageTitleMap = {
   profile: "个人主页",
   settings: "设置"
 };
+
+function prependGlobalPromptGuard(text) {
+  const resolvedText = String(text || "").trim();
+  if (!resolvedText) {
+    return GLOBAL_PROMPT_GUARD;
+  }
+  if (resolvedText.startsWith(GLOBAL_PROMPT_GUARD)) {
+    return resolvedText;
+  }
+  return `${GLOBAL_PROMPT_GUARD}\n\n${resolvedText}`;
+}
 
 const pages = {
   home: document.querySelector("#home-page"),
@@ -2533,7 +2546,7 @@ function buildPrompt(
     ? `这个讨论区当前存在一个主导性热点：${customTab.hotTopic}。本轮生成的绝大部分帖子都应围绕这个热点展开，但仍要拆成不同立场、不同情绪、不同细节与不同争议点。`
     : "如果这个讨论区没有单一主导热点，可围绕长期讨论背景自由展开。";
 
-  return [
+  return prependGlobalPromptGuard([
     "你是一个负责生成 X 风格中文讨论流的内容助手。",
     `当前目标论坛讨论区是“${feedLabel}”。`,
     `请严格输出 JSON 数组，并且包含 ${count} 个对象，不要输出额外解释。`,
@@ -2566,7 +2579,7 @@ function buildPrompt(
     `请保证 ${count} 条内容不重复，角度不同；即使围绕同一大主题，也要主动拆出不同争议点、不同立场、不同细节切口。`
   ]
     .filter(Boolean)
-    .join("\n\n");
+    .join("\n\n"));
 }
 
 function buildFeedSourceText(settings, feedType = state.activeFeed) {
@@ -2658,7 +2671,7 @@ function buildReplyPrompt(
       : "这是一条仅包含图片的帖子。");
   const resolvedTargetText = String(targetText || "").trim() || resolvedRootText;
 
-  return [
+  return prependGlobalPromptGuard([
     `你正在生成 X 风格中文讨论串中的${promptTitle}。`,
     `当前所属论坛讨论区是“${feedLabel}”。`,
     "请严格输出 JSON 数组，不要输出额外解释。",
@@ -2703,7 +2716,7 @@ function buildReplyPrompt(
     "请避免重复句式，并保持楼中讨论的连贯性。"
   ]
     .filter(Boolean)
-    .join("\n\n");
+    .join("\n\n"));
 }
 
 function getReplyPreviewSeedPost(settings) {
@@ -5343,14 +5356,14 @@ async function requestGeneratedPosts(
 }
 
 function buildTranslatePrompt(sourceText) {
-  return [
+  return prependGlobalPromptGuard([
     "请把下面内容翻译成中文，保留原意、语气和换行，不要添加解释。",
     sourceText
-  ].join("\n\n");
+  ].join("\n\n"));
 }
 
 function buildTranslatePostPrompt(post) {
-  return [
+  return prependGlobalPromptGuard([
     "请把下面帖子翻译成中文，保留原意、语气和换行。",
     "请严格输出 JSON 数组，并且只包含 1 个对象。",
     '对象必须包含字段：text, tags。',
@@ -5359,7 +5372,7 @@ function buildTranslatePostPrompt(post) {
     post.text || "",
     "原文标签：",
     getRenderableTags(post, post.feedType || DEFAULT_CONTENT_FEED).join(" ")
-  ].join("\n\n");
+  ].join("\n\n"));
 }
 
 function buildTranslateRequestBody(settings, prompt) {

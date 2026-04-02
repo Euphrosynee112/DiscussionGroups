@@ -37,6 +37,8 @@ const CONVERSATION_SOFT_MESSAGE_LIMIT = 240;
 const CONVERSATION_MIN_MESSAGE_LIMIT = 80;
 const CONVERSATION_STORAGE_TARGET_CHARS = 1400000;
 const CONVERSATION_IMAGE_PAYLOAD_KEEP_COUNT = 20;
+const GLOBAL_PROMPT_GUARD =
+  "虚拟世界观，与真实世界无关。禁止搜索未提供的任何其他信息。";
 const DEFAULT_WORLDVIEW =
   "这是一个强调长期主义、产品洞察和公共讨论质量的中文社交世界。用户习惯像在 X 上一样快速表达观点，但会天然追问效率、增长、AI 和平台变迁。整体语气要真实、犀利、能引发跟帖，不要写成官方通稿。";
 
@@ -922,6 +924,17 @@ function normalizePositiveInteger(value, fallback) {
 
 function clampNumber(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function prependGlobalPromptGuard(text) {
+  const resolvedText = String(text || "").trim();
+  if (!resolvedText) {
+    return GLOBAL_PROMPT_GUARD;
+  }
+  if (resolvedText.startsWith(GLOBAL_PROMPT_GUARD)) {
+    return resolvedText;
+  }
+  return `${GLOBAL_PROMPT_GUARD}\n\n${resolvedText}`;
 }
 
 function appendApiLog(entry) {
@@ -3240,7 +3253,7 @@ function buildConversationSystemPrompt(
     "不要输出编号、列表符号、引号包裹、解释说明、舞台指令或心理活动旁白。"
   );
 
-  return parts.join("\n\n");
+  return prependGlobalPromptGuard(parts.join("\n\n"));
 }
 
 function buildJournalSystemPrompt(
@@ -3256,7 +3269,7 @@ function buildJournalSystemPrompt(
   const chatTranscript = buildJournalChatTranscript(conversation, dateText);
   const referenceContext = buildJournalReferenceContext(settings, promptSettings);
 
-  return [
+  return prependGlobalPromptGuard([
     `你是即时聊天联系人：${contact.name}。`,
     "现在不是聊天回复，而是以这个角色的第一人称口吻写一篇今日日记。",
     `日期：${formatJournalFullDateLabel(dateText)}。`,
@@ -3280,7 +3293,7 @@ function buildJournalSystemPrompt(
     ].join("\n")
   ]
     .filter(Boolean)
-    .join("\n\n");
+    .join("\n\n"));
 }
 
 function buildGenericConversationPrompt(systemPrompt, history = []) {
@@ -3532,7 +3545,7 @@ function buildExistingMemoryDigest(contactId = "") {
 }
 
 function buildMemorySummarySystemPrompt(profile, contact) {
-  return [
+  return prependGlobalPromptGuard([
     `你正在为联系人 ${contact.name} 整理一对一聊天里的长期记忆。`,
     `这个联系人的稳定性格与表达底色：${
       contact.personaPrompt || "自然、友好、会根据关系稳定回应。"
@@ -3547,7 +3560,7 @@ function buildMemorySummarySystemPrompt(profile, contact) {
     "importance 使用整数。1 越低越不重要，100 越重要。",
     "最多输出 6 条；如果没有值得保留的内容，就输出 {\"memories\":[]}。",
     "不要输出 markdown，不要代码块，不要解释，不要额外字段。"
-  ].join("\n\n");
+  ].join("\n\n"));
 }
 
 function parseJsonLikeContent(value) {

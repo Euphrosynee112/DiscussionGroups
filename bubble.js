@@ -2,6 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
+const GLOBAL_PROMPT_GUARD =
+  "虚拟世界观，与真实世界无关。禁止搜索未提供的任何其他信息。";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const PROFILE_KEY = "x_style_generator_profile_v1";
 const PROFILE_POSTS_KEY = "x_style_generator_profile_posts_v1";
@@ -41,6 +43,17 @@ const DEFAULT_PROFILE = {
   personaPrompt:
     "这个用户理性、克制、对产品与内容趋势敏感，说话直接但不失礼貌，偏爱长期主义和结构化表达。"
 };
+
+function prependGlobalPromptGuard(text) {
+  const resolvedText = String(text || "").trim();
+  if (!resolvedText) {
+    return GLOBAL_PROMPT_GUARD;
+  }
+  if (resolvedText.startsWith(GLOBAL_PROMPT_GUARD)) {
+    return resolvedText;
+  }
+  return `${GLOBAL_PROMPT_GUARD}\n\n${resolvedText}`;
+}
 
 const FAN_EMOJI_POOL = [
   "🥺",
@@ -655,10 +668,10 @@ function buildJsonArrayRequestBody(settings, prompt, count = FAN_DETAIL_REPLY_CO
 }
 
 function buildTranslatePrompt(sourceText) {
-  return [
+  return prependGlobalPromptGuard([
     "请把下面内容翻译成中文，保留原意、语气和换行，不要添加解释。",
     sourceText
-  ].join("\n\n");
+  ].join("\n\n"));
 }
 
 function buildTranslateRequestBody(settings, prompt) {
@@ -2339,7 +2352,7 @@ function buildFanReplyPrompt(profile, sourceMessages = [], emojiSet = [], settin
     : [];
   const worldbookContext = buildBubbleWorldbookContext(promptSettings);
   const hotTopicsContext = buildBubbleHotTopicsContext(settings, promptSettings);
-  return [
+  return prependGlobalPromptGuard([
     "你正在模拟 Bubble 中创作者的粉丝回复列表。",
     "请严格输出 JSON 数组，不要输出额外解释。",
     `请输出 ${FAN_DETAIL_REPLY_COUNT} 个对象，每个对象只包含字段：language, text。`,
@@ -2370,7 +2383,7 @@ function buildFanReplyPrompt(profile, sourceMessages = [], emojiSet = [], settin
       : ""
   ]
     .filter(Boolean)
-    .join("\n\n");
+    .join("\n\n"));
 }
 
 function parseFanReplies(rawText, count = FAN_DETAIL_REPLY_COUNT) {
