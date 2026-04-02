@@ -118,6 +118,10 @@ function renderApiLogList() {
       const responseText = entry.responseText || "";
       const promptText = entry.prompt || "";
       const geminiFinishReason = entry.gemini_finish_reason || entry.geminiFinishReason || "";
+      const geminiSafetyRatings = entry.geminiSafetyRatings || entry.gemini_safety_ratings || null;
+      const geminiSafetyRatingsText = geminiSafetyRatings
+        ? JSON.stringify(geminiSafetyRatings, null, 2)
+        : "";
       return `
         <article class="api-log-card">
           <div class="api-log-card__head">
@@ -163,6 +167,16 @@ function renderApiLogList() {
               <summary>Response Body</summary>
               <pre class="api-log-pre">${escapeHtml(responseBodyText || "null")}</pre>
             </details>
+            ${
+              geminiSafetyRatingsText
+                ? `
+                    <details class="api-log-details">
+                      <summary>Gemini Safety Ratings</summary>
+                      <pre class="api-log-pre">${escapeHtml(geminiSafetyRatingsText)}</pre>
+                    </details>
+                  `
+                : ""
+            }
           </div>
         </article>
       `;

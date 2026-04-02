@@ -197,6 +197,12 @@
         entry.gemini_finish_reason || entry.geminiFinishReason || "",
         120
       ),
+      geminiSafetyRatings: compactValue(
+        entry.geminiSafetyRatings || entry.gemini_safety_ratings || null
+      ),
+      gemini_safety_ratings: compactValue(
+        entry.gemini_safety_ratings || entry.geminiSafetyRatings || null
+      ),
       errorMessage: compactString(entry.errorMessage || "", 1000),
       summary: compactString(entry.summary || "", 800)
     };
@@ -264,6 +270,12 @@
       ),
       gemini_finish_reason: sanitizeString(
         entry.gemini_finish_reason || entry.geminiFinishReason || ""
+      ),
+      geminiSafetyRatings: sanitizeValue(
+        entry.geminiSafetyRatings || entry.gemini_safety_ratings || null
+      ),
+      gemini_safety_ratings: sanitizeValue(
+        entry.gemini_safety_ratings || entry.geminiSafetyRatings || null
       ),
       status: String(entry.status || "success").trim() || "success",
       statusCode: Number.isFinite(Number(entry.statusCode)) ? Number(entry.statusCode) : 0,

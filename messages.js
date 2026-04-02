@@ -1321,10 +1321,16 @@ function buildGeminiLogFields(settings, payload) {
   if (normalizeApiMode(settings?.mode) !== "gemini") {
     return {};
   }
-  const finishReason = getGeminiFinishReason(payload);
+  const diagnostics = getGeminiResponseDiagnostics(payload);
+  const geminiSafetyRatings = {
+    prompt: diagnostics.promptSafety,
+    candidate: diagnostics.candidateSafety
+  };
   return {
-    geminiFinishReason: finishReason,
-    gemini_finish_reason: finishReason
+    geminiFinishReason: diagnostics.finishReason,
+    gemini_finish_reason: diagnostics.finishReason,
+    geminiSafetyRatings,
+    gemini_safety_ratings: geminiSafetyRatings
   };
 }
 

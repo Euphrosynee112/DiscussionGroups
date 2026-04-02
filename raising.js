@@ -1152,14 +1152,34 @@ function getGeminiFinishReason(payload) {
   return String(payload?.candidates?.[0]?.finishReason || payload?.candidates?.[0]?.finish_reason || "").trim();
 }
 
+function getGeminiSafetyRatings(payload) {
+  const promptFeedback = payload?.promptFeedback || payload?.prompt_feedback || null;
+  const candidate = payload?.candidates?.[0] || null;
+  return {
+    prompt: Array.isArray(promptFeedback?.safetyRatings)
+      ? promptFeedback.safetyRatings
+      : Array.isArray(promptFeedback?.safety_ratings)
+        ? promptFeedback.safety_ratings
+        : [],
+    candidate: Array.isArray(candidate?.safetyRatings)
+      ? candidate.safetyRatings
+      : Array.isArray(candidate?.safety_ratings)
+        ? candidate.safety_ratings
+        : []
+  };
+}
+
 function buildGeminiLogFields(settings, payload) {
   if (normalizeApiMode(settings?.mode) !== "gemini") {
     return {};
   }
   const finishReason = getGeminiFinishReason(payload);
+  const geminiSafetyRatings = getGeminiSafetyRatings(payload);
   return {
     geminiFinishReason: finishReason,
-    gemini_finish_reason: finishReason
+    gemini_finish_reason: finishReason,
+    geminiSafetyRatings,
+    gemini_safety_ratings: geminiSafetyRatings
   };
 }
 
