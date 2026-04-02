@@ -676,12 +676,12 @@ body.embedded .messages-shell {
 }
 
 .messages-location-map.is-compact .messages-location-map__header {
-  min-height: 64px;
-  padding: 12px 14px 10px;
+  min-height: 54px;
+  padding: 10px 12px 8px;
 }
 
 .messages-location-map.is-compact .messages-location-map__canvas {
-  min-height: 152px;
+  min-height: 116px;
 }
 
 .messages-bubble__time {
@@ -724,7 +724,7 @@ body.embedded .messages-shell {
   z-index: 5;
   flex-shrink: 0;
   margin-top: 0;
-  padding: 4px 10px calc(2px + env(safe-area-inset-bottom, 0px));
+  padding: 6px 10px calc(1px + env(safe-area-inset-bottom, 0px));
   display: grid;
   grid-template-columns: minmax(0, 1fr) 60px 40px 40px;
   gap: 8px;

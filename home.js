@@ -2,7 +2,7 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260401f";
+const APP_BUILD_VERSION = "20260402a";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -115,18 +115,21 @@ function hideHomeLayer(element) {
 }
 
 function safeGetItem(key) {
+  if (Object.prototype.hasOwnProperty.call(memoryStorage, key)) {
+    return memoryStorage[key];
+  }
   try {
     return window.localStorage.getItem(key);
   } catch (_error) {
-    return Object.prototype.hasOwnProperty.call(memoryStorage, key) ? memoryStorage[key] : null;
+    return null;
   }
 }
 
 function safeSetItem(key, value) {
+  memoryStorage[key] = value;
   try {
     window.localStorage.setItem(key, value);
   } catch (_error) {
-    memoryStorage[key] = value;
   }
 }
 
@@ -426,6 +429,21 @@ function pickForumProfilePayload(profile = {}) {
   };
 }
 
+function pickChatProfilePayload(profile = {}) {
+  const source = profile && typeof profile === "object" ? profile : {};
+  const chatProfileInitialized = Boolean(source.chatProfileInitialized);
+  return {
+    username: String(source.chatUsername || source.username || "").trim(),
+    userId: String(source.chatUserId || source.userId || "").trim(),
+    avatarImage: chatProfileInitialized
+      ? String(source.chatAvatarImage || "").trim()
+      : String(source.chatAvatarImage || source.avatarImage || "").trim(),
+    personaPrompt: String(
+      source.chatPersonaPrompt || source.personaPrompt || ""
+    ).trim()
+  };
+}
+
 function hasAnyTextValue(source = {}) {
   return Object.values(source).some((value) => String(value || "").trim());
 }
@@ -433,6 +451,7 @@ function hasAnyTextValue(source = {}) {
 function buildTransferPayloadFromCurrentState() {
   const settings = loadSettings();
   const profile = readStoredJson(PROFILE_KEY, {}) || {};
+  const chatProfile = pickChatProfilePayload(profile);
   const worldbooks = readStoredJson(WORLD_BOOKS_KEY, { categories: [], entries: [] }) || {};
   const contacts = readStoredJson(MESSAGE_CONTACTS_KEY, []) || [];
   const apiConfigs = normalizeApiConfigs(settings.apiConfigs || []);
@@ -473,9 +492,7 @@ function buildTransferPayloadFromCurrentState() {
       customTabs: normalizeObjectArray(settings.customTabs)
     },
     forumProfile: pickForumProfilePayload(profile),
-    chatPersona: {
-      personaPrompt: String(profile.personaPrompt || "").trim()
-    },
+    chatPersona: chatProfile,
     worldbooks: {
       categories: normalizeObjectArray(worldbooks.categories),
       entries: normalizeObjectArray(worldbooks.entries).filter(
@@ -621,8 +638,8 @@ function normalizeTransferPayload(parsed) {
     forumProfile: hasAnyTextValue(pickForumProfilePayload(profile))
       ? pickForumProfilePayload(profile)
       : null,
-    chatPersona: String(profile.personaPrompt || "").trim()
-      ? { personaPrompt: String(profile.personaPrompt || "").trim() }
+    chatPersona: hasAnyTextValue(pickChatProfilePayload(profile))
+      ? pickChatProfilePayload(profile)
       : null,
     worldbooks: parsed.worldbooks && typeof parsed.worldbooks === "object" ? parsed.worldbooks : null,
     contacts: parsed.contacts && typeof parsed.contacts === "object" ? parsed.contacts : null,
@@ -713,10 +730,10 @@ function buildTransferSections(payload, options = {}) {
     },
     {
       id: "chatPersona",
-      label: "Chat 用户人设",
-      description: "Chat 下的人设 prompt，会参与 Bubble / 私聊等生成。",
-      checked: Boolean(String(payload?.chatPersona?.personaPrompt || "").trim()),
-      disabled: !String(payload?.chatPersona?.personaPrompt || "").trim(),
+      label: "Chat 用户资料",
+      description: "Chat / Bubble 共用的昵称、头像、微信号与人设 prompt。",
+      checked: Boolean(payload?.chatPersona && hasAnyTextValue(payload.chatPersona)),
+      disabled: !(payload?.chatPersona && hasAnyTextValue(payload.chatPersona)),
       items: []
     },
     {
@@ -1205,7 +1222,24 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
   }
 
   if (imported.chatPersona) {
-    nextProfile.personaPrompt = String(imported.chatPersona.personaPrompt || "").trim();
+    const shouldInitializeChatProfile =
+      nextProfile.chatProfileInitialized ||
+      Object.prototype.hasOwnProperty.call(imported.chatPersona, "username") ||
+      Object.prototype.hasOwnProperty.call(imported.chatPersona, "userId") ||
+      Object.prototype.hasOwnProperty.call(imported.chatPersona, "avatarImage");
+    nextProfile.chatProfileInitialized = Boolean(shouldInitializeChatProfile);
+    if (Object.prototype.hasOwnProperty.call(imported.chatPersona, "username")) {
+      nextProfile.chatUsername = String(imported.chatPersona.username || "").trim();
+    }
+    if (Object.prototype.hasOwnProperty.call(imported.chatPersona, "userId")) {
+      nextProfile.chatUserId = String(imported.chatPersona.userId || "").trim();
+    }
+    if (Object.prototype.hasOwnProperty.call(imported.chatPersona, "avatarImage")) {
+      nextProfile.chatAvatarImage = String(imported.chatPersona.avatarImage || "").trim();
+    }
+    if (Object.prototype.hasOwnProperty.call(imported.chatPersona, "personaPrompt")) {
+      nextProfile.chatPersonaPrompt = String(imported.chatPersona.personaPrompt || "").trim();
+    }
   }
 
   if (imported.worldbooks) {

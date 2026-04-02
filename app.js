@@ -242,18 +242,21 @@ const state = {
 };
 
 function safeGetItem(key) {
+  if (Object.prototype.hasOwnProperty.call(memoryStorage, key)) {
+    return memoryStorage[key];
+  }
   try {
     return window.localStorage.getItem(key);
   } catch (_error) {
-    return Object.prototype.hasOwnProperty.call(memoryStorage, key) ? memoryStorage[key] : null;
+    return null;
   }
 }
 
 function safeSetItem(key, value) {
+  memoryStorage[key] = value;
   try {
     window.localStorage.setItem(key, value);
   } catch (_error) {
-    memoryStorage[key] = value;
   }
 }
 
@@ -1436,6 +1439,43 @@ function readFileAsDataUrl(file) {
   });
 }
 
+function readAvatarAsDataUrl(file, options = {}) {
+  const avatarOptions = options && typeof options === "object" ? options : {};
+  const maxSide = Math.max(avatarOptions.maxSide || 420, 180);
+  const quality = Math.min(0.92, Math.max(0.68, Number(avatarOptions.quality) || 0.8));
+  if (!file || !String(file.type || "").startsWith("image/")) {
+    return readFileAsDataUrl(file);
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const image = new Image();
+      image.onload = () => {
+        const longestSide = Math.max(image.width || 0, image.height || 0) || maxSide;
+        const scale = Math.min(1, maxSide / longestSide);
+        const width = Math.max(1, Math.round((image.width || maxSide) * scale));
+        const height = Math.max(1, Math.round((image.height || maxSide) * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext("2d");
+        if (!context) {
+          resolve(String(reader.result || ""));
+          return;
+        }
+        context.clearRect(0, 0, width, height);
+        context.drawImage(image, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      image.onerror = () => resolve(String(reader.result || ""));
+      image.src = String(reader.result || "");
+    };
+    reader.onerror = () => reject(new Error("图片读取失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
 function loadProfilePosts() {
   const raw = safeGetItem(PROFILE_POSTS_KEY);
   if (!raw) {
@@ -1464,7 +1504,7 @@ function persistProfilePosts(posts) {
 
 function createDefaultFeeds() {
   return {
-    entertainment: buildLocalPosts(DEFAULT_SETTINGS, DEFAULT_POST_COUNT, "entertainment")
+    entertainment: []
   };
 }
 
@@ -1505,11 +1545,7 @@ function loadFeeds() {
         0
       );
       if (totalPosts === 0) {
-        normalized.entertainment = buildLocalPosts(
-          DEFAULT_SETTINGS,
-          DEFAULT_POST_COUNT,
-          "entertainment"
-        );
+        normalized.entertainment = [];
       }
       return normalized;
     }
@@ -2080,7 +2116,7 @@ async function handleProfileImageUpload(file, targetKey, successMessage) {
   }
 
   try {
-    const dataUrl = await readFileAsDataUrl(file);
+    const dataUrl = await readAvatarAsDataUrl(file);
     state.profile = {
       ...getCurrentProfile(),
       [targetKey]: dataUrl
@@ -2770,7 +2806,7 @@ function setPullIndicator(distance = 0, mode = "idle") {
 
   if (mode === "loading") {
     pullLabelEl.textContent = "正在刷新讨论流";
-    pullMetaEl.textContent = "正在请求 API 或本地回退生成内容";
+    pullMetaEl.textContent = "正在请求 API 生成内容";
     return;
   }
 
@@ -3224,21 +3260,6 @@ function ensureDistinctGeneratedPosts(
 
   (incomingPosts || []).forEach((post) => {
     if (!post) {
-      return;
-    }
-    if (isPostDirectionTooSimilar(post, [...historyRefs, ...chosen])) {
-      return;
-    }
-    chosen.push(post);
-  });
-
-  if (chosen.length >= count) {
-    return chosen.slice(0, count);
-  }
-
-  const localCandidates = buildLocalPosts(settings, Math.max(count * 3, 12), feedType);
-  localCandidates.forEach((post) => {
-    if (chosen.length >= count) {
       return;
     }
     if (isPostDirectionTooSimilar(post, [...historyRefs, ...chosen])) {
@@ -4078,26 +4099,14 @@ async function loadPostDiscussionReplies(postId, bucketName = state.activeFeed, 
   const replyCount = settings.replyCount || DEFAULT_REPLY_COUNT;
 
   try {
-    let replies;
-    try {
-      replies = await requestGeneratedReplies(
-        settings,
-        profile,
-        post.feedType || resolvedBucket,
-        post,
-        null,
-        replyCount
-      );
-    } catch (_error) {
-      replies = buildLocalReplies(
-        settings,
-        profile,
-        post.feedType || resolvedBucket,
-        post,
-        null,
-        replyCount
-      );
-    }
+    const replies = await requestGeneratedReplies(
+      settings,
+      profile,
+      post.feedType || resolvedBucket,
+      post,
+      null,
+      replyCount
+    );
 
     const nextReplies = append
       ? mergeRepliesWithUniqueIds(existingReplies, replies)
@@ -4110,13 +4119,14 @@ async function loadPostDiscussionReplies(postId, bucketName = state.activeFeed, 
     syncDiscussionForAuthoredPost(post, bucketName, postId, feedState[postId]);
     persistDiscussions();
     renderThreadModal();
-  } catch (_error) {
+  } catch (error) {
     feedState[postId] = {
       expanded: true,
       loading: false,
       replies: existingReplies
     };
     persistDiscussions();
+    setHomeStatus(`讨论回复加载失败：${error?.message || "请求失败"}`, "error");
     renderThreadModal();
   }
 }
@@ -5416,7 +5426,7 @@ async function requestGeneratedPosts(
   settings.endpoint = requestEndpoint;
 
   if (!requestEndpoint) {
-    throw new Error("未配置 API 地址，已切换为本地回退生成。");
+    throw new Error("未配置 API 地址，无法生成讨论流。");
   }
 
   if (normalizeApiMode(settings.mode) === "openai" && !settings.model) {
@@ -5910,7 +5920,7 @@ async function requestGeneratedReplies(
   settings.endpoint = requestEndpoint;
 
   if (!requestEndpoint) {
-    throw new Error("未配置 API 地址，已切换为本地回退生成。");
+    throw new Error("未配置 API 地址，无法生成回复。");
   }
   if (normalizeApiMode(settings.mode) === "gemini" && !settings.token) {
     throw new Error("Gemini 模式需要填写 API Key。");
@@ -6035,27 +6045,15 @@ async function expandPostDiscussion(postId, bucketName = state.activeFeed) {
   const settings = { ...getCurrentSettings() };
   const profile = { ...getCurrentProfile() };
   try {
-    let replies;
     const replyCount = settings.replyCount || DEFAULT_REPLY_COUNT;
-    try {
-      replies = await requestGeneratedReplies(
-        settings,
-        profile,
-        post.feedType || state.activeFeed,
-        post,
-        null,
-        replyCount
-      );
-    } catch (_error) {
-      replies = buildLocalReplies(
-        settings,
-        profile,
-        post.feedType || state.activeFeed,
-        post,
-        null,
-        replyCount
-      );
-    }
+    const replies = await requestGeneratedReplies(
+      settings,
+      profile,
+      post.feedType || state.activeFeed,
+      post,
+      null,
+      replyCount
+    );
 
     feedState[postId] = {
       expanded: true,
@@ -6071,13 +6069,14 @@ async function expandPostDiscussion(postId, bucketName = state.activeFeed) {
     persistDiscussions();
     renderActiveFeed();
     renderProfilePage();
-  } catch (_error) {
+  } catch (error) {
     feedState[postId] = {
       expanded: true,
       loading: false,
       replies: []
     };
     persistDiscussions();
+    setHomeStatus(`讨论回复加载失败：${error?.message || "请求失败"}`, "error");
     renderActiveFeed();
     renderProfilePage();
   }
@@ -6136,26 +6135,14 @@ async function toggleNestedReply(postId, replyId, bucketName = state.activeFeed)
   const settings = { ...getCurrentSettings() };
   const profile = { ...getCurrentProfile() };
   try {
-    let replies;
-    try {
-      replies = await requestGeneratedReplies(
-        settings,
-        profile,
-        rootPost.feedType || state.activeFeed,
-        rootPost,
-        targetReply,
-        NESTED_REPLY_COUNT
-      );
-    } catch (_error) {
-      replies = buildLocalReplies(
-        settings,
-        profile,
-        rootPost.feedType || state.activeFeed,
-        rootPost,
-        targetReply,
-        NESTED_REPLY_COUNT
-      );
-    }
+    const replies = await requestGeneratedReplies(
+      settings,
+      profile,
+      rootPost.feedType || state.activeFeed,
+      rootPost,
+      targetReply,
+      NESTED_REPLY_COUNT
+    );
 
     targetReply.children = replies;
     targetReply.loading = false;
@@ -6169,10 +6156,11 @@ async function toggleNestedReply(postId, replyId, bucketName = state.activeFeed)
     renderActiveFeed();
     renderProfilePage();
     renderThreadModal();
-  } catch (_error) {
+  } catch (error) {
     targetReply.children = [];
     targetReply.loading = false;
     persistDiscussions();
+    setHomeStatus(`楼中楼加载失败：${error?.message || "请求失败"}`, "error");
     renderActiveFeed();
     renderProfilePage();
     renderThreadModal();

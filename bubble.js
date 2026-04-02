@@ -158,26 +158,29 @@ function hideLayer(element) {
 }
 
 function safeGetItem(key) {
+  if (Object.prototype.hasOwnProperty.call(memoryStorage, key)) {
+    return memoryStorage[key];
+  }
   try {
     return window.localStorage.getItem(key);
   } catch (_error) {
-    return Object.prototype.hasOwnProperty.call(memoryStorage, key) ? memoryStorage[key] : null;
+    return null;
   }
 }
 
 function safeSetItem(key, value) {
+  memoryStorage[key] = value;
   try {
     window.localStorage.setItem(key, value);
   } catch (_error) {
-    memoryStorage[key] = value;
   }
 }
 
 function safeRemoveItem(key) {
+  delete memoryStorage[key];
   try {
     window.localStorage.removeItem(key);
   } catch (_error) {
-    delete memoryStorage[key];
   }
 }
 
@@ -1035,9 +1038,30 @@ function loadProfile() {
   }
 
   try {
+    const storedProfile = JSON.parse(raw);
+    const chatProfileInitialized = Boolean(storedProfile?.chatProfileInitialized);
+    const username = String(
+      storedProfile?.chatUsername || storedProfile?.username || DEFAULT_PROFILE.username
+    ).trim();
+    const userId = String(
+      storedProfile?.chatUserId || storedProfile?.userId || DEFAULT_PROFILE.userId
+    ).trim();
+    const avatarImage = chatProfileInitialized
+      ? String(storedProfile?.chatAvatarImage || "").trim()
+      : String(storedProfile?.chatAvatarImage || storedProfile?.avatarImage || "").trim();
+    const personaPrompt = String(
+      storedProfile?.chatPersonaPrompt ||
+        storedProfile?.personaPrompt ||
+        DEFAULT_PROFILE.personaPrompt
+    ).trim();
+
     return {
       ...DEFAULT_PROFILE,
-      ...JSON.parse(raw)
+      ...storedProfile,
+      username: username || DEFAULT_PROFILE.username,
+      userId: userId || DEFAULT_PROFILE.userId,
+      avatarImage,
+      personaPrompt: personaPrompt || DEFAULT_PROFILE.personaPrompt
     };
   } catch (_error) {
     return { ...DEFAULT_PROFILE };
@@ -2320,6 +2344,61 @@ function parseFanReplies(rawText, count = FAN_DETAIL_REPLY_COUNT) {
     .filter((item) => item.text);
 }
 
+function mixFanRepliesByLanguage(replies, seed = "") {
+  const normalizedReplies = Array.isArray(replies) ? replies.slice() : [];
+  if (normalizedReplies.length <= 1) {
+    return normalizedReplies;
+  }
+
+  const groups = new Map();
+  normalizedReplies.forEach((item, index) => {
+    const language = normalizeReplyLanguage(item.language, item.text);
+    const bucket = groups.get(language) || [];
+    bucket.push({
+      ...item,
+      language,
+      sortKey: Number.parseInt(
+        hashText(`${seed}-${language}-${index}-${item.text || ""}`).slice(0, 8),
+        36
+      )
+    });
+    groups.set(language, bucket);
+  });
+
+  const languageOrder = [...groups.keys()].sort((left, right) => {
+    const leftScore = Number.parseInt(hashText(`${seed}-lang-${left}`).slice(0, 8), 36) || 0;
+    const rightScore = Number.parseInt(hashText(`${seed}-lang-${right}`).slice(0, 8), 36) || 0;
+    return leftScore - rightScore;
+  });
+
+  languageOrder.forEach((language) => {
+    const bucket = groups.get(language) || [];
+    bucket.sort((left, right) => (left.sortKey || 0) - (right.sortKey || 0));
+  });
+
+  const mixedReplies = [];
+  while (mixedReplies.length < normalizedReplies.length) {
+    let added = false;
+    languageOrder.forEach((language) => {
+      const bucket = groups.get(language) || [];
+      if (!bucket.length) {
+        return;
+      }
+      const nextReply = bucket.shift();
+      if (nextReply) {
+        const { sortKey: _sortKey, ...reply } = nextReply;
+        mixedReplies.push(reply);
+        added = true;
+      }
+    });
+    if (!added) {
+      break;
+    }
+  }
+
+  return mixedReplies;
+}
+
 async function generateFanRepliesForDetail(detailId, options = {}) {
   const placeholder = findFanPlaceholderByDetailId(detailId);
   const detail = ensureFanDetail(
@@ -2375,7 +2454,11 @@ async function generateFanRepliesForDetail(detailId, options = {}) {
       buildFanReplyPrompt(state.profile, detail.sourceMessages, detail.emojiSet, getCurrentSettings()),
       FAN_DETAIL_REPLY_COUNT
     );
-    const replies = parseFanReplies(rawText, FAN_DETAIL_REPLY_COUNT).map((item, index) =>
+    const mixedReplies = mixFanRepliesByLanguage(
+      parseFanReplies(rawText, FAN_DETAIL_REPLY_COUNT),
+      `${detailId}-${detail.sourceText || parentMessage.text || ""}`
+    );
+    const replies = mixedReplies.map((item, index) =>
       normalizeFanReply(
         {
           id: `fan_reply_${Date.now()}_${index}_${hashText(item.text)}`,
@@ -2750,7 +2833,7 @@ function init() {
   hideLayer(bubbleFanDetailModalEl);
   refreshBubbleData();
   renderBubbleRooms();
-  setBubbleStatus("Bubble 会自动读取论坛个人主页资料；详情页会使用当前 API 生成粉丝回复。");
+  setBubbleStatus("Bubble 会优先读取 Chat 资料；首次未单独设置时会沿用论坛资料。");
   attachEvents();
 }
 

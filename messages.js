@@ -150,6 +150,9 @@ const messagesContactAvatarFileInputEl = document.querySelector("#messages-conta
 const messagesContactAvatarResetBtnEl = document.querySelector("#messages-contact-avatar-reset-btn");
 const messagesContactNameInputEl = document.querySelector("#messages-contact-name-input");
 const messagesContactPersonaInputEl = document.querySelector("#messages-contact-persona-input");
+const messagesContactSpecialPersonaInputEl = document.querySelector(
+  "#messages-contact-special-persona-input"
+);
 const messagesContactEditorStatusEl = document.querySelector("#messages-contact-editor-status");
 
 const messagesPickerModalEl = document.querySelector("#messages-picker-modal");
@@ -474,18 +477,21 @@ function bindMessagesViewportHeight() {
 }
 
 function safeGetItem(key) {
+  if (Object.prototype.hasOwnProperty.call(memoryStorage, key)) {
+    return memoryStorage[key];
+  }
   try {
     return window.localStorage.getItem(key);
   } catch (_error) {
-    return Object.prototype.hasOwnProperty.call(memoryStorage, key) ? memoryStorage[key] : null;
+    return null;
   }
 }
 
 function safeSetItem(key, value) {
+  memoryStorage[key] = value;
   try {
     window.localStorage.setItem(key, value);
   } catch (_error) {
-    memoryStorage[key] = value;
   }
 }
 
@@ -740,6 +746,43 @@ function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("图片读取失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function readAvatarAsDataUrl(file, options = {}) {
+  const avatarOptions = options && typeof options === "object" ? options : {};
+  const maxSide = Math.max(avatarOptions.maxSide || 420, 180);
+  const quality = Math.min(0.92, Math.max(0.68, Number(avatarOptions.quality) || 0.8));
+  if (!file || !String(file.type || "").startsWith("image/")) {
+    return readFileAsDataUrl(file);
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const image = new Image();
+      image.onload = () => {
+        const longestSide = Math.max(image.width || 0, image.height || 0) || maxSide;
+        const scale = Math.min(1, maxSide / longestSide);
+        const width = Math.max(1, Math.round((image.width || maxSide) * scale));
+        const height = Math.max(1, Math.round((image.height || maxSide) * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext("2d");
+        if (!context) {
+          resolve(String(reader.result || ""));
+          return;
+        }
+        context.clearRect(0, 0, width, height);
+        context.drawImage(image, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      image.onerror = () => resolve(String(reader.result || ""));
+      image.src = String(reader.result || "");
+    };
     reader.onerror = () => reject(new Error("图片读取失败"));
     reader.readAsDataURL(file);
   });
@@ -1188,9 +1231,30 @@ function loadProfile() {
   }
 
   try {
+    const storedProfile = JSON.parse(raw);
+    const chatProfileInitialized = Boolean(storedProfile?.chatProfileInitialized);
+    const username = String(
+      storedProfile?.chatUsername || storedProfile?.username || DEFAULT_PROFILE.username
+    ).trim();
+    const userId = String(
+      storedProfile?.chatUserId || storedProfile?.userId || DEFAULT_PROFILE.userId
+    ).trim();
+    const avatarImage = chatProfileInitialized
+      ? String(storedProfile?.chatAvatarImage || "").trim()
+      : String(storedProfile?.chatAvatarImage || storedProfile?.avatarImage || "").trim();
+    const personaPrompt = String(
+      storedProfile?.chatPersonaPrompt ||
+        storedProfile?.personaPrompt ||
+        DEFAULT_PROFILE.personaPrompt
+    ).trim();
+
     return {
       ...DEFAULT_PROFILE,
-      ...JSON.parse(raw)
+      ...storedProfile,
+      username: username || DEFAULT_PROFILE.username,
+      userId: userId || DEFAULT_PROFILE.userId,
+      avatarImage,
+      personaPrompt: personaPrompt || DEFAULT_PROFILE.personaPrompt
     };
   } catch (_error) {
     return { ...DEFAULT_PROFILE };
@@ -1198,7 +1262,26 @@ function loadProfile() {
 }
 
 function persistProfile(profile) {
-  safeSetItem(PROFILE_KEY, JSON.stringify(profile));
+  let storedProfile = {};
+  try {
+    storedProfile = JSON.parse(safeGetItem(PROFILE_KEY) || "{}") || {};
+  } catch (_error) {
+    storedProfile = {};
+  }
+
+  safeSetItem(
+    PROFILE_KEY,
+    JSON.stringify({
+      ...storedProfile,
+      chatProfileInitialized: true,
+      chatUsername: String(profile?.username || DEFAULT_PROFILE.username).trim() || DEFAULT_PROFILE.username,
+      chatUserId: String(profile?.userId || DEFAULT_PROFILE.userId).trim() || DEFAULT_PROFILE.userId,
+      chatAvatarImage: String(profile?.avatarImage || "").trim(),
+      chatPersonaPrompt:
+        String(profile?.personaPrompt || DEFAULT_PROFILE.personaPrompt).trim() ||
+        DEFAULT_PROFILE.personaPrompt
+    })
+  );
 }
 
 function syncProfileStateFromStorage() {
@@ -1215,6 +1298,7 @@ function normalizeContact(contact, index = 0) {
     avatarImage: String(source.avatarImage || "").trim(),
     avatarText: String(source.avatarText || "").trim() || getContactAvatarFallback({ name }),
     personaPrompt: String(source.personaPrompt || "").trim(),
+    specialUserPersona: String(source.specialUserPersona || "").trim(),
     createdAt: Number(source.createdAt) || Date.now(),
     updatedAt: Number(source.updatedAt) || Date.now()
   };
@@ -2744,6 +2828,12 @@ function buildConversationSystemPrompt(
       profile.personaPrompt || DEFAULT_PROFILE.personaPrompt
     }。`
   );
+
+  if (String(contact.specialUserPersona || "").trim()) {
+    parts.push(
+      `你对这个用户的特别认知：${String(contact.specialUserPersona || "").trim()}。这部分是你基于相处形成的更私人、更具体的认识，重要程度略高于用户的通用画像。`
+    );
+  }
 
   if (requestOptions.regenerate) {
     parts.push(
@@ -5147,7 +5237,8 @@ function applyContactToForm(contact = null) {
     id: "",
     name: "",
     avatarImage: "",
-    personaPrompt: ""
+    personaPrompt: "",
+    specialUserPersona: ""
   };
   state.contactEditorAvatarImage = String(resolvedContact.avatarImage || "").trim();
   if (messagesContactNameInputEl) {
@@ -5155,6 +5246,9 @@ function applyContactToForm(contact = null) {
   }
   if (messagesContactPersonaInputEl) {
     messagesContactPersonaInputEl.value = resolvedContact.personaPrompt || "";
+  }
+  if (messagesContactSpecialPersonaInputEl) {
+    messagesContactSpecialPersonaInputEl.value = resolvedContact.specialUserPersona || "";
   }
   if (messagesContactModalTitleEl) {
     messagesContactModalTitleEl.textContent = resolvedContact.id ? "编辑联系人" : "新建联系人";
@@ -5172,6 +5266,7 @@ function getCurrentContactDraft() {
     avatarImage: state.contactEditorAvatarImage || "",
     avatarText: getContactAvatarFallback({ name }),
     personaPrompt: String(messagesContactPersonaInputEl?.value || "").trim(),
+    specialUserPersona: String(messagesContactSpecialPersonaInputEl?.value || "").trim(),
     createdAt: existingContact?.createdAt || Date.now(),
     updatedAt: Date.now()
   };
@@ -6557,7 +6652,7 @@ function attachEvents() {
         return;
       }
       try {
-        state.profileEditorAvatarImage = await readFileAsDataUrl(file);
+        state.profileEditorAvatarImage = await readAvatarAsDataUrl(file);
         renderProfileEditorAvatarPreview();
         setEditorStatus(messagesProfileEditorStatusEl, "头像图片已更新。", "success");
       } catch (error) {
@@ -6609,7 +6704,7 @@ function attachEvents() {
         return;
       }
       try {
-        state.contactEditorAvatarImage = await readFileAsDataUrl(file);
+        state.contactEditorAvatarImage = await readAvatarAsDataUrl(file);
         renderContactEditorAvatarPreview();
         setEditorStatus(messagesContactEditorStatusEl, "头像图片已更新。", "success");
       } catch (error) {

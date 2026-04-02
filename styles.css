@@ -865,6 +865,7 @@ body.embedded .embedded-close-btn {
 
 .translation-tags {
   margin: 0 0 8px;
+  font-size: 14px;
   line-height: 1.65;
   white-space: pre-wrap;
   word-break: break-word;
@@ -873,6 +874,7 @@ body.embedded .embedded-close-btn {
 
 .translation-text {
   margin: 0;
+  font-size: 14px;
   line-height: 1.65;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1833,6 +1835,12 @@ textarea {
     margin-top: 8px;
     font-size: 13px;
     line-height: 1.55;
+  }
+
+  .translation-text,
+  .translation-tags {
+    font-size: 13px;
+    line-height: 1.58;
   }
 
   .post-actions,
