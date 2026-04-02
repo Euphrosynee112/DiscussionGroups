@@ -16,6 +16,20 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function formatPreviewValue(value) {
+  if (value == null) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch (_error) {
+    return String(value);
+  }
+}
+
 function isEmbeddedView() {
   try {
     const params = new URLSearchParams(window.location.search);
@@ -117,6 +131,20 @@ function renderApiLogList() {
       const responseBodyText = JSON.stringify(entry.responseBody || {}, null, 2);
       const responseText = entry.responseText || "";
       const promptText = entry.prompt || "";
+      const decodedPrompt = window.PulseApiLog?.decodeValueByLogId
+        ? String(window.PulseApiLog.decodeValueByLogId(entry.id, promptText) || "")
+        : "";
+      const decodedRequestBody = window.PulseApiLog?.decodeValueByLogId
+        ? window.PulseApiLog.decodeValueByLogId(entry.id, entry.requestBody || {})
+        : null;
+      const decodedRequestBodyText = formatPreviewValue(decodedRequestBody);
+      const decodedResponseText = window.PulseApiLog?.decodeValueByLogId
+        ? String(window.PulseApiLog.decodeValueByLogId(entry.id, responseText) || "")
+        : "";
+      const decodedResponseBody = window.PulseApiLog?.decodeValueByLogId
+        ? window.PulseApiLog.decodeValueByLogId(entry.id, entry.responseBody || {})
+        : null;
+      const decodedResponseBodyText = formatPreviewValue(decodedResponseBody);
       const geminiFinishReason = entry.gemini_finish_reason || entry.geminiFinishReason || "";
       const geminiSafetyRatings = entry.geminiSafetyRatings || entry.gemini_safety_ratings || null;
       const geminiSafetyRatingsText = geminiSafetyRatings
@@ -155,18 +183,58 @@ function renderApiLogList() {
               <summary>Prompt</summary>
               <pre class="api-log-pre">${escapeHtml(promptText || "（未记录）")}</pre>
             </details>
+            ${
+              decodedPrompt && decodedPrompt !== promptText
+                ? `
+                    <details class="api-log-details">
+                      <summary>Prompt 解码预览</summary>
+                      <pre class="api-log-pre">${escapeHtml(decodedPrompt)}</pre>
+                    </details>
+                  `
+                : ""
+            }
             <details class="api-log-details">
               <summary>Request Body</summary>
               <pre class="api-log-pre">${escapeHtml(requestBodyText || "null")}</pre>
             </details>
+            ${
+              decodedRequestBodyText && decodedRequestBodyText !== requestBodyText
+                ? `
+                    <details class="api-log-details">
+                      <summary>Request Body 解码预览</summary>
+                      <pre class="api-log-pre">${escapeHtml(decodedRequestBodyText)}</pre>
+                    </details>
+                  `
+                : ""
+            }
             <details class="api-log-details">
               <summary>Response Text</summary>
               <pre class="api-log-pre">${escapeHtml(responseText || "（空）")}</pre>
             </details>
+            ${
+              decodedResponseText && decodedResponseText !== responseText
+                ? `
+                    <details class="api-log-details">
+                      <summary>Response Text 解码预览</summary>
+                      <pre class="api-log-pre">${escapeHtml(decodedResponseText)}</pre>
+                    </details>
+                  `
+                : ""
+            }
             <details class="api-log-details">
               <summary>Response Body</summary>
               <pre class="api-log-pre">${escapeHtml(responseBodyText || "null")}</pre>
             </details>
+            ${
+              decodedResponseBodyText && decodedResponseBodyText !== responseBodyText
+                ? `
+                    <details class="api-log-details">
+                      <summary>Response Body 解码预览</summary>
+                      <pre class="api-log-pre">${escapeHtml(decodedResponseBodyText)}</pre>
+                    </details>
+                  `
+                : ""
+            }
             ${
               geminiSafetyRatingsText
                 ? `

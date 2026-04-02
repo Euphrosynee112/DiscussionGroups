@@ -47,7 +47,8 @@ const DEFAULT_SETTINGS = {
   apiConfigs: [],
   activeApiConfigId: "",
   translationApiEnabled: false,
-  translationApiConfigId: ""
+  translationApiConfigId: "",
+  privacyAllowlist: []
 };
 
 const DEFAULT_PROFILE = {
@@ -398,6 +399,66 @@ function appendApiLog(entry) {
     window.PulseApiLog?.append?.(entry);
   } catch (_error) {
   }
+}
+
+function normalizePrivacyAllowlist(value) {
+  if (window.PulsePrivacyCover?.normalizeAllowlist) {
+    return window.PulsePrivacyCover.normalizeAllowlist(value);
+  }
+  const lines = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/\r?\n/g)
+      : [];
+  const unique = new Set();
+  return lines
+    .map((item) => String(item || "").trim())
+    .filter((item) => {
+      if (!item || unique.has(item)) {
+        return false;
+      }
+      unique.add(item);
+      return true;
+    });
+}
+
+function createPrivacySession(options = {}) {
+  return window.PulsePrivacyCover?.createSession?.(options) || null;
+}
+
+function preparePromptWithPrivacy(value, session) {
+  if (!session || !window.PulsePrivacyCover?.preparePrompt) {
+    return String(value || "");
+  }
+  return window.PulsePrivacyCover.preparePrompt(value, session);
+}
+
+function encodeTextWithPrivacy(value, session) {
+  if (!session || !window.PulsePrivacyCover?.encodeText) {
+    return String(value || "");
+  }
+  return window.PulsePrivacyCover.encodeText(value, session);
+}
+
+function decodeTextWithPrivacy(value, session) {
+  if (!session || !window.PulsePrivacyCover?.decodeText) {
+    return String(value || "");
+  }
+  return window.PulsePrivacyCover.decodeText(value, session);
+}
+
+function decodeValueWithPrivacy(value, session) {
+  if (!session || !window.PulsePrivacyCover?.decodeValue) {
+    return value;
+  }
+  return window.PulsePrivacyCover.decodeValue(value, session);
+}
+
+function applyPrivacyToLogEntry(entry, session) {
+  if (!session || !window.PulsePrivacyCover?.applyPrivacyToLogEntry) {
+    return entry;
+  }
+  return window.PulsePrivacyCover.applyPrivacyToLogEntry(entry, session);
 }
 
 function buildDiscussionApiLogBase(action, settings, endpoint, prompt, requestBody, summary = "") {
@@ -1373,6 +1434,9 @@ function buildNormalizedSettingsSnapshot(source, options = {}) {
       ? ""
       : String(merged.model || getDefaultModelByMode(merged.mode)).trim() ||
         getDefaultModelByMode(merged.mode);
+  merged.privacyAllowlist = normalizePrivacyAllowlist(
+    merged.privacyAllowlist || source?.privacyAllowlist || []
+  );
 
   const activeConfig =
     merged.apiConfigs.find((item) => item.id === merged.activeApiConfigId) || null;
@@ -5259,15 +5323,25 @@ async function requestGeneratedPosts(
   }
 
   const prompt = buildPrompt(settings, resolvedFeedType, count);
-  const headers = buildRequestHeaders(settings);
-  const requestBody = buildRequestBody(settings, prompt, count);
-  const logBase = buildDiscussionApiLogBase(
-    "generate_posts",
+  const privacySession = createPrivacySession({
     settings,
-    requestEndpoint,
-    prompt,
-    requestBody,
-    `页签：${getFeedLabel(resolvedFeedType)} · 数量：${count}`
+    profile: getCurrentProfile(),
+    resolvedFeedType,
+    prompt
+  });
+  const encodedPrompt = preparePromptWithPrivacy(prompt, privacySession);
+  const headers = buildRequestHeaders(settings);
+  const requestBody = buildRequestBody(settings, encodedPrompt, count);
+  const logBase = applyPrivacyToLogEntry(
+    buildDiscussionApiLogBase(
+      "generate_posts",
+      settings,
+      requestEndpoint,
+      encodedPrompt,
+      requestBody,
+      `页签：${getFeedLabel(resolvedFeedType)} · 数量：${count}`
+    ),
+    privacySession
   );
   let logged = false;
 
@@ -5339,10 +5413,16 @@ async function requestGeneratedPosts(
       statusCode: response.status,
       responseText: rawResponse,
       responseBody: payload,
-      summary: `页签：${getFeedLabel(resolvedFeedType)} · 已生成 ${count} 条帖子`
+      summary: encodeTextWithPrivacy(
+        `页签：${getFeedLabel(resolvedFeedType)} · 已生成 ${count} 条帖子`,
+        privacySession
+      )
     });
     logged = true;
-    return parseGeneratedPosts(message, count, resolvedFeedType);
+    return decodeValueWithPrivacy(
+      parseGeneratedPosts(message, count, resolvedFeedType),
+      privacySession
+    );
   } catch (error) {
     if (!logged) {
       appendApiLog({
@@ -5463,14 +5543,23 @@ async function requestTranslatedPostContent(settings, post) {
   }
 
   const prompt = buildTranslatePostPrompt(post);
-  const requestBody = buildTranslateRequestBody(settings, prompt);
-  const logBase = buildDiscussionApiLogBase(
-    "translate_post",
+  const privacySession = createPrivacySession({
     settings,
-    requestEndpoint,
-    prompt,
-    requestBody,
-    `帖子：${truncate(post?.text || "图片帖子", 48)}`
+    post,
+    prompt
+  });
+  const encodedPrompt = preparePromptWithPrivacy(prompt, privacySession);
+  const requestBody = buildTranslateRequestBody(settings, encodedPrompt);
+  const logBase = applyPrivacyToLogEntry(
+    buildDiscussionApiLogBase(
+      "translate_post",
+      settings,
+      requestEndpoint,
+      encodedPrompt,
+      requestBody,
+      `帖子：${truncate(post?.text || "图片帖子", 48)}`
+    ),
+    privacySession
   );
   let logged = false;
 
@@ -5533,7 +5622,10 @@ async function requestTranslatedPostContent(settings, post) {
     }
 
     const parsed = parseJsonArrayWithRepair(jsonText, "翻译标签 JSON 解析失败。");
-    const translatedPost = Array.isArray(parsed) && parsed.length ? parsed[0] : null;
+    const translatedPost = decodeValueWithPrivacy(
+      Array.isArray(parsed) && parsed.length ? parsed[0] : null,
+      privacySession
+    );
     if (!translatedPost || typeof translatedPost !== "object") {
       appendApiLog({
         ...logBase,
@@ -5559,7 +5651,7 @@ async function requestTranslatedPostContent(settings, post) {
       statusCode: response.status,
       responseText: rawResponse,
       responseBody: payload,
-      summary: `帖子翻译完成：${truncate(result.text, 48)}`
+      summary: encodeTextWithPrivacy(`帖子翻译完成：${truncate(result.text, 48)}`, privacySession)
     });
     logged = true;
     return result;
@@ -5594,14 +5686,23 @@ async function requestTranslatedText(settings, sourceText) {
   }
 
   const prompt = buildTranslatePrompt(originalText);
-  const requestBody = buildTranslateRequestBody(settings, prompt);
-  const logBase = buildDiscussionApiLogBase(
-    "translate_reply",
+  const privacySession = createPrivacySession({
     settings,
-    requestEndpoint,
-    prompt,
-    requestBody,
-    `回复：${truncate(originalText, 48)}`
+    sourceText: originalText,
+    prompt
+  });
+  const encodedPrompt = preparePromptWithPrivacy(prompt, privacySession);
+  const requestBody = buildTranslateRequestBody(settings, encodedPrompt);
+  const logBase = applyPrivacyToLogEntry(
+    buildDiscussionApiLogBase(
+      "translate_reply",
+      settings,
+      requestEndpoint,
+      encodedPrompt,
+      requestBody,
+      `回复：${truncate(originalText, 48)}`
+    ),
+    privacySession
   );
   let logged = false;
 
@@ -5633,7 +5734,7 @@ async function requestTranslatedText(settings, sourceText) {
       throw new Error(`翻译请求失败：HTTP ${response.status}`);
     }
 
-    const message = resolveMessage(payload);
+    const message = decodeTextWithPrivacy(resolveMessage(payload), privacySession);
     if (!message) {
       appendApiLog({
         ...logBase,
@@ -5656,7 +5757,7 @@ async function requestTranslatedText(settings, sourceText) {
       statusCode: response.status,
       responseText: rawResponse,
       responseBody: payload,
-      summary: `回复翻译完成：${truncate(translated, 48)}`
+      summary: encodeTextWithPrivacy(`回复翻译完成：${truncate(translated, 48)}`, privacySession)
     });
     logged = true;
     return translated;
@@ -5762,17 +5863,29 @@ async function requestGeneratedReplies(
   }
 
   const prompt = buildReplyPrompt(settings, profile, feedType, rootPost, parentReply, count);
+  const privacySession = createPrivacySession({
+    settings,
+    profile,
+    rootPost,
+    parentReply,
+    feedType,
+    prompt
+  });
+  const encodedPrompt = preparePromptWithPrivacy(prompt, privacySession);
   const headers = buildRequestHeaders(settings);
-  const requestBody = buildRequestBody(settings, prompt, count, {
+  const requestBody = buildRequestBody(settings, encodedPrompt, count, {
     images: [rootPost?.imageDataUrl].filter(Boolean)
   });
-  const logBase = buildDiscussionApiLogBase(
-    "generate_replies",
-    settings,
-    requestEndpoint,
-    prompt,
-    requestBody,
-    `页签：${getFeedLabel(feedType)} · 主贴：${truncate(rootPost?.text || "图片帖子", 48)}${parentReply ? " · 楼中楼" : ""}`
+  const logBase = applyPrivacyToLogEntry(
+    buildDiscussionApiLogBase(
+      "generate_replies",
+      settings,
+      requestEndpoint,
+      encodedPrompt,
+      requestBody,
+      `页签：${getFeedLabel(feedType)} · 主贴：${truncate(rootPost?.text || "图片帖子", 48)}${parentReply ? " · 楼中楼" : ""}`
+    ),
+    privacySession
   );
   let logged = false;
 
@@ -5827,13 +5940,15 @@ async function requestGeneratedReplies(
       statusCode: response.status,
       responseText: rawResponse,
       responseBody: payload,
-      summary: `页签：${getFeedLabel(feedType)} · 已生成 ${count} 条论坛回复${parentReply ? "（楼中楼）" : ""}`
+      summary: encodeTextWithPrivacy(
+        `页签：${getFeedLabel(feedType)} · 已生成 ${count} 条论坛回复${parentReply ? "（楼中楼）" : ""}`,
+        privacySession
+      )
     });
     logged = true;
-    return parseGeneratedReplies(
-      message,
-      count,
-      `${rootPost.id}-${parentReply?.id || "root"}`
+    return decodeValueWithPrivacy(
+      parseGeneratedReplies(message, count, `${rootPost.id}-${parentReply?.id || "root"}`),
+      privacySession
     );
   } catch (error) {
     if (!logged) {

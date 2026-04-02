@@ -4,6 +4,7 @@
   }
 
   const API_LOG_KEY = "x_style_generator_api_logs_v1";
+  const API_LOG_PRIVACY_KEY = "x_style_generator_api_log_privacy_v1";
   const API_LOG_LIMIT = 120;
   const API_LOG_MIN_LIMIT = 24;
   const memoryStorage = {};
@@ -141,6 +142,94 @@
     }
   }
 
+  function readPrivacyEntries() {
+    const raw = safeGetItem(API_LOG_PRIVACY_KEY);
+    if (!raw) {
+      return {};
+    }
+
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (_error) {
+      return {};
+    }
+  }
+
+  function writePrivacyEntries(entries = {}) {
+    safeSetItem(API_LOG_PRIVACY_KEY, JSON.stringify(entries));
+  }
+
+  function sanitizePrivacySession(session) {
+    if (!session || typeof session !== "object") {
+      return null;
+    }
+    const replacements = Array.isArray(session.replacements)
+      ? session.replacements
+          .map((item) => ({
+            raw: sanitizeString(item?.raw || ""),
+            placeholder: sanitizeString(item?.placeholder || ""),
+            category: sanitizeString(item?.category || "")
+          }))
+          .filter((item) => item.raw && item.placeholder)
+      : [];
+    if (!replacements.length) {
+      return null;
+    }
+    return {
+      id: sanitizeString(session.id || ""),
+      replacements
+    };
+  }
+
+  function prunePrivacyEntries(validIds = []) {
+    const valid = new Set(validIds.map((item) => String(item || "").trim()).filter(Boolean));
+    const current = readPrivacyEntries();
+    const next = {};
+    Object.entries(current).forEach(([logId, session]) => {
+      if (valid.has(logId)) {
+        next[logId] = session;
+      }
+    });
+    writePrivacyEntries(next);
+  }
+
+  function storePrivacySession(logId, session, validIds = []) {
+    const normalizedId = String(logId || "").trim();
+    if (!normalizedId) {
+      return;
+    }
+    const sanitized = sanitizePrivacySession(session);
+    const next = readPrivacyEntries();
+    if (sanitized) {
+      next[normalizedId] = sanitized;
+    } else {
+      delete next[normalizedId];
+    }
+    if (validIds.length) {
+      const valid = new Set(validIds.map((item) => String(item || "").trim()).filter(Boolean));
+      Object.keys(next).forEach((key) => {
+        if (!valid.has(key)) {
+          delete next[key];
+        }
+      });
+    }
+    writePrivacyEntries(next);
+  }
+
+  function getPrivacySession(logId) {
+    const current = readPrivacyEntries();
+    return current[String(logId || "").trim()] || null;
+  }
+
+  function decodeValueByLogId(logId, value) {
+    const session = getPrivacySession(logId);
+    if (!session || !window.PulsePrivacyCover?.decodeWithSerializedSession) {
+      return value;
+    }
+    return window.PulsePrivacyCover.decodeWithSerializedSession(value, session);
+  }
+
   function compactEntryForQuota(entry = {}, level = 0) {
     const promptLimit = level === 0 ? 4000 : level === 1 ? 2200 : 1200;
     const responseLimit = level === 0 ? 4000 : level === 1 ? 2200 : 1200;
@@ -212,6 +301,7 @@
     let nextEntries = entries.slice(-API_LOG_LIMIT);
     let serialized = JSON.stringify(nextEntries);
     if (safeSetItem(API_LOG_KEY, serialized)) {
+      prunePrivacyEntries(nextEntries.map((entry) => entry.id));
       return;
     }
 
@@ -219,6 +309,7 @@
       nextEntries = nextEntries.map((entry) => compactEntryForQuota(entry, level));
       serialized = JSON.stringify(nextEntries);
       if (safeSetItem(API_LOG_KEY, serialized)) {
+        prunePrivacyEntries(nextEntries.map((entry) => entry.id));
         return;
       }
     }
@@ -231,6 +322,7 @@
     }
 
     safeSetItem(API_LOG_KEY, serialized);
+    prunePrivacyEntries(nextEntries.map((entry) => entry.id));
   }
 
   function downloadJson(filename, payload) {
@@ -250,6 +342,7 @@
   }
 
   function append(entry = {}) {
+    const privacySession = sanitizePrivacySession(entry.privacySession);
     const nextEntry = {
       id:
         String(entry.id || "").trim() ||
@@ -285,11 +378,18 @@
     const entries = read();
     entries.push(nextEntry);
     write(entries);
+    const validIds = read().map((item) => item.id);
+    if (privacySession) {
+      storePrivacySession(nextEntry.id, privacySession, validIds);
+    } else {
+      prunePrivacyEntries(validIds);
+    }
     return nextEntry;
   }
 
   function clear() {
     safeRemoveItem(API_LOG_KEY);
+    safeRemoveItem(API_LOG_PRIVACY_KEY);
   }
 
   function exportLogs() {
@@ -311,6 +411,8 @@
     read,
     clear,
     exportLogs,
-    formatTimestamp
+    formatTimestamp,
+    getPrivacySession,
+    decodeValueByLogId
   };
 })();

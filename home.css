@@ -502,7 +502,8 @@ button {
 }
 
 .home-field input,
-.home-field select {
+.home-field select,
+.home-field textarea {
   width: 100%;
   min-height: 48px;
   padding: 0 14px;
@@ -514,8 +515,17 @@ button {
   box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.45);
 }
 
+.home-field textarea {
+  min-height: 132px;
+  padding-top: 12px;
+  padding-bottom: 12px;
+  resize: vertical;
+  line-height: 1.55;
+}
+
 .home-field input:focus,
-.home-field select:focus {
+.home-field select:focus,
+.home-field textarea:focus {
   border-color: rgba(29, 155, 240, 0.48);
   box-shadow:
     0 0 0 4px rgba(29, 155, 240, 0.14),

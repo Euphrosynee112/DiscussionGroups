@@ -53,6 +53,7 @@ const DEFAULT_SETTINGS = {
   translationApiConfigId: "",
   summaryApiEnabled: false,
   summaryApiConfigId: "",
+  privacyAllowlist: [],
   worldview: DEFAULT_WORLDVIEW,
   messagePromptSettings: {
     historyRounds: DEFAULT_MESSAGE_HISTORY_ROUNDS,
@@ -944,6 +945,73 @@ function appendApiLog(entry) {
   }
 }
 
+function normalizePrivacyAllowlist(value) {
+  if (window.PulsePrivacyCover?.normalizeAllowlist) {
+    return window.PulsePrivacyCover.normalizeAllowlist(value);
+  }
+  const lines = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/\r?\n/g)
+      : [];
+  const unique = new Set();
+  return lines
+    .map((item) => String(item || "").trim())
+    .filter((item) => {
+      if (!item || unique.has(item)) {
+        return false;
+      }
+      unique.add(item);
+      return true;
+    });
+}
+
+function createPrivacySession(options = {}) {
+  return window.PulsePrivacyCover?.createSession?.(options) || null;
+}
+
+function preparePromptWithPrivacy(value, session) {
+  if (!session || !window.PulsePrivacyCover?.preparePrompt) {
+    return String(value || "");
+  }
+  return window.PulsePrivacyCover.preparePrompt(value, session);
+}
+
+function encodeTextWithPrivacy(value, session) {
+  if (!session || !window.PulsePrivacyCover?.encodeText) {
+    return String(value || "");
+  }
+  return window.PulsePrivacyCover.encodeText(value, session);
+}
+
+function encodeValueWithPrivacy(value, session) {
+  if (!session || !window.PulsePrivacyCover?.encodeValue) {
+    return value;
+  }
+  return window.PulsePrivacyCover.encodeValue(value, session);
+}
+
+function decodeTextWithPrivacy(value, session) {
+  if (!session || !window.PulsePrivacyCover?.decodeText) {
+    return String(value || "");
+  }
+  return window.PulsePrivacyCover.decodeText(value, session);
+}
+
+function decodeValueWithPrivacy(value, session) {
+  if (!session || !window.PulsePrivacyCover?.decodeValue) {
+    return value;
+  }
+  return window.PulsePrivacyCover.decodeValue(value, session);
+}
+
+function applyPrivacyToLogEntry(entry, session) {
+  if (!session || !window.PulsePrivacyCover?.applyPrivacyToLogEntry) {
+    return entry;
+  }
+  return window.PulsePrivacyCover.applyPrivacyToLogEntry(entry, session);
+}
+
 function buildMessageApiLogBase(action, settings, endpoint, prompt, requestBody, summary = "") {
   const mode = normalizeApiMode(settings.mode);
   return {
@@ -1158,6 +1226,9 @@ function buildNormalizedSettingsSnapshot(source) {
   merged.apiConfigs = normalizeApiConfigs(merged.apiConfigs || []);
   merged.messagePromptSettings = normalizeMessagePromptSettings(
     merged.messagePromptSettings || source?.messagePromptSettings || {}
+  );
+  merged.privacyAllowlist = normalizePrivacyAllowlist(
+    merged.privacyAllowlist || source?.privacyAllowlist || []
   );
 
   const activeConfig =
@@ -3680,19 +3751,33 @@ async function requestMemorySummaryItems(
     "",
     "请只输出 JSON。"
   ].join("\n");
+  const privacySession = createPrivacySession({
+    settings: apiSettings,
+    profile,
+    contact,
+    messages,
+    promptSettings,
+    systemPrompt,
+    userInstruction
+  });
+  const encodedSystemPrompt = preparePromptWithPrivacy(systemPrompt, privacySession);
+  const encodedUserInstruction = encodeTextWithPrivacy(userInstruction, privacySession);
   const requestBody = buildSingleInstructionRequestBody(
     apiSettings,
-    systemPrompt,
-    userInstruction,
+    encodedSystemPrompt,
+    encodedUserInstruction,
     "memory_summary"
   );
-  const logBase = buildMessageApiLogBase(
-    "chat_memory_summary",
-    apiSettings,
-    requestEndpoint,
-    [systemPrompt, userInstruction].join("\n\n"),
-    requestBody,
-    `联系人：${contact.name} · 记忆提取`
+  const logBase = applyPrivacyToLogEntry(
+    buildMessageApiLogBase(
+      "chat_memory_summary",
+      apiSettings,
+      requestEndpoint,
+      [encodedSystemPrompt, encodedUserInstruction].join("\n\n"),
+      requestBody,
+      `联系人：${contact.name} · 记忆提取`
+    ),
+    privacySession
   );
   let logged = false;
 
@@ -3724,7 +3809,10 @@ async function requestMemorySummaryItems(
       throw new Error(`接口请求失败：HTTP ${response.status}`);
     }
 
-    const memoryItems = parseMemorySummaryPayload(payload, contact.id);
+    const memoryItems = decodeValueWithPrivacy(
+      parseMemorySummaryPayload(payload, contact.id),
+      privacySession
+    );
     appendApiLog({
       ...logBase,
       ...buildGeminiLogFields(apiSettings, payload),
@@ -3732,7 +3820,10 @@ async function requestMemorySummaryItems(
       statusCode: response.status,
       responseText: rawResponse,
       responseBody: payload,
-      summary: `联系人：${contact.name} · 已提取 ${memoryItems.length} 条记忆`
+      summary: encodeTextWithPrivacy(
+        `联系人：${contact.name} · 已提取 ${memoryItems.length} 条记忆`,
+        privacySession
+      )
     });
     logged = true;
     return memoryItems;
@@ -3883,7 +3974,7 @@ function limitReplyItems(items = [], limit = DEFAULT_MESSAGE_REPLY_SENTENCE_LIMI
   return limited.filter(Boolean);
 }
 
-function buildReplyItems(replyText, promptSettings = {}) {
+function buildReplyItems(replyText, promptSettings = {}, privacySession = null) {
   const { text: textWithoutLocationBlocks, blocks } = extractLocationReplyBlocks(replyText);
   const blockMap = new Map(blocks.map((block) => [block.token, block.items]));
   const rawLines = String(textWithoutLocationBlocks || "")
@@ -3894,7 +3985,7 @@ function buildReplyItems(replyText, promptSettings = {}) {
 
   rawLines.forEach((line) => {
     if (blockMap.has(line)) {
-      blockMap.get(line).forEach((item) => {
+      decodeValueWithPrivacy(blockMap.get(line), privacySession).forEach((item) => {
         items.push({
           ...item,
           text: buildLocationMessageText(item.locationName, item.coordinates)
@@ -3902,7 +3993,7 @@ function buildReplyItems(replyText, promptSettings = {}) {
       });
       return;
     }
-    splitReplyIntoMessageLines(line).forEach((textLine) => {
+    splitReplyIntoMessageLines(decodeTextWithPrivacy(line, privacySession)).forEach((textLine) => {
       const normalizedLine = String(textLine || "").trim();
       if (!normalizedLine) {
         return;
@@ -3926,7 +4017,7 @@ function buildReplyItems(replyText, promptSettings = {}) {
     ? [
         {
           messageType: "text",
-          text: fallback
+          text: decodeTextWithPrivacy(fallback, privacySession)
         }
       ]
     : [];
@@ -3940,8 +4031,13 @@ function recalculateConversationUpdatedAt(conversation) {
   conversation.updatedAt = latestMessage?.createdAt || Date.now();
 }
 
-async function appendAssistantReplyBatch(conversation, replyText, promptSettings = {}) {
-  const replyItems = buildReplyItems(replyText, promptSettings);
+async function appendAssistantReplyBatch(
+  conversation,
+  replyText,
+  promptSettings = {},
+  privacySession = null
+) {
+  const replyItems = buildReplyItems(replyText, promptSettings, privacySession);
   if (!replyItems.length) {
     throw new Error("接口请求成功，但没有可展示的回复内容。");
   }
@@ -4036,16 +4132,30 @@ async function requestChatReplyText(
       history,
       requestOptions
     );
-    const requestBody = buildChatRequestBody(settings, systemPrompt, history);
-    const logBase = buildMessageApiLogBase(
-      requestOptions.regenerate ? "chat_reply_regenerate" : "chat_reply",
+    const privacySession = createPrivacySession({
       settings,
-      requestEndpoint,
-      systemPrompt,
-      requestBody,
-      `联系人：${contact.name} · 历史消息 ${history.length} 条${
-        requestOptions.regenerate ? " · 重回" : ""
-      }${summarySuffix}`
+      profile,
+      contact,
+      history,
+      promptSettings: resolvedPromptSettings,
+      requestOptions,
+      systemPrompt
+    });
+    const encodedSystemPrompt = preparePromptWithPrivacy(systemPrompt, privacySession);
+    const encodedHistory = encodeValueWithPrivacy(history, privacySession);
+    const requestBody = buildChatRequestBody(settings, encodedSystemPrompt, encodedHistory);
+    const logBase = applyPrivacyToLogEntry(
+      buildMessageApiLogBase(
+        requestOptions.regenerate ? "chat_reply_regenerate" : "chat_reply",
+        settings,
+        requestEndpoint,
+        encodedSystemPrompt,
+        requestBody,
+        `联系人：${contact.name} · 历史消息 ${history.length} 条${
+          requestOptions.regenerate ? " · 重回" : ""
+        }${summarySuffix}`
+      ),
+      privacySession
     );
     let logged = false;
 
@@ -4126,12 +4236,18 @@ async function requestChatReplyText(
         statusCode: response.status,
         responseText: rawResponse,
         responseBody: payload,
-        summary: `联系人：${contact.name} · 已生成 ${
-          buildReplyItems(message, resolvedPromptSettings).length || 1
-        } 行回复${summarySuffix}`
+        summary: encodeTextWithPrivacy(
+          `联系人：${contact.name} · 已生成 ${
+            buildReplyItems(message, resolvedPromptSettings).length || 1
+          } 行回复${summarySuffix}`,
+          privacySession
+        )
       });
       logged = true;
-      return message;
+      return {
+        text: message,
+        privacySession
+      };
     } catch (error) {
       if (!logged) {
         appendApiLog({
@@ -4258,14 +4374,29 @@ async function requestJournalEntryText(
     journalOptions
   );
   const userInstruction = "请根据这些信息，直接写出今天的日记正文。";
-  const requestBody = buildDiaryRequestBody(settings, systemPrompt, userInstruction);
-  const logBase = buildMessageApiLogBase(
-    "journal_entry",
+  const privacySession = createPrivacySession({
     settings,
-    requestEndpoint,
+    profile,
+    contact,
+    conversation,
+    promptSettings: normalizedPromptSettings,
+    journalOptions,
     systemPrompt,
-    requestBody,
-    `联系人：${contact.name} · ${journalOptions.dateText || getTodayDateValue()} · 今日日记`
+    userInstruction
+  });
+  const encodedSystemPrompt = preparePromptWithPrivacy(systemPrompt, privacySession);
+  const encodedUserInstruction = encodeTextWithPrivacy(userInstruction, privacySession);
+  const requestBody = buildDiaryRequestBody(settings, encodedSystemPrompt, encodedUserInstruction);
+  const logBase = applyPrivacyToLogEntry(
+    buildMessageApiLogBase(
+      "journal_entry",
+      settings,
+      requestEndpoint,
+      encodedSystemPrompt,
+      requestBody,
+      `联系人：${contact.name} · ${journalOptions.dateText || getTodayDateValue()} · 今日日记`
+    ),
+    privacySession
   );
   let logged = false;
 
@@ -4314,7 +4445,7 @@ async function requestJournalEntryText(
       throw new Error(`接口请求失败：HTTP ${response.status}`);
     }
 
-    const message = resolveMessage(payload).trim();
+    const message = decodeTextWithPrivacy(resolveMessage(payload).trim(), privacySession);
     if (!message) {
       appendApiLog({
         ...logBase,
@@ -4336,7 +4467,10 @@ async function requestJournalEntryText(
       statusCode: response.status,
       responseText: rawResponse,
       responseBody: payload,
-      summary: `联系人：${contact.name} · 已生成 ${message.length} 字今日日记`
+      summary: encodeTextWithPrivacy(
+        `联系人：${contact.name} · 已生成 ${message.length} 字今日日记`,
+        privacySession
+      )
     });
     logged = true;
     return message;
@@ -6971,7 +7105,7 @@ async function requestConversationReply(options = {}) {
   }
 
   try {
-    const replyText = await requestChatReplyText(
+    const replyResult = await requestChatReplyText(
       settings,
       state.profile,
       contact,
@@ -6993,7 +7127,12 @@ async function requestConversationReply(options = {}) {
       );
     }
 
-    await appendAssistantReplyBatch(updatedConversation, replyText, promptSettings);
+    await appendAssistantReplyBatch(
+      updatedConversation,
+      replyResult.text,
+      promptSettings,
+      replyResult.privacySession
+    );
     if (!isRegenerate) {
       updatedConversation.awarenessCounter = shouldEvaluateAwareness
         ? 0

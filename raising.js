@@ -158,6 +158,59 @@ function appendApiLog(entry) {
   }
 }
 
+function normalizePrivacyAllowlist(value) {
+  if (window.PulsePrivacyCover?.normalizeAllowlist) {
+    return window.PulsePrivacyCover.normalizeAllowlist(value);
+  }
+  const lines = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/\r?\n/g)
+      : [];
+  const unique = new Set();
+  return lines
+    .map((item) => String(item || "").trim())
+    .filter((item) => {
+      if (!item || unique.has(item)) {
+        return false;
+      }
+      unique.add(item);
+      return true;
+    });
+}
+
+function createPrivacySession(options = {}) {
+  return window.PulsePrivacyCover?.createSession?.(options) || null;
+}
+
+function preparePromptWithPrivacy(value, session) {
+  if (!session || !window.PulsePrivacyCover?.preparePrompt) {
+    return String(value || "");
+  }
+  return window.PulsePrivacyCover.preparePrompt(value, session);
+}
+
+function encodeTextWithPrivacy(value, session) {
+  if (!session || !window.PulsePrivacyCover?.encodeText) {
+    return String(value || "");
+  }
+  return window.PulsePrivacyCover.encodeText(value, session);
+}
+
+function decodeValueWithPrivacy(value, session) {
+  if (!session || !window.PulsePrivacyCover?.decodeValue) {
+    return value;
+  }
+  return window.PulsePrivacyCover.decodeValue(value, session);
+}
+
+function applyPrivacyToLogEntry(entry, session) {
+  if (!session || !window.PulsePrivacyCover?.applyPrivacyToLogEntry) {
+    return entry;
+  }
+  return window.PulsePrivacyCover.applyPrivacyToLogEntry(entry, session);
+}
+
 function normalizePositiveInteger(value, fallback) {
   const numeric = Number.parseInt(value, 10);
   if (Number.isFinite(numeric) && numeric > 0) {
@@ -275,6 +328,9 @@ function buildNormalizedSettingsSnapshot(source) {
       : String(merged.model || getDefaultModelByMode(merged.mode)).trim() ||
         getDefaultModelByMode(merged.mode);
   merged.apiConfigs = normalizeApiConfigs(merged.apiConfigs || []);
+  merged.privacyAllowlist = normalizePrivacyAllowlist(
+    merged.privacyAllowlist || source?.privacyAllowlist || []
+  );
 
   const activeConfig =
     merged.apiConfigs.find((item) => item.id === merged.activeApiConfigId) || null;
@@ -1324,14 +1380,25 @@ function buildKidArchivePrompt(profile, partner, record) {
 async function requestKidArchive(settings, profile, partner, record) {
   const requestEndpoint = validateApiSettings(settings, "成长档案生成");
   const prompt = buildKidArchivePrompt(profile, partner, record);
-  const requestBody = buildJsonObjectRequestBody(settings, prompt);
-  const logBase = buildRaisingApiLogBase(
-    "kid_archive_generate",
+  const privacySession = createPrivacySession({
     settings,
-    requestEndpoint,
-    prompt,
-    requestBody,
-    `宝宝：${record.childName} · 共同抚养人：${partner.name}`
+    profile,
+    partner,
+    record,
+    prompt
+  });
+  const encodedPrompt = preparePromptWithPrivacy(prompt, privacySession);
+  const requestBody = buildJsonObjectRequestBody(settings, encodedPrompt);
+  const logBase = applyPrivacyToLogEntry(
+    buildRaisingApiLogBase(
+      "kid_archive_generate",
+      settings,
+      requestEndpoint,
+      encodedPrompt,
+      requestBody,
+      `宝宝：${record.childName} · 共同抚养人：${partner.name}`
+    ),
+    privacySession
   );
   let logged = false;
 
@@ -1397,7 +1464,7 @@ async function requestKidArchive(settings, profile, partner, record) {
     }
 
     const parsed = parseJsonObjectWithRepair(jsonText, "成长档案 JSON 解析失败。");
-    const archive = normalizeArchiveData(parsed);
+    const archive = normalizeArchiveData(decodeValueWithPrivacy(parsed, privacySession));
     if (!archive.appearanceSummary || !archive.hobbies.length || !archive.habits.length) {
       appendApiLog({
         ...logBase,
@@ -1419,7 +1486,10 @@ async function requestKidArchive(settings, profile, partner, record) {
       statusCode: response.status,
       responseText: rawResponse,
       responseBody: payload,
-      summary: `宝宝：${record.childName} · 已生成成长档案`
+      summary: encodeTextWithPrivacy(
+        `宝宝：${record.childName} · 已生成成长档案`,
+        privacySession
+      )
     });
     logged = true;
     return archive;

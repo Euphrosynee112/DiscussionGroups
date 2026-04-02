@@ -4,15 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Pulse Generator v2.0</title>
-    <link rel="stylesheet" href="./home.css?v=20260402g" />
+    <link rel="stylesheet" href="./home.css?v=20260402-163711" />
   </head>
   <body>
     <main class="home-scene">
       <section class="phone-home" aria-label="手机首页">
         <header class="status-bar" aria-label="前端版本信息">
           <div class="status-build">
-            <span id="status-version" class="status-build__version">FE v20260402g</span>
-            <span id="status-updated" class="status-build__updated">更新于 2026-04-02 14:15:08</span>
+            <span id="status-version" class="status-build__version">FE v20260402-163711</span>
+            <span id="status-updated" class="status-build__updated">更新于 2026-04-02 16:37:11</span>
           </div>
         </header>
 
@@ -251,6 +251,36 @@
 
           <div class="home-config-transfer">
             <div>
+              <p class="home-settings-kicker">Privacy Cover</p>
+              <h3 class="home-config-transfer__title">手动隐私白名单</h3>
+            </div>
+            <p class="home-field-hint">
+              这里填写“始终需要在 prompt 中匿名化的文本”，适合名字、公司名、地址片段、作品名或圈内黑话。每行一个词，和本地配置文件内的默认白名单一起生效。
+            </p>
+            <label class="home-field home-field--full">
+              <span>手动隐私白名单</span>
+              <textarea
+                id="home-privacy-allowlist-input"
+                rows="6"
+                placeholder="每行一个词，例如：&#10;某某娱乐&#10;《某作品》&#10;某小区 3 栋"
+              ></textarea>
+              <span class="home-field-hint">
+                白名单是强制匿名化名单，不是跳过匿名化。这里保存的是你手动补充的词，代码里的默认白名单不会被导出覆盖。
+              </span>
+            </label>
+            <div class="home-config-transfer__actions">
+              <button id="home-privacy-scan-btn" class="home-chip" type="button">
+                一键扫描当前配置
+              </button>
+            </div>
+            <p class="home-field-hint">
+              扫描范围包括角色人设、用户人设、用户特别人设、世界书与论坛设置。会自动补充当前规则能识别的公司、作品名、地址、坐标、@handle 等词；普通昵称若未命中规则，仍可继续手动补充。
+            </p>
+            <p id="home-privacy-scan-status" class="home-settings-status" aria-live="polite"></p>
+          </div>
+
+          <div class="home-config-transfer">
+            <div>
               <p class="home-settings-kicker">Config Transfer</p>
               <h3 class="home-config-transfer__title">导入 / 导出配置</h3>
             </div>
@@ -346,6 +376,8 @@
       </div>
     </section>
 
-    <script src="./home.js?v=20260402g"></script>
+    <script src="./privacy-allowlist.js?v=20260402-163711"></script>
+    <script src="./pulse-privacy-cover.js?v=20260402-163711"></script>
+    <script src="./home.js?v=20260402-163711"></script>
   </body>
 </html>

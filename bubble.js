@@ -24,6 +24,7 @@ const DEFAULT_SETTINGS = {
   activeApiConfigId: "",
   translationApiEnabled: false,
   translationApiConfigId: "",
+  privacyAllowlist: [],
   bubblePromptSettings: {
     hotTopicsEnabled: false,
     hotTopicsTabId: "",
@@ -272,6 +273,66 @@ function appendApiLog(entry) {
   }
 }
 
+function normalizePrivacyAllowlist(value) {
+  if (window.PulsePrivacyCover?.normalizeAllowlist) {
+    return window.PulsePrivacyCover.normalizeAllowlist(value);
+  }
+  const lines = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/\r?\n/g)
+      : [];
+  const unique = new Set();
+  return lines
+    .map((item) => String(item || "").trim())
+    .filter((item) => {
+      if (!item || unique.has(item)) {
+        return false;
+      }
+      unique.add(item);
+      return true;
+    });
+}
+
+function createPrivacySession(options = {}) {
+  return window.PulsePrivacyCover?.createSession?.(options) || null;
+}
+
+function preparePromptWithPrivacy(value, session) {
+  if (!session || !window.PulsePrivacyCover?.preparePrompt) {
+    return String(value || "");
+  }
+  return window.PulsePrivacyCover.preparePrompt(value, session);
+}
+
+function encodeTextWithPrivacy(value, session) {
+  if (!session || !window.PulsePrivacyCover?.encodeText) {
+    return String(value || "");
+  }
+  return window.PulsePrivacyCover.encodeText(value, session);
+}
+
+function decodeTextWithPrivacy(value, session) {
+  if (!session || !window.PulsePrivacyCover?.decodeText) {
+    return String(value || "");
+  }
+  return window.PulsePrivacyCover.decodeText(value, session);
+}
+
+function decodeValueWithPrivacy(value, session) {
+  if (!session || !window.PulsePrivacyCover?.decodeValue) {
+    return value;
+  }
+  return window.PulsePrivacyCover.decodeValue(value, session);
+}
+
+function applyPrivacyToLogEntry(entry, session) {
+  if (!session || !window.PulsePrivacyCover?.applyPrivacyToLogEntry) {
+    return entry;
+  }
+  return window.PulsePrivacyCover.applyPrivacyToLogEntry(entry, session);
+}
+
 function buildBubbleApiLogBase(action, settings, endpoint, prompt, requestBody, summary = "") {
   const mode = normalizeApiMode(settings.mode);
   return {
@@ -499,6 +560,9 @@ function buildNormalizedSettingsSnapshot(source, options = {}) {
         getDefaultModelByMode(merged.mode);
   merged.apiConfigs = normalizeApiConfigs(
     merged.apiConfigs || source?.apiPresets || source?.apiProfiles || []
+  );
+  merged.privacyAllowlist = normalizePrivacyAllowlist(
+    merged.privacyAllowlist || source?.privacyAllowlist || []
   );
   merged.bubblePromptSettings = normalizeBubblePromptSettings(
     merged.bubblePromptSettings || source?.bubblePromptSettings || {}
@@ -921,14 +985,22 @@ function validateApiSettings(settings, purpose = "请求") {
 
 async function requestJsonArrayText(settings, prompt, count = FAN_DETAIL_REPLY_COUNT) {
   const requestEndpoint = validateApiSettings(settings, "粉丝回复生成");
-  const requestBody = buildJsonArrayRequestBody(settings, prompt, count);
-  const logBase = buildBubbleApiLogBase(
-    "fan_reply_generate",
+  const privacySession = createPrivacySession({
     settings,
-    requestEndpoint,
-    prompt,
-    requestBody,
-    `请求生成 ${count} 条粉丝回复`
+    prompt
+  });
+  const encodedPrompt = preparePromptWithPrivacy(prompt, privacySession);
+  const requestBody = buildJsonArrayRequestBody(settings, encodedPrompt, count);
+  const logBase = applyPrivacyToLogEntry(
+    buildBubbleApiLogBase(
+      "fan_reply_generate",
+      settings,
+      requestEndpoint,
+      encodedPrompt,
+      requestBody,
+      `请求生成 ${count} 条粉丝回复`
+    ),
+    privacySession
   );
   let logged = false;
 
@@ -999,10 +1071,16 @@ async function requestJsonArrayText(settings, prompt, count = FAN_DETAIL_REPLY_C
       statusCode: response.status,
       responseText: rawResponse,
       responseBody: payload,
-      summary: `已返回粉丝回复原始文本 ${message.length} 字符`
+      summary: encodeTextWithPrivacy(
+        `已返回粉丝回复原始文本 ${message.length} 字符`,
+        privacySession
+      )
     });
     logged = true;
-    return message;
+    return {
+      rawText: message,
+      privacySession
+    };
   } catch (error) {
     if (!logged) {
       appendApiLog({
@@ -1023,14 +1101,23 @@ async function requestTranslatedText(settings, sourceText) {
 
   const requestEndpoint = validateApiSettings(settings, "翻译");
   const prompt = buildTranslatePrompt(originalText);
-  const requestBody = buildTranslateRequestBody(settings, prompt);
-  const logBase = buildBubbleApiLogBase(
-    "fan_reply_translate",
+  const privacySession = createPrivacySession({
     settings,
-    requestEndpoint,
-    prompt,
-    requestBody,
-    `翻译粉丝回复：${truncateFanReply(originalText, 36)}`
+    sourceText: originalText,
+    prompt
+  });
+  const encodedPrompt = preparePromptWithPrivacy(prompt, privacySession);
+  const requestBody = buildTranslateRequestBody(settings, encodedPrompt);
+  const logBase = applyPrivacyToLogEntry(
+    buildBubbleApiLogBase(
+      "fan_reply_translate",
+      settings,
+      requestEndpoint,
+      encodedPrompt,
+      requestBody,
+      `翻译粉丝回复：${truncateFanReply(originalText, 36)}`
+    ),
+    privacySession
   );
   let logged = false;
 
@@ -1062,7 +1149,7 @@ async function requestTranslatedText(settings, sourceText) {
       throw new Error(`翻译请求失败：HTTP ${response.status}`);
     }
 
-    const message = resolveMessage(payload);
+    const message = decodeTextWithPrivacy(resolveMessage(payload), privacySession);
     if (!message) {
       appendApiLog({
         ...logBase,
@@ -1085,7 +1172,10 @@ async function requestTranslatedText(settings, sourceText) {
       statusCode: response.status,
       responseText: rawResponse,
       responseBody: payload,
-      summary: `翻译完成：${truncateFanReply(translated, 36)}`
+      summary: encodeTextWithPrivacy(
+        `翻译完成：${truncateFanReply(translated, 36)}`,
+        privacySession
+      )
     });
     logged = true;
     return translated;
@@ -2519,13 +2609,16 @@ async function generateFanRepliesForDetail(detailId, options = {}) {
   }
 
   try {
-    const rawText = await requestJsonArrayText(
+    const replyResult = await requestJsonArrayText(
       getCurrentSettings(),
       buildFanReplyPrompt(state.profile, detail.sourceMessages, detail.emojiSet, getCurrentSettings()),
       FAN_DETAIL_REPLY_COUNT
     );
     const mixedReplies = mixFanRepliesByLanguage(
-      parseFanReplies(rawText, FAN_DETAIL_REPLY_COUNT),
+      decodeValueWithPrivacy(
+        parseFanReplies(replyResult.rawText, FAN_DETAIL_REPLY_COUNT),
+        replyResult.privacySession
+      ),
       `${detailId}-${detail.sourceText || parentMessage.text || ""}`
     );
     const replies = mixedReplies.map((item, index) =>

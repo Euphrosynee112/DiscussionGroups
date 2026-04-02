@@ -2,8 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260402g";
-const APP_BUILD_UPDATED_AT = "2026-04-02 14:15:08";
+const APP_BUILD_VERSION = "20260402-163711";
+const APP_BUILD_UPDATED_AT = "2026-04-02 16:37:11";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -39,6 +39,9 @@ const homeTranslationApiConfigSelectEl = document.querySelector(
 );
 const homeSummaryApiEnabledEl = document.querySelector("#home-summary-api-enabled");
 const homeSummaryApiConfigSelectEl = document.querySelector("#home-summary-api-config-select");
+const homePrivacyAllowlistInput = document.querySelector("#home-privacy-allowlist-input");
+const homePrivacyScanBtn = document.querySelector("#home-privacy-scan-btn");
+const homePrivacyScanStatusEl = document.querySelector("#home-privacy-scan-status");
 const homeConfigExportBtn = document.querySelector("#home-config-export-btn");
 const homeConfigImportBtn = document.querySelector("#home-config-import-btn");
 const homeConfigImportInput = document.querySelector("#home-config-import-input");
@@ -85,7 +88,8 @@ const DEFAULT_SETTINGS = {
   translationApiEnabled: false,
   translationApiConfigId: "",
   summaryApiEnabled: false,
-  summaryApiConfigId: ""
+  summaryApiConfigId: "",
+  privacyAllowlist: []
 };
 
 const homeState = {
@@ -216,6 +220,28 @@ function normalizeApiConfigToken(token) {
   return String(token || "").trim();
 }
 
+function normalizePrivacyAllowlist(value) {
+  if (window.PulsePrivacyCover?.normalizeAllowlist) {
+    return window.PulsePrivacyCover.normalizeAllowlist(value);
+  }
+
+  const lines = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/\r?\n/g)
+      : [];
+  const unique = new Set();
+  return lines
+    .map((item) => String(item || "").trim())
+    .filter((item) => {
+      if (!item || unique.has(item)) {
+        return false;
+      }
+      unique.add(item);
+      return true;
+    });
+}
+
 function normalizeOpenAICompatibleEndpoint(endpoint) {
   const trimmed = String(endpoint || "").trim();
   if (!trimmed) {
@@ -342,6 +368,9 @@ function buildNormalizedSettingsSnapshot(source, options = {}) {
     merged.summaryApiEnabled = false;
   }
   merged.summaryApiEnabled = Boolean(merged.summaryApiEnabled && merged.summaryApiConfigId);
+  merged.privacyAllowlist = normalizePrivacyAllowlist(
+    merged.privacyAllowlist || source?.privacyAllowlist || []
+  );
   return merged;
 }
 
@@ -381,6 +410,17 @@ function setHomeTransferStatus(message, tone = "") {
   homeConfigTransferStatusEl.className = "home-settings-status";
   if (tone) {
     homeConfigTransferStatusEl.classList.add(tone);
+  }
+}
+
+function setHomePrivacyScanStatus(message, tone = "") {
+  if (!homePrivacyScanStatusEl) {
+    return;
+  }
+  homePrivacyScanStatusEl.textContent = String(message || "").trim();
+  homePrivacyScanStatusEl.className = "home-settings-status";
+  if (tone) {
+    homePrivacyScanStatusEl.classList.add(tone);
   }
 }
 
@@ -535,6 +575,7 @@ function buildTransferPayloadFromCurrentState() {
         (item) => String(item.title || "").trim() && String(item.date || "").trim()
       )
     },
+    privacyAllowlist: normalizePrivacyAllowlist(settings.privacyAllowlist || []),
     contactChatSettings:
       settings.messagePromptSettings && typeof settings.messagePromptSettings === "object"
         ? { ...settings.messagePromptSettings }
@@ -544,6 +585,104 @@ function buildTransferPayloadFromCurrentState() {
         ? { ...settings.bubblePromptSettings }
         : null
   };
+}
+
+function collectPrivacyScanTexts() {
+  const settings = buildNormalizedSettingsSnapshot({
+    ...homeState.settings,
+    ...readHomeSettingsFromForm()
+  });
+  const profile = readStoredJson(PROFILE_KEY, {}) || {};
+  const worldbooks = readStoredJson(WORLD_BOOKS_KEY, { categories: [], entries: [] }) || {};
+  const contacts = normalizeObjectArray(readStoredJson(MESSAGE_CONTACTS_KEY, []));
+  const texts = [];
+  const counts = {
+    rolePersona: 0,
+    userPersona: 0,
+    specialUserPersona: 0,
+    worldbook: 0,
+    forum: 0
+  };
+
+  function pushText(bucket, value) {
+    const text = String(value || "").trim();
+    if (!text) {
+      return;
+    }
+    texts.push(text);
+    if (Object.prototype.hasOwnProperty.call(counts, bucket)) {
+      counts[bucket] += 1;
+    }
+  }
+
+  pushText("userPersona", profile.chatPersonaPrompt || profile.personaPrompt || "");
+
+  contacts.forEach((contact) => {
+    pushText("rolePersona", contact.personaPrompt);
+    pushText("specialUserPersona", contact.specialUserPersona);
+  });
+
+  normalizeObjectArray(worldbooks.categories).forEach((category) => {
+    pushText("worldbook", category.name);
+  });
+  normalizeObjectArray(worldbooks.entries).forEach((entry) => {
+    pushText("worldbook", entry.name);
+    pushText("worldbook", entry.text);
+  });
+
+  pushText("forum", settings.worldview);
+  normalizeObjectArray(settings.customTabs).forEach((tab) => {
+    pushText("forum", tab.name);
+    pushText("forum", tab.audience);
+    pushText("forum", tab.discussionText || tab.text);
+    pushText("forum", tab.hotTopic);
+  });
+
+  return { texts, counts };
+}
+
+function scanCurrentPrivacyAllowlistCandidates() {
+  const { texts, counts } = collectPrivacyScanTexts();
+  if (!texts.length) {
+    setHomePrivacyScanStatus("当前没有可扫描的人设、世界书或论坛文本。", "error");
+    return;
+  }
+
+  const scannedEntries = window.PulsePrivacyCover?.scanTerms
+    ? window.PulsePrivacyCover.scanTerms(texts)
+    : [];
+  const scannedTerms = normalizePrivacyAllowlist(scannedEntries.map((item) => item?.text || item));
+  if (!scannedTerms.length) {
+    setHomePrivacyScanStatus(
+      "扫描完成，但当前规则没有识别到可自动补充的隐私词；你仍可继续手动补充昵称或圈内黑话。",
+      ""
+    );
+    return;
+  }
+
+  const existingTerms = normalizePrivacyAllowlist(homePrivacyAllowlistInput?.value || "");
+  const mergedTerms = normalizePrivacyAllowlist([...existingTerms, ...scannedTerms]);
+  const addedCount = Math.max(0, mergedTerms.length - existingTerms.length);
+  const duplicateCount = Math.max(0, scannedTerms.length - addedCount);
+
+  if (homePrivacyAllowlistInput) {
+    homePrivacyAllowlistInput.value = mergedTerms.join("\n");
+  }
+  saveCurrentHomeSettings({ silent: true });
+
+  const sourceCount =
+    counts.rolePersona +
+    counts.userPersona +
+    counts.specialUserPersona +
+    counts.worldbook +
+    counts.forum;
+  const summaryParts = [
+    `已扫描 ${sourceCount} 段配置文本`,
+    `识别 ${scannedTerms.length} 个候选词`,
+    addedCount > 0 ? `新增 ${addedCount} 个到手动白名单` : "没有新增词",
+    duplicateCount > 0 ? `${duplicateCount} 个已存在` : ""
+  ].filter(Boolean);
+  setHomePrivacyScanStatus(`${summaryParts.join("，")}。`, addedCount > 0 ? "success" : "");
 }
 
 function resolveLegacyImportedConfigPayload(parsed) {
@@ -613,6 +752,7 @@ function normalizeTransferPayload(parsed) {
         source.worldbooks && typeof source.worldbooks === "object" ? source.worldbooks : null,
       contacts: source.contacts && typeof source.contacts === "object" ? source.contacts : null,
       schedules: source.schedules && typeof source.schedules === "object" ? source.schedules : null,
+      privacyAllowlist: normalizePrivacyAllowlist(source.privacyAllowlist || []),
       contactChatSettings:
         source.contactChatSettings && typeof source.contactChatSettings === "object"
           ? source.contactChatSettings
@@ -678,6 +818,7 @@ function normalizeTransferPayload(parsed) {
     worldbooks: parsed.worldbooks && typeof parsed.worldbooks === "object" ? parsed.worldbooks : null,
     contacts: parsed.contacts && typeof parsed.contacts === "object" ? parsed.contacts : null,
     schedules: parsed.schedules && typeof parsed.schedules === "object" ? parsed.schedules : null,
+    privacyAllowlist: normalizePrivacyAllowlist(parsed.privacyAllowlist || []),
     contactChatSettings:
       settings?.messagePromptSettings && typeof settings.messagePromptSettings === "object"
         ? { ...settings.messagePromptSettings }
@@ -701,6 +842,7 @@ function buildTransferSections(payload, options = {}) {
   const scheduleEntries = normalizeObjectArray(payload?.schedules?.entries).filter(
     (item) => String(item.title || "").trim() && String(item.date || "").trim()
   );
+  const privacyAllowlist = normalizePrivacyAllowlist(payload?.privacyAllowlist || []);
   const hasApiSecrets = Boolean(
     payload?.apiSecrets &&
       (String(payload.apiSecrets.currentToken || "").trim() ||
@@ -821,6 +963,14 @@ function buildTransferSections(payload, options = {}) {
         description: buildScheduleTransferDescription(entry),
         checked: true
       }))
+    },
+    {
+      id: "privacyAllowlist",
+      label: "隐私白名单",
+      description: "首页设置里手动补充的强制匿名化名单；代码内的默认白名单不在这里导出。",
+      checked: privacyAllowlist.length > 0,
+      disabled: privacyAllowlist.length === 0,
+      items: []
     },
     {
       id: "contactChatSettings",
@@ -1123,6 +1273,14 @@ function buildSelectedTransferPayload(payload, selection) {
     };
   }
 
+  const privacyAllowlistSection = sectionMap.get("privacyAllowlist");
+  if (privacyAllowlistSection?.checked) {
+    const terms = normalizePrivacyAllowlist(payload.privacyAllowlist || []);
+    if (terms.length) {
+      selected.privacyAllowlist = terms;
+    }
+  }
+
   const contactChatSettingsSection = sectionMap.get("contactChatSettings");
   if (contactChatSettingsSection?.checked && payload.contactChatSettings) {
     selected.contactChatSettings = payload.contactChatSettings;
@@ -1140,7 +1298,7 @@ function buildHomeConfigExportPayload(selection = homeState.exportTransferSelect
   const fullPayload = buildTransferPayloadFromCurrentState();
   return {
     schema: CONFIG_EXPORT_SCHEMA,
-    version: 6,
+    version: 7,
     exportedAt: new Date().toISOString(),
     data: buildSelectedTransferPayload(fullPayload, selection)
   };
@@ -1325,6 +1483,10 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
     nextSchedules = mergeById(nextSchedules, imported.schedules.entries);
   }
 
+  if (Array.isArray(imported.privacyAllowlist) || typeof imported.privacyAllowlist === "string") {
+    nextSettings.privacyAllowlist = normalizePrivacyAllowlist(imported.privacyAllowlist);
+  }
+
   if (imported.contactChatSettings && typeof imported.contactChatSettings === "object") {
     nextSettings.messagePromptSettings = {
       ...imported.contactChatSettings
@@ -1414,6 +1576,11 @@ function applySettingsToHomeForm(settings) {
         ? ""
         : settings.model || getDefaultModelByMode(settings.mode);
   }
+  if (homePrivacyAllowlistInput) {
+    homePrivacyAllowlistInput.value = normalizePrivacyAllowlist(
+      settings.privacyAllowlist || []
+    ).join("\n");
+  }
   updateHomeModeUI();
   renderHomeApiConfigList();
   syncHomeActiveConfigSummary();
@@ -1430,6 +1597,7 @@ function readHomeSettingsFromForm() {
       mode === "generic"
         ? ""
         : String(homeApiModelInput?.value || "").trim() || getDefaultModelByMode(mode),
+    privacyAllowlist: normalizePrivacyAllowlist(homePrivacyAllowlistInput?.value || ""),
     apiConfigs: normalizeApiConfigs(homeState.settings.apiConfigs)
   };
 }
@@ -2016,7 +2184,7 @@ function attachHomeSettingsEvents() {
     }
   });
 
-  [homeApiModeSelect, homeApiEndpointInput, homeApiTokenInput, homeApiModelInput]
+  [homeApiModeSelect, homeApiEndpointInput, homeApiTokenInput, homeApiModelInput, homePrivacyAllowlistInput]
     .filter(Boolean)
     .forEach((field) => {
       field.addEventListener("input", () => {
@@ -2036,6 +2204,12 @@ function attachHomeSettingsEvents() {
   if (homeApiConfigSaveBtn) {
     homeApiConfigSaveBtn.addEventListener("click", () => {
       saveCurrentHomeApiConfig();
+    });
+  }
+
+  if (homePrivacyScanBtn) {
+    homePrivacyScanBtn.addEventListener("click", () => {
+      scanCurrentPrivacyAllowlistCandidates();
     });
   }
 
