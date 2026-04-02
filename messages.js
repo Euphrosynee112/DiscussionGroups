@@ -3926,6 +3926,7 @@ async function appendAssistantReplyBatch(conversation, replyText, promptSettings
   if (!replyItems.length) {
     throw new Error("接口请求成功，但没有可展示的回复内容。");
   }
+  const conversationId = String(conversation?.id || "").trim();
   const now = Date.now();
   const timeLabel = formatLocalTime();
   const createdMessages = [];
@@ -3933,6 +3934,10 @@ async function appendAssistantReplyBatch(conversation, replyText, promptSettings
   for (let index = 0; index < replyItems.length; index += 1) {
     await sleep(index === 0 ? 1640 : 1460);
     const item = replyItems[index];
+    const activeConversation = conversationId ? getConversationById(conversationId) : conversation;
+    if (!activeConversation) {
+      break;
+    }
     const replyMessage = normalizeConversationMessage(
       {
         id: `message_${now}_${index}_${hashText(item.text || item.locationName || "")}`,
@@ -3944,10 +3949,10 @@ async function appendAssistantReplyBatch(conversation, replyText, promptSettings
         time: timeLabel,
         createdAt: now + index
       },
-      conversation.messages.length + index
+      activeConversation.messages.length + index
     );
-    conversation.messages = [...conversation.messages, replyMessage];
-    recalculateConversationUpdatedAt(conversation);
+    activeConversation.messages = [...activeConversation.messages, replyMessage];
+    recalculateConversationUpdatedAt(activeConversation);
     createdMessages.push(replyMessage);
     persistConversations();
     renderMessagesPage();

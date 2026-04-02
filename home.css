@@ -82,102 +82,44 @@ button {
 .status-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 4px 2px 0;
-  font-size: 18px;
-  font-weight: 600;
+  justify-content: flex-start;
+  padding: 6px 2px 0;
+  min-height: 42px;
 }
 
-.status-icons {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
-
-.signal-bars {
+.status-build {
   display: inline-flex;
-  align-items: flex-end;
-  gap: 2px;
-  height: 15px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-width: 0;
+  white-space: nowrap;
 }
 
-.signal-bars i {
-  display: block;
-  width: 3px;
-  border-radius: 999px;
-  background: #111827;
+.status-build__version {
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: rgba(15, 23, 42, 0.9);
 }
 
-.signal-bars i:nth-child(1) {
-  height: 5px;
-}
-
-.signal-bars i:nth-child(2) {
-  height: 8px;
-}
-
-.signal-bars i:nth-child(3) {
-  height: 11px;
-}
-
-.signal-bars i:nth-child(4) {
-  height: 14px;
-}
-
-.wifi-icon {
-  width: 14px;
-  height: 10px;
-  border: 2px solid #111827;
-  border-top-left-radius: 14px;
-  border-top-right-radius: 14px;
-  border-bottom: 0;
-  transform: translateY(2px);
-  position: relative;
-}
-
-.wifi-icon::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  bottom: -2px;
-  width: 4px;
-  height: 4px;
-  border-radius: 999px;
-  background: #111827;
-  transform: translateX(-50%);
-}
-
-.battery {
-  width: 25px;
-  height: 13px;
-  border-radius: 4px;
-  border: 1.8px solid #111827;
-  padding: 2px;
-  position: relative;
-}
-
-.battery::after {
-  content: "";
-  position: absolute;
-  right: -3.5px;
-  top: 3px;
-  width: 2px;
-  height: 6px;
-  border-radius: 999px;
-  background: #111827;
-}
-
-.battery-level {
-  display: block;
-  width: 78%;
-  height: 100%;
-  border-radius: 2px;
-  background: #111827;
+.status-build__updated {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11.5px;
+  line-height: 1.15;
+  font-weight: 500;
+  color: rgba(15, 23, 42, 0.56);
 }
 
 .clock-panel {
   text-align: center;
-  padding: 34px 12px 18px;
+  padding: 28px 12px 18px;
 }
 
 .phone-date {

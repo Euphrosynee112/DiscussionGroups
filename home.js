@@ -2,7 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260402b";
+const APP_BUILD_VERSION = "20260402d";
+const APP_BUILD_UPDATED_AT = "2026-04-02 13:46:40";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -17,7 +18,8 @@ const TRANSFER_FORUM_BASE_ITEM_ID = "__forum_base__";
 
 const phoneDateEl = document.querySelector("#phone-date");
 const phoneClockEl = document.querySelector("#phone-clock");
-const statusTimeEl = document.querySelector("#status-time");
+const statusVersionEl = document.querySelector("#status-version");
+const statusUpdatedEl = document.querySelector("#status-updated");
 const homeSettingsTriggerBtn = document.querySelector("#home-settings-trigger");
 const homeSettingsModalEl = document.querySelector("#home-settings-modal");
 const homeSettingsCloseBtn = document.querySelector("#home-settings-close-btn");
@@ -158,8 +160,14 @@ function updateLocalClock() {
   if (phoneClockEl) {
     phoneClockEl.textContent = timeText;
   }
-  if (statusTimeEl) {
-    statusTimeEl.textContent = timeText;
+}
+
+function renderBuildBadge() {
+  if (statusVersionEl) {
+    statusVersionEl.textContent = `FE v${APP_BUILD_VERSION}`;
+  }
+  if (statusUpdatedEl) {
+    statusUpdatedEl.textContent = `更新于 ${APP_BUILD_UPDATED_AT}`;
   }
 }
 
@@ -2156,6 +2164,7 @@ function initHome() {
   setHomeExportReviewOpen(false);
   setHomeImportReviewOpen(false);
   updateLocalClock();
+  renderBuildBadge();
   setInterval(updateLocalClock, 1000);
   attachHomeSettingsEvents();
   syncHomeActiveConfigSummary();
