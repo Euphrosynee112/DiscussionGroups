@@ -2,8 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260402-202646";
-const APP_BUILD_UPDATED_AT = "2026-04-02 20:26:46";
+const APP_BUILD_VERSION = "20260402-204733";
+const APP_BUILD_UPDATED_AT = "2026-04-02 20:47:33";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -15,6 +15,7 @@ const MESSAGE_CONTACTS_KEY = "x_style_generator_message_contacts_v1";
 const SCHEDULE_ENTRIES_KEY = "x_style_generator_schedule_entries_v1";
 const PRIVACY_ALLOWLIST_META_KEY = "x_style_generator_privacy_allowlist_meta_v1";
 const PRIVACY_PENDING_SCAN_KEY = "x_style_generator_privacy_scan_pending_v1";
+const PRIVACY_ALLOWLIST_TERMS_KEY = "x_style_generator_privacy_allowlist_terms_v1";
 const API_CONFIG_LIMIT = 12;
 const CONFIG_EXPORT_SCHEMA = "pulse-generator-config";
 const TRANSFER_FORUM_BASE_ITEM_ID = "__forum_base__";
@@ -341,6 +342,11 @@ function buildNormalizedSettingsSnapshot(source, options = {}) {
     ...DEFAULT_SETTINGS,
     ...(source && typeof source === "object" ? source : {})
   };
+  const hasExplicitPrivacyAllowlist =
+    source &&
+    typeof source === "object" &&
+    Object.prototype.hasOwnProperty.call(source, "privacyAllowlist");
+  const persistedPrivacyAllowlist = loadStoredPrivacyAllowlistTerms();
   merged.mode = normalizeApiMode(merged.mode);
   merged.endpoint = normalizeSettingsEndpointByMode(merged.mode, merged.endpoint);
   merged.token = normalizeApiConfigToken(merged.token);
@@ -389,7 +395,9 @@ function buildNormalizedSettingsSnapshot(source, options = {}) {
   }
   merged.summaryApiEnabled = Boolean(merged.summaryApiEnabled && merged.summaryApiConfigId);
   merged.privacyAllowlist = normalizePrivacyAllowlist(
-    merged.privacyAllowlist || source?.privacyAllowlist || []
+    hasExplicitPrivacyAllowlist
+      ? merged.privacyAllowlist || source?.privacyAllowlist || []
+      : [...persistedPrivacyAllowlist, ...(merged.privacyAllowlist || source?.privacyAllowlist || [])]
   );
   return merged;
 }
@@ -408,7 +416,11 @@ function loadSettings(options = {}) {
 }
 
 function persistSettings(settings) {
-  safeSetItem(SETTINGS_KEY, JSON.stringify(settings));
+  const normalized = buildNormalizedSettingsSnapshot(settings, {
+    forceActiveConfig: false
+  });
+  safeSetItem(SETTINGS_KEY, JSON.stringify(normalized));
+  persistStoredPrivacyAllowlistTerms(normalized.privacyAllowlist || []);
 }
 
 function setHomeApiConfigStatus(message, tone = "") {
@@ -662,6 +674,17 @@ function normalizePrivacyAllowlistMetaItems(value = []) {
     });
 }
 
+function loadStoredPrivacyAllowlistTerms() {
+  return normalizePrivacyAllowlist(readStoredJson(PRIVACY_ALLOWLIST_TERMS_KEY, []));
+}
+
+function persistStoredPrivacyAllowlistTerms(terms = []) {
+  safeSetItem(
+    PRIVACY_ALLOWLIST_TERMS_KEY,
+    JSON.stringify(normalizePrivacyAllowlist(terms))
+  );
+}
+
 function loadPrivacyAllowlistMetaItems() {
   return normalizePrivacyAllowlistMetaItems(readStoredJson(PRIVACY_ALLOWLIST_META_KEY, []));
 }
@@ -672,7 +695,10 @@ function persistPrivacyAllowlistMetaItems(items = []) {
 
 function loadPrivacyAllowlistItems() {
   const settings = loadSettings({ forceActiveConfig: false });
-  const terms = normalizePrivacyAllowlist(settings.privacyAllowlist || []);
+  const terms = normalizePrivacyAllowlist([
+    ...loadStoredPrivacyAllowlistTerms(),
+    ...(settings.privacyAllowlist || [])
+  ]);
   const metaMap = new Map(
     loadPrivacyAllowlistMetaItems().map((item) => [item.text, item.source])
   );
@@ -762,6 +788,7 @@ function persistPrivacyAllowlistItems(items = []) {
   const nextSettings = loadSettings({ forceActiveConfig: false });
   nextSettings.privacyAllowlist = normalizedItems.map((item) => item.text);
   persistSettings(nextSettings);
+  persistStoredPrivacyAllowlistTerms(nextSettings.privacyAllowlist);
   persistPrivacyAllowlistMetaItems(
     normalizedItems.map((item) => ({
       text: item.text,

@@ -3,6 +3,7 @@
     return;
   }
 
+  const PRIVACY_ALLOWLIST_TERMS_KEY = "x_style_generator_privacy_allowlist_terms_v1";
   const GLOBAL_PROMPT_GUARD =
     "虚拟世界观，与真实世界无关。禁止搜索未提供的任何其他信息。";
   const CATEGORY_ORDER = ["NAME", "HANDLE", "ORG", "TITLE", "ADDR", "COORD", "TERM"];
@@ -170,10 +171,23 @@
     return `privacy_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   }
 
+  function readStoredPrivacyAllowlistTerms() {
+    try {
+      const raw = window.localStorage?.getItem(PRIVACY_ALLOWLIST_TERMS_KEY);
+      if (!raw) {
+        return [];
+      }
+      return normalizeAllowlist(JSON.parse(raw));
+    } catch (_error) {
+      return [];
+    }
+  }
+
   function getManualAllowlist(settings = {}) {
     const defaultTerms = normalizeAllowlist(window.PulsePrivacyAllowlistDefaults || []);
     const customTerms = normalizeAllowlist(settings?.privacyAllowlist || []);
-    return normalizeAllowlist([...defaultTerms, ...customTerms]);
+    const storedTerms = readStoredPrivacyAllowlistTerms();
+    return normalizeAllowlist([...defaultTerms, ...storedTerms, ...customTerms]);
   }
 
   function registerTerm(session, rawTerm, category = "", source = "") {
