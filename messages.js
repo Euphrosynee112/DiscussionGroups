@@ -457,6 +457,7 @@ const messagesAwarenessModalEl = document.querySelector("#messages-awareness-mod
 const messagesAwarenessCloseBtnEl = document.querySelector("#messages-awareness-close-btn");
 const messagesAwarenessCancelBtnEl = document.querySelector("#messages-awareness-cancel-btn");
 const messagesAwarenessFormEl = document.querySelector("#messages-awareness-form");
+const messagesAwarenessTitleInputEl = document.querySelector("#messages-awareness-title-input");
 const messagesAwarenessTextInputEl = document.querySelector("#messages-awareness-text-input");
 const messagesAwarenessEmotionInputEl = document.querySelector(
   "#messages-awareness-emotion-input"
@@ -1943,10 +1944,23 @@ function normalizeAutoScheduleTime(value = "") {
   return /^\d{2}:\d{2}$/.test(trimmed) ? trimmed : "";
 }
 
+function resolveAwarenessTitle(title = "", awarenessText = "") {
+  const resolvedTitle = String(title || "").trim();
+  if (resolvedTitle) {
+    return resolvedTitle.slice(0, 40);
+  }
+  const fallbackText = String(awarenessText || "").trim().replace(/\s+/g, " ");
+  if (!fallbackText) {
+    return "未命名察觉";
+  }
+  return truncate(fallbackText, 20);
+}
+
 function normalizeAwarenessHistory(items = []) {
   return normalizeObjectArray(items)
     .map((item, index) => ({
       id: String(item.id || `awareness_history_${index}_${Date.now()}`).trim(),
+      title: resolveAwarenessTitle(item.title || item.awarenessTitle, ""),
       checkedAt: Number(item.checkedAt) || Date.now(),
       triggered: Boolean(item.triggered),
       roundCount: Math.max(0, Number.parseInt(String(item.roundCount || 0), 10) || 0),
@@ -1956,9 +1970,10 @@ function normalizeAwarenessHistory(items = []) {
     .slice(0, MAX_AWARENESS_HISTORY_ITEMS);
 }
 
-function buildAwarenessHistoryItem(triggered = false, roundCount = 0, note = "") {
+function buildAwarenessHistoryItem(triggered = false, roundCount = 0, note = "", title = "") {
   return {
-    id: `awareness_history_${Date.now()}_${hashText(`${triggered}_${roundCount}_${note}`)}`,
+    id: `awareness_history_${Date.now()}_${hashText(`${triggered}_${roundCount}_${note}_${title}`)}`,
+    title: resolveAwarenessTitle(title, note),
     checkedAt: Date.now(),
     triggered: Boolean(triggered),
     roundCount: Math.max(0, Number.parseInt(String(roundCount || 0), 10) || 0),
@@ -2612,6 +2627,7 @@ function normalizeContact(contact, index = 0) {
     avatarText: String(source.avatarText || "").trim() || getContactAvatarFallback({ name }),
     personaPrompt: String(source.personaPrompt || "").trim(),
     specialUserPersona: String(source.specialUserPersona || "").trim(),
+    awarenessTitle: resolveAwarenessTitle(source.awarenessTitle, source.awarenessText),
     awarenessText: String(source.awarenessText || "").trim(),
     awarenessEmotionShift: String(source.awarenessEmotionShift || "").trim(),
     awarenessSensitivity: normalizeAwarenessSensitivity(source.awarenessSensitivity),
@@ -5123,7 +5139,7 @@ function buildConversationSystemPrompt(
         : "",
       requestOptions.triggeredAwareness?.text
         ? [
-            `你刚刚自己忽然想起了一条并非来自用户当前对话、而是你此前独自察觉到的额外信息；这是你此刻需要优先关注的重点之一：${String(
+            `你刚刚自己忽然想起了一条并非来自用户当前对话、而是你此前独自察觉到的额外信息；这条信息和最近几轮聊天记录具有同等优先级，需要和当前聊天一起理解：${String(
               requestOptions.triggeredAwareness.text || ""
             ).trim()}。`,
             requestOptions.triggeredAwareness.emotionShift
@@ -5131,7 +5147,7 @@ function buildConversationSystemPrompt(
                   requestOptions.triggeredAwareness.emotionShift || ""
                 ).trim()}。`
               : "",
-            "请把它当作你自己突然联想到的隐性线索，而不是用户刚刚告诉你的内容；这次回复里可以自然地主动带起相关话题，但仍然要先接住当前聊天。"
+            "请把它当作你自己突然联想到的隐性线索，而不是用户刚刚告诉你的内容；它的重要程度不要低于最近聊天记录。你可以自然地主动带起相关话题，但仍然要先接住当前聊天。"
           ]
             .filter(Boolean)
             .join("\n")
@@ -5730,27 +5746,10 @@ function splitReplyIntoMessageLines(text) {
     return [];
   }
 
-  const lines = [];
-  let current = "";
-  const separators = new Set(["\n", "，", "。", ",", "."]);
-  const pushCurrent = () => {
-    const value = current.trim();
-    if (value) {
-      lines.push(value);
-    }
-    current = "";
-  };
-
-  for (const character of resolved) {
-    if (separators.has(character)) {
-      pushCurrent();
-      continue;
-    }
-    current += character;
-  }
-  pushCurrent();
-
-  return lines.length ? lines : [resolved];
+  return resolved
+    .split("\n")
+    .map((line) => String(line || "").trim())
+    .filter(Boolean);
 }
 
 function extractLocationReplyBlocks(text) {
@@ -6012,12 +6011,9 @@ function buildReplyItems(replyText, promptSettings = {}, privacySession = null) 
     });
   });
 
-  const limitedItems = limitReplyItems(
-    items,
-    normalizeMessagePromptSettings(promptSettings).replySentenceLimit
-  ).filter(Boolean);
-  if (limitedItems.length) {
-    return limitedItems;
+  const normalizedItems = items.filter(Boolean);
+  if (normalizedItems.length) {
+    return normalizedItems;
   }
   const fallback = String(replyText || "").trim();
   return fallback
@@ -6818,10 +6814,16 @@ function renderAwarenessHistory(contact = null, conversation = null) {
   );
   const threshold = promptSettings.awarenessIntervalRounds;
   const history = normalizeAwarenessHistory(resolvedContact.awarenessHistory || []);
+  const currentTitle = resolveAwarenessTitle(
+    resolvedContact.awarenessTitle,
+    resolvedContact.awarenessText
+  );
   const summaryParts = [
+    `当前察觉：${currentTitle}`,
     `累计判断 ${Math.max(0, Number.parseInt(String(resolvedContact.awarenessCheckCount || 0), 10) || 0)} 次`,
     `命中 ${Math.max(0, Number.parseInt(String(resolvedContact.awarenessTriggerCount || 0), 10) || 0)} 次`,
-    `当前进度 ${Math.min(currentRounds, threshold)}/${threshold} 轮`
+    `当前进度 ${Math.min(currentRounds, threshold)}/${threshold} 轮`,
+    `每满 ${threshold} 轮才会判断一次`
   ];
   if (resolvedContact.awarenessConsumed) {
     summaryParts.push("当前察觉已触发并锁定");
@@ -6845,6 +6847,7 @@ function renderAwarenessHistory(contact = null, conversation = null) {
                         <strong>${escapeHtml(label)}</strong>
                         <span>${escapeHtml(timeText)}</span>
                       </div>
+                      <p>${escapeHtml(`察觉标题：${resolveAwarenessTitle(item.title)}`)}</p>
                       <p>${escapeHtml(`判断时累计轮数：${item.roundCount}`)}</p>
                       ${noteText ? `<p>${escapeHtml(noteText)}</p>` : ""}
                     </article>
@@ -6861,6 +6864,11 @@ function renderAwarenessHistory(contact = null, conversation = null) {
 function applyAwarenessToForm(contact = null) {
   const resolvedContact = contact && typeof contact === "object" ? contact : null;
   const conversation = getConversationById();
+  if (messagesAwarenessTitleInputEl) {
+    messagesAwarenessTitleInputEl.value = String(
+      resolvedContact?.awarenessTitle || ""
+    ).trim();
+  }
   if (messagesAwarenessTextInputEl) {
     messagesAwarenessTextInputEl.value = String(resolvedContact?.awarenessText || "").trim();
   }
@@ -6885,6 +6893,10 @@ function applyAwarenessToForm(contact = null) {
 
 function getCurrentAwarenessDraft() {
   return {
+    awarenessTitle: resolveAwarenessTitle(
+      messagesAwarenessTitleInputEl?.value,
+      messagesAwarenessTextInputEl?.value
+    ),
     awarenessText: String(messagesAwarenessTextInputEl?.value || "").trim(),
     awarenessEmotionShift: String(messagesAwarenessEmotionInputEl?.value || "").trim(),
     awarenessSensitivity: normalizeAwarenessSensitivity(
@@ -9174,6 +9186,10 @@ function getCurrentContactDraft() {
     avatarText: getContactAvatarFallback({ name }),
     personaPrompt: String(messagesContactPersonaInputEl?.value || "").trim(),
     specialUserPersona: String(messagesContactSpecialPersonaInputEl?.value || "").trim(),
+    awarenessTitle: resolveAwarenessTitle(
+      existingContact?.awarenessTitle,
+      existingContact?.awarenessText
+    ),
     awarenessText: String(existingContact?.awarenessText || "").trim(),
     awarenessEmotionShift: String(existingContact?.awarenessEmotionShift || "").trim(),
     awarenessSensitivity: normalizeAwarenessSensitivity(existingContact?.awarenessSensitivity),
@@ -10676,7 +10692,8 @@ async function requestConversationReply(options = {}) {
       currentAwarenessCounter + 1,
       awarenessTriggered
         ? "已命中这次察觉判断，后续会主动把这条额外信息带入对话。"
-        : "本次未命中察觉判断，等待下一轮满足轮数后再判断。"
+        : "本次未命中察觉判断，等待下一轮满足轮数后再判断。",
+      contact.awarenessTitle || contact.awarenessText
     );
     if (awarenessTriggered) {
       triggeredAwareness = {
@@ -12164,10 +12181,13 @@ function attachEvents() {
       const previous = state.contacts[contactIndex];
       const changed =
         draft.awarenessText !== String(previous.awarenessText || "").trim() ||
+        draft.awarenessTitle !==
+          resolveAwarenessTitle(previous.awarenessTitle, previous.awarenessText) ||
         draft.awarenessEmotionShift !== String(previous.awarenessEmotionShift || "").trim() ||
         draft.awarenessSensitivity !== normalizeAwarenessSensitivity(previous.awarenessSensitivity);
       state.contacts[contactIndex] = {
         ...previous,
+        awarenessTitle: draft.awarenessTitle,
         awarenessText: draft.awarenessText,
         awarenessEmotionShift: draft.awarenessEmotionShift,
         awarenessSensitivity: draft.awarenessSensitivity,
@@ -12180,12 +12200,17 @@ function attachEvents() {
           : Math.max(0, Number.parseInt(String(previous.awarenessTriggerCount || 0), 10) || 0),
         awarenessLastCheckedAt: changed ? 0 : Number(previous.awarenessLastCheckedAt) || 0,
         awarenessLastTriggeredAt: changed ? 0 : Number(previous.awarenessLastTriggeredAt) || 0,
-        awarenessHistory: changed
-          ? []
-          : normalizeAwarenessHistory(previous.awarenessHistory || []),
+        awarenessHistory: normalizeAwarenessHistory(previous.awarenessHistory || []),
         updatedAt: Date.now()
       };
       persistContacts();
+      if (changed) {
+        const activeConversation = getConversationById(conversation.id);
+        if (activeConversation) {
+          activeConversation.awarenessCounter = 0;
+          persistConversations();
+        }
+      }
       renderMessagesPage();
       setAwarenessStatus("察觉已保存。", "success");
       setMessagesStatus("角色察觉已更新。", "success");
