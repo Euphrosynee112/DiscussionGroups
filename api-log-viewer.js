@@ -172,22 +172,26 @@ function renderApiLogList() {
       const timestamp = window.PulseApiLog?.formatTimestamp
         ? window.PulseApiLog.formatTimestamp(entry.createdAt)
         : String(entry.createdAt || "");
-      const requestBodyText = JSON.stringify(entry.requestBody || {}, null, 2);
-      const responseBodyText = JSON.stringify(entry.responseBody || {}, null, 2);
-      const responseText = entry.responseText || "";
-      const promptText = entry.prompt || "";
+      const fullFields = window.PulseApiLog?.getFullFields
+        ? window.PulseApiLog.getFullFields(entry.id) || {}
+        : {};
+      const promptText = fullFields.prompt || entry.prompt || "";
+      const responseText = fullFields.responseText || entry.responseText || "";
+      const requestBodyText = JSON.stringify(fullFields.requestBody ?? entry.requestBody ?? {}, null, 2);
+      const responseBodyText = JSON.stringify(fullFields.responseBody ?? entry.responseBody ?? {}, null, 2);
       const decodedPrompt = window.PulseApiLog?.decodeValueByLogId
         ? String(window.PulseApiLog.decodeValueByLogId(entry.id, promptText) || "")
         : "";
+      const displayPromptText = decodedPrompt || promptText;
       const decodedRequestBody = window.PulseApiLog?.decodeValueByLogId
-        ? window.PulseApiLog.decodeValueByLogId(entry.id, entry.requestBody || {})
+        ? window.PulseApiLog.decodeValueByLogId(entry.id, fullFields.requestBody ?? entry.requestBody ?? {})
         : null;
       const decodedRequestBodyText = formatPreviewValue(decodedRequestBody);
       const decodedResponseText = window.PulseApiLog?.decodeValueByLogId
         ? String(window.PulseApiLog.decodeValueByLogId(entry.id, responseText) || "")
         : "";
       const decodedResponseBody = window.PulseApiLog?.decodeValueByLogId
-        ? window.PulseApiLog.decodeValueByLogId(entry.id, entry.responseBody || {})
+        ? window.PulseApiLog.decodeValueByLogId(entry.id, fullFields.responseBody ?? entry.responseBody ?? {})
         : null;
       const decodedResponseBodyText = formatPreviewValue(decodedResponseBody);
       const geminiFinishReason = entry.gemini_finish_reason || entry.geminiFinishReason || "";
@@ -226,14 +230,14 @@ function renderApiLogList() {
           <div class="api-log-card__body">
             <details class="api-log-details" open>
               <summary>Prompt</summary>
-              <pre class="api-log-pre">${escapeHtml(promptText || "（未记录）")}</pre>
+              <pre class="api-log-pre">${escapeHtml(displayPromptText || "（未记录）")}</pre>
             </details>
             ${
               decodedPrompt && decodedPrompt !== promptText
                 ? `
                     <details class="api-log-details">
-                      <summary>Prompt 解码预览</summary>
-                      <pre class="api-log-pre">${escapeHtml(decodedPrompt)}</pre>
+                      <summary>Prompt 原文（占位符版）</summary>
+                      <pre class="api-log-pre">${escapeHtml(promptText)}</pre>
                     </details>
                   `
                 : ""

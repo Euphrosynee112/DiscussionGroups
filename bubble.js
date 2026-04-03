@@ -47,6 +47,36 @@ function prependGlobalPromptGuard(text) {
   return String(text || "").trim();
 }
 
+function buildPromptSectionText(value, fallback = "") {
+  const text = (Array.isArray(value) ? value : [value])
+    .flatMap((item) => (Array.isArray(item) ? item : [item]))
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+  return text || String(fallback || "").trim();
+}
+
+function buildStructuredPromptSections(sections = {}) {
+  const resolvedSections = sections && typeof sections === "object" ? sections : {};
+  return prependGlobalPromptGuard(
+    [
+      `<context_library>\n${buildPromptSectionText(
+        resolvedSections.contextLibrary,
+        "暂无额外背景信息。"
+      )}\n</context_library>`,
+      `<persona_alignment>\n${buildPromptSectionText(
+        resolvedSections.personaAlignment,
+        "按当前已知身份与语境自然输出。"
+      )}\n</persona_alignment>`,
+      `<output_standard>\n${buildPromptSectionText(
+        resolvedSections.outputStandard,
+        "只输出符合要求的最终结果。"
+      )}\n</output_standard>`
+    ].join("\n\n")
+  );
+}
+
 const FAN_EMOJI_POOL = [
   "🥺",
   "🥹",
@@ -726,10 +756,11 @@ function buildJsonArrayRequestBody(settings, prompt, count = FAN_DETAIL_REPLY_CO
 }
 
 function buildTranslatePrompt(sourceText) {
-  return prependGlobalPromptGuard([
-    "请把下面内容翻译成中文，保留原意、语气和换行，不要添加解释。",
-    sourceText
-  ].join("\n\n"));
+  return buildStructuredPromptSections({
+    contextLibrary: sourceText,
+    personaAlignment: "任务：把提供的内容翻译成中文，并保留原意、语气和换行。",
+    outputStandard: "只输出翻译结果，不要添加解释。"
+  });
 }
 
 function buildTranslateRequestBody(settings, prompt) {
@@ -2436,38 +2467,42 @@ function buildFanReplyPrompt(profile, sourceMessages = [], emojiSet = [], settin
     : [];
   const worldbookContext = buildBubbleWorldbookContext(promptSettings);
   const hotTopicsContext = buildBubbleHotTopicsContext(settings, promptSettings);
-  return prependGlobalPromptGuard([
-    "你正在模拟 Bubble 中创作者的粉丝回复列表。",
-    "请严格输出 JSON 数组，不要输出额外解释。",
-    `请输出 ${FAN_DETAIL_REPLY_COUNT} 个对象，每个对象只包含字段：language, text。`,
-    "language 只能是 zh、ja、en、ko 四选一。",
-    "四种语言都必须出现，尽量平均分配。",
-    "text 是粉丝视角对创作者刚发消息的即时反应。",
-    "每条 text 不得超过 50 个字符。",
-    "语气要像真实粉丝：可以可爱、惊讶、夸赞、调侃、尖叫，但都要围绕原消息做反应。",
-    "不要加编号、不要加标签、不要解释、不要输出用户名字段。",
-    worldbookContext
-      ? `补充背景设定（优先级低于粉丝团体近期关注话题、创作者人设与本轮 Bubble 消息，只作弱背景参考）：\n${worldbookContext}`
-      : "",
-    `创作者昵称：${creatorName}`,
-    `创作者人设：${creatorPersona}`,
-    hotTopicsContext
-      ? `粉丝团体近期共同关注的话题：\n${hotTopicsContext}`
-      : "",
-    normalizedMessages.length
-      ? `创作者这一轮连续发送了 ${normalizedMessages.length} 条 Bubble 消息；以下所有消息在理解上同等重要，请综合这一整轮内容生成粉丝回复：`
-      : "",
-    normalizedMessages.length
-      ? normalizedMessages
-          .map((item, index) => `${index + 1}. ${item.time ? `${item.time} · ` : ""}${item.text}`)
-          .join("\n")
-      : "",
-    normalizedMessages.length
-      ? "请把这一整轮消息视作同一组连续表达，回复可以综合回应其中的共同情绪、主题、转折和细节，不要只盯某一条。"
-      : ""
-  ]
-    .filter(Boolean)
-    .join("\n\n"));
+  return buildStructuredPromptSections({
+    contextLibrary: [
+      worldbookContext
+        ? `补充背景设定（优先级低于粉丝团体近期关注话题、创作者人设与本轮 Bubble 消息，只作弱背景参考）：\n${worldbookContext}`
+        : "",
+      hotTopicsContext
+        ? `粉丝团体近期共同关注的话题：\n${hotTopicsContext}`
+        : "",
+      normalizedMessages.length
+        ? `创作者这一轮连续发送了 ${normalizedMessages.length} 条 Bubble 消息；以下所有消息在理解上同等重要，请综合这一整轮内容生成粉丝回复：`
+        : "",
+      normalizedMessages.length
+        ? normalizedMessages
+            .map((item, index) => `${index + 1}. ${item.time ? `${item.time} · ` : ""}${item.text}`)
+            .join("\n")
+        : "",
+      normalizedMessages.length
+        ? "请把这一整轮消息视作同一组连续表达，回复可以综合回应其中的共同情绪、主题、转折和细节，不要只盯某一条。"
+        : ""
+    ],
+    personaAlignment: [
+      "你正在模拟 Bubble 中创作者的粉丝回复列表。",
+      `创作者昵称：${creatorName}`,
+      `创作者人设：${creatorPersona}`
+    ],
+    outputStandard: [
+      "请严格输出 JSON 数组，不要输出额外解释。",
+      `请输出 ${FAN_DETAIL_REPLY_COUNT} 个对象，每个对象只包含字段：language, text。`,
+      "language 只能是 zh、ja、en、ko 四选一。",
+      "四种语言都必须出现，尽量平均分配。",
+      "text 是粉丝视角对创作者刚发消息的即时反应。",
+      "每条 text 不得超过 50 个字符。",
+      "语气要像真实粉丝：可以可爱、惊讶、夸赞、调侃、尖叫，但都要围绕原消息做反应。",
+      "不要加编号、不要加标签、不要解释、不要输出用户名字段。"
+    ]
+  });
 }
 
 function parseFanReplies(rawText, count = FAN_DETAIL_REPLY_COUNT) {

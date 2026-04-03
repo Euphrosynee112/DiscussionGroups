@@ -441,24 +441,25 @@ body.embedded .schedule-shell {
   gap: 4px;
   text-align: left;
   border-radius: 18px;
-  background: #ffffff;
-  border: 1px solid rgba(38, 33, 29, 0.06);
+  background: rgba(var(--schedule-entry-rgb, 255, 255, 255), 0.11);
+  border: 1px solid rgba(var(--schedule-entry-rgb, 38, 33, 29), 0.24);
   box-shadow: 0 8px 18px rgba(97, 86, 75, 0.05);
   cursor: pointer;
 }
 
 .schedule-time-entry--continuation {
-  background: rgba(255, 255, 255, 0.82);
+  background: rgba(var(--schedule-entry-rgb, 255, 255, 255), 0.07);
   border-style: dashed;
 }
 
 .schedule-time-entry__title {
   font-size: 14px;
   font-weight: 700;
+  color: rgb(var(--schedule-entry-rgb, 38, 33, 29));
 }
 
 .schedule-time-entry__meta {
-  color: var(--schedule-muted);
+  color: rgba(var(--schedule-entry-rgb, 38, 33, 29), 0.78);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -475,8 +476,8 @@ body.embedded .schedule-shell {
   gap: 10px;
   text-align: left;
   border-radius: 22px;
-  background: var(--schedule-panel-strong);
-  border: 1px solid var(--schedule-line);
+  background: rgba(var(--schedule-entry-rgb, 255, 255, 255), 0.1);
+  border: 1px solid rgba(var(--schedule-entry-rgb, 38, 33, 29), 0.2);
   box-shadow: 0 10px 24px rgba(112, 102, 88, 0.06);
   cursor: pointer;
 }
@@ -492,10 +493,11 @@ body.embedded .schedule-shell {
   font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.02em;
+  color: rgb(var(--schedule-entry-rgb, 38, 33, 29));
 }
 
 .schedule-entry__time {
-  color: var(--schedule-accent);
+  color: rgb(var(--schedule-entry-rgb, 204, 124, 89));
   font-size: 12px;
   font-weight: 700;
   flex-shrink: 0;
@@ -631,15 +633,15 @@ body.embedded .schedule-shell {
   gap: 2px;
   text-align: left;
   border-radius: 12px;
-  background: rgba(204, 124, 89, 0.12);
-  color: #9c5d3f;
+  background: rgba(var(--schedule-entry-rgb, 204, 124, 89), 0.14);
+  color: rgb(var(--schedule-entry-rgb, 156, 93, 63));
   cursor: pointer;
 }
 
 .schedule-week-timeline__entry--continuation {
-  background: rgba(204, 124, 89, 0.08);
-  color: rgba(156, 93, 63, 0.9);
-  border: 1px dashed rgba(156, 93, 63, 0.18);
+  background: rgba(var(--schedule-entry-rgb, 204, 124, 89), 0.08);
+  color: rgba(var(--schedule-entry-rgb, 156, 93, 63), 0.9);
+  border: 1px dashed rgba(var(--schedule-entry-rgb, 156, 93, 63), 0.18);
 }
 
 .schedule-week-timeline__entry + .schedule-week-timeline__entry {
@@ -651,8 +653,8 @@ body.embedded .schedule-shell {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(236, 79, 162, 0.14);
-  color: #c7448d;
+  background: rgba(var(--schedule-entry-rgb, 236, 79, 162), 0.16);
+  color: rgb(var(--schedule-entry-rgb, 199, 68, 141));
   font-weight: 700;
 }
 
@@ -663,7 +665,7 @@ body.embedded .schedule-shell {
 
 .schedule-week-timeline__entry-meta {
   font-size: 11px;
-  color: rgba(156, 93, 63, 0.78);
+  color: rgba(var(--schedule-entry-rgb, 156, 93, 63), 0.78);
 }
 
 .schedule-month-cell.is-selected {
@@ -695,22 +697,40 @@ body.embedded .schedule-shell {
 }
 
 .schedule-mini-entry {
-  padding: 8px 10px;
-  border-radius: 14px;
-  background: rgba(47, 42, 36, 0.05);
   color: var(--schedule-text);
   font-size: 12px;
   line-height: 1.45;
 }
 
+.schedule-mini-entry__surface {
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: rgba(var(--schedule-entry-rgb, 47, 42, 36), 0.1);
+  border: 1px solid rgba(var(--schedule-entry-rgb, 47, 42, 36), 0.18);
+}
+
 .schedule-mini-entry strong {
   display: block;
   font-size: 12px;
+  color: rgb(var(--schedule-entry-rgb, 38, 33, 29));
+}
+
+.schedule-mini-entry span {
+  color: rgba(var(--schedule-entry-rgb, 38, 33, 29), 0.78);
 }
 
 .schedule-mini-entry--more {
   color: var(--schedule-accent);
   font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+}
+
+.schedule-mini-entry--collapse {
+  color: rgba(114, 95, 74, 0.82);
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
 }
 
 .schedule-month-grid {
@@ -727,6 +747,10 @@ body.embedded .schedule-shell {
   gap: 8px;
   text-align: left;
   cursor: pointer;
+}
+
+.schedule-month-cell.is-expanded {
+  min-height: 148px;
 }
 
 .schedule-month-cell.is-outside {

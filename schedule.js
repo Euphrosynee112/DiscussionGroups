@@ -32,6 +32,7 @@ const DEFAULT_SETTINGS = {
 
 const scheduleBackBtnEl = document.querySelector("#schedule-back-btn");
 const scheduleFilterBtnEl = document.querySelector("#schedule-filter-btn");
+const scheduleClearRangeBtnEl = document.querySelector("#schedule-clear-range-btn");
 const scheduleAddBtnEl = document.querySelector("#schedule-add-btn");
 const scheduleStatusEl = document.querySelector("#schedule-status");
 const scheduleViewSwitchEl = document.querySelector("#schedule-view-switch");
@@ -74,6 +75,19 @@ const scheduleFilterCancelBtnEl = document.querySelector("#schedule-filter-cance
 const scheduleFilterApplyBtnEl = document.querySelector("#schedule-filter-apply-btn");
 const scheduleFilterSelectAllBtnEl = document.querySelector("#schedule-filter-select-all-btn");
 const scheduleFilterClearBtnEl = document.querySelector("#schedule-filter-clear-btn");
+const scheduleClearModalEl = document.querySelector("#schedule-clear-modal");
+const scheduleClearCloseBtnEl = document.querySelector("#schedule-clear-close-btn");
+const scheduleClearCancelBtnEl = document.querySelector("#schedule-clear-cancel-btn");
+const scheduleClearFormEl = document.querySelector("#schedule-clear-form");
+const scheduleClearActorSelectEl = document.querySelector("#schedule-clear-actor-select");
+const scheduleClearPresetTodayBtnEl = document.querySelector("#schedule-clear-preset-today-btn");
+const scheduleClearPresetWeekBtnEl = document.querySelector("#schedule-clear-preset-week-btn");
+const scheduleClearPresetMonthBtnEl = document.querySelector("#schedule-clear-preset-month-btn");
+const scheduleClearStartDateInputEl = document.querySelector("#schedule-clear-start-date-input");
+const scheduleClearStartTimeInputEl = document.querySelector("#schedule-clear-start-time-input");
+const scheduleClearEndDateInputEl = document.querySelector("#schedule-clear-end-date-input");
+const scheduleClearEndTimeInputEl = document.querySelector("#schedule-clear-end-time-input");
+const scheduleClearStatusEl = document.querySelector("#schedule-clear-status");
 
 const memoryStorage = {};
 const USER_ACTOR_KEY = "user:self";
@@ -86,11 +100,14 @@ const state = {
   cursorDate: getTodayValue(),
   editorOpen: false,
   filterOpen: false,
+  clearRangeOpen: false,
   editorMode: "create",
   editingEntryId: "",
   draft: createDefaultDraft(getTodayValue()),
+  clearDraft: createDefaultClearDraft(getTodayValue()),
   filterActorKeys: [],
-  filterDraftActorKeys: []
+  filterDraftActorKeys: [],
+  monthExpandedDates: []
 };
 
 function safeGetItem(key) {
@@ -733,6 +750,36 @@ function prependGlobalPromptGuard(text) {
   return String(text || "").trim();
 }
 
+function buildPromptSectionText(value, fallback = "") {
+  const text = (Array.isArray(value) ? value : [value])
+    .flatMap((item) => (Array.isArray(item) ? item : [item]))
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+  return text || String(fallback || "").trim();
+}
+
+function buildStructuredPromptSections(sections = {}) {
+  const resolvedSections = sections && typeof sections === "object" ? sections : {};
+  return prependGlobalPromptGuard(
+    [
+      `<context_library>\n${buildPromptSectionText(
+        resolvedSections.contextLibrary,
+        "暂无额外背景信息。"
+      )}\n</context_library>`,
+      `<persona_alignment>\n${buildPromptSectionText(
+        resolvedSections.personaAlignment,
+        "按当前已知身份与关系自然回应。"
+      )}\n</persona_alignment>`,
+      `<output_standard>\n${buildPromptSectionText(
+        resolvedSections.outputStandard,
+        "只输出符合要求的最终结果。"
+      )}\n</output_standard>`
+    ].join("\n\n")
+  );
+}
+
 function parseJsonLikeContent(value) {
   if (value && typeof value === "object") {
     return null;
@@ -926,33 +973,35 @@ function buildInviteConflictContext(contact, inviteEntry) {
 
 function buildScheduleInviteSystemPrompt(profile, contact, inviteEntry, options = {}) {
   const companionNames = Array.isArray(options.companionNames) ? options.companionNames : [];
-  return prependGlobalPromptGuard([
-    `你叫 ${contact.name}。`,
-    `现在是你和 ${profile.username || DEFAULT_PROFILE.username} 在即时聊天软件里的一对一私聊。`,
-    "你本人正在收到对方发来的一个日程邀请，需要像真实聊天一样做决定并回复。",
-    `你的稳定性格、表达习惯和关系底色：${
-      contact.personaPrompt || "自然、友好，会根据关系和现实安排做决定。"
-    }。`,
-    `正在和你聊天的用户昵称：${profile.username || DEFAULT_PROFILE.username}。`,
-    `用户整体画像：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt || "用户有自己稳定的人设和表达方式。"}。`,
-    contact.specialUserPersona
-      ? `你对这个用户的特别认知：${contact.specialUserPersona}。`
-      : "",
-    [
+  return buildStructuredPromptSections({
+    contextLibrary: [
+      buildInviteConflictContext(contact, inviteEntry),
+      companionNames.length
+        ? `除你之外，这次同行人还有：${companionNames.join("、")}。`
+        : "这次邀请没有其他角色同行人。"
+    ],
+    personaAlignment: [
+      `你叫 ${contact.name}。`,
+      `现在是你和 ${profile.username || DEFAULT_PROFILE.username} 在即时聊天软件里的一对一私聊。`,
+      "你本人正在收到对方发来的一个日程邀请，需要像真实聊天一样做决定并回复。",
+      `你的稳定性格、表达习惯和关系底色：${
+        contact.personaPrompt || "自然、友好，会根据关系和现实安排做决定。"
+      }。`,
+      `正在和你聊天的用户昵称：${profile.username || DEFAULT_PROFILE.username}。`,
+      `用户整体画像：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt || "用户有自己稳定的人设和表达方式。"}。`,
+      contact.specialUserPersona
+        ? `你对这个用户的特别认知：${contact.specialUserPersona}。`
+        : ""
+    ],
+    outputStandard: [
       "你需要先判断是否接受这个邀请，再给出一条自然聊天式回复。",
       "接受时要显得像真的愿意赴约；拒绝时要像真实生活中的婉拒，可以简短带一点理由，但不要冷冰冰。",
       "优先考虑你的人设、和用户的关系、你当前已知的行程冲突，以及这个邀请本身是否合理。",
-      "如果没有明显冲突且关系允许，默认更偏向接受；如果确实撞时间、明显不合适，或以你的性格不想去，就拒绝。"
-    ].join(" "),
-    buildInviteConflictContext(contact, inviteEntry),
-    companionNames.length
-      ? `除你之外，这次同行人还有：${companionNames.join("、")}。`
-      : "这次邀请没有其他角色同行人。",
-    '输出必须是严格 JSON：{"decision":"accept|reject","reply":"自然回复"}。',
-    "reply 只写你真正会发出去的话，不要解释 JSON，不要加 markdown，不要附加其他字段。"
-  ]
-    .filter(Boolean)
-    .join("\n\n"));
+      "如果没有明显冲突且关系允许，默认更偏向接受；如果确实撞时间、明显不合适，或以你的性格不想去，就拒绝。",
+      '输出必须是严格 JSON：{"decision":"accept|reject","reply":"自然回复"}。',
+      "reply 只写你真正会发出去的话，不要解释 JSON，不要加 markdown，不要附加其他字段。"
+    ]
+  });
 }
 
 function buildScheduleInviteUserInstruction(inviteEntry, companionNames = []) {
@@ -1289,6 +1338,17 @@ function createDefaultDraft(dateText = getTodayValue(), overrides = {}) {
   };
 }
 
+function createDefaultClearDraft(dateText = getTodayValue(), overrides = {}) {
+  return {
+    actorKey: USER_ACTOR_KEY,
+    startDate: dateText,
+    startTime: "00:00",
+    endDate: dateText,
+    endTime: "23:59",
+    ...overrides
+  };
+}
+
 function getUserDisplayName() {
   return String(state.profile.username || DEFAULT_PROFILE.username).trim() || DEFAULT_PROFILE.username;
 }
@@ -1341,6 +1401,11 @@ function getActiveOwnerFilterSummary() {
     return labels.join("、");
   }
   return `${labels.slice(0, 2).join("、")} 等 ${labels.length} 位`;
+}
+
+function getActorLabelByKey(actorKey = USER_ACTOR_KEY) {
+  const option = getFilterActorOptions().find((item) => item.key === actorKey);
+  return option?.label || (actorKey === USER_ACTOR_KEY ? getUserDisplayName() : "角色");
 }
 
 function getAvailableCompanionOptions(draft = state.draft) {
@@ -1531,7 +1596,7 @@ function parseTimeToMinutes(timeText = "") {
 function getEntryVisibleEndHour(entry) {
   const startMinutes = parseTimeToMinutes(entry.startTime);
   const endMinutes = Math.max(startMinutes + 1, parseTimeToMinutes(entry.endTime));
-  return Math.max(parseTimeHour(entry.startTime), Math.min(23, Math.floor(endMinutes / 60)));
+  return Math.max(parseTimeHour(entry.startTime), Math.min(23, Math.floor((endMinutes - 1) / 60)));
 }
 
 function entryOccupiesHour(entry, hour) {
@@ -1542,7 +1607,7 @@ function entryOccupiesHour(entry, hour) {
   const endMinutes = Math.max(startMinutes + 1, parseTimeToMinutes(entry.endTime));
   const slotStart = hour * 60;
   const slotEnd = Math.min(24 * 60, (hour + 1) * 60);
-  return startMinutes < slotEnd && endMinutes >= slotStart;
+  return startMinutes < slotEnd && endMinutes > slotStart;
 }
 
 function getTimedEntrySlotState(entry, hour) {
@@ -1598,6 +1663,48 @@ function getOwnerChipClass(entry) {
     : "schedule-chip schedule-chip--user";
 }
 
+const SCHEDULE_ENTRY_PALETTE = [
+  "93,131,222",
+  "81,167,121",
+  "208,123,84",
+  "170,109,214",
+  "71,168,180",
+  "224,148,74",
+  "214,104,144",
+  "118,144,213"
+];
+
+function getScheduleActorTone(entry) {
+  const actorKey =
+    String(entry?.displayOwnerKey || "").trim() ||
+    getActorKey(entry?.displayOwnerType || entry?.ownerType || "user", entry?.displayOwnerId || entry?.ownerId || "");
+  const index = Number.parseInt(hashText(actorKey), 36) % SCHEDULE_ENTRY_PALETTE.length;
+  return SCHEDULE_ENTRY_PALETTE[Math.max(0, index)];
+}
+
+function buildScheduleActorToneStyle(entry) {
+  return `--schedule-entry-rgb:${getScheduleActorTone(entry)};`;
+}
+
+function isMonthDateExpanded(dateText = "") {
+  const resolvedDate = String(dateText || "").trim();
+  return resolvedDate ? (Array.isArray(state.monthExpandedDates) ? state.monthExpandedDates : []).includes(resolvedDate) : false;
+}
+
+function toggleMonthDateExpanded(dateText = "") {
+  const resolvedDate = String(dateText || "").trim();
+  if (!resolvedDate) {
+    return;
+  }
+  const current = new Set(Array.isArray(state.monthExpandedDates) ? state.monthExpandedDates : []);
+  if (current.has(resolvedDate)) {
+    current.delete(resolvedDate);
+  } else {
+    current.add(resolvedDate);
+  }
+  state.monthExpandedDates = [...current];
+}
+
 function formatParticipantLabel(entry) {
   const names = Array.isArray(entry.displayCompanionNames) ? entry.displayCompanionNames.filter(Boolean) : [];
   if (!names.length) {
@@ -1616,7 +1723,7 @@ function renderEntryCard(entry) {
     (ownerType === "contact" ? getContactName(entry.displayOwnerId || entry.ownerId) : getUserDisplayName());
   const participantLabel = formatParticipantLabel(entry);
   return `
-    <button class="schedule-entry" type="button" data-action="edit-entry" data-entry-id="${escapeHtml(entry.sourceEntryId || entry.id)}">
+    <button class="schedule-entry" style="${escapeHtml(buildScheduleActorToneStyle(entry))}" type="button" data-action="edit-entry" data-entry-id="${escapeHtml(entry.sourceEntryId || entry.id)}">
       <div class="schedule-entry__top">
         <span class="schedule-entry__title">${escapeHtml(entry.title)}</span>
         <span class="schedule-entry__time">${escapeHtml(formatEntryTime(entry))}</span>
@@ -1633,22 +1740,36 @@ function renderEntryCard(entry) {
   `;
 }
 
-function renderMiniEntries(entries, maxCount = 2) {
+function renderMiniEntries(entries, maxCount = 2, options = {}) {
+  const resolvedOptions = options && typeof options === "object" ? options : {};
+  const dateText = String(resolvedOptions.date || "").trim();
+  const expanded = Boolean(resolvedOptions.expanded);
   if (!entries.length) {
-    return '<div class="schedule-month-cell__empty">点击添加</div>';
+    return '<div class="schedule-month-cell__empty">点击查看</div>';
   }
-  const visibleEntries = entries.slice(0, maxCount);
-  const moreCount = entries.length - visibleEntries.length;
+  const visibleEntries = expanded ? entries : entries.slice(0, maxCount);
+  const moreCount = expanded ? 0 : entries.length - visibleEntries.length;
   return [
     ...visibleEntries.map(
       (entry) => `
         <div class="schedule-mini-entry">
+          <div class="schedule-mini-entry__surface" style="${escapeHtml(buildScheduleActorToneStyle(entry))}">
           <strong>${escapeHtml(entry.title)}</strong>
           <span>${escapeHtml(formatEntryTime(entry))}</span>
+          </div>
         </div>
       `
     ),
-    moreCount > 0 ? `<div class="schedule-mini-entry schedule-mini-entry--more">+${moreCount} 条更多</div>` : ""
+    moreCount > 0
+      ? `<div class="schedule-mini-entry schedule-mini-entry--more" data-action="toggle-date-entries" data-date="${escapeHtml(
+          dateText
+        )}">+${moreCount} 条更多</div>`
+      : "",
+    expanded && entries.length > maxCount
+      ? `<div class="schedule-mini-entry schedule-mini-entry--collapse" data-action="toggle-date-entries" data-date="${escapeHtml(
+          dateText
+        )}">收起</div>`
+      : ""
   ].join("");
 }
 
@@ -1671,6 +1792,7 @@ function renderDayView(dateText) {
                           (entry) => `
                             <button
                               class="schedule-time-entry schedule-time-entry--all-day"
+                              style="${escapeHtml(buildScheduleActorToneStyle(entry))}"
                               type="button"
                               data-action="edit-entry"
                               data-entry-id="${escapeHtml(entry.sourceEntryId || entry.id)}"
@@ -1723,6 +1845,7 @@ function renderDayView(dateText) {
                                     class="schedule-time-entry schedule-time-entry--${escapeHtml(
                                       getTimedEntrySlotState(entry, hour)
                                     )}"
+                                    style="${escapeHtml(buildScheduleActorToneStyle(entry))}"
                                     type="button"
                                     data-action="edit-entry"
                                     data-entry-id="${escapeHtml(entry.sourceEntryId || entry.id)}"
@@ -1796,6 +1919,7 @@ function renderWeekView(dateText) {
                             (entry) => `
                               <button
                                 class="schedule-week-timeline__entry schedule-week-timeline__entry--all-day"
+                                style="${escapeHtml(buildScheduleActorToneStyle(entry))}"
                                 type="button"
                                 data-action="edit-entry"
                                 data-entry-id="${escapeHtml(entry.sourceEntryId || entry.id)}"
@@ -1840,6 +1964,7 @@ function renderWeekView(dateText) {
                                       class="schedule-week-timeline__entry schedule-week-timeline__entry--${escapeHtml(
                                         getTimedEntrySlotState(entry, hour)
                                       )}"
+                                      style="${escapeHtml(buildScheduleActorToneStyle(entry))}"
                                       type="button"
                                       data-action="edit-entry"
                                       data-entry-id="${escapeHtml(entry.sourceEntryId || entry.id)}"
@@ -1898,18 +2023,19 @@ function renderMonthView(dateText) {
       const isOutside = date.getMonth() !== baseMonth;
       const isToday = isSameDateValue(value, getTodayValue());
       const isSelected = isSameDateValue(value, state.cursorDate);
+      const expanded = isMonthDateExpanded(value);
       return `
         <button
-          class="schedule-month-cell${isOutside ? " is-outside" : ""}${isToday ? " is-today" : ""}${isSelected ? " is-selected" : ""}"
+          class="schedule-month-cell${isOutside ? " is-outside" : ""}${isToday ? " is-today" : ""}${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}"
           type="button"
-          data-action="add-day"
+          data-action="open-date"
           data-date="${escapeHtml(value)}"
         >
           <div class="schedule-month-cell__top">
             <span class="schedule-month-cell__weekday">${escapeHtml(formatWeekday(value, "short"))}</span>
             <span class="schedule-month-cell__day">${escapeHtml(String(date.getDate()))}</span>
           </div>
-          <div class="schedule-month-cell__items">${renderMiniEntries(entries, 2)}</div>
+          <div class="schedule-month-cell__items">${renderMiniEntries(entries, 2, { date: value, expanded })}</div>
         </button>
       `;
     })
@@ -1983,7 +2109,10 @@ function renderSchedulePage() {
 }
 
 function refreshModalOpenState() {
-  document.body.classList.toggle("schedule-modal-open", state.editorOpen || state.filterOpen);
+  document.body.classList.toggle(
+    "schedule-modal-open",
+    state.editorOpen || state.filterOpen || state.clearRangeOpen
+  );
 }
 
 function setEditorOpen(isOpen, options = {}) {
@@ -2059,6 +2188,35 @@ function setFilterOpen(isOpen) {
     : getFilterActorOptions().map((option) => option.key);
   renderFilterOptions();
   setFilterStatus("");
+}
+
+function setClearRangeOpen(isOpen, options = {}) {
+  state.clearRangeOpen = Boolean(isOpen);
+  if (!scheduleClearModalEl) {
+    return;
+  }
+  scheduleClearModalEl.hidden = !state.clearRangeOpen;
+  scheduleClearModalEl.setAttribute("aria-hidden", String(!state.clearRangeOpen));
+  refreshModalOpenState();
+
+  if (!state.clearRangeOpen) {
+    state.clearDraft = createDefaultClearDraft(state.cursorDate, {
+      actorKey: getDefaultClearActorKey()
+    });
+    setClearStatus("");
+    return;
+  }
+
+  const resolvedDate = String(options.date || state.cursorDate).trim() || state.cursorDate;
+  state.clearDraft = createDefaultClearDraft(resolvedDate, {
+    actorKey: String(options.actorKey || getDefaultClearActorKey()).trim() || getDefaultClearActorKey(),
+    startDate: resolvedDate,
+    endDate: resolvedDate
+  });
+  renderClearModal();
+  window.setTimeout(() => {
+    scheduleClearActorSelectEl?.focus();
+  }, 0);
 }
 
 function renderOwnerContactOptions() {
@@ -2202,6 +2360,294 @@ function setFilterStatus(message = "", tone = "") {
   }
   scheduleFilterStatusEl.textContent = message;
   scheduleFilterStatusEl.className = `schedule-editor-status${tone ? ` ${tone}` : ""}`;
+}
+
+function setClearStatus(message = "", tone = "") {
+  if (!scheduleClearStatusEl) {
+    return;
+  }
+  scheduleClearStatusEl.textContent = message;
+  scheduleClearStatusEl.className = `schedule-editor-status${tone ? ` ${tone}` : ""}`;
+}
+
+function getDefaultClearActorKey() {
+  const filteredKeys = normalizeFilterActorKeys(state.filterActorKeys);
+  const filteredContactKeys = filteredKeys.filter((key) => key !== USER_ACTOR_KEY);
+  if (filteredContactKeys.length === 1) {
+    return filteredContactKeys[0];
+  }
+  if (filteredKeys.length === 1) {
+    return filteredKeys[0];
+  }
+  if (state.contacts.length === 1) {
+    return getActorKey("contact", state.contacts[0].id);
+  }
+  return USER_ACTOR_KEY;
+}
+
+function renderClearActorOptions() {
+  if (!scheduleClearActorSelectEl) {
+    return;
+  }
+
+  const options = getFilterActorOptions();
+  scheduleClearActorSelectEl.innerHTML = options
+    .map(
+      (option) =>
+        `<option value="${escapeHtml(option.key)}">${escapeHtml(
+          option.type === "user" ? `用户 · ${option.label}` : `角色 · ${option.label}`
+        )}</option>`
+    )
+    .join("");
+
+  const availableKeys = new Set(options.map((option) => option.key));
+  const nextActorKey = availableKeys.has(state.clearDraft.actorKey)
+    ? state.clearDraft.actorKey
+    : getDefaultClearActorKey();
+  scheduleClearActorSelectEl.value = nextActorKey;
+  state.clearDraft = {
+    ...state.clearDraft,
+    actorKey: nextActorKey
+  };
+}
+
+function renderClearModal() {
+  renderClearActorOptions();
+  if (scheduleClearStartDateInputEl) {
+    scheduleClearStartDateInputEl.value = state.clearDraft.startDate || state.cursorDate;
+  }
+  if (scheduleClearStartTimeInputEl) {
+    scheduleClearStartTimeInputEl.value = state.clearDraft.startTime || "00:00";
+  }
+  if (scheduleClearEndDateInputEl) {
+    scheduleClearEndDateInputEl.value = state.clearDraft.endDate || state.clearDraft.startDate || state.cursorDate;
+  }
+  if (scheduleClearEndTimeInputEl) {
+    scheduleClearEndTimeInputEl.value = state.clearDraft.endTime || "23:59";
+  }
+  setClearStatus("");
+}
+
+function collectClearDraft() {
+  return {
+    actorKey: String(scheduleClearActorSelectEl?.value || getDefaultClearActorKey()).trim() || USER_ACTOR_KEY,
+    startDate: String(scheduleClearStartDateInputEl?.value || state.cursorDate).trim() || state.cursorDate,
+    startTime: String(scheduleClearStartTimeInputEl?.value || "00:00").trim() || "00:00",
+    endDate:
+      String(scheduleClearEndDateInputEl?.value || state.cursorDate).trim() ||
+      String(scheduleClearStartDateInputEl?.value || state.cursorDate).trim() ||
+      state.cursorDate,
+    endTime: String(scheduleClearEndTimeInputEl?.value || "23:59").trim() || "23:59"
+  };
+}
+
+function syncClearDraft(overrides = {}) {
+  state.clearDraft = {
+    ...collectClearDraft(),
+    ...(overrides && typeof overrides === "object" ? overrides : {})
+  };
+  renderClearModal();
+  return state.clearDraft;
+}
+
+function getClearPresetRange(preset = "today") {
+  const today = getTodayValue();
+  if (preset === "week") {
+    const startDate = getWeekStart(today);
+    return {
+      startDate,
+      startTime: "00:00",
+      endDate: addDays(startDate, 6),
+      endTime: "23:59"
+    };
+  }
+  if (preset === "month") {
+    const baseDate = parseLocalDateValue(today) || new Date();
+    const monthStart = new Date(baseDate.getFullYear(), baseDate.getMonth(), 1);
+    const monthEnd = new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 0);
+    return {
+      startDate: formatDateValue(monthStart),
+      startTime: "00:00",
+      endDate: formatDateValue(monthEnd),
+      endTime: "23:59"
+    };
+  }
+  return {
+    startDate: today,
+    startTime: "00:00",
+    endDate: today,
+    endTime: "23:59"
+  };
+}
+
+function applyClearPreset(preset = "today") {
+  syncClearDraft(getClearPresetRange(preset));
+  const presetLabel = preset === "week" ? "本周" : preset === "month" ? "本月" : "今天";
+  setClearStatus(`已切换为“${presetLabel}”范围。`, "success");
+}
+
+function buildEntryOccurrenceRange(entry, occurrenceDateText = "") {
+  const resolvedEntry = entry && typeof entry === "object" ? entry : null;
+  const dateText = String(occurrenceDateText || resolvedEntry?.date || "").trim();
+  if (!resolvedEntry || !dateText) {
+    return null;
+  }
+
+  if (resolvedEntry.scheduleType === "day") {
+    const start = parseLocalDateTimeValue(dateText, "00:00");
+    const end = parseLocalDateTimeValue(addDays(dateText, 1), "00:00");
+    return start && end ? { start, end } : null;
+  }
+
+  const start = parseLocalDateTimeValue(dateText, resolvedEntry.startTime || "09:00");
+  const end = parseLocalDateTimeValue(dateText, resolvedEntry.endTime || "10:00");
+  if (!start || !end) {
+    return null;
+  }
+  if (end <= start) {
+    end.setTime(start.getTime() + 60 * 60 * 1000);
+  }
+  return { start, end };
+}
+
+function getEntryOccurrenceRangesWithinRange(entry, rangeStart, rangeEnd) {
+  const resolvedEntry = entry && typeof entry === "object" ? entry : null;
+  if (!resolvedEntry || !(rangeStart instanceof Date) || !(rangeEnd instanceof Date) || rangeEnd <= rangeStart) {
+    return [];
+  }
+
+  if (resolvedEntry.scheduleType !== "week") {
+    const occurrence = buildEntryOccurrenceRange(resolvedEntry, resolvedEntry.date);
+    if (!occurrence) {
+      return [];
+    }
+    return occurrence.start < rangeEnd && rangeStart < occurrence.end ? [occurrence] : [];
+  }
+
+  const targetWeekday = getDateWeekday(resolvedEntry.date);
+  const startDate = new Date(rangeStart.getFullYear(), rangeStart.getMonth(), rangeStart.getDate());
+  const endDate = new Date(rangeEnd.getFullYear(), rangeEnd.getMonth(), rangeEnd.getDate());
+  const ranges = [];
+
+  for (
+    const cursor = new Date(startDate.getTime());
+    cursor.getTime() <= endDate.getTime();
+    cursor.setDate(cursor.getDate() + 1)
+  ) {
+    if (cursor.getDay() !== targetWeekday) {
+      continue;
+    }
+    const occurrence = buildEntryOccurrenceRange(resolvedEntry, formatDateValue(cursor));
+    if (!occurrence) {
+      continue;
+    }
+    if (occurrence.start < rangeEnd && rangeStart < occurrence.end) {
+      ranges.push(occurrence);
+    }
+  }
+
+  return ranges;
+}
+
+function entryOverlapsDateTimeRange(entry, rangeStart, rangeEnd) {
+  return getEntryOccurrenceRangesWithinRange(entry, rangeStart, rangeEnd).length > 0;
+}
+
+function getEntryClearAction(entry, actorKey = USER_ACTOR_KEY) {
+  const resolvedKey = String(actorKey || "").trim() || USER_ACTOR_KEY;
+  if (resolvedKey === USER_ACTOR_KEY) {
+    if (entry.ownerType === "user") {
+      return "remove_entry";
+    }
+    if (entry.companionIncludesUser) {
+      return "detach_user";
+    }
+    return "";
+  }
+
+  const contactId = resolvedKey.startsWith("contact:") ? resolvedKey.slice("contact:".length) : "";
+  if (!contactId) {
+    return "";
+  }
+  if (entry.ownerType === "contact" && entry.ownerId === contactId) {
+    return "remove_entry";
+  }
+  if (entry.companionContactIds.includes(contactId)) {
+    return "detach_contact";
+  }
+  return "";
+}
+
+function clearSchedulesInRange(draft = state.clearDraft) {
+  const resolvedDraft = draft && typeof draft === "object" ? draft : state.clearDraft;
+  const rangeStart = parseLocalDateTimeValue(resolvedDraft.startDate, resolvedDraft.startTime || "00:00");
+  const rangeEnd = parseLocalDateTimeValue(resolvedDraft.endDate, resolvedDraft.endTime || "23:59");
+  if (!rangeStart || !rangeEnd) {
+    throw new Error("请填写完整的开始和结束时间。");
+  }
+  if (rangeEnd <= rangeStart) {
+    throw new Error("结束时间需要晚于开始时间。");
+  }
+
+  const targetActorKey = String(resolvedDraft.actorKey || "").trim() || USER_ACTOR_KEY;
+  let removedEntries = 0;
+  let detachedParticipants = 0;
+  const nextEntries = [];
+
+  state.entries.forEach((entry, index) => {
+    if (!entryOverlapsDateTimeRange(entry, rangeStart, rangeEnd)) {
+      nextEntries.push(entry);
+      return;
+    }
+
+    const action = getEntryClearAction(entry, targetActorKey);
+    if (action === "remove_entry") {
+      removedEntries += 1;
+      return;
+    }
+    if (action === "detach_user") {
+      detachedParticipants += 1;
+      nextEntries.push(
+        normalizeScheduleEntry(
+          {
+            ...entry,
+            companionIncludesUser: false,
+            updatedAt: Date.now() + index
+          },
+          index
+        )
+      );
+      return;
+    }
+    if (action === "detach_contact") {
+      const contactId = targetActorKey.slice("contact:".length);
+      const nextInviteDecisions = {
+        ...(entry.inviteDecisions || {})
+      };
+      delete nextInviteDecisions[contactId];
+      detachedParticipants += 1;
+      nextEntries.push(
+        normalizeScheduleEntry(
+          {
+            ...entry,
+            companionContactIds: entry.companionContactIds.filter((item) => item !== contactId),
+            inviteDecisions: nextInviteDecisions,
+            updatedAt: Date.now() + index
+          },
+          index
+        )
+      );
+      return;
+    }
+
+    nextEntries.push(entry);
+  });
+
+  return {
+    nextEntries,
+    removedEntries,
+    detachedParticipants
+  };
 }
 
 function renderEditor() {
@@ -2574,6 +3020,44 @@ function handleDeleteEntry() {
   setStatus("日程已删除。", "success");
 }
 
+function handleClearRangeSubmit(event) {
+  event.preventDefault();
+  const draft = collectClearDraft();
+  state.clearDraft = draft;
+
+  const actorLabel = getActorLabelByKey(draft.actorKey);
+  const confirmed = window.confirm(
+    `确定清除 ${actorLabel} 在 ${draft.startDate} ${draft.startTime} 到 ${draft.endDate} ${draft.endTime} 之间的相关日程吗？`
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    const result = clearSchedulesInRange(draft);
+    if (!result.removedEntries && !result.detachedParticipants) {
+      setClearStatus("所选时间段内没有可清除的日程。", "error");
+      return;
+    }
+
+    state.entries = result.nextEntries;
+    persistScheduleEntries();
+    renderSchedulePage();
+    setClearRangeOpen(false);
+
+    const summaryParts = [];
+    if (result.removedEntries) {
+      summaryParts.push(`删除 ${result.removedEntries} 条`);
+    }
+    if (result.detachedParticipants) {
+      summaryParts.push(`移除 ${result.detachedParticipants} 个同行关联`);
+    }
+    setStatus(`${actorLabel} 的行程已清除：${summaryParts.join("，")}。`, "success");
+  } catch (error) {
+    setClearStatus(error?.message || "清除日程失败。", "error");
+  }
+}
+
 function shiftCursor(step) {
   if (state.viewMode === "month") {
     state.cursorDate = addMonths(state.cursorDate, step);
@@ -2600,6 +3084,10 @@ function attachEvents() {
 
   scheduleFilterBtnEl?.addEventListener("click", () => {
     setFilterOpen(true);
+  });
+
+  scheduleClearRangeBtnEl?.addEventListener("click", () => {
+    setClearRangeOpen(true, { date: state.cursorDate });
   });
 
   scheduleViewSwitchEl?.addEventListener("click", (event) => {
@@ -2633,12 +3121,30 @@ function attachEvents() {
     if (!(target instanceof Element)) {
       return;
     }
+    const toggleDateEntriesEl = target.closest("[data-action='toggle-date-entries']");
+    if (toggleDateEntriesEl instanceof HTMLElement) {
+      event.preventDefault();
+      event.stopPropagation();
+      const date = String(toggleDateEntriesEl.dataset.date || state.cursorDate).trim() || state.cursorDate;
+      toggleMonthDateExpanded(date);
+      renderSchedulePage();
+      return;
+    }
     const addDayEl = target.closest("[data-action='add-day']");
     if (addDayEl instanceof HTMLElement) {
       const date = String(addDayEl.dataset.date || state.cursorDate).trim() || state.cursorDate;
       state.cursorDate = date;
       setEditorOpen(true, { date, scheduleType: "day" });
       renderSchedulePage();
+      return;
+    }
+    const openDateEl = target.closest("[data-action='open-date']");
+    if (openDateEl instanceof HTMLElement) {
+      const date = String(openDateEl.dataset.date || state.cursorDate).trim() || state.cursorDate;
+      state.cursorDate = date;
+      state.viewMode = "day";
+      renderSchedulePage();
+      setStatus(`已展开查看 ${formatFullDate(date)}。`, "success");
       return;
     }
     const addHourEl = target.closest("[data-action='add-hour-slot']");
@@ -2818,6 +3324,54 @@ function attachEvents() {
     }
   });
 
+  scheduleClearCloseBtnEl?.addEventListener("click", () => {
+    setClearRangeOpen(false);
+  });
+
+  scheduleClearCancelBtnEl?.addEventListener("click", () => {
+    setClearRangeOpen(false);
+  });
+
+  scheduleClearFormEl?.addEventListener("submit", handleClearRangeSubmit);
+
+  [
+    scheduleClearActorSelectEl,
+    scheduleClearStartDateInputEl,
+    scheduleClearStartTimeInputEl,
+    scheduleClearEndDateInputEl,
+    scheduleClearEndTimeInputEl
+  ].forEach((input) => {
+    input?.addEventListener("input", () => {
+      state.clearDraft = collectClearDraft();
+      setClearStatus("");
+    });
+    input?.addEventListener("change", () => {
+      state.clearDraft = collectClearDraft();
+      setClearStatus("");
+    });
+  });
+
+  scheduleClearPresetTodayBtnEl?.addEventListener("click", () => {
+    applyClearPreset("today");
+  });
+
+  scheduleClearPresetWeekBtnEl?.addEventListener("click", () => {
+    applyClearPreset("week");
+  });
+
+  scheduleClearPresetMonthBtnEl?.addEventListener("click", () => {
+    applyClearPreset("month");
+  });
+
+  scheduleClearModalEl?.addEventListener("click", (event) => {
+    if (
+      event.target === scheduleClearModalEl ||
+      event.target?.classList?.contains("schedule-modal__backdrop")
+    ) {
+      setClearRangeOpen(false);
+    }
+  });
+
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.editorOpen) {
       setEditorOpen(false);
@@ -2825,6 +3379,10 @@ function attachEvents() {
     }
     if (event.key === "Escape" && state.filterOpen) {
       setFilterOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.clearRangeOpen) {
+      setClearRangeOpen(false);
       return;
     }
     if (event.key === "Escape" && isEmbeddedView()) {

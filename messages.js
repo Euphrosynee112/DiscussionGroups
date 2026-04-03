@@ -39,6 +39,7 @@ const MAX_CONTEXT_FOCUS_MINUTES = 1440;
 const DEFAULT_AUTO_SCHEDULE_DAYS = 3;
 const MAX_AUTO_SCHEDULE_DAYS = 14;
 const MAX_AWARENESS_HISTORY_ITEMS = 12;
+const AUTO_SCHEDULE_TIMER_INTERVAL_MS = 60 * 1000;
 const CONVERSATION_RENDER_BATCH_SIZE = 50;
 const CONVERSATION_SOFT_MESSAGE_LIMIT = 240;
 const CONVERSATION_MIN_MESSAGE_LIMIT = 80;
@@ -85,6 +86,7 @@ const DEFAULT_SETTINGS = {
     worldbookIds: [],
     forumPostFocusEnabled: false,
     bubbleFocusEnabled: false,
+    bubbleFocusMinutes: DEFAULT_CONTEXT_FOCUS_MINUTES,
     sceneMode: "online",
     showContactAvatar: true,
     showUserAvatar: true
@@ -166,6 +168,7 @@ const messagesTabbarEl = document.querySelector("#messages-tabbar");
 
 const messagesProfileModalEl = document.querySelector("#messages-profile-modal");
 const messagesProfileModalCloseBtnEl = document.querySelector("#messages-profile-modal-close-btn");
+const messagesProfileSaveBtnEl = document.querySelector("#messages-profile-save-btn");
 const messagesProfileFormEl = document.querySelector("#messages-profile-form");
 const messagesProfileAvatarPreviewEl = document.querySelector("#messages-profile-avatar-preview");
 const messagesProfileAvatarFileInputEl = document.querySelector("#messages-profile-avatar-file-input");
@@ -179,6 +182,7 @@ const messagesProfileEditorStatusEl = document.querySelector("#messages-profile-
 const messagesContactModalEl = document.querySelector("#messages-contact-modal");
 const messagesContactModalCloseBtnEl = document.querySelector("#messages-contact-modal-close-btn");
 const messagesContactModalTitleEl = document.querySelector("#messages-contact-modal-title");
+const messagesContactSaveBtnEl = document.querySelector("#messages-contact-save-btn");
 const messagesContactFormEl = document.querySelector("#messages-contact-form");
 const messagesContactAvatarPreviewEl = document.querySelector("#messages-contact-avatar-preview");
 const messagesContactAvatarFileInputEl = document.querySelector("#messages-contact-avatar-file-input");
@@ -198,6 +202,7 @@ const messagesChatSettingsModalEl = document.querySelector("#messages-chat-setti
 const messagesChatSettingsCloseBtnEl = document.querySelector(
   "#messages-chat-settings-close-btn"
 );
+const messagesChatSettingsSaveBtnEl = document.querySelector("#messages-chat-settings-save-btn");
 const messagesChatSettingsFormEl = document.querySelector("#messages-chat-settings-form");
 const messagesChatHistoryRoundsInputEl = document.querySelector(
   "#messages-chat-history-rounds-input"
@@ -237,6 +242,9 @@ const messagesChatProfilePostFocusInputEl = document.querySelector(
 const messagesChatBubbleFocusInputEl = document.querySelector(
   "#messages-chat-bubble-focus-input"
 );
+const messagesChatBubbleFocusMinutesInputEl = document.querySelector(
+  "#messages-chat-bubble-focus-minutes-input"
+);
 const messagesChatShowContactAvatarInputEl = document.querySelector(
   "#messages-chat-show-contact-avatar-input"
 );
@@ -252,9 +260,34 @@ const messagesChatAllowAiAutoScheduleInputEl = document.querySelector(
 const messagesChatAutoScheduleDaysInputEl = document.querySelector(
   "#messages-chat-auto-schedule-days-input"
 );
+const messagesChatAutoScheduleTimeInputEl = document.querySelector(
+  "#messages-chat-auto-schedule-time-input"
+);
 const messagesChatAutoScheduleGenerateBtnEl = document.querySelector(
   "#messages-chat-auto-schedule-generate-btn"
 );
+const messagesChatAutoScheduleModalEl = document.querySelector(
+  "#messages-chat-auto-schedule-modal"
+);
+const messagesChatAutoScheduleCloseBtnEl = document.querySelector(
+  "#messages-chat-auto-schedule-close-btn"
+);
+const messagesChatAutoScheduleConfirmBtnEl = document.querySelector(
+  "#messages-chat-auto-schedule-confirm-btn"
+);
+const messagesChatAutoScheduleFormEl = document.querySelector(
+  "#messages-chat-auto-schedule-form"
+);
+const messagesChatAutoScheduleWorldbookListEl = document.querySelector(
+  "#messages-chat-auto-schedule-worldbook-list"
+);
+const messagesChatAutoScheduleNoteInputEl = document.querySelector(
+  "#messages-chat-auto-schedule-note-input"
+);
+const messagesChatAutoScheduleStatusEl = document.querySelector(
+  "#messages-chat-auto-schedule-status"
+);
+let autoScheduleTimerId = 0;
 const messagesChatClearHistoryBtnEl = document.querySelector("#messages-chat-clear-history-btn");
 const messagesChatClearMemoryBtnEl = document.querySelector("#messages-chat-clear-memory-btn");
 const messagesChatSettingsStatusEl = document.querySelector("#messages-chat-settings-status");
@@ -511,17 +544,30 @@ const initialWindowFocusPrimed =
     : true;
 
 const state = {
-  profile: loadProfile(),
-  contacts: loadContacts(),
-  conversations: loadConversations(),
-  worldbooks: loadWorldbooks(),
-  commonPlaces: loadCommonPlaces(),
-  presenceState: loadPresenceState(),
-  journalEntries: loadJournalEntries(),
-  memories: loadMessageMemories(),
-  recentLocations: loadRecentLocations(),
-  chatPromptSettings: loadSettings().messagePromptSettings,
-  chatGlobalSettings: normalizeChatGlobalSettings(loadSettings().chatGlobalSettings),
+  profile: { ...DEFAULT_PROFILE },
+  contacts: [],
+  conversations: [],
+  worldbooks: {
+    categories: [],
+    entries: []
+  },
+  commonPlaces: [],
+  presenceState: {
+    userGlobal: {
+      presenceType: "at_place",
+      placeId: "",
+      fromPlaceId: "",
+      toPlaceId: "",
+      updatedAt: 0
+    },
+    userByContact: {},
+    contacts: {}
+  },
+  journalEntries: [],
+  memories: [],
+  recentLocations: [],
+  chatPromptSettings: normalizeMessagePromptSettings(DEFAULT_SETTINGS.messagePromptSettings),
+  chatGlobalSettings: normalizeChatGlobalSettings(DEFAULT_SETTINGS.chatGlobalSettings),
   activeTab: "chat",
   activeConversationId: "",
   query: "",
@@ -533,6 +579,11 @@ const state = {
   contactEditorAvatarImage: "",
   conversationPickerOpen: false,
   chatSettingsOpen: false,
+  autoScheduleRequestOpen: false,
+  autoScheduleRequestDraft: {
+    worldbookIds: [],
+    note: ""
+  },
   chatGlobalSettingsOpen: false,
   worldbookManagerOpen: false,
   worldbookEditorOpen: false,
@@ -574,6 +625,7 @@ const state = {
   backgroundReplyTaskBusy: false,
   windowFocusPrimed: initialWindowFocusPrimed,
   conversationVisibleCounts: {},
+  quotedMessageId: "",
   sceneModalOpen: false,
   sceneSyncModalOpen: false,
   pendingConversationRenderOptions: null
@@ -582,9 +634,16 @@ const state = {
 function isEmbeddedView() {
   try {
     const params = new URLSearchParams(window.location.search);
-    return params.get("embed") === "1";
+    if (params.get("embed") === "1") {
+      return true;
+    }
   } catch (_error) {
-    return false;
+  }
+
+  try {
+    return window.self !== window.top;
+  } catch (_error) {
+    return true;
   }
 }
 
@@ -1003,17 +1062,22 @@ function getAllCommonPlaceSelectOptions() {
 }
 
 function findCommonPlaceByName(name = "", contactId = "") {
-  const needle = String(name || "").trim().toLowerCase();
+  const normalizePlaceNeedle = (value) =>
+    String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[「」『』【】（）()《》〈〉<>、，。,.\-_\s]/g, "");
+  const needle = normalizePlaceNeedle(name);
   if (!needle) {
     return null;
   }
   const candidates = contactId ? getVisibleCommonPlacesForContact(contactId) : state.commonPlaces;
   return (
     candidates.find((place) => {
-      const names = [String(place.name || "").trim(), ...buildCommonPlaceAliasList(place)].map((item) =>
-        item.toLowerCase()
-      );
-      return names.includes(needle);
+      const names = [String(place.name || "").trim(), ...buildCommonPlaceAliasList(place)]
+        .map((item) => normalizePlaceNeedle(item))
+        .filter(Boolean);
+      return names.some((item) => item === needle || item.includes(needle) || needle.includes(item));
     }) || null
   );
 }
@@ -1132,11 +1196,25 @@ function buildPresenceSummaryText(entry, contactId = "") {
 
 function escapeHtml(value) {
   return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function submitFormReliably(form, event) {
+  if (event) {
+    event.preventDefault();
+  }
+  if (!(form instanceof HTMLFormElement)) {
+    return;
+  }
+  if (typeof form.requestSubmit === "function") {
+    form.requestSubmit();
+    return;
+  }
+  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 }
 
 function hashText(value) {
@@ -1218,6 +1296,71 @@ function buildImageMessageText() {
   return "[图片消息]";
 }
 
+function buildQuoteMessageText(quotedText = "", quotedRole = "user", replyText = "") {
+  const roleLabel = quotedRole === "assistant" ? "角色" : "用户";
+  return [
+    "[引用回复]",
+    `引用对象：${roleLabel}`,
+    `引用内容：${String(quotedText || "").trim()}`,
+    `回复内容：${String(replyText || "").trim()}`
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function parseQuoteMessageText(text = "") {
+  const normalized = String(text || "").replace(/\r/g, "").trim();
+  if (!normalized.startsWith("[引用回复]")) {
+    return null;
+  }
+  const lines = normalized
+    .split("\n")
+    .map((line) => String(line || "").trim())
+    .filter(Boolean);
+  let quotedRole = "user";
+  let quotedText = "";
+  let replyText = "";
+  lines.forEach((line) => {
+    if (line.startsWith("引用对象：")) {
+      quotedRole = line.slice("引用对象：".length).includes("角色") ? "assistant" : "user";
+      return;
+    }
+    if (line.startsWith("引用内容：")) {
+      quotedText = line.slice("引用内容：".length).trim();
+      return;
+    }
+    if (line.startsWith("回复内容：")) {
+      replyText = line.slice("回复内容：".length).trim();
+    }
+  });
+  if (!quotedText || !replyText) {
+    return null;
+  }
+  return {
+    quotedRole,
+    quotedText,
+    replyText
+  };
+}
+
+function parseInlineQuoteReplyMessage(text = "") {
+  const parsed = parseQuoteReplyPayload(String(text || "").trim());
+  const item = Array.isArray(parsed) ? parsed[0] : null;
+  if (!item) {
+    return null;
+  }
+  const quotedText = String(item.quotedText || "").trim();
+  const replyText = String(item.text || "").trim();
+  if (!quotedText || !replyText) {
+    return null;
+  }
+  return {
+    quotedRole: item.quotedRole === "assistant" ? "assistant" : "user",
+    quotedText,
+    replyText
+  };
+}
+
 function isLocationConversationMessage(message) {
   const explicitType = String(message?.messageType || "").trim() === "location";
   const hasPayload =
@@ -1240,6 +1383,45 @@ function isImageConversationMessage(message) {
   return explicitType || hasPayload;
 }
 
+function isQuoteConversationMessage(message) {
+  const explicitType = String(message?.messageType || "").trim() === "quote";
+  const hasPayload =
+    Boolean(String(message?.quotedText || "").trim()) &&
+    Boolean(String(message?.text || "").trim());
+  return (
+    explicitType ||
+    hasPayload ||
+    Boolean(parseQuoteMessageText(message?.text)) ||
+    Boolean(parseInlineQuoteReplyMessage(message?.text))
+  );
+}
+
+function getConversationMessagePromptText(message = {}) {
+  if (isScheduleInviteConversationMessage(message)) {
+    return buildScheduleInviteMessageText(
+      String(message.scheduleInviteTitle || "").trim() || "未命名日程",
+      String(message.scheduleInviteDate || "").trim(),
+      String(message.scheduleInviteStartTime || "").trim(),
+      String(message.scheduleInviteEndTime || "").trim(),
+      ["day", "hour", "week"].includes(message.scheduleInviteType) ? message.scheduleInviteType : "day"
+    );
+  }
+  if (isLocationConversationMessage(message)) {
+    return buildLocationMessageText(
+      String(message.locationName || "").trim() || "未命名位置",
+      String(message.coordinates || "").trim() ||
+        buildRandomLocationCoordinates(String(message.locationName || "").trim())
+    );
+  }
+  if (isImageConversationMessage(message)) {
+    return buildImageMessageText();
+  }
+  if (isQuoteConversationMessage(message)) {
+    return buildQuoteMessageText(message.quotedText, message.quotedRole, message.text);
+  }
+  return String(message?.text || "").trim();
+}
+
 function getConversationMessagePreviewText(message) {
   if (isScheduleInviteConversationMessage(message)) {
     return `🗓️ 日程邀请：${String(message.scheduleInviteTitle || "").trim() || "新的安排"}`;
@@ -1249,6 +1431,9 @@ function getConversationMessagePreviewText(message) {
   }
   if (isImageConversationMessage(message)) {
     return "🖼️ 发送了图片";
+  }
+  if (isQuoteConversationMessage(message)) {
+    return `↪ ${String(message.text || "").trim()}`;
   }
   return String(message?.text || "").trim();
 }
@@ -1535,8 +1720,42 @@ function clampNumber(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+function normalizeObjectArray(value) {
+  return Array.isArray(value) ? value.filter((item) => item && typeof item === "object") : [];
+}
+
 function prependGlobalPromptGuard(text) {
   return String(text || "").trim();
+}
+
+function buildPromptSectionText(value, fallback = "") {
+  const text = (Array.isArray(value) ? value : [value])
+    .flatMap((item) => (Array.isArray(item) ? item : [item]))
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+  return text || String(fallback || "").trim();
+}
+
+function buildStructuredPromptSections(sections = {}) {
+  const resolvedSections = sections && typeof sections === "object" ? sections : {};
+  return prependGlobalPromptGuard(
+    [
+      `<context_library>\n${buildPromptSectionText(
+        resolvedSections.contextLibrary,
+        "暂无额外背景信息。"
+      )}\n</context_library>`,
+      `<persona_alignment>\n${buildPromptSectionText(
+        resolvedSections.personaAlignment,
+        "按当前已知身份、关系与语境自然回应。"
+      )}\n</persona_alignment>`,
+      `<output_standard>\n${buildPromptSectionText(
+        resolvedSections.outputStandard,
+        "只输出符合要求的最终结果。"
+      )}\n</output_standard>`
+    ].join("\n\n")
+  );
 }
 
 function appendApiLog(entry) {
@@ -1703,6 +1922,7 @@ function normalizeMessagePromptSettings(source = {}) {
       : [],
     forumPostFocusEnabled: Boolean(resolved.forumPostFocusEnabled),
     bubbleFocusEnabled: Boolean(resolved.bubbleFocusEnabled),
+    bubbleFocusMinutes: normalizeContextFocusMinutes(resolved.bubbleFocusMinutes),
     sceneMode,
     showContactAvatar:
       typeof resolved.showContactAvatar === "boolean" ? resolved.showContactAvatar : true,
@@ -1716,6 +1936,11 @@ function normalizeAutoScheduleDays(value, fallback = DEFAULT_AUTO_SCHEDULE_DAYS)
     1,
     MAX_AUTO_SCHEDULE_DAYS
   );
+}
+
+function normalizeAutoScheduleTime(value = "") {
+  const trimmed = String(value || "").trim();
+  return /^\d{2}:\d{2}$/.test(trimmed) ? trimmed : "";
 }
 
 function normalizeAwarenessHistory(items = []) {
@@ -2407,24 +2632,93 @@ function normalizeContact(contact, index = 0) {
   };
 }
 
-function loadContacts() {
+function buildSnapshotContactFromConversation(conversation = {}, index = 0) {
+  const contactId = String(conversation?.contactId || "").trim();
+  const contactName = String(conversation?.contactNameSnapshot || "").trim();
+  if (!contactId || !contactName) {
+    return null;
+  }
+  return normalizeContact(
+    {
+      id: contactId,
+      name: contactName,
+      avatarImage: String(conversation?.contactAvatarImageSnapshot || "").trim(),
+      avatarText:
+        String(conversation?.contactAvatarTextSnapshot || "").trim() ||
+        getContactAvatarFallback({ name: contactName }),
+      personaPrompt: "",
+      specialUserPersona: "",
+      createdAt: Number(conversation?.updatedAt) || Date.now(),
+      updatedAt: Number(conversation?.updatedAt) || Date.now()
+    },
+    index
+  );
+}
+
+function mergeContactsWithConversationSnapshots(contacts = [], conversations = []) {
+  const normalizedContacts = Array.isArray(contacts)
+    ? contacts.map((item, index) => normalizeContact(item, index))
+    : [];
+  const nextContacts = normalizedContacts.map((item) => ({ ...item }));
+  const contactIndexMap = new Map(
+    nextContacts.map((item, index) => [String(item.id || "").trim(), index])
+  );
+
+  (Array.isArray(conversations) ? conversations : []).forEach((conversation, index) => {
+    const recoveredContact = buildSnapshotContactFromConversation(conversation, nextContacts.length + index);
+    if (!recoveredContact) {
+      return;
+    }
+    const existingIndex = contactIndexMap.get(recoveredContact.id);
+    if (Number.isInteger(existingIndex) && existingIndex >= 0) {
+      const current = nextContacts[existingIndex];
+      nextContacts[existingIndex] = normalizeContact(
+        {
+          ...current,
+          name: String(current.name || "").trim() || recoveredContact.name,
+          avatarImage: String(current.avatarImage || "").trim() || recoveredContact.avatarImage,
+          avatarText: String(current.avatarText || "").trim() || recoveredContact.avatarText,
+          updatedAt: Math.max(Number(current.updatedAt) || 0, Number(recoveredContact.updatedAt) || 0)
+        },
+        existingIndex
+      );
+      return;
+    }
+    contactIndexMap.set(recoveredContact.id, nextContacts.length);
+    nextContacts.push(recoveredContact);
+  });
+
+  return nextContacts.sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0));
+}
+
+function loadContacts(conversations = []) {
   const raw = safeGetItem(MESSAGE_CONTACTS_KEY);
+  const sourceConversations = Array.isArray(conversations) ? conversations : [];
   if (!raw) {
-    return [];
+    return mergeContactsWithConversationSnapshots([], sourceConversations);
   }
 
   try {
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? parsed.map((item, index) => normalizeContact(item, index))
-      : [];
+    const storedContacts = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.contacts)
+        ? parsed.contacts
+        : [];
+    return mergeContactsWithConversationSnapshots(storedContacts, sourceConversations);
   } catch (_error) {
-    return [];
+    return mergeContactsWithConversationSnapshots([], sourceConversations);
   }
 }
 
 function persistContacts() {
-  safeSetItem(MESSAGE_CONTACTS_KEY, JSON.stringify(state.contacts));
+  const mergedContacts = mergeContactsWithConversationSnapshots(state.contacts, state.conversations);
+  const nextPayload = JSON.stringify(mergedContacts);
+  state.contacts = mergedContacts;
+  if (safeGetItem(MESSAGE_CONTACTS_KEY) === nextPayload) {
+    return true;
+  }
+  return safeSetItem(MESSAGE_CONTACTS_KEY, nextPayload);
 }
 
 function normalizeWorldbookCategory(category, index = 0) {
@@ -2696,16 +2990,26 @@ function normalizeConversationMessage(message, index = 0) {
   const scheduleInviteType = ["day", "hour", "week"].includes(message?.scheduleInviteType)
     ? message.scheduleInviteType
     : "day";
+  const legacyQuotePayload =
+    parseQuoteMessageText(message?.text) || parseInlineQuoteReplyMessage(message?.text);
+  const quotedText = String(message?.quotedText || legacyQuotePayload?.quotedText || "").trim();
+  const quotedRole =
+    String(message?.quotedRole || legacyQuotePayload?.quotedRole || "").trim() === "assistant"
+      ? "assistant"
+      : "user";
   const messageType = isScheduleInviteConversationMessage(message)
     ? "schedule_invite"
     : isLocationConversationMessage(message)
     ? "location"
     : isImageConversationMessage(message)
       ? "image"
+      : isQuoteConversationMessage(message)
+        ? "quote"
       : "text";
   const locationName = String(message?.locationName || "").trim();
   const coordinates = String(message?.coordinates || "").trim();
   const imageDataUrl = String(message?.imageDataUrl || "").trim();
+  const replyText = String(message?.text || "").trim();
   const text =
     messageType === "schedule_invite"
       ? buildScheduleInviteMessageText(
@@ -2722,7 +3026,9 @@ function normalizeConversationMessage(message, index = 0) {
         )
       : messageType === "image"
         ? buildImageMessageText()
-      : String(message?.text || "").trim();
+      : messageType === "quote"
+        ? String(message?.text || legacyQuotePayload?.replyText || "").trim()
+      : replyText;
   return {
     id: String(message?.id || `conversation_message_${Date.now()}_${index}`),
     role,
@@ -2741,6 +3047,8 @@ function normalizeConversationMessage(message, index = 0) {
         ? coordinates || buildRandomLocationCoordinates(`${locationName}_${index}`)
         : "",
     imageDataUrl: messageType === "image" ? imageDataUrl : "",
+    quotedText: messageType === "quote" ? quotedText : "",
+    quotedRole: messageType === "quote" ? quotedRole : "",
     text,
     needsReply: role === "user" ? Boolean(message?.needsReply) : false,
     time:
@@ -2773,6 +3081,10 @@ function normalizeConversation(conversation, index = 0) {
     allowAiPresenceUpdate: Boolean(source.allowAiPresenceUpdate),
     allowAiAutoSchedule: Boolean(source.allowAiAutoSchedule),
     autoScheduleDays: normalizeAutoScheduleDays(source.autoScheduleDays, DEFAULT_AUTO_SCHEDULE_DAYS),
+    autoScheduleTime: normalizeAutoScheduleTime(source.autoScheduleTime),
+    autoScheduleLastRunDate: /^\d{4}-\d{2}-\d{2}$/.test(String(source.autoScheduleLastRunDate || "").trim())
+      ? String(source.autoScheduleLastRunDate || "").trim()
+      : "",
     messages,
     awarenessCounter: Math.max(
       0,
@@ -2923,6 +3235,48 @@ function getConversationById(conversationId = state.activeConversationId) {
   return state.conversations.find((item) => item.id === conversationId) || null;
 }
 
+function getResolvedConversationContact(conversation = getConversationById()) {
+  const resolvedConversation = conversation && typeof conversation === "object" ? conversation : null;
+  const contactId = String(resolvedConversation?.contactId || "").trim();
+  if (!contactId) {
+    return null;
+  }
+  const storedContact =
+    getContactById(contactId) ||
+    normalizeObjectArray(loadContacts(state.conversations)).find(
+      (item) => String(item.id || "").trim() === contactId
+    ) ||
+    null;
+  if (storedContact) {
+    return storedContact;
+  }
+  const snapshotName = String(resolvedConversation?.contactNameSnapshot || "").trim();
+  if (!snapshotName) {
+    return null;
+  }
+  return {
+    id: contactId,
+    name: snapshotName,
+    avatarImage: String(resolvedConversation?.contactAvatarImageSnapshot || "").trim(),
+    avatarText:
+      String(resolvedConversation?.contactAvatarTextSnapshot || "").trim() || snapshotName.slice(0, 1),
+    personaPrompt: "",
+    specialUserPersona: ""
+  };
+}
+
+function getQuotedConversationMessage(conversation = getConversationById()) {
+  const resolvedConversation = conversation && typeof conversation === "object" ? conversation : null;
+  if (!resolvedConversation) {
+    return null;
+  }
+  const targetId = String(state.quotedMessageId || "").trim();
+  if (!targetId) {
+    return null;
+  }
+  return resolvedConversation.messages.find((message) => message.id === targetId) || null;
+}
+
 function resolveConversationVisibleMessageCount(conversationId = state.activeConversationId) {
   const conversation = getConversationById(conversationId);
   const total = Array.isArray(conversation?.messages) ? conversation.messages.length : 0;
@@ -2935,10 +3289,14 @@ function resolveConversationVisibleMessageCount(conversationId = state.activeCon
     return 0;
   }
   const stored = Number.parseInt(String(state.conversationVisibleCounts[key] || 0), 10);
-  const nextCount =
-    Number.isFinite(stored) && stored > 0
-      ? Math.min(total, stored)
-      : Math.min(total, CONVERSATION_RENDER_BATCH_SIZE);
+  let nextCount = 0;
+  if (total <= CONVERSATION_RENDER_BATCH_SIZE) {
+    nextCount = total;
+  } else if (Number.isFinite(stored) && stored > CONVERSATION_RENDER_BATCH_SIZE) {
+    nextCount = Math.min(total, stored);
+  } else {
+    nextCount = CONVERSATION_RENDER_BATCH_SIZE;
+  }
   state.conversationVisibleCounts[key] = nextCount;
   return nextCount;
 }
@@ -2985,7 +3343,7 @@ function buildConversationRenderWindow(conversation) {
 }
 
 function getConversationMeta(conversation) {
-  const contact = getContactById(conversation.contactId);
+  const contact = getResolvedConversationContact(conversation);
   if (contact) {
     return {
       name: contact.name,
@@ -3001,6 +3359,57 @@ function getConversationMeta(conversation) {
     avatarText: conversation.contactAvatarTextSnapshot || "联",
     personaPrompt: ""
   };
+}
+
+function getConversationSnapshotName(conversation = {}) {
+  const contactId = String(conversation?.contactId || "").trim();
+  const contact = contactId ? getContactById(contactId) : null;
+  const contactName = String(contact?.name || "").trim();
+  const snapshotName = String(conversation?.contactNameSnapshot || "").trim();
+  return contactName || snapshotName || "未命名联系人";
+}
+
+function getConversationSnapshotAvatarImage(conversation = {}) {
+  const contactId = String(conversation?.contactId || "").trim();
+  const contact = contactId ? getContactById(contactId) : null;
+  return String(contact?.avatarImage || conversation?.contactAvatarImageSnapshot || "").trim();
+}
+
+function getConversationSnapshotAvatarText(conversation = {}) {
+  const contactId = String(conversation?.contactId || "").trim();
+  const contact = contactId ? getContactById(contactId) : null;
+  const name = getConversationSnapshotName(conversation);
+  return (
+    String(contact?.avatarText || conversation?.contactAvatarTextSnapshot || "").trim() ||
+    getContactAvatarFallback({ name })
+  );
+}
+
+function buildConversationListAvatarMarkup(conversation = {}) {
+  const avatarImage = getConversationSnapshotAvatarImage(conversation);
+  const avatarText = getConversationSnapshotAvatarText(conversation);
+  return avatarImage
+    ? `<img src="${escapeHtml(avatarImage)}" alt="${escapeHtml(getConversationSnapshotName(conversation))} 的头像" />`
+    : `<span>${escapeHtml(avatarText)}</span>`;
+}
+
+function getConversationPreviewSafe(conversation = {}) {
+  const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];
+  const latestMessage = messages.length ? messages[messages.length - 1] : null;
+  if (!latestMessage) {
+    return "";
+  }
+  try {
+    return truncate(getConversationMessagePreviewText(latestMessage), 46);
+  } catch (_error) {
+    return truncate(String(latestMessage?.text || "").trim(), 46);
+  }
+}
+
+function getConversationTimeSafe(conversation = {}) {
+  const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];
+  const latestMessage = messages.length ? messages[messages.length - 1] : null;
+  return String(latestMessage?.time || "").trim();
 }
 
 function getConversationPreview(conversation) {
@@ -3055,6 +3464,8 @@ function createConversation(contact) {
     allowAiPresenceUpdate: false,
     allowAiAutoSchedule: false,
     autoScheduleDays: DEFAULT_AUTO_SCHEDULE_DAYS,
+    autoScheduleTime: "",
+    autoScheduleLastRunDate: "",
     messages: [],
     awarenessCounter: 0,
     memorySummaryCounter: 0,
@@ -3430,7 +3841,8 @@ function extractLatestBubbleBatch(thread) {
 }
 
 function buildBubbleFocusContext(promptSettings) {
-  if (!promptSettings.bubbleFocusEnabled) {
+  const resolvedSettings = normalizeMessagePromptSettings(promptSettings);
+  if (!resolvedSettings.bubbleFocusEnabled) {
     return "";
   }
 
@@ -3452,7 +3864,19 @@ function buildBubbleFocusContext(promptSettings) {
     return "";
   }
 
-  return `用户最近一轮 Bubble 发言（共 ${latestBatch.length} 条）：\n${latestBatch
+  const latestCreatedAt = Number(latestBatch[latestBatch.length - 1]?.createdAt) || 0;
+  const bubbleFocusMinutes = normalizeContextFocusMinutes(
+    resolvedSettings.bubbleFocusMinutes,
+    DEFAULT_CONTEXT_FOCUS_MINUTES
+  );
+  if (
+    latestCreatedAt &&
+    Date.now() - latestCreatedAt > bubbleFocusMinutes * 60 * 1000
+  ) {
+    return "";
+  }
+
+  return `用户最近一轮 Bubble 发言（${bubbleFocusMinutes} 分钟感知窗口内，共 ${latestBatch.length} 条）：\n${latestBatch
     .map((item, index) => {
       const timestamp = resolveStoredTimestampLabel(item.createdAt, item.time || "");
       const prefix = timestamp ? `${timestamp} · ` : "";
@@ -3600,6 +4024,11 @@ function formatDateToValue(date) {
 
 function getTodayDateValue(now = new Date()) {
   return formatDateToValue(now);
+}
+
+function formatWeekday(dateText, length = "short") {
+  const date = parseLocalDateValue(dateText) || new Date();
+  return new Intl.DateTimeFormat("zh-CN", { weekday: length }).format(date);
 }
 
 function formatJournalDateLabel(dateText = getTodayDateValue()) {
@@ -3861,7 +4290,7 @@ function getSchedulePreviewEntryVisibleEndHour(entry) {
   const endMinutes = Math.max(startMinutes + 1, parseTimeToMinutes(entry.endTime));
   return Math.max(
     Number.parseInt(String(entry.startTime || "00:00").slice(0, 2), 10) || 0,
-    Math.min(23, Math.floor(endMinutes / 60))
+    Math.min(23, Math.floor((endMinutes - 1) / 60))
   );
 }
 
@@ -3873,7 +4302,7 @@ function schedulePreviewEntryOccupiesHour(entry, hour) {
   const endMinutes = Math.max(startMinutes + 1, parseTimeToMinutes(entry.endTime));
   const slotStart = hour * 60;
   const slotEnd = Math.min(24 * 60, (hour + 1) * 60);
-  return startMinutes < slotEnd && endMinutes >= slotStart;
+  return startMinutes < slotEnd && endMinutes > slotStart;
 }
 
 function getSchedulePreviewEntrySlotState(entry, hour) {
@@ -4163,42 +4592,79 @@ function buildAutoScheduleOccupiedContext(contactId = "", dateValues = []) {
     .join("\n");
 }
 
-function buildAutoScheduleWorldbookContext(promptSettings = {}) {
-  const context = buildWorldbookContext(promptSettings);
+function buildAutoScheduleWorldbookContext(promptSettings = {}, options = {}) {
+  const resolvedOptions = options && typeof options === "object" ? options : {};
+  const overrideWorldbookIds = Object.prototype.hasOwnProperty.call(resolvedOptions, "worldbookIds")
+    ? normalizeWorldbookSelectionIds(resolvedOptions.worldbookIds)
+    : null;
+  const context = overrideWorldbookIds
+    ? buildWorldbookContext({
+        worldbookEnabled: overrideWorldbookIds.length > 0,
+        worldbookIds: overrideWorldbookIds
+      })
+    : buildWorldbookContext(promptSettings);
   return context ? `${context}\n` : "";
 }
 
-function buildAutoScheduleGenerationSystemPrompt(contact, promptSettings = {}, dayCount = DEFAULT_AUTO_SCHEDULE_DAYS) {
-  const resolvedContact = contact && typeof contact === "object" ? contact : {};
-  const resolvedDayCount = normalizeAutoScheduleDays(dayCount, DEFAULT_AUTO_SCHEDULE_DAYS);
-  return prependGlobalPromptGuard(
-    [
-      `你需要为 ${resolvedContact.name || "这个角色"} 设计未来 ${resolvedDayCount} 天的生活行程。`,
-      "这不是聊天回复，而是纯粹的日程规划任务。",
-      `角色稳定人设：${resolvedContact.personaPrompt || "作息自然、贴近真实生活。"}。`,
-      buildAutoScheduleWorldbookContext(promptSettings),
-      [
-        "只根据角色人设和世界书背景去安排，不要引用用户人设，不要写用户相关内容。",
-        "要尽量真实，有正常的起居、吃饭、工作/学习/休息/娱乐节奏。",
-        "不要覆盖已占用时段，只能补空白。",
-        "所有结果都必须是按小时的日程，使用同一天内的 startTime / endTime。",
-        "不要输出跨天时段；如果是睡眠，可安排为当日 00:00-07:00 这类同日块。",
-        "如果某一天空白很少，只补最合理的几个空档，不要硬塞满。",
-        '只输出 JSON 数组，格式为：[{"date":"YYYY-MM-DD","title":"安排名称","startTime":"HH:00","endTime":"HH:00"}]。'
-      ].join(" ")
-    ]
-      .filter(Boolean)
-      .join("\n\n")
-  );
+function buildAutoScheduleDateMeta(dateValue = "") {
+  const weekday = formatWeekday(dateValue, "long");
+  const date = parseLocalDateValue(dateValue);
+  const isWeekend = Boolean(date && (date.getDay() === 0 || date.getDay() === 6));
+  return {
+    weekday,
+    isWeekend,
+    label: `${dateValue}（${weekday}，${isWeekend ? "默认休息日" : "默认工作日"}）`
+  };
 }
 
-function buildAutoScheduleGenerationInstruction(contactId = "", dateValues = []) {
+function buildAutoScheduleGenerationSystemPrompt(
+  contact,
+  promptSettings = {},
+  dayCount = DEFAULT_AUTO_SCHEDULE_DAYS,
+  options = {}
+) {
+  const resolvedContact = contact && typeof contact === "object" ? contact : {};
+  const resolvedDayCount = normalizeAutoScheduleDays(dayCount, DEFAULT_AUTO_SCHEDULE_DAYS);
+  const resolvedOptions = options && typeof options === "object" ? options : {};
+  const extraInstruction = String(resolvedOptions.extraInstruction || "").trim();
+  return buildStructuredPromptSections({
+    contextLibrary: [
+      `任务背景：为 ${resolvedContact.name || "这个角色"} 设计未来 ${resolvedDayCount} 天的生活行程。`,
+      buildAutoScheduleWorldbookContext(promptSettings, resolvedOptions)
+    ],
+    personaAlignment: [
+      "这不是聊天回复，而是纯粹的日程规划任务。",
+      `角色稳定人设：${resolvedContact.personaPrompt || "作息自然、贴近真实生活。"}。`,
+      "只根据角色人设和世界书背景去安排，不要引用用户人设，不要写用户相关内容。"
+    ],
+    outputStandard: [
+      "要尽量真实，有正常的起居、吃饭、工作/学习/休息/娱乐节奏。",
+      "默认把周一到周五视为工作日，把周六周日视为休息日；周末更偏向补觉、放松、轻社交、娱乐、家务或恢复性安排。",
+      extraInstruction
+        ? `本次额外生成要求（优先级高于默认周末休息倾向）：${extraInstruction}`
+        : "如果没有额外说明，就按常规作息与周末休息倾向安排。",
+      "不要覆盖已占用时段，只能补空白。",
+      "所有结果都必须是按小时的日程，使用同一天内的 startTime / endTime。",
+      "不要输出跨天时段；如果是睡眠，可安排为当日 00:00-07:00 这类同日块。",
+      "如果某一天空白很少，只补最合理的几个空档，不要硬塞满。",
+      '只输出 JSON 数组，格式为：[{"date":"YYYY-MM-DD","title":"安排名称","startTime":"HH:00","endTime":"HH:00"}]。'
+    ]
+  });
+}
+
+function buildAutoScheduleGenerationInstruction(contactId = "", dateValues = [], options = {}) {
+  const resolvedOptions = options && typeof options === "object" ? options : {};
+  const extraInstruction = String(resolvedOptions.extraInstruction || "").trim();
   return [
     "请根据以下日期和已占用时段，补全这个角色未来几天的空白小时行程：",
-    ...dateValues.map((dateValue) => `- 日期：${dateValue}`),
+    ...dateValues.map((dateValue) => `- 日期：${buildAutoScheduleDateMeta(dateValue).label}`),
     "",
     "已占用时段：",
     buildAutoScheduleOccupiedContext(contactId, dateValues) || "当前没有已占用时段。",
+    "",
+    extraInstruction
+      ? `补充注意事项（若与默认节奏冲突，以这里为准）：${extraInstruction}`
+      : "没有额外限制时，请默认区分工作日与休息日，周末以休息恢复为主。",
     "",
     "返回时不要解释思路，不要加 markdown，只返回 JSON 数组。"
   ]
@@ -4267,13 +4733,14 @@ function parseAutoScheduleItems(payload, dateValues = []) {
 
 async function generateAutoSchedulesForConversation(
   days = DEFAULT_AUTO_SCHEDULE_DAYS,
-  conversationId = state.activeConversationId
+  conversationId = state.activeConversationId,
+  options = {}
 ) {
   const conversation = getConversationById(conversationId);
   if (!conversation) {
     throw new Error("当前没有打开的 1v1 会话。");
   }
-  const contact = getContactById(conversation.contactId);
+  const contact = getResolvedConversationContact(conversation);
   if (!contact) {
     throw new Error("未找到当前聊天对象。");
   }
@@ -4281,9 +4748,15 @@ async function generateAutoSchedulesForConversation(
   const resolvedDays = normalizeAutoScheduleDays(days, getConversationAutoScheduleDays(conversation));
   const settings = loadSettings();
   const promptSettings = normalizeMessagePromptSettings(state.chatPromptSettings);
+  const requestOptions = options && typeof options === "object" ? options : {};
   const dateValues = buildAutoScheduleDateValues(resolvedDays, getTodayDateValue());
-  const systemPrompt = buildAutoScheduleGenerationSystemPrompt(contact, promptSettings, resolvedDays);
-  const userInstruction = buildAutoScheduleGenerationInstruction(contact.id, dateValues);
+  const systemPrompt = buildAutoScheduleGenerationSystemPrompt(
+    contact,
+    promptSettings,
+    resolvedDays,
+    requestOptions
+  );
+  const userInstruction = buildAutoScheduleGenerationInstruction(contact.id, dateValues, requestOptions);
   const requestEndpoint = validateApiSettings(settings, "自动生成行程");
   const privacySession = createPrivacySession({
     settings,
@@ -4291,6 +4764,10 @@ async function generateAutoSchedulesForConversation(
     commonPlaces: state.commonPlaces,
     scheduleEntries: getAutoScheduleExistingEntries(contact.id, dateValues),
     promptSettings,
+    autoScheduleWorldbookIds: Array.isArray(requestOptions.worldbookIds)
+      ? normalizeWorldbookSelectionIds(requestOptions.worldbookIds)
+      : [],
+    autoScheduleExtraInstruction: String(requestOptions.extraInstruction || "").trim(),
     systemPrompt,
     userInstruction
   });
@@ -4443,6 +4920,57 @@ async function maybeAutoGenerateSchedulesForConversation(conversation = null) {
   }
 }
 
+function hasReachedAutoScheduleTime(timeText = "", now = new Date()) {
+  const normalized = normalizeAutoScheduleTime(timeText);
+  if (!normalized) {
+    return false;
+  }
+  const [hourText, minuteText] = normalized.split(":");
+  const targetMinutes = Number(hourText) * 60 + Number(minuteText);
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  return currentMinutes >= targetMinutes;
+}
+
+async function maybeRunTimedAutoSchedules() {
+  refreshStateFromStorage();
+  const todayValue = getTodayDateValue();
+  const now = new Date();
+  const candidates = state.conversations.filter(
+    (conversation) =>
+      getConversationAllowAiAutoSchedule(conversation) &&
+      getConversationAutoScheduleTime(conversation) &&
+      String(conversation.autoScheduleLastRunDate || "").trim() !== todayValue &&
+      hasReachedAutoScheduleTime(getConversationAutoScheduleTime(conversation), now)
+  );
+  if (!candidates.length) {
+    return;
+  }
+  for (const conversation of candidates) {
+    try {
+      await maybeAutoGenerateSchedulesForConversation(conversation);
+      const latestConversation = getConversationById(conversation.id);
+      if (latestConversation) {
+        latestConversation.autoScheduleLastRunDate = todayValue;
+      }
+      persistConversations();
+    } catch (_error) {
+    }
+  }
+  if (!isBackgroundMessagesWorker() && state.activeConversationId && state.activeTab === "chat") {
+    renderMessagesPage();
+  }
+}
+
+function initAutoScheduleClock() {
+  if (autoScheduleTimerId) {
+    window.clearInterval(autoScheduleTimerId);
+  }
+  void maybeRunTimedAutoSchedules();
+  autoScheduleTimerId = window.setInterval(() => {
+    void maybeRunTimedAutoSchedules();
+  }, AUTO_SCHEDULE_TIMER_INTERVAL_MS);
+}
+
 function resolvePresencePlaceForPrompt(placeId = "", contactId = "", actor = "user") {
   const resolvedId = String(placeId || "").trim();
   if (!resolvedId) {
@@ -4532,6 +5060,7 @@ function buildPresencePromptContext(contact, conversation) {
     lines.push(
       [
         "如果这一轮回复里自然发生了“到达 / 出发 / 正在赶路 / 刚回到某地”，你可以只更新你自己的状态；不要修改用户状态，也不要修改线上/线下模式。",
+        "如果你在正文里明确说了“我现在过来 / 我在路上 / 我刚到 / 我已经到了 / 我先回去 / 我出发了”这类状态变化，就必须同步输出 presence_update，而不是只在正文里口头说一下。",
         "若需要更新，请在正常回复正文后另起一行输出：<presence_update>{...}</presence_update>。",
         '可用格式一：<presence_update>{"presenceType":"at_place","placeName":"地点名"}</presence_update>',
         '可用格式二：<presence_update>{"presenceType":"in_transit","fromPlaceName":"地点名","toPlaceName":"地点名"}</presence_update>',
@@ -4557,115 +5086,102 @@ function buildConversationSystemPrompt(
   const sceneMode = requestOptions.sceneMode === "offline" ? "offline" : "online";
   const memoryContexts = buildMemoryPromptContexts(contact, promptSettings);
   const presenceContext = buildPresencePromptContext(contact, requestOptions.conversation);
-  const parts = [
-    `你叫 ${contact.name}。`,
-    sceneMode === "offline"
-      ? `现在是你和 ${profile.username || DEFAULT_PROFILE.username} 正在现实里见面相处，不是在即时聊天软件里远程对话。`
-      : `现在是你和 ${profile.username || DEFAULT_PROFILE.username} 在即时聊天软件里的一对一私聊。`,
-    "先像这个人本人一样去理解这段关系、语气和情绪，不要把自己当成解释设定或执行任务的助手。",
-    "下面的信息都是你已经拥有的长期记忆与当下语境；只有在自然相关时才轻轻带出，不需要像背资料一样复述。",
-    "如果信息之间出现冲突，请按以下优先级从低到高理解：热点挂载 < 世界书挂载 < INS 关注 < Bubble 关注 < 情景记忆 < 常用地点状态 < 日程感知 < 时间感知 < 核心记忆与自身稳定心态 < 最近对话轮数消息 < 回复格式要求。"
-  ];
-
-  const awarenessSections = [
-    buildHotTopicsContext(settings, promptSettings),
-    buildWorldbookContext(promptSettings),
-    buildForumPostFocusContext(promptSettings),
-    buildBubbleFocusContext(promptSettings),
-    memoryContexts.scene,
-    buildScheduleAwarenessContext(contact, history, promptSettings),
-    buildTimeAwarenessContext(promptSettings)
+  const worldbookContext = buildWorldbookContext(promptSettings);
+  const hotTopicsContext = buildHotTopicsContext(settings, promptSettings);
+  const forumPostFocusContext = buildForumPostFocusContext(promptSettings);
+  const bubbleFocusContext = buildBubbleFocusContext(promptSettings);
+  const scheduleAwarenessContext = buildScheduleAwarenessContext(contact, history, promptSettings);
+  const timeAwarenessContext = buildTimeAwarenessContext(promptSettings);
+  const importantContextSections = [
+    presenceContext ? `当前场景与状态：\n${presenceContext}` : "",
+    timeAwarenessContext || "",
+    scheduleAwarenessContext ? `当前日程感知：\n${scheduleAwarenessContext}` : "",
+    bubbleFocusContext || "",
+    forumPostFocusContext || "",
+    hotTopicsContext ? `当前也会影响你判断的论坛关注语境：\n${hotTopicsContext}` : "",
+    memoryContexts.scene ? `你在相关话题里会自然想起的情景记忆：\n${memoryContexts.scene}` : ""
   ].filter(Boolean);
 
-  parts.push(
-    `你的稳定性格、表达习惯和关系底色：${
-      contact.personaPrompt || "自然、友好、会根据关系和语境稳定回应。"
-    }。`
-  );
-
-  if (memoryContexts.core) {
-    parts.push(memoryContexts.core);
-  }
-
-  if (presenceContext) {
-    parts.push(`当前场景补充：\n${presenceContext}`);
-  }
-
-  if (awarenessSections.length) {
-    parts.push(
-      `补充语境信息（相关时轻微融入；不相关就完全不提，也不要像总结背景一样复述）：\n${awarenessSections.join(
-        "\n\n"
-      )}`
-    );
-  }
-
-  parts.push(
-    `正在和你聊天的用户昵称：${profile.username || DEFAULT_PROFILE.username}。`,
-    `你对这个用户已知的整体印象：${
-      profile.personaPrompt || DEFAULT_PROFILE.personaPrompt
-    }。`
-  );
-
-  if (String(contact.specialUserPersona || "").trim()) {
-    parts.push(
-      `你对这个用户的特别认知：${String(contact.specialUserPersona || "").trim()}。这部分是你基于相处形成的更私人、更具体的认识，重要程度略高于用户的通用画像。`
-    );
-  }
-
-  if (requestOptions.triggeredAwareness?.text) {
-    parts.push(
-      [
-        `你刚刚自己忽然想起了一条并非来自用户当前对话、而是你此前独自察觉到的额外信息：${String(
-          requestOptions.triggeredAwareness.text || ""
-        ).trim()}。`,
-        requestOptions.triggeredAwareness.emotionShift
-          ? `这让你此刻的心绪与态度轻微转向：${String(
-              requestOptions.triggeredAwareness.emotionShift || ""
-            ).trim()}。`
-          : "",
-        "请把它当作你自己突然联想到的隐性线索，而不是用户刚刚告诉你的内容；这次回复里可以自然地主动带起相关话题，但仍然要先接住当前聊天。"
-      ]
-        .filter(Boolean)
-        .join("\n")
-    );
-  }
-
-  if (requestOptions.regenerate) {
-    parts.push(
-      [
-        "这是一条针对上一版回复的重回请求，需要重新生成这一轮回复。",
-        "不要沿用上一版的句式、结构、开头或明显重复的措辞。",
-        requestOptions.regenerateInstruction
-          ? `本次重回的额外要求：${requestOptions.regenerateInstruction}。`
-          : ""
-      ]
-        .filter(Boolean)
-        .join("\n")
-    );
-  }
-
-  parts.push(
-    "先接住这一轮对话里最真实的情绪、关系推进和潜台词，再决定是否需要带出任何背景信息。",
-    "如果某些背景对这一句回复没有帮助，可以完全不提。",
-    "回复要像真人在聊天软件里即时回消息，可以有自然口语、省略、停顿、转折和情绪，不要像客服、摘要、设定说明或任务执行结果。",
-    "不要为了显得自己记得很多事，就生硬提论坛、世界书、Bubble、INS、日程、时间或记忆条目本身；只有真的会自然想到时才轻轻带过。",
-    "不要使用“根据设定”“结合以上信息”“从背景来看”“你最近关注”这类机械引入。",
-    "请只输出联系人下一条回复，不要添加角色标签、前缀、旁白或解释。",
-    `回复要像真实聊天，简洁自然，可以带情绪，总共不要超过${promptSettings.replySentenceLimit}行。`,
-    "如果一句话里自然出现逗号或句号，请按分句拆成多行输出。",
-    "每一行都会被视为一条单独发出的聊天消息。",
-    "每一行结尾若原本是逗号或句号，请去掉这一枚逗号或句号。",
-    "如果聊天记录里出现“[定位消息]”，那代表对方真实发送了一条位置卡片，而不是普通文本。",
-    "如果某条用户消息里出现“[图片消息]”，你会直接看到那条消息附带的图片内容；如有需要可以自然参考图片，但不要机械描述图片本身。",
-    '如果你也要发送定位，必须单独输出一行严格 JSON，格式固定为：[{"type":"location","locationName":"位置名","coordinates":"116.417E, 40.1277N"}]。',
-    "定位 JSON 不要放进代码块，不要添加解释、前缀、序号或额外说明；它本身就算一行回复。",
-    "不要去掉感叹号、问号、波浪号、省略号等表达情绪的标点。",
-    sceneMode === "offline"
-      ? "这是见面状态；在自然需要时，可以用中文全角括号（ ）补一小段动作、表情、停顿或视线描写，但不要把每句都写成长舞台指令，也不要写长段心理活动。"
-      : "不要输出编号、列表符号、引号包裹、解释说明、舞台指令或心理活动旁白。"
-  );
-
-  return prependGlobalPromptGuard(parts.join("\n\n"));
+  return buildStructuredPromptSections({
+    contextLibrary: [worldbookContext],
+    personaAlignment: [
+      `你叫 ${contact.name}。`,
+      sceneMode === "offline"
+        ? `现在是你和 ${profile.username || DEFAULT_PROFILE.username} 正在现实里见面相处，不是在即时聊天软件里远程对话。`
+        : `现在是你和 ${profile.username || DEFAULT_PROFILE.username} 在即时聊天软件里的一对一私聊。`,
+      "先像这个人本人一样去理解这段关系、语气和情绪，不要把自己当成解释设定或执行任务的助手。",
+      `你的稳定性格、表达习惯和关系底色：${
+        contact.personaPrompt || "自然、友好、会根据关系和语境稳定回应。"
+      }。`,
+      memoryContexts.core,
+      `正在和你聊天的用户昵称：${profile.username || DEFAULT_PROFILE.username}。`,
+      `你对这个用户已知的整体印象：${
+        profile.personaPrompt || DEFAULT_PROFILE.personaPrompt
+      }。`,
+      String(contact.specialUserPersona || "").trim()
+        ? `你对这个用户的特别认知：${String(contact.specialUserPersona || "").trim()}。这部分是你基于相处形成的更私人、更具体的认识，重要程度略高于用户的通用画像。`
+        : "",
+      requestOptions.triggeredAwareness?.text
+        ? [
+            `你刚刚自己忽然想起了一条并非来自用户当前对话、而是你此前独自察觉到的额外信息；这是你此刻需要优先关注的重点之一：${String(
+              requestOptions.triggeredAwareness.text || ""
+            ).trim()}。`,
+            requestOptions.triggeredAwareness.emotionShift
+              ? `这让你此刻的心绪与态度轻微转向：${String(
+                  requestOptions.triggeredAwareness.emotionShift || ""
+                ).trim()}。`
+              : "",
+            "请把它当作你自己突然联想到的隐性线索，而不是用户刚刚告诉你的内容；这次回复里可以自然地主动带起相关话题，但仍然要先接住当前聊天。"
+          ]
+            .filter(Boolean)
+            .join("\n")
+        : "",
+      importantContextSections.length
+        ? `以下是你当前需要优先关注的重要信息；它们比 context_library 更重要：\n${importantContextSections.join(
+            "\n\n"
+          )}`
+        : "",
+      requestOptions.regenerate
+        ? [
+            "这是一条针对上一版回复的重回请求，需要重新生成这一轮回复。",
+            "不要沿用上一版的句式、结构、开头或明显重复的措辞。",
+            requestOptions.regenerateInstruction
+              ? `本次重回的额外要求：${requestOptions.regenerateInstruction}。`
+              : ""
+          ]
+            .filter(Boolean)
+            .join("\n")
+        : ""
+    ],
+    outputStandard: [
+      "你的回复必须像即时聊天软件中的真人对话，自然、轻松、有情绪，而不是助手或任务执行结果。",
+      "回复时优先接住当前对话中的情绪、语气和潜台词，再决定是否回应具体内容，不要只做信息回答。",
+      "表达需要口语化，可以有停顿、转折和即时反应，可以使用“……” “！”以及自然语气词，允许有一点碎碎念或临场感。",
+      `每一行代表一条单独发送的消息，总行数不超过${promptSettings.replySentenceLimit}行，长句可以拆成多行表达。`,
+      "不要使用列表、编号或说明性结构，不要添加角色标签、前缀或解释性文字。",
+      "不要出现“根据设定”“从背景来看”“你的人设是”等表达，不要解释设定、总结对话或进行分析，不要刻意展示你记得很多背景信息。",
+      "context_library 只有在聊天语境中自然联想到时才可以使用，如果没有触发，就不要主动提及。",
+      "当信息存在冲突时，优先依据当前对话内容和当下语境，其次是性格设定，最后才是背景信息。",
+      "最终目标是让对话看起来像真实的人在聊天，而不是在执行设定或扮演角色。",
+      getConversationAllowAiPresenceUpdate(requestOptions.conversation)
+        ? "如果这一轮正文里明确出现了你自己的状态变化，例如正在过来、已经在路上、刚刚到达、刚回到某地，就必须同步输出 presence_update，不允许只在正文口头提到却不更新状态。"
+        : "",
+      sceneMode === "online"
+        ? '如果需要引用某一句话进行回应，可以使用以下格式（单独一行）：<quote_reply>{"quotedRole":"user|assistant","quotedText":"原句","reply":"回复"}</quote_reply>'
+        : "",
+      sceneMode === "online"
+        ? "每一轮最多使用一次引用，只在强情绪、明显回扣、明确点名回应或误解澄清时使用。默认不要引用，绝大多数回复都应该直接正常回消息。quotedText 必须引用聊天里真实出现过的一句原话，不要编造，也不要引用太短、太碎或没有必要单独点名的内容。"
+        : "",
+      "如果聊天记录里出现“[定位消息]”，那代表对方真实发送了一条位置卡片，而不是普通文本。",
+      "如果某条用户消息里出现“[图片消息]”，你会直接看到那条消息附带的图片内容；如有需要可以自然参考图片，但不要机械描述图片本身。",
+      '如果需要发送位置，必须单独一行输出如下格式：[{"type":"location","locationName":"位置名","coordinates":"__PG_COORD_01__"}]',
+      "定位 JSON 不要放进代码块，不要添加解释、前缀、序号或额外说明；它本身就算一行回复。",
+      "不要去掉感叹号、问号、波浪号、省略号等表达情绪的标点。",
+      sceneMode === "offline"
+        ? "这是见面状态；在自然需要时，可以用中文全角括号（ ）补一小段动作、表情、停顿或视线描写，但不要把每句都写成长舞台指令，也不要写长段心理活动。"
+        : "不要输出编号、列表符号、引号包裹、解释说明、舞台指令或心理活动旁白。"
+    ]
+  });
 }
 
 function buildJournalSystemPrompt(
@@ -4681,31 +5197,32 @@ function buildJournalSystemPrompt(
   const chatTranscript = buildJournalChatTranscript(conversation, dateText);
   const referenceContext = buildJournalReferenceContext(settings, promptSettings);
 
-  return prependGlobalPromptGuard([
-    `你是即时聊天联系人：${contact.name}。`,
-    "现在不是聊天回复，而是以这个角色的第一人称口吻写一篇今日日记。",
-    `日期：${formatJournalFullDateLabel(dateText)}。`,
-    `角色人设：${contact.personaPrompt || "自然、细腻、会根据设定稳定表达。"}。`,
-    `和你聊天的用户昵称：${profile.username || DEFAULT_PROFILE.username}。`,
-    `用户的人设：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt}。`,
-    referenceContext
-      ? `补充背景（只做参考，优先级低于今日日内聊天记录）：\n${referenceContext}`
-      : "",
-    chatTranscript
-      ? `今日自然日内的聊天记录（最重要，请围绕这些内容来写）：\n${chatTranscript}`
-      : "今日自然日内没有聊天记录。",
-    [
-      "输出要求：",
+  return buildStructuredPromptSections({
+    contextLibrary: [
+      `日期：${formatJournalFullDateLabel(dateText)}。`,
+      referenceContext
+        ? `补充背景（只做参考，优先级低于今日日内聊天记录）：\n${referenceContext}`
+        : "",
+      chatTranscript
+        ? `今日自然日内的聊天记录（最重要，请围绕这些内容来写）：\n${chatTranscript}`
+        : "今日自然日内没有聊天记录。"
+    ],
+    personaAlignment: [
+      `你是即时聊天联系人：${contact.name}。`,
+      "现在不是聊天回复，而是以这个角色的第一人称口吻写一篇今日日记。",
+      `角色人设：${contact.personaPrompt || "自然、细腻、会根据设定稳定表达。"}。`,
+      `和你聊天的用户昵称：${profile.username || DEFAULT_PROFILE.username}。`,
+      `用户的人设：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt}。`
+    ],
+    outputStandard: [
       "1. 只输出日记正文，不要标题、署名、编号、项目符号、解释或 markdown。",
       "2. 正文里要自然写出今天是几月几日、星期几；天气只能从今天的聊天记录里提取，若聊天里没有提到天气，就自然写成没特别留意到天气，不要硬编温度、天气现象或城市。",
       "3. 今日聊天记录是核心，挂载的世界书和论坛背景只做辅助参考。",
       `4. 控制在 ${normalizeMessagePromptSettings(promptSettings).journalLength} 字以内。`,
       "5. 语气要像当天稍晚写下来的私人记录，细节真实，不要写成总结报告。",
       "6. 适当增加一些心理活动、犹豫、回味和没说出口的小念头。"
-    ].join("\n")
-  ]
-    .filter(Boolean)
-    .join("\n\n"));
+    ]
+  });
 }
 
 function buildGenericConversationPrompt(systemPrompt, history = []) {
@@ -4782,7 +5299,7 @@ function collapseConversationMessagesByTurn(messages = []) {
   }
 
   return messages.reduce((collapsed, message) => {
-    const text = String(message?.text || "").trim();
+    const text = getConversationMessagePromptText(message);
     if (!text) {
       return collapsed;
     }
@@ -4957,22 +5474,26 @@ function buildExistingMemoryDigest(contactId = "") {
 }
 
 function buildMemorySummarySystemPrompt(profile, contact) {
-  return prependGlobalPromptGuard([
-    `你正在为联系人 ${contact.name} 整理一对一聊天里的长期记忆。`,
-    `这个联系人的稳定性格与表达底色：${
-      contact.personaPrompt || "自然、友好、会根据关系稳定回应。"
-    }。`,
-    `聊天对象昵称：${profile.username || DEFAULT_PROFILE.username}。`,
-    `用户整体画像：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt}。`,
-    "你的目标不是写摘要，而是从新对话中提取未来聊天真正值得记住的内容。",
-    "核心记忆的标准非常严格：只有会改变联系人对用户的态度、距离感、信任、期待、介意点，或改变联系人看待某个话题/事物的心境与立场，才算核心记忆。",
-    "除此之外，其他能在相关话题里帮助回想上下文的内容，都归为情景记忆。",
-    "不要把普通闲聊、礼貌回应、表层信息重复写成核心记忆。",
-    "输出必须是 JSON，对象格式固定为：{\"memories\":[{\"type\":\"core|scene\",\"content\":\"...\",\"importance\":1-100}]}",
-    "importance 使用整数。1 越低越不重要，100 越重要。",
-    "最多输出 6 条；如果没有值得保留的内容，就输出 {\"memories\":[]}。",
-    "不要输出 markdown，不要代码块，不要解释，不要额外字段。"
-  ].join("\n\n"));
+  return buildStructuredPromptSections({
+    contextLibrary: `任务：为联系人 ${contact.name} 整理一对一聊天里的长期记忆。`,
+    personaAlignment: [
+      `这个联系人的稳定性格与表达底色：${
+        contact.personaPrompt || "自然、友好、会根据关系稳定回应。"
+      }。`,
+      `聊天对象昵称：${profile.username || DEFAULT_PROFILE.username}。`,
+      `用户整体画像：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt}。`,
+      "你的目标不是写摘要，而是从新对话中提取未来聊天真正值得记住的内容。",
+      "核心记忆的标准非常严格：只有会改变联系人对用户的态度、距离感、信任、期待、介意点，或改变联系人看待某个话题/事物的心境与立场，才算核心记忆。",
+      "除此之外，其他能在相关话题里帮助回想上下文的内容，都归为情景记忆。",
+      "不要把普通闲聊、礼貌回应、表层信息重复写成核心记忆。"
+    ],
+    outputStandard: [
+      '输出必须是 JSON，对象格式固定为：{"memories":[{"type":"core|scene","content":"...","importance":1-100}]}',
+      "importance 使用整数。1 越低越不重要，100 越重要。",
+      "最多输出 6 条；如果没有值得保留的内容，就输出 {\"memories\":[]}。",
+      "不要输出 markdown，不要代码块，不要解释，不要额外字段。"
+    ]
+  });
 }
 
 function parseJsonLikeContent(value) {
@@ -5280,6 +5801,114 @@ function extractLocationReplyBlocks(text) {
   return { text: workingText, blocks };
 }
 
+function parseQuoteReplyPayload(payload) {
+  function parseLooseQuoteObject(value) {
+    const raw = String(value || "")
+      .replace(/<\/?quote_reply>/gi, "")
+      .trim();
+    if (!raw) {
+      return null;
+    }
+
+    const roleMatch = raw.match(/"quotedRole"\s*:\s*"(assistant|user)"/i);
+    const quotedTextMatch = raw.match(
+      /"quotedText"\s*:\s*"([\s\S]*?)"(?=\s*,?\s*"reply"\s*:|\s*}\s*$|\s*$)/i
+    );
+    const replyMatch = raw.match(/"reply"\s*:\s*"([\s\S]*?)"(?=\s*}\s*$|\s*$)/i);
+    const quotedText = String(quotedTextMatch?.[1] || "").trim();
+    const reply = String(replyMatch?.[1] || "").trim();
+    if (!quotedText || !reply) {
+      return null;
+    }
+    return {
+      messageType: "quote",
+      quotedRole: String(roleMatch?.[1] || "").trim() === "assistant" ? "assistant" : "user",
+      quotedText: quotedText.slice(0, 240),
+      text: reply
+    };
+  }
+
+  const rawValue =
+    parseJsonLikeContent(payload) ||
+    parseJsonLikeContent(resolveMessage(payload)) ||
+    payload;
+  const items = Array.isArray(rawValue)
+    ? rawValue
+    : rawValue && typeof rawValue === "object"
+      ? Array.isArray(rawValue.items)
+        ? rawValue.items
+        : [rawValue]
+      : [];
+
+  return items
+    .map((item) => {
+      const source = item && typeof item === "object" ? item : {};
+      const quotedText = String(
+        source.quotedText || source.quote || source.quoteText || source.reference || ""
+      ).trim();
+      const reply = String(source.reply || source.text || source.content || "").trim();
+      const quotedRole =
+        String(source.quotedRole || source.role || source.quoteRole || "").trim() === "assistant"
+          ? "assistant"
+          : "user";
+      if (!quotedText || !reply) {
+        return null;
+      }
+      return {
+        messageType: "quote",
+        quotedRole,
+        quotedText: quotedText.slice(0, 240),
+        text: reply
+      };
+    })
+    .filter(Boolean)
+    .concat((() => {
+      const looseItem = parseLooseQuoteObject(payload);
+      return looseItem ? [looseItem] : [];
+    })())
+    .slice(0, 1);
+}
+
+function extractQuoteReplyBlocks(text) {
+  let workingText = String(text || "").replace(/\r/g, "").trim();
+  if (!workingText) {
+    return { text: "", blocks: [] };
+  }
+
+  const blocks = [];
+  workingText = workingText.replace(/<quote_reply>([\s\S]*?)<\/quote_reply>/gi, (match, inner) => {
+    const parsedItems = parseQuoteReplyPayload(String(inner || "").trim());
+    if (!parsedItems.length) {
+      return match;
+    }
+    const token = `__PULSE_QUOTE_BLOCK_${blocks.length}__`;
+    blocks.push({
+      token,
+      items: parsedItems
+    });
+    return `\n${token}\n`;
+  });
+
+  const looseQuoteIndex = workingText.toLowerCase().indexOf("<quote_reply>");
+  if (looseQuoteIndex >= 0) {
+    const candidate = workingText.slice(looseQuoteIndex).trim();
+    const parsedItems = parseQuoteReplyPayload(candidate);
+    if (parsedItems.length) {
+      const token = `__PULSE_QUOTE_BLOCK_${blocks.length}__`;
+      blocks.push({
+        token,
+        items: parsedItems
+      });
+      workingText = `${workingText.slice(0, looseQuoteIndex).trim()}\n${token}\n`.trim();
+    }
+  }
+
+  return {
+    text: workingText,
+    blocks
+  };
+}
+
 function limitReplyItems(items = [], limit = DEFAULT_MESSAGE_REPLY_SENTENCE_LIMIT) {
   const resolvedLimit = clampNumber(
     normalizePositiveInteger(limit, DEFAULT_MESSAGE_REPLY_SENTENCE_LIMIT),
@@ -5296,11 +5925,11 @@ function limitReplyItems(items = [], limit = DEFAULT_MESSAGE_REPLY_SENTENCE_LIMI
   const limited = normalized.slice(0, resolvedLimit);
   const overflow = normalized.slice(resolvedLimit);
   const lastItem = limited[resolvedLimit - 1];
-  if (lastItem && lastItem.messageType !== "location") {
+  if (lastItem && !["location", "quote"].includes(String(lastItem.messageType || "").trim())) {
     const mergedText = [String(lastItem.text || "").trim()]
       .concat(
         overflow
-          .filter((item) => item.messageType !== "location")
+          .filter((item) => !["location", "quote"].includes(String(item.messageType || "").trim()))
           .map((item) => String(item.text || "").trim())
       )
       .filter(Boolean)
@@ -5316,8 +5945,12 @@ function limitReplyItems(items = [], limit = DEFAULT_MESSAGE_REPLY_SENTENCE_LIMI
 }
 
 function buildReplyItems(replyText, promptSettings = {}, privacySession = null) {
-  const { text: textWithoutLocationBlocks, blocks } = extractLocationReplyBlocks(replyText);
-  const blockMap = new Map(blocks.map((block) => [block.token, block.items]));
+  const { text: textWithoutQuoteBlocks, blocks: quoteBlocks } = extractQuoteReplyBlocks(replyText);
+  const { text: textWithoutLocationBlocks, blocks: locationBlocks } =
+    extractLocationReplyBlocks(textWithoutQuoteBlocks);
+  const blockMap = new Map(
+    [...quoteBlocks, ...locationBlocks].map((block) => [block.token, block.items])
+  );
   const rawLines = String(textWithoutLocationBlocks || "")
     .split("\n")
     .map((item) => String(item || "").trim())
@@ -5327,6 +5960,39 @@ function buildReplyItems(replyText, promptSettings = {}, privacySession = null) 
   rawLines.forEach((line) => {
     if (blockMap.has(line)) {
       decodeValueWithPrivacy(blockMap.get(line), privacySession).forEach((item) => {
+        if (String(item?.messageType || "").trim() === "location") {
+          items.push({
+            ...item,
+            text: buildLocationMessageText(item.locationName, item.coordinates)
+          });
+          return;
+        }
+        if (String(item?.messageType || "").trim() === "quote") {
+          items.push({
+            messageType: "quote",
+            quotedRole: item.quotedRole === "assistant" ? "assistant" : "user",
+            quotedText: String(item.quotedText || "").trim(),
+            text: String(item.text || "").trim()
+          });
+        }
+      });
+      return;
+    }
+    const inlineQuoteItems = parseQuoteReplyPayload(line);
+    if (inlineQuoteItems.length) {
+      decodeValueWithPrivacy(inlineQuoteItems, privacySession).forEach((item) => {
+        items.push({
+          messageType: "quote",
+          quotedRole: item.quotedRole === "assistant" ? "assistant" : "user",
+          quotedText: String(item.quotedText || "").trim(),
+          text: String(item.text || "").trim()
+        });
+      });
+      return;
+    }
+    const inlineLocationItems = parseLocationMessagePayload(line);
+    if (inlineLocationItems.length) {
+      decodeValueWithPrivacy(inlineLocationItems, privacySession).forEach((item) => {
         items.push({
           ...item,
           text: buildLocationMessageText(item.locationName, item.coordinates)
@@ -5371,13 +6037,67 @@ function stripAssistantPresenceUpdateTag(text = "") {
     .trim();
 }
 
+function inferAssistantPresenceUpdateFromText(text = "", contactId = "") {
+  const cleanedText = String(text || "").trim();
+  if (!cleanedText) {
+    return null;
+  }
+
+  const resolvedContactId = String(contactId || "").trim();
+  const userPresence = getUserPresenceForContact(resolvedContactId);
+  const userPlace = resolvePresencePlaceForPrompt(userPresence.placeId, resolvedContactId, "user");
+  const contactPresence = getContactPresence(resolvedContactId);
+  const contactPlace = resolvePresencePlaceForPrompt(contactPresence.placeId, resolvedContactId, "contact");
+  const visiblePlaces = getVisibleCommonPlacesForContact(resolvedContactId);
+
+  const explicitPlace = visiblePlaces.find((place) => {
+    const candidates = [String(place.name || "").trim(), ...buildCommonPlaceAliasList(place)].filter(Boolean);
+    return candidates.some((item) => cleanedText.includes(item));
+  }) || null;
+
+  if (
+    /(我(?:现在|这就|马上|立刻|先)?(?:过来|过去|赶过来|赶过去|出发|过来啦|过去啦|来啦|来了)|我(?:已经|正在)?在路上|我正(?:在)?赶过来|我正(?:在)?过去|我往你那边|我去找你|我来找你|我这就来|我先过去了?)/.test(
+      cleanedText
+    )
+  ) {
+    if (userPlace || contactPlace || explicitPlace) {
+      return {
+        presenceType: "in_transit",
+        placeId: "",
+        fromPlaceId: contactPlace?.id || "",
+        toPlaceId: explicitPlace?.id || userPlace?.id || "",
+        updatedAt: Date.now()
+      };
+    }
+  }
+
+  if (
+    /(我(?:已经|刚刚|终于)?到了|我到啦|我到了呀|我刚到|我先到啦|我过来了|我已经过来了|我到你这了|我到你那里了|我刚过来|我刚到这边)/.test(
+      cleanedText
+    )
+  ) {
+    const destinationPlace = explicitPlace || userPlace || contactPlace;
+    if (destinationPlace) {
+      return {
+        presenceType: "at_place",
+        placeId: destinationPlace.id,
+        fromPlaceId: "",
+        toPlaceId: "",
+        updatedAt: Date.now()
+      };
+    }
+  }
+
+  return null;
+}
+
 function parseAssistantPresenceUpdate(text = "", contactId = "") {
   const rawText = String(text || "");
   const match = rawText.match(/<presence_update>([\s\S]*?)<\/presence_update>/i);
   if (!match) {
     return {
       cleanedText: rawText.trim(),
-      update: null
+      update: inferAssistantPresenceUpdateFromText(rawText, contactId)
     };
   }
 
@@ -5387,7 +6107,7 @@ function parseAssistantPresenceUpdate(text = "", contactId = "") {
   } catch (_error) {
     return {
       cleanedText: stripAssistantPresenceUpdateTag(rawText),
-      update: null
+      update: inferAssistantPresenceUpdateFromText(stripAssistantPresenceUpdateTag(rawText), contactId)
     };
   }
 
@@ -5405,7 +6125,7 @@ function parseAssistantPresenceUpdate(text = "", contactId = "") {
             toPlaceId: "",
             updatedAt: Date.now()
           }
-        : null
+        : inferAssistantPresenceUpdateFromText(stripAssistantPresenceUpdateTag(rawText), contactId)
     };
   }
 
@@ -5414,7 +6134,7 @@ function parseAssistantPresenceUpdate(text = "", contactId = "") {
   if (!fromPlace && !toPlace) {
     return {
       cleanedText: stripAssistantPresenceUpdateTag(rawText),
-      update: null
+      update: inferAssistantPresenceUpdateFromText(stripAssistantPresenceUpdateTag(rawText), contactId)
     };
   }
   return {
@@ -5465,6 +6185,8 @@ async function appendAssistantReplyBatch(
         role: "assistant",
         messageType: item.messageType || "text",
         text: item.text || "",
+        quotedText: item.quotedText || "",
+        quotedRole: item.quotedRole || "",
         locationName: item.locationName || "",
         coordinates: item.coordinates || "",
         time: timeLabel,
@@ -5740,7 +6462,7 @@ async function maybeExtractConversationMemories(conversationId, settings, prompt
     return;
   }
 
-  const contact = getContactById(conversation.contactId);
+  const contact = getResolvedConversationContact(conversation);
   if (!contact) {
     return;
   }
@@ -5953,6 +6675,7 @@ function updateBodyModalState() {
     state.contactEditorOpen ||
     state.conversationPickerOpen ||
     state.chatSettingsOpen ||
+    state.autoScheduleRequestOpen ||
     state.chatGlobalSettingsOpen ||
     state.sceneModalOpen ||
     state.sceneSyncModalOpen ||
@@ -6178,7 +6901,7 @@ function setAwarenessModalOpen(isOpen) {
   }
   if (state.awarenessModalOpen) {
     const conversation = getConversationById();
-    const contact = conversation ? getContactById(conversation.contactId) : null;
+    const contact = conversation ? getResolvedConversationContact(conversation) : null;
     applyAwarenessToForm(contact);
     window.setTimeout(() => {
       messagesAwarenessTextInputEl?.focus();
@@ -6219,7 +6942,7 @@ function setJournalStatus(message = "", tone = "") {
 
 function getActiveConversationContext() {
   const conversation = getConversationById();
-  const contact = conversation ? getContactById(conversation.contactId) : null;
+  const contact = conversation ? getResolvedConversationContact(conversation) : null;
   return {
     conversation,
     contact
@@ -6634,19 +7357,13 @@ function renderNavButton() {
     return;
   }
 
-  if (isEmbeddedView()) {
-    messagesNavBtnEl.hidden = false;
-    messagesNavBtnEl.setAttribute("aria-label", "关闭 Chat");
-    messagesNavBtnEl.innerHTML = `
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M7 7l10 10M17 7 7 17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-      </svg>
-    `;
-    return;
-  }
-
-  messagesNavBtnEl.hidden = true;
-  messagesNavBtnEl.innerHTML = "";
+  messagesNavBtnEl.hidden = false;
+  messagesNavBtnEl.setAttribute("aria-label", "关闭 Chat");
+  messagesNavBtnEl.innerHTML = `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M7 7l10 10M17 7 7 17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    </svg>
+  `;
 }
 
 function renderTopbar() {
@@ -6924,6 +7641,12 @@ function renderConversationMessageMenu(message, isMenuOpen) {
   if (!isMenuOpen) {
     return "";
   }
+  const sceneMode = getConversationSceneMode();
+  const canQuote =
+    sceneMode === "online" &&
+    !isScheduleInviteConversationMessage(message) &&
+    !isLocationConversationMessage(message) &&
+    !isImageConversationMessage(message);
   const actions =
     isScheduleInviteConversationMessage(message) ||
     isLocationConversationMessage(message) ||
@@ -6961,7 +7684,54 @@ function renderConversationMessageMenu(message, isMenuOpen) {
       ];
   return `
     <div class="messages-message-row__menu" role="group" aria-label="消息操作">
+      ${
+        canQuote
+          ? `
+            <button
+              type="button"
+              data-action="quote-conversation-message"
+              data-message-id="${escapeHtml(message.id)}"
+            >
+              引用
+            </button>
+          `
+          : ""
+      }
       ${actions.join("")}
+    </div>
+  `;
+}
+
+function renderConversationQuoteCard(message, isUser = false) {
+  const quotedRole = String(message?.quotedRole || "").trim() === "assistant" ? "assistant" : "user";
+  const quotedRoleLabel = quotedRole === "assistant" ? "角色" : "用户";
+  const replyText = String(message?.text || "").trim();
+  return `
+    <article class="messages-bubble messages-bubble--quote ${
+      isUser ? "messages-bubble--user" : "messages-bubble--assistant"
+    }">
+      <div class="messages-quote-card">
+        <div class="messages-quote-card__meta">${escapeHtml(quotedRoleLabel)}</div>
+        <p class="messages-quote-card__text">${escapeHtml(String(message?.quotedText || "").trim())}</p>
+      </div>
+      <p>${escapeHtml(replyText)}</p>
+    </article>
+  `;
+}
+
+function renderComposerQuotePreview(message = null) {
+  const resolvedMessage = message && typeof message === "object" ? message : null;
+  if (!resolvedMessage) {
+    return "";
+  }
+  const quotedRole = resolvedMessage.role === "assistant" ? "角色" : "用户";
+  return `
+    <div class="messages-conversation__quote-draft">
+      <div class="messages-conversation__quote-draft-meta">
+        <strong>正在引用 ${escapeHtml(quotedRole)}</strong>
+        <button type="button" data-action="clear-quoted-message" aria-label="取消引用">取消</button>
+      </div>
+      <p>${escapeHtml(getConversationMessagePreviewText(resolvedMessage))}</p>
     </div>
   `;
 }
@@ -7059,12 +7829,15 @@ function renderConversationMessage(message, conversation, promptSettings = state
   const isScheduleInviteMessage = isScheduleInviteConversationMessage(message);
   const isLocationMessage = isLocationConversationMessage(message);
   const isImageMessage = isImageConversationMessage(message);
+  const isQuoteMessage = isQuoteConversationMessage(message);
   const bubbleMarkup = isScheduleInviteMessage
     ? renderConversationScheduleInviteCard(message, conversation)
     : isLocationMessage
     ? renderConversationLocationCard(message)
     : isImageMessage
       ? renderConversationImageCard(message)
+    : isQuoteMessage
+      ? renderConversationQuoteCard(message, isUser)
     : `
       <article class="messages-bubble ${isUser ? "messages-bubble--user" : "messages-bubble--assistant"}">
         <p>${escapeHtml(message.text)}</p>
@@ -7077,6 +7850,8 @@ function renderConversationMessage(message, conversation, promptSettings = state
       isLocationMessage ? " messages-message-row--location" : ""
     }${
       isImageMessage ? " messages-message-row--image" : ""
+    }${
+      isQuoteMessage ? " messages-message-row--quote" : ""
     }">
       ${!isUser && avatarMarkup ? avatarMarkup : ""}
       <div class="messages-message-row__bubble-wrap${
@@ -7121,31 +7896,60 @@ function renderChatList() {
     return;
   }
 
+  const brokenConversationIds = [];
+  const brokenConversationErrors = [];
+  const conversationRows = conversations.reduce((markupList, conversation) => {
+    try {
+      const conversationName = getConversationSnapshotName(conversation);
+      markupList.push(`
+        <button
+          type="button"
+          class="messages-row"
+          data-action="open-conversation"
+          data-conversation-id="${escapeHtml(conversation.id)}"
+          aria-label="${escapeHtml(conversationName)} 的会话"
+        >
+          <div class="messages-row__avatar">${buildConversationListAvatarMarkup(conversation)}</div>
+          <div class="messages-row__body">
+            <div class="messages-row__head">
+              <strong>${escapeHtml(conversationName)}</strong>
+              <span class="messages-row__time">${escapeHtml(getConversationTimeSafe(conversation))}</span>
+            </div>
+            <div class="messages-row__preview">${escapeHtml(getConversationPreviewSafe(conversation))}</div>
+          </div>
+        </button>
+      `);
+    } catch (error) {
+      const conversationId = String(conversation?.id || "").trim();
+      if (conversationId) {
+        brokenConversationIds.push(conversationId);
+      }
+      brokenConversationErrors.push(String(error?.message || "未知错误"));
+      console.error("[Pulse Messages] Failed to render conversation row:", error, conversation);
+    }
+    return markupList;
+  }, []);
+
+  if (!conversationRows.length) {
+    const firstError = String(brokenConversationErrors[0] || "").trim();
+    setMessagesStatus(
+      firstError
+        ? `聊天列表读取失败：${firstError}`
+        : "聊天列表读取失败，请返回首页后重试。",
+      "error"
+    );
+    messagesContentEl.innerHTML =
+      '<div class="messages-empty">聊天列表暂时加载失败。可点击右上角 + 重新发起会话，或返回首页后再进入。</div>';
+    return;
+  }
+
+  if (brokenConversationIds.length) {
+    setMessagesStatus(`已跳过 ${brokenConversationIds.length} 条异常会话。`, "error");
+  }
+
   messagesContentEl.innerHTML = `
     <div class="messages-chat-list">
-      ${conversations
-        .map((conversation) => {
-          const meta = getConversationMeta(conversation);
-          return `
-            <button
-              type="button"
-              class="messages-row"
-              data-action="open-conversation"
-              data-conversation-id="${escapeHtml(conversation.id)}"
-              aria-label="${escapeHtml(meta.name)} 的会话"
-            >
-              <div class="messages-row__avatar">${buildConversationAvatarMarkup(conversation)}</div>
-              <div class="messages-row__body">
-                <div class="messages-row__head">
-                  <strong>${escapeHtml(meta.name)}</strong>
-                  <span class="messages-row__time">${escapeHtml(getConversationTime(conversation))}</span>
-                </div>
-                <div class="messages-row__preview">${escapeHtml(getConversationPreview(conversation))}</div>
-              </div>
-            </button>
-          `;
-        })
-        .join("")}
+      ${conversationRows.join("")}
     </div>
   `;
 }
@@ -7171,6 +7975,17 @@ function renderConversationDetail(options = {}) {
   const promptSettings = normalizeMessagePromptSettings(state.chatPromptSettings);
   const renderOptions = options && typeof options === "object" ? options : {};
   const renderWindow = buildConversationRenderWindow(conversation);
+  const quotedMessage = getConversationSceneMode(conversation) === "online"
+    ? getQuotedConversationMessage(conversation)
+    : null;
+  const renderedMessages = renderWindow.visibleMessages.reduce((markupList, message) => {
+    try {
+      markupList.push(renderConversationMessage(message, conversation, promptSettings));
+    } catch (error) {
+      console.error("[Pulse Messages] Failed to render conversation message:", error, message);
+    }
+    return markupList;
+  }, []);
   messagesContentEl.innerHTML = `
     <section class="messages-conversation">
       <div class="messages-conversation__history">
@@ -7193,15 +8008,14 @@ function renderConversationDetail(options = {}) {
             : ""
         }
         ${
-          renderWindow.visibleMessages.length
-            ? renderWindow.visibleMessages
-                .map((message) => renderConversationMessage(message, conversation, promptSettings))
-                .join("")
+          renderedMessages.length
+            ? renderedMessages.join("")
             : '<div class="messages-conversation__empty">输入第一条消息，开始和这个角色聊天。</div>'
         }
       </div>
       ${renderConversationUtilityPanel()}
       <form class="messages-conversation__composer" data-action="send-conversation-message">
+        ${renderComposerQuotePreview(quotedMessage)}
         <input
           class="messages-conversation__input"
           name="message"
@@ -7419,6 +8233,31 @@ function renderMeTab() {
 }
 
 function renderMessagesPage() {
+  try {
+    renderMessagesPageInner();
+  } catch (error) {
+    console.error("[Pulse Messages] Render failed:", error);
+    if (!state.profileEditorOpen) {
+      syncProfileStateFromStorage();
+    }
+    if (messagesContentEl) {
+      messagesContentEl.classList.remove("is-conversation-view");
+    }
+    try {
+      renderTopbar();
+      renderSearchSection();
+      renderTabbar();
+    } catch (_error) {
+    }
+    if (messagesContentEl) {
+      messagesContentEl.innerHTML =
+        '<div class="messages-empty">Chat 页面加载失败。你可以点击右上角 + 重新发起会话，或返回首页后再进入。</div>';
+    }
+    setMessagesStatus(`Chat 页面加载失败：${error?.message || "未知错误"}`, "error");
+  }
+}
+
+function renderMessagesPageInner() {
   if (!state.profileEditorOpen) {
     syncProfileStateFromStorage();
   }
@@ -7485,6 +8324,10 @@ function getConversationAutoScheduleDays(conversation = getConversationById()) {
     conversation?.autoScheduleDays,
     DEFAULT_AUTO_SCHEDULE_DAYS
   );
+}
+
+function getConversationAutoScheduleTime(conversation = getConversationById()) {
+  return normalizeAutoScheduleTime(conversation?.autoScheduleTime);
 }
 
 function applySceneModeToButtons(sceneMode = "online") {
@@ -7638,6 +8481,9 @@ function setConversationSceneMode(sceneMode = "online") {
   }
   const resolvedMode = sceneMode === "offline" ? "offline" : "online";
   conversation.sceneMode = resolvedMode;
+  if (resolvedMode === "offline") {
+    state.quotedMessageId = "";
+  }
   persistConversations();
   renderTopbar();
   if (state.sceneModalOpen) {
@@ -7698,6 +8544,9 @@ function saveSceneDraft() {
   }
   const draft = validateSceneDraft(getCurrentSceneDraft());
   conversation.sceneMode = draft.sceneMode;
+  if (draft.sceneMode === "offline") {
+    state.quotedMessageId = "";
+  }
   persistConversations();
   setUserPresenceEntry(conversation.contactId, draft.userPresence);
   setContactPresenceEntry(conversation.contactId, draft.contactPresence);
@@ -7731,7 +8580,8 @@ function setConversationAllowAiPresenceUpdate(enabled = false) {
 
 function setConversationAutoScheduleSettings(
   enabled = false,
-  autoScheduleDays = DEFAULT_AUTO_SCHEDULE_DAYS
+  autoScheduleDays = DEFAULT_AUTO_SCHEDULE_DAYS,
+  autoScheduleTime = ""
 ) {
   const conversation = getConversationById();
   if (!conversation) {
@@ -7742,6 +8592,7 @@ function setConversationAutoScheduleSettings(
     autoScheduleDays,
     DEFAULT_AUTO_SCHEDULE_DAYS
   );
+  conversation.autoScheduleTime = normalizeAutoScheduleTime(autoScheduleTime);
   persistConversations();
 }
 
@@ -8166,8 +9017,7 @@ function shouldShowConversationNotification(conversationId = "", createdMessages
   return !(
     state.activeTab === "chat" &&
     state.activeConversationId === String(conversationId || "").trim() &&
-    !document.hidden &&
-    document.hasFocus()
+    !document.hidden
   );
 }
 
@@ -9116,6 +9966,9 @@ function applyChatPromptSettingsToForm(promptSettings) {
   if (messagesChatBubbleFocusInputEl) {
     messagesChatBubbleFocusInputEl.checked = resolved.bubbleFocusEnabled;
   }
+  if (messagesChatBubbleFocusMinutesInputEl) {
+    messagesChatBubbleFocusMinutesInputEl.value = String(resolved.bubbleFocusMinutes);
+  }
   if (messagesChatShowContactAvatarInputEl) {
     messagesChatShowContactAvatarInputEl.checked = resolved.showContactAvatar;
   }
@@ -9133,6 +9986,10 @@ function applyChatPromptSettingsToForm(promptSettings) {
   if (messagesChatAutoScheduleDaysInputEl) {
     messagesChatAutoScheduleDaysInputEl.value = String(getConversationAutoScheduleDays());
     messagesChatAutoScheduleDaysInputEl.disabled = !Boolean(getConversationById());
+  }
+  if (messagesChatAutoScheduleTimeInputEl) {
+    messagesChatAutoScheduleTimeInputEl.value = String(getConversationAutoScheduleTime() || "");
+    messagesChatAutoScheduleTimeInputEl.disabled = !Boolean(getConversationById());
   }
   if (messagesChatAutoScheduleGenerateBtnEl) {
     messagesChatAutoScheduleGenerateBtnEl.disabled = !Boolean(getConversationById());
@@ -9189,6 +10046,9 @@ function updateChatSettingsFormState() {
     "is-disabled",
     !Boolean(messagesChatWorldbookInputEl?.checked)
   );
+  if (messagesChatBubbleFocusMinutesInputEl) {
+    messagesChatBubbleFocusMinutesInputEl.disabled = !Boolean(messagesChatBubbleFocusInputEl?.checked);
+  }
 }
 
 function updateChatHotTopicsWarning(promptSettings = getCurrentChatPromptSettingsDraft()) {
@@ -9228,10 +10088,102 @@ function getCurrentChatPromptSettingsDraft() {
     worldbookIds: selectedWorldbookIds,
     forumPostFocusEnabled: Boolean(messagesChatProfilePostFocusInputEl?.checked),
     bubbleFocusEnabled: Boolean(messagesChatBubbleFocusInputEl?.checked),
+    bubbleFocusMinutes: messagesChatBubbleFocusMinutesInputEl?.value,
     sceneMode: currentSettings.sceneMode,
     showContactAvatar: Boolean(messagesChatShowContactAvatarInputEl?.checked),
     showUserAvatar: Boolean(messagesChatShowUserAvatarInputEl?.checked)
   });
+}
+
+function createAutoScheduleRequestDraft() {
+  const promptSettings = normalizeMessagePromptSettings(
+    state.chatSettingsOpen ? getCurrentChatPromptSettingsDraft() : state.chatPromptSettings
+  );
+  return {
+    worldbookIds: normalizeWorldbookSelectionIds(
+      promptSettings.worldbookEnabled ? promptSettings.worldbookIds : []
+    ),
+    note: ""
+  };
+}
+
+function renderAutoScheduleRequestWorldbookOptions(selectedIds = []) {
+  if (!messagesChatAutoScheduleWorldbookListEl) {
+    return;
+  }
+  const validSelectedIds = normalizeWorldbookSelectionIds(selectedIds);
+  const groups = getWorldbookGroups();
+  if (!state.worldbooks.entries.length) {
+    messagesChatAutoScheduleWorldbookListEl.innerHTML =
+      '<p class="messages-worldbook-selector__empty">当前还没有世界书。你也可以只填写附加要求来生成行程。</p>';
+    return;
+  }
+
+  messagesChatAutoScheduleWorldbookListEl.innerHTML = groups
+    .map(
+      (group) => `
+        <section class="messages-worldbook-selector__group">
+          <strong>${escapeHtml(group.name)}</strong>
+          <div class="messages-worldbook-selector__items">
+            ${group.entries
+              .map(
+                (entry) => `
+                  <label class="messages-worldbook-selector__item">
+                    <input
+                      type="checkbox"
+                      value="${escapeHtml(entry.id)}"
+                      ${validSelectedIds.includes(entry.id) ? "checked" : ""}
+                    />
+                    <span>${escapeHtml(entry.name)}</span>
+                  </label>
+                `
+              )
+              .join("")}
+          </div>
+        </section>
+      `
+    )
+    .join("");
+}
+
+function renderAutoScheduleRequestModal() {
+  renderAutoScheduleRequestWorldbookOptions(state.autoScheduleRequestDraft.worldbookIds || []);
+  if (messagesChatAutoScheduleNoteInputEl) {
+    messagesChatAutoScheduleNoteInputEl.value = String(state.autoScheduleRequestDraft.note || "");
+  }
+  setEditorStatus(messagesChatAutoScheduleStatusEl);
+}
+
+function collectAutoScheduleRequestDraft() {
+  return {
+    worldbookIds: messagesChatAutoScheduleWorldbookListEl
+      ? [...messagesChatAutoScheduleWorldbookListEl.querySelectorAll("input[type='checkbox']:checked")]
+          .map((input) =>
+            input instanceof HTMLInputElement ? String(input.value || "").trim() : ""
+          )
+          .filter((id) => getWorldbookEntryById(id))
+      : [],
+    note: String(messagesChatAutoScheduleNoteInputEl?.value || "").trim()
+  };
+}
+
+function setAutoScheduleRequestOpen(isOpen) {
+  state.autoScheduleRequestOpen = Boolean(isOpen);
+  if (messagesChatAutoScheduleModalEl) {
+    messagesChatAutoScheduleModalEl.hidden = !state.autoScheduleRequestOpen;
+    messagesChatAutoScheduleModalEl.setAttribute("aria-hidden", String(!state.autoScheduleRequestOpen));
+  }
+  if (state.autoScheduleRequestOpen) {
+    state.autoScheduleRequestDraft = createAutoScheduleRequestDraft();
+    renderAutoScheduleRequestModal();
+    window.setTimeout(() => {
+      messagesChatAutoScheduleNoteInputEl?.focus();
+    }, 0);
+  } else {
+    state.autoScheduleRequestDraft = createAutoScheduleRequestDraft();
+    setEditorStatus(messagesChatAutoScheduleStatusEl);
+  }
+  updateBodyModalState();
 }
 
 function setChatSettingsOpen(isOpen) {
@@ -9312,6 +10264,9 @@ function deleteConversationMessage(messageId = "") {
   }
 
   conversation.messages = conversation.messages.filter((message) => message.id !== targetMessage.id);
+  if (String(state.quotedMessageId || "").trim() === targetMessage.id) {
+    state.quotedMessageId = "";
+  }
   recalculateConversationUpdatedAt(conversation);
   state.messageActionMessageId = "";
   persistConversations();
@@ -9340,6 +10295,7 @@ function clearCurrentConversationHistory() {
   conversation.updatedAt = Date.now();
   resetConversationVisibleMessageCount(conversation.id);
   state.messageActionMessageId = "";
+  state.quotedMessageId = "";
   state.composerPanelOpen = false;
   persistConversations();
   queueConversationRenderOptions({
@@ -9570,17 +10526,22 @@ function sendConversationMessage(text) {
     return;
   }
 
-  const contact = getContactById(conversation.contactId);
+  const contact = getResolvedConversationContact(conversation);
   if (!contact) {
     setMessagesStatus("未找到对应联系人，请先去通讯录检查人物信息。", "error");
     return;
   }
 
   closeConversationTransientUi();
+  const quotedMessage =
+    getConversationSceneMode(conversation) === "online" ? getQuotedConversationMessage(conversation) : null;
   const userMessage = normalizeConversationMessage(
     {
       id: `message_${Date.now()}_${hashText(content)}`,
       role: "user",
+      messageType: quotedMessage ? "quote" : "text",
+      quotedText: quotedMessage ? getConversationMessagePreviewText(quotedMessage) : "",
+      quotedRole: quotedMessage?.role || "user",
       text: content,
       needsReply: true,
       time: formatLocalTime(),
@@ -9591,6 +10552,7 @@ function sendConversationMessage(text) {
 
   conversation.messages = [...conversation.messages, userMessage];
   conversation.updatedAt = userMessage.createdAt;
+  state.quotedMessageId = "";
   persistConversations();
   queueConversationRenderOptions({
     scrollBehavior: "bottom",
@@ -9630,7 +10592,7 @@ async function requestConversationReply(options = {}) {
     return;
   }
 
-  const contact = getContactById(conversation.contactId);
+  const contact = getResolvedConversationContact(conversation);
   if (!contact) {
     if (!suppressUi) {
       setMessagesStatus("未找到对应联系人，请先去通讯录检查人物信息。", "error");
@@ -9781,6 +10743,12 @@ async function requestConversationReply(options = {}) {
     );
     if (replyResult.assistantPresenceUpdate && updatedConversation.contactId) {
       setContactPresenceEntry(updatedConversation.contactId, replyResult.assistantPresenceUpdate);
+      if (state.sceneModalOpen) {
+        updateSceneModalFields(buildSceneDraft(updatedConversation));
+      }
+      if (state.sceneSyncModalOpen) {
+        renderSceneSyncModal();
+      }
     }
     pushConversationReplyNotification(contact, updatedConversation, createdMessages);
     repairPersistedChatWorldbookMounts(promptSettings);
@@ -9938,6 +10906,7 @@ function initBackgroundMessagesWorker() {
   sanitizePresenceStateReferences();
   persistPresenceState();
   persistConversations();
+  initAutoScheduleClock();
   window.addEventListener("storage", (event) => {
     if (String(event?.key || "").trim() !== MESSAGE_REPLY_TASKS_KEY) {
       return;
@@ -9952,8 +10921,8 @@ function initBackgroundMessagesWorker() {
 function refreshStateFromStorage() {
   const settings = loadSettings();
   state.profile = loadProfile();
-  state.contacts = loadContacts();
   state.conversations = loadConversations();
+  state.contacts = loadContacts(state.conversations);
   state.worldbooks = loadWorldbooks();
   state.commonPlaces = loadCommonPlaces();
   state.presenceState = loadPresenceState();
@@ -9964,6 +10933,7 @@ function refreshStateFromStorage() {
   state.chatGlobalSettings = normalizeChatGlobalSettings(settings.chatGlobalSettings);
   sanitizePresenceStateReferences();
   syncSendingConversationStateFromReplyTasks();
+  persistContacts();
 }
 
 function attachEvents() {
@@ -9976,7 +10946,11 @@ function attachEvents() {
         renderMessagesPage();
         return;
       }
-      requestEmbeddedClose();
+      if (isEmbeddedView()) {
+        requestEmbeddedClose();
+        return;
+      }
+      window.location.href = "./index.html";
     });
   }
 
@@ -10166,6 +11140,37 @@ function attachEvents() {
         return;
       }
 
+      if (
+        actionEl.getAttribute("data-action") === "quote-conversation-message" &&
+        actionEl.getAttribute("data-message-id")
+      ) {
+        const conversation = getConversationById();
+        if (!conversation || getConversationSceneMode(conversation) !== "online") {
+          return;
+        }
+        const scrollSnapshot = captureConversationScrollSnapshot();
+        state.quotedMessageId = String(actionEl.getAttribute("data-message-id") || "").trim();
+        state.messageActionMessageId = "";
+        state.composerPanelOpen = false;
+        renderConversationDetail({
+          scrollBehavior: "preserve",
+          scrollSnapshot,
+          focusInput: true
+        });
+        return;
+      }
+
+      if (actionEl.getAttribute("data-action") === "clear-quoted-message") {
+        const scrollSnapshot = captureConversationScrollSnapshot();
+        state.quotedMessageId = "";
+        renderConversationDetail({
+          scrollBehavior: "preserve",
+          scrollSnapshot,
+          focusInput: true
+        });
+        return;
+      }
+
       if (actionEl.getAttribute("data-action") === "request-conversation-reply") {
         requestConversationReply();
         return;
@@ -10241,6 +11246,12 @@ function attachEvents() {
     });
   }
 
+  if (messagesProfileSaveBtnEl) {
+    messagesProfileSaveBtnEl.addEventListener("click", (event) => {
+      submitFormReliably(messagesProfileFormEl, event);
+    });
+  }
+
   if (messagesProfileAvatarResetBtnEl) {
     messagesProfileAvatarResetBtnEl.addEventListener("click", () => {
       state.profileEditorAvatarImage = "";
@@ -10297,6 +11308,12 @@ function attachEvents() {
     });
   }
 
+  if (messagesContactSaveBtnEl) {
+    messagesContactSaveBtnEl.addEventListener("click", (event) => {
+      submitFormReliably(messagesContactFormEl, event);
+    });
+  }
+
   if (messagesContactAvatarResetBtnEl) {
     messagesContactAvatarResetBtnEl.addEventListener("click", () => {
       state.contactEditorAvatarImage = "";
@@ -10342,9 +11359,18 @@ function attachEvents() {
       } else {
         state.contacts = [draft, ...state.contacts];
       }
-      persistContacts();
+      const persisted = persistContacts();
       syncConversationSnapshots(draft);
       renderMessagesPage();
+      if (!persisted) {
+        setEditorStatus(
+          messagesContactEditorStatusEl,
+          "联系人已加入当前页面，但本地缓存写入失败，请清理缓存后再试一次。",
+          "error"
+        );
+        setMessagesStatus("联系人已加入当前页面，但本地缓存写入失败。", "error");
+        return;
+      }
       setEditorStatus(messagesContactEditorStatusEl, "联系人已保存。", "success");
       setMessagesStatus("联系人资料已更新。", "success");
       window.setTimeout(() => {
@@ -10402,9 +11428,21 @@ function attachEvents() {
     });
   }
 
+  if (messagesChatSettingsSaveBtnEl) {
+    messagesChatSettingsSaveBtnEl.addEventListener("click", (event) => {
+      submitFormReliably(messagesChatSettingsFormEl, event);
+    });
+  }
+
   if (messagesSceneCloseBtnEl) {
     messagesSceneCloseBtnEl.addEventListener("click", () => {
       setSceneModalOpen(false);
+    });
+  }
+
+  if (messagesSceneSaveBtnEl) {
+    messagesSceneSaveBtnEl.addEventListener("click", (event) => {
+      submitFormReliably(messagesSceneFormEl, event);
     });
   }
 
@@ -10502,7 +11540,8 @@ function attachEvents() {
       );
       setConversationAutoScheduleSettings(
         Boolean(messagesChatAllowAiAutoScheduleInputEl?.checked),
-        messagesChatAutoScheduleDaysInputEl?.value || DEFAULT_AUTO_SCHEDULE_DAYS
+        messagesChatAutoScheduleDaysInputEl?.value || DEFAULT_AUTO_SCHEDULE_DAYS,
+        messagesChatAutoScheduleTimeInputEl?.value || ""
       );
       updateChatHotTopicsWarning(draft);
       setEditorStatus(messagesChatSettingsStatusEl, "对话回复设置已保存。", "success");
@@ -10529,25 +11568,85 @@ function attachEvents() {
   }
 
   if (messagesChatAutoScheduleGenerateBtnEl) {
-    messagesChatAutoScheduleGenerateBtnEl.addEventListener("click", async () => {
-      if (!getConversationById()) {
+    messagesChatAutoScheduleGenerateBtnEl.addEventListener("click", () => {
+      const { conversation } = getActiveConversationContext();
+      const contact = conversation ? getResolvedConversationContact(conversation) : null;
+      if (!conversation) {
         setEditorStatus(messagesChatSettingsStatusEl, "当前没有打开的会话。", "error");
+        return;
+      }
+      if (!contact) {
+        setEditorStatus(messagesChatSettingsStatusEl, "未找到当前聊天对象。", "error");
+        return;
+      }
+      setAutoScheduleRequestOpen(true);
+    });
+  }
+
+  if (messagesChatAutoScheduleCloseBtnEl) {
+    messagesChatAutoScheduleCloseBtnEl.addEventListener("click", () => {
+      setAutoScheduleRequestOpen(false);
+    });
+  }
+
+  if (messagesChatAutoScheduleModalEl) {
+    messagesChatAutoScheduleModalEl.addEventListener("click", (event) => {
+      if (event.target === messagesChatAutoScheduleModalEl) {
+        setAutoScheduleRequestOpen(false);
+      }
+    });
+  }
+
+  if (messagesChatAutoScheduleWorldbookListEl) {
+    messagesChatAutoScheduleWorldbookListEl.addEventListener("change", () => {
+      state.autoScheduleRequestDraft = collectAutoScheduleRequestDraft();
+      setEditorStatus(messagesChatAutoScheduleStatusEl);
+    });
+  }
+
+  if (messagesChatAutoScheduleNoteInputEl) {
+    messagesChatAutoScheduleNoteInputEl.addEventListener("input", () => {
+      state.autoScheduleRequestDraft = collectAutoScheduleRequestDraft();
+      setEditorStatus(messagesChatAutoScheduleStatusEl);
+    });
+  }
+
+  if (messagesChatAutoScheduleFormEl) {
+    messagesChatAutoScheduleFormEl.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const { conversation } = getActiveConversationContext();
+      const contact = conversation ? getResolvedConversationContact(conversation) : null;
+      if (!conversation) {
+        setEditorStatus(messagesChatAutoScheduleStatusEl, "当前没有打开的会话。", "error");
+        return;
+      }
+      if (!contact) {
+        setEditorStatus(messagesChatAutoScheduleStatusEl, "未找到当前聊天对象。", "error");
         return;
       }
       const days = normalizeAutoScheduleDays(
         messagesChatAutoScheduleDaysInputEl?.value,
-        getConversationAutoScheduleDays()
+        getConversationAutoScheduleDays(conversation)
       );
+      const autoScheduleTime = normalizeAutoScheduleTime(
+        messagesChatAutoScheduleTimeInputEl?.value || getConversationAutoScheduleTime(conversation)
+      );
+      const draft = collectAutoScheduleRequestDraft();
+      state.autoScheduleRequestDraft = draft;
       setEditorStatus(
-        messagesChatSettingsStatusEl,
+        messagesChatAutoScheduleStatusEl,
         `正在为当前角色补齐未来 ${days} 天的空白小时行程…`
       );
       try {
         setConversationAutoScheduleSettings(
           Boolean(messagesChatAllowAiAutoScheduleInputEl?.checked),
-          days
+          days,
+          autoScheduleTime
         );
-        const result = await generateAutoSchedulesForConversation(days);
+        const result = await generateAutoSchedulesForConversation(days, conversation.id, {
+          worldbookIds: draft.worldbookIds,
+          extraInstruction: draft.note
+        });
         setEditorStatus(
           messagesChatSettingsStatusEl,
           `已补齐 ${result.acceptedEntries.length} 条小时行程。`,
@@ -10557,9 +11656,10 @@ function attachEvents() {
           `已为当前角色补齐未来 ${result.requestedDays} 天的 ${result.acceptedEntries.length} 条行程。`,
           "success"
         );
+        setAutoScheduleRequestOpen(false);
       } catch (error) {
         setEditorStatus(
-          messagesChatSettingsStatusEl,
+          messagesChatAutoScheduleStatusEl,
           error?.message || "自动生成行程失败。",
           "error"
         );
@@ -11046,7 +12146,7 @@ function attachEvents() {
     messagesAwarenessFormEl.addEventListener("submit", (event) => {
       event.preventDefault();
       const conversation = getConversationById();
-      const contact = conversation ? getContactById(conversation.contactId) : null;
+      const contact = conversation ? getResolvedConversationContact(conversation) : null;
       if (!contact) {
         setAwarenessStatus("未找到当前聊天对象。", "error");
         return;
@@ -11409,6 +12509,7 @@ function attachEvents() {
       state.contactEditorOpen ||
       state.sceneModalOpen ||
       state.sceneSyncModalOpen ||
+      state.autoScheduleRequestOpen ||
       state.chatGlobalSettingsOpen ||
       state.placesManagerOpen ||
       state.placeEditorOpen ||
@@ -11456,7 +12557,8 @@ function attachEvents() {
       state.profileEditorOpen ||
       state.contactEditorOpen ||
       state.awarenessModalOpen ||
-      state.placeEditorOpen
+      state.placeEditorOpen ||
+      state.autoScheduleRequestOpen
     ) {
       return;
     }
@@ -11478,6 +12580,10 @@ function attachEvents() {
     }
     if (event.key === "Escape" && state.conversationPickerOpen) {
       setConversationPickerOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.autoScheduleRequestOpen) {
+      setAutoScheduleRequestOpen(false);
       return;
     }
     if (event.key === "Escape" && state.chatSettingsOpen) {
@@ -11597,7 +12703,11 @@ function init() {
     document.body.classList.toggle("background-worker", isBackgroundMessagesWorker());
   }
   if (isBackgroundMessagesWorker()) {
-    initBackgroundMessagesWorker();
+    try {
+      initBackgroundMessagesWorker();
+    } catch (error) {
+      console.error("[Pulse Messages] Background worker init failed:", error);
+    }
     notifyEmbeddedReady();
     return;
   }
@@ -11606,16 +12716,30 @@ function init() {
     state.activeTab = "me";
   }
   bindMessagesViewportHeight();
-  refreshStateFromStorage();
-  sanitizePresenceStateReferences();
-  persistPresenceState();
-  persistConversations();
-  renderMessagesPage();
   attachEvents();
-  if (launchView === "memory") {
-    setMemoryViewerOpen(true);
-  }
-  notifyEmbeddedReady();
+  renderMessagesPage();
+  window.setTimeout(() => {
+    try {
+      refreshStateFromStorage();
+      sanitizePresenceStateReferences();
+      persistPresenceState();
+      persistConversations();
+      initAutoScheduleClock();
+      renderMessagesPage();
+      if (launchView === "memory") {
+        setMemoryViewerOpen(true);
+      }
+    } catch (error) {
+      console.error("[Pulse Messages] Init hydration failed:", error);
+      setMessagesStatus(`Chat 初始化失败：${error?.message || "未知错误"}`, "error");
+      try {
+        renderMessagesPage();
+      } catch (_renderError) {
+      }
+    } finally {
+      notifyEmbeddedReady();
+    }
+  }, 0);
 }
 
 init();

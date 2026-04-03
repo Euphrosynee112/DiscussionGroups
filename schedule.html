@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <title>Pulse Generator · 日程</title>
-    <link rel="stylesheet" href="./schedule.css?v=20260403-122055" />
+    <link rel="stylesheet" href="./schedule.css?v=20260403-163443" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -50,6 +50,23 @@
                   stroke="currentColor"
                   stroke-width="1.9"
                   stroke-linecap="round"
+                />
+              </svg>
+            </button>
+            <button
+              id="schedule-clear-range-btn"
+              class="schedule-topbar__button"
+              type="button"
+              aria-label="按时间范围清除日程"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M8.2 7.6h7.6m-6.7 0 .4-1.4A1.3 1.3 0 0 1 10.8 5h2.4a1.3 1.3 0 0 1 1.25 1.2l.35 1.4m-8.3 0h10.8m-9.7 0 .65 9.25a2 2 0 0 0 2 1.86h3.5a2 2 0 0 0 2-1.86l.65-9.25M10.2 10.4v5.2M13.8 10.4v5.2"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
                 />
               </svg>
             </button>
@@ -260,10 +277,82 @@
       </div>
     </section>
 
-    <script src="./privacy-allowlist.js?v=20260403-122055"></script>
-    <script src="./pulse-privacy-cover.js?v=20260403-122055"></script>
-    <script src="./pulse-message-banner.js?v=20260403-122055"></script>
-    <script src="./api-log.js?v=20260403-122055"></script>
-    <script src="./schedule.js?v=20260403-122055"></script>
+    <section id="schedule-clear-modal" class="schedule-modal" hidden aria-hidden="true">
+      <div class="schedule-modal__backdrop"></div>
+      <div class="schedule-modal__panel" role="dialog" aria-modal="true" aria-label="清除日程">
+        <div class="schedule-modal__head">
+          <strong>清除某段时间内的日程</strong>
+          <button id="schedule-clear-close-btn" class="schedule-modal__close" type="button" aria-label="关闭">
+            ×
+          </button>
+        </div>
+
+        <form id="schedule-clear-form" class="schedule-editor">
+          <label class="schedule-field">
+            <span>清除对象</span>
+            <select id="schedule-clear-actor-select"></select>
+            <small class="schedule-field__hint">
+              只会清除该对象在所选时间段内参与的行程；若只是同行人，则仅移除该同行关联。
+            </small>
+          </label>
+
+          <section class="schedule-field schedule-field--group">
+            <div class="schedule-field__head">
+              <span>快捷预设</span>
+            </div>
+            <div class="schedule-filter-toolbar">
+              <button id="schedule-clear-preset-today-btn" class="schedule-filter-chip" type="button">
+                今天
+              </button>
+              <button id="schedule-clear-preset-week-btn" class="schedule-filter-chip" type="button">
+                本周
+              </button>
+              <button id="schedule-clear-preset-month-btn" class="schedule-filter-chip" type="button">
+                本月
+              </button>
+            </div>
+          </section>
+
+          <div class="schedule-time-grid">
+            <label class="schedule-field">
+              <span>开始日期</span>
+              <input id="schedule-clear-start-date-input" type="date" />
+            </label>
+            <label class="schedule-field">
+              <span>开始时间</span>
+              <input id="schedule-clear-start-time-input" type="time" />
+            </label>
+          </div>
+
+          <div class="schedule-time-grid">
+            <label class="schedule-field">
+              <span>结束日期</span>
+              <input id="schedule-clear-end-date-input" type="date" />
+            </label>
+            <label class="schedule-field">
+              <span>结束时间</span>
+              <input id="schedule-clear-end-time-input" type="time" />
+            </label>
+          </div>
+
+          <p id="schedule-clear-status" class="schedule-editor-status" aria-live="polite"></p>
+
+          <div class="schedule-modal__actions">
+            <button id="schedule-clear-cancel-btn" class="schedule-modal__button schedule-modal__button--ghost" type="button">
+              取消
+            </button>
+            <button class="schedule-modal__button schedule-modal__button--danger" type="submit">
+              一键清除
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <script src="./privacy-allowlist.js?v=20260403-163443"></script>
+    <script src="./pulse-privacy-cover.js?v=20260403-163443"></script>
+    <script src="./pulse-message-banner.js?v=20260403-163443"></script>
+    <script src="./api-log.js?v=20260403-163443"></script>
+    <script src="./schedule.js?v=20260403-163443"></script>
   </body>
 </html>

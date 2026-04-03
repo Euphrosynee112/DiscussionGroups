@@ -2,8 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260403-122055";
-const APP_BUILD_UPDATED_AT = "2026-04-03 12:20:55";
+const APP_BUILD_VERSION = "20260403-163443";
+const APP_BUILD_UPDATED_AT = "2026-04-03 20:45:32";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -19,10 +19,14 @@ const MESSAGE_PRESENCE_STATE_KEY = "x_style_generator_presence_state_v1";
 const PRIVACY_ALLOWLIST_META_KEY = "x_style_generator_privacy_allowlist_meta_v1";
 const PRIVACY_PENDING_SCAN_KEY = "x_style_generator_privacy_scan_pending_v1";
 const PRIVACY_ALLOWLIST_TERMS_KEY = "x_style_generator_privacy_allowlist_terms_v1";
+const PRIVACY_IGNORELIST_TERMS_KEY = "x_style_generator_privacy_ignorelist_terms_v1";
 const DEFAULT_AUTO_SCHEDULE_DAYS = 3;
 const API_CONFIG_LIMIT = 12;
 const CONFIG_EXPORT_SCHEMA = "pulse-generator-config";
 const TRANSFER_FORUM_BASE_ITEM_ID = "__forum_base__";
+const TRANSFER_CONTACT_CHAT_HISTORY_PREFIX = "__contact_chat_history__:";
+const TRANSFER_SCHEDULE_USER_ITEM_ID = "__schedule_owner__user";
+const TRANSFER_SCHEDULE_CONTACT_ITEM_PREFIX = "__schedule_owner__contact:";
 
 const homeSceneEl = document.querySelector(".home-scene");
 const phoneDateEl = document.querySelector("#phone-date");
@@ -75,6 +79,10 @@ const privacyAppCloseBtn = document.querySelector("#privacy-app-close-btn");
 const privacyAppAddBtn = document.querySelector("#privacy-app-add-btn");
 const privacyAppWhitelistSummaryEl = document.querySelector("#privacy-app-whitelist-summary");
 const privacyAppWhitelistListEl = document.querySelector("#privacy-app-whitelist-list");
+const privacyAppIgnoreSummaryEl = document.querySelector("#privacy-app-ignore-summary");
+const privacyAppIgnoreListEl = document.querySelector("#privacy-app-ignore-list");
+const privacyAppRecentSummaryEl = document.querySelector("#privacy-app-recent-summary");
+const privacyAppRecentListEl = document.querySelector("#privacy-app-recent-list");
 const privacyAppPendingSummaryEl = document.querySelector("#privacy-app-pending-summary");
 const privacyAppPendingListEl = document.querySelector("#privacy-app-pending-list");
 const privacyAppPendingSelectAllBtn = document.querySelector("#privacy-app-pending-select-all-btn");
@@ -128,6 +136,8 @@ const homeState = {
   pendingImportTransferPayload: null,
   importTransferSelection: [],
   privacyAllowlistItems: [],
+  privacyIgnorelistItems: [],
+  privacyRecentHitItems: [],
   privacyPendingCandidates: [],
   privacyAddModalOpen: false
 };
@@ -596,7 +606,16 @@ function pickConversationChatSettingsPayload(conversation = {}) {
     sceneMode: String(source.sceneMode || "").trim() === "offline" ? "offline" : "online",
     allowAiPresenceUpdate: Boolean(source.allowAiPresenceUpdate),
     allowAiAutoSchedule: Boolean(source.allowAiAutoSchedule),
-    autoScheduleDays: normalizeAutoScheduleDays(source.autoScheduleDays, DEFAULT_AUTO_SCHEDULE_DAYS)
+    autoScheduleDays: normalizeAutoScheduleDays(source.autoScheduleDays, DEFAULT_AUTO_SCHEDULE_DAYS),
+    autoScheduleTime:
+      /^\d{2}:\d{2}$/.test(String(source.autoScheduleTime || "").trim())
+        ? String(source.autoScheduleTime || "").trim()
+        : "",
+    autoScheduleLastRunDate: /^\d{4}-\d{2}-\d{2}$/.test(
+      String(source.autoScheduleLastRunDate || "").trim()
+    )
+      ? String(source.autoScheduleLastRunDate || "").trim()
+      : ""
   };
 }
 
@@ -638,7 +657,16 @@ function mergeConversationChatSettings(existingThreads = [], incomingItems = [],
         autoScheduleDays: normalizeAutoScheduleDays(
           item.autoScheduleDays,
           nextThreads[existingIndex].autoScheduleDays || DEFAULT_AUTO_SCHEDULE_DAYS
+        ),
+        autoScheduleTime:
+          /^\d{2}:\d{2}$/.test(String(item.autoScheduleTime || "").trim())
+            ? String(item.autoScheduleTime || "").trim()
+            : String(nextThreads[existingIndex].autoScheduleTime || "").trim(),
+        autoScheduleLastRunDate: /^\d{4}-\d{2}-\d{2}$/.test(
+          String(item.autoScheduleLastRunDate || "").trim()
         )
+          ? String(item.autoScheduleLastRunDate || "").trim()
+          : String(nextThreads[existingIndex].autoScheduleLastRunDate || "").trim()
       };
       return;
     }
@@ -658,12 +686,129 @@ function mergeConversationChatSettings(existingThreads = [], incomingItems = [],
         item.autoScheduleDays,
         DEFAULT_AUTO_SCHEDULE_DAYS
       ),
+      autoScheduleTime:
+        /^\d{2}:\d{2}$/.test(String(item.autoScheduleTime || "").trim())
+          ? String(item.autoScheduleTime || "").trim()
+          : "",
+      autoScheduleLastRunDate: /^\d{4}-\d{2}-\d{2}$/.test(
+        String(item.autoScheduleLastRunDate || "").trim()
+      )
+        ? String(item.autoScheduleLastRunDate || "").trim()
+        : "",
       messages: [],
       awarenessCounter: 0,
       memorySummaryCounter: 0,
       memorySummaryLastMessageCount: 0,
       updatedAt: Date.now()
     });
+  });
+
+  return nextThreads;
+}
+
+function normalizeConversationThreadPayloadItems(items = []) {
+  return normalizeObjectArray(items)
+    .map((item) => {
+      const source = item && typeof item === "object" ? item : {};
+      const contactId = String(source.contactId || "").trim();
+      if (!contactId) {
+        return null;
+      }
+      return {
+        ...source,
+        contactId,
+        id: String(source.id || "").trim(),
+        messages: Array.isArray(source.messages) ? source.messages.map((message) => ({ ...message })) : []
+      };
+    })
+    .filter(Boolean);
+}
+
+function mergeConversationThreads(existingThreads = [], incomingThreads = [], contacts = []) {
+  const contactMap = new Map(
+    normalizeObjectArray(contacts).map((contact) => [String(contact.id || "").trim(), contact])
+  );
+  const nextThreads = normalizeObjectArray(existingThreads).map((thread) => ({
+    ...thread,
+    messages: Array.isArray(thread.messages) ? thread.messages.map((message) => ({ ...message })) : []
+  }));
+
+  normalizeConversationThreadPayloadItems(incomingThreads).forEach((incomingThread, index) => {
+    const contactId = String(incomingThread.contactId || "").trim();
+    const existingIndex = nextThreads.findIndex(
+      (thread) => String(thread.contactId || "").trim() === contactId
+    );
+    const contact = contactMap.get(contactId) || {};
+    if (existingIndex < 0) {
+      nextThreads.push({
+        ...incomingThread,
+        id:
+          String(incomingThread.id || "").trim() ||
+          `conversation_imported_${Date.now()}_${index}_${contactId}`,
+        contactNameSnapshot:
+          String(incomingThread.contactNameSnapshot || contact.name || "").trim(),
+        contactAvatarImageSnapshot:
+          String(incomingThread.contactAvatarImageSnapshot || contact.avatarImage || "").trim(),
+        contactAvatarTextSnapshot: String(
+          incomingThread.contactAvatarTextSnapshot ||
+            contact.avatarText ||
+            buildContactAvatarTextFallback(contact)
+        ).trim(),
+        messages: Array.isArray(incomingThread.messages)
+          ? incomingThread.messages.map((message) => ({ ...message }))
+          : []
+      });
+      return;
+    }
+
+    const current = nextThreads[existingIndex];
+    const mergedMessages = Array.isArray(current.messages) ? current.messages.map((message) => ({ ...message })) : [];
+    normalizeObjectArray(incomingThread.messages).forEach((message) => {
+      const messageId = String(message.id || "").trim();
+      if (!messageId) {
+        mergedMessages.push({ ...message });
+        return;
+      }
+      const messageIndex = mergedMessages.findIndex(
+        (currentMessage) => String(currentMessage.id || "").trim() === messageId
+      );
+      if (messageIndex >= 0) {
+        mergedMessages[messageIndex] = {
+          ...mergedMessages[messageIndex],
+          ...message
+        };
+      } else {
+        mergedMessages.push({ ...message });
+      }
+    });
+    mergedMessages.sort(
+      (left, right) =>
+        (Number(left.createdAt) || 0) - (Number(right.createdAt) || 0) ||
+        String(left.id || "").localeCompare(String(right.id || ""))
+    );
+
+    nextThreads[existingIndex] = {
+      ...current,
+      ...incomingThread,
+      id: String(current.id || incomingThread.id || "").trim() || current.id,
+      contactId,
+      contactNameSnapshot:
+        String(incomingThread.contactNameSnapshot || current.contactNameSnapshot || contact.name || "").trim(),
+      contactAvatarImageSnapshot: String(
+        incomingThread.contactAvatarImageSnapshot ||
+          current.contactAvatarImageSnapshot ||
+          contact.avatarImage ||
+          ""
+      ).trim(),
+      contactAvatarTextSnapshot: String(
+        incomingThread.contactAvatarTextSnapshot ||
+          current.contactAvatarTextSnapshot ||
+          contact.avatarText ||
+          buildContactAvatarTextFallback(contact)
+      ).trim(),
+      messages: mergedMessages,
+      updatedAt: Math.max(Number(current.updatedAt) || 0, Number(incomingThread.updatedAt) || 0) || Date.now()
+    };
   });
 
   return nextThreads;
@@ -717,6 +862,122 @@ function hasPresenceTransferStateData(value = {}) {
     Object.values(normalized.userByContact).some((entry) => hasPresenceTransferEntryData(entry)) ||
     Object.values(normalized.contacts).some((entry) => hasPresenceTransferEntryData(entry))
   );
+}
+
+function buildScheduleActorTransferItems(entries = [], contacts = []) {
+  const normalizedEntries = normalizeObjectArray(entries).filter(
+    (entry) => String(entry.title || "").trim() && String(entry.date || "").trim()
+  );
+  const contactMap = new Map(
+    normalizeObjectArray(contacts).map((contact) => [String(contact.id || "").trim(), contact])
+  );
+  const groupMap = new Map();
+
+  const ensureGroup = (groupId, label, descriptionPrefix = "") => {
+    if (!groupMap.has(groupId)) {
+      groupMap.set(groupId, {
+        id: groupId,
+        label,
+        descriptionPrefix,
+        checked: true,
+        scheduleIds: [],
+        latestDate: ""
+      });
+    }
+    return groupMap.get(groupId);
+  };
+
+  normalizedEntries.forEach((entry) => {
+    const entryId = String(entry.id || "").trim();
+    const dateText = String(entry.date || "").trim();
+    const attachToGroup = (groupId, label, descriptionPrefix = "") => {
+      if (!entryId || !groupId) {
+        return;
+      }
+      const group = ensureGroup(groupId, label, descriptionPrefix);
+      if (!group.scheduleIds.includes(entryId)) {
+        group.scheduleIds.push(entryId);
+      }
+      if (!group.latestDate || group.latestDate < dateText) {
+        group.latestDate = dateText;
+      }
+    };
+
+    if (String(entry.ownerType || "").trim() === "contact") {
+      const ownerId = String(entry.ownerId || "").trim();
+      if (ownerId) {
+        const contact = contactMap.get(ownerId);
+        attachToGroup(
+          `${TRANSFER_SCHEDULE_CONTACT_ITEM_PREFIX}${ownerId}`,
+          contact?.name || "角色",
+          "角色相关日程"
+        );
+      }
+    } else {
+      attachToGroup(TRANSFER_SCHEDULE_USER_ITEM_ID, "用户", "用户相关日程");
+    }
+
+    if (Boolean(entry.companionIncludesUser)) {
+      attachToGroup(TRANSFER_SCHEDULE_USER_ITEM_ID, "用户", "用户相关日程");
+    }
+
+    (Array.isArray(entry.companionContactIds) ? entry.companionContactIds : []).forEach((contactIdValue) => {
+      const contactId = String(contactIdValue || "").trim();
+      if (!contactId) {
+        return;
+      }
+      const contact = contactMap.get(contactId);
+      attachToGroup(
+        `${TRANSFER_SCHEDULE_CONTACT_ITEM_PREFIX}${contactId}`,
+        contact?.name || "角色",
+        "角色相关日程"
+      );
+    });
+  });
+
+  return [...groupMap.values()]
+    .map((item) => ({
+      id: item.id,
+      label: item.label,
+      description: `${item.descriptionPrefix} · ${item.scheduleIds.length} 条${
+        item.latestDate ? ` · 最近 ${item.latestDate}` : ""
+      }`,
+      checked: true,
+      scheduleIds: item.scheduleIds.slice()
+    }))
+    .sort((left, right) => {
+      if (left.id === TRANSFER_SCHEDULE_USER_ITEM_ID) {
+        return -1;
+      }
+      if (right.id === TRANSFER_SCHEDULE_USER_ITEM_ID) {
+        return 1;
+      }
+      return String(left.label || "").localeCompare(String(right.label || ""), "zh-CN");
+    });
+}
+
+function getTransferLeafStats(section = {}) {
+  const items = Array.isArray(section.items) ? section.items : [];
+  let total = 0;
+  let checked = 0;
+  items.forEach((item) => {
+    total += 1;
+    if (item.checked) {
+      checked += 1;
+    }
+    normalizeObjectArray(item.children).forEach((child) => {
+      total += 1;
+      if (child.checked) {
+        checked += 1;
+      }
+    });
+  });
+  return { total, checked };
+}
+
+function syncTransferSectionChecked(section = {}) {
+  const { checked } = getTransferLeafStats(section);
+  section.checked = checked > 0;
 }
 
 function sanitizePresenceTransferStateForPlaces(value = {}, commonPlaces = []) {
@@ -814,7 +1075,8 @@ function buildTransferPayloadFromCurrentState() {
       )
     },
     contacts: {
-      contacts: normalizeObjectArray(contacts).filter((item) => String(item.name || "").trim())
+      contacts: normalizeObjectArray(contacts).filter((item) => String(item.name || "").trim()),
+      chatThreads: normalizeConversationThreadPayloadItems(messageThreads)
     },
     schedules: {
       entries: normalizeObjectArray(scheduleEntries).filter(
@@ -900,6 +1162,41 @@ function normalizePrivacyAllowlistItemSource(value) {
   return value === "scan" ? "scan" : "manual";
 }
 
+function getPrivacyLogSourceLabel(source = "") {
+  if (source === "discussion") {
+    return "论坛";
+  }
+  if (source === "bubble") {
+    return "Bubble";
+  }
+  if (source === "messages") {
+    return "Message";
+  }
+  if (source === "raising") {
+    return "养崽";
+  }
+  return String(source || "未知").trim() || "未知";
+}
+
+function getPrivacyLogActionLabel(action = "") {
+  const map = {
+    generate_posts: "生成帖子",
+    generate_replies: "生成回复",
+    translate_post: "翻译帖子",
+    translate_reply: "翻译回复",
+    chat_reply: "聊天回复",
+    chat_reply_regenerate: "重回回复",
+    chat_memory_summary: "记忆总结",
+    chat_auto_schedule_generate: "自动生成行程",
+    journal_entry: "日记生成",
+    fan_reply_generate: "粉丝回复生成",
+    fan_reply_translate: "粉丝回复翻译",
+    kid_archive_generate: "成长档案生成",
+    schedule_invite: "日程邀请"
+  };
+  return map[action] || String(action || "请求").trim() || "请求";
+}
+
 function buildPrivacyItemId(value, prefix = "privacy_item") {
   const text = String(value || "").trim();
   return `${prefix}_${hashText(text || `${prefix}_${Date.now()}`)}`;
@@ -950,6 +1247,102 @@ function persistStoredPrivacyAllowlistTerms(terms = []) {
     PRIVACY_ALLOWLIST_TERMS_KEY,
     JSON.stringify(normalizePrivacyAllowlist(terms))
   );
+}
+
+function loadStoredPrivacyIgnorelistTerms() {
+  return normalizePrivacyAllowlist(readStoredJson(PRIVACY_IGNORELIST_TERMS_KEY, []));
+}
+
+function persistStoredPrivacyIgnorelistTerms(terms = []) {
+  safeSetItem(
+    PRIVACY_IGNORELIST_TERMS_KEY,
+    JSON.stringify(normalizePrivacyAllowlist(terms))
+  );
+}
+
+function normalizePrivacyIgnorelistItems(items = []) {
+  const unique = new Set();
+  return normalizeObjectArray(items)
+    .map((item) => ({
+      id: String(item.id || buildPrivacyItemId(item.text || "", "privacy_ignore")).trim(),
+      text: String(item.text || "").trim()
+    }))
+    .filter((item) => {
+      if (!item.text || unique.has(item.text)) {
+        return false;
+      }
+      unique.add(item.text);
+      return true;
+    });
+}
+
+function loadPrivacyIgnorelistItems() {
+  return loadStoredPrivacyIgnorelistTerms().map((text) => ({
+    id: buildPrivacyItemId(text, "privacy_ignore"),
+    text
+  }));
+}
+
+function persistPrivacyIgnorelistItems(items = []) {
+  const normalizedItems = normalizePrivacyIgnorelistItems(items);
+  persistStoredPrivacyIgnorelistTerms(normalizedItems.map((item) => item.text));
+  homeState.privacyIgnorelistItems = normalizedItems;
+  persistPrivacyPendingCandidates(
+    homeState.privacyPendingCandidates,
+    homeState.privacyAllowlistItems.map((item) => item.text),
+    normalizedItems.map((item) => item.text)
+  );
+}
+
+function normalizePrivacyRecentHitItems(items = []) {
+  const unique = new Set();
+  return normalizeObjectArray(items)
+    .map((item, index) => ({
+      id: String(item.id || buildPrivacyItemId(`${item.text || ""}_${index}`, "privacy_recent")).trim(),
+      text: String(item.text || "").trim(),
+      placeholder: String(item.placeholder || "").trim(),
+      category: String(item.category || "TERM").trim() || "TERM",
+      source: String(item.source || "").trim() || "未记录",
+      createdAt: Number(item.createdAt) || 0,
+      logId: String(item.logId || "").trim()
+    }))
+    .filter((item) => {
+      if (!item.text || unique.has(item.text)) {
+        return false;
+      }
+      unique.add(item.text);
+      return true;
+    });
+}
+
+function loadRecentPrivacyHitItems(limit = 80) {
+  const logs = window.PulseApiLog?.read ? window.PulseApiLog.read() : [];
+  const result = [];
+  logs
+    .slice()
+    .reverse()
+    .forEach((entry) => {
+      const session = window.PulseApiLog?.getPrivacySession
+        ? window.PulseApiLog.getPrivacySession(entry.id)
+        : null;
+      const replacements = Array.isArray(session?.replacements) ? session.replacements : [];
+      replacements.forEach((replacement, index) => {
+        const text = String(replacement?.raw || "").trim();
+        if (!text) {
+          return;
+        }
+        result.push({
+          id: buildPrivacyItemId(`${entry.id}_${replacement.placeholder || text}_${index}`, "privacy_recent"),
+          text,
+          placeholder: String(replacement?.placeholder || "").trim(),
+          category: String(replacement?.category || "TERM").trim() || "TERM",
+          source: `${getPrivacyLogSourceLabel(entry.source)} · ${getPrivacyLogActionLabel(entry.action)}`,
+          createdAt: Number(entry.createdAt) || 0,
+          logId: String(entry.id || "").trim()
+        });
+      });
+    });
+  return normalizePrivacyRecentHitItems(result).slice(0, limit);
 }
 
 function loadPrivacyAllowlistMetaItems() {
@@ -1004,13 +1397,14 @@ function normalizePrivacyAllowlistItems(items = []) {
   return result;
 }
 
-function normalizePrivacyPendingCandidates(candidates = [], allowlistTerms = []) {
+function normalizePrivacyPendingCandidates(candidates = [], allowlistTerms = [], ignorelistTerms = []) {
   const allowlist = new Set(normalizePrivacyAllowlist(allowlistTerms));
+  const ignorelist = new Set(normalizePrivacyAllowlist(ignorelistTerms));
   const merged = [];
   const indexMap = new Map();
   normalizeObjectArray(candidates).forEach((item, index) => {
     const text = String(item.text || "").trim();
-    if (!text || allowlist.has(text)) {
+    if (!text || allowlist.has(text) || ignorelist.has(text)) {
       return;
     }
     const normalized = {
@@ -1039,15 +1433,16 @@ function normalizePrivacyPendingCandidates(candidates = [], allowlistTerms = [])
   return merged;
 }
 
-function loadPrivacyPendingCandidates(allowlistTerms = []) {
+function loadPrivacyPendingCandidates(allowlistTerms = [], ignorelistTerms = []) {
   return normalizePrivacyPendingCandidates(
     readStoredJson(PRIVACY_PENDING_SCAN_KEY, []),
-    allowlistTerms
+    allowlistTerms,
+    ignorelistTerms
   );
 }
 
-function persistPrivacyPendingCandidates(candidates = [], allowlistTerms = []) {
-  const normalized = normalizePrivacyPendingCandidates(candidates, allowlistTerms);
+function persistPrivacyPendingCandidates(candidates = [], allowlistTerms = [], ignorelistTerms = []) {
+  const normalized = normalizePrivacyPendingCandidates(candidates, allowlistTerms, ignorelistTerms);
   safeSetItem(PRIVACY_PENDING_SCAN_KEY, JSON.stringify(normalized));
   homeState.privacyPendingCandidates = normalized;
 }
@@ -1070,7 +1465,8 @@ function persistPrivacyAllowlistItems(items = []) {
   homeState.privacyAllowlistItems = normalizedItems;
   persistPrivacyPendingCandidates(
     homeState.privacyPendingCandidates,
-    normalizedItems.map((item) => item.text)
+    normalizedItems.map((item) => item.text),
+    homeState.privacyIgnorelistItems.map((item) => item.text)
   );
 }
 
@@ -1153,6 +1549,7 @@ function summarizePrivacyCandidateSources(sources = []) {
 
 function buildPrivacyScanCandidates(texts = []) {
   const allowlistTerms = homeState.privacyAllowlistItems.map((item) => item.text);
+  const ignorelistTerms = homeState.privacyIgnorelistItems.map((item) => item.text);
   const pendingTerms = new Set(homeState.privacyPendingCandidates.map((item) => item.text));
   const scannedEntries = window.PulsePrivacyCover?.scanTerms
     ? window.PulsePrivacyCover.scanTerms(texts)
@@ -1164,6 +1561,7 @@ function buildPrivacyScanCandidates(texts = []) {
         return (
           text &&
           !allowlistTerms.includes(text) &&
+          !ignorelistTerms.includes(text) &&
           !pendingTerms.has(text)
         );
       })
@@ -1248,6 +1646,141 @@ function renderPrivacyAllowlistItems() {
   renderPrivacyAllowlistSummary();
 }
 
+function renderPrivacyIgnorelistSummary() {
+  if (!privacyAppIgnoreSummaryEl) {
+    return;
+  }
+  const items = homeState.privacyIgnorelistItems;
+  privacyAppIgnoreSummaryEl.textContent = items.length
+    ? `当前有 ${items.length} 个自动屏蔽排除词；这些词之后不会再被自动隐私覆盖。`
+    : "当前还没有自动屏蔽排除词。若最近命中里有误伤词，可直接加入这里。";
+}
+
+function renderPrivacyIgnorelistItems() {
+  if (!privacyAppIgnoreListEl) {
+    return;
+  }
+  const items = homeState.privacyIgnorelistItems;
+  if (!items.length) {
+    privacyAppIgnoreListEl.innerHTML =
+      '<div class="privacy-app__empty">当前还没有自动屏蔽排除词。</div>';
+    renderPrivacyIgnorelistSummary();
+    return;
+  }
+
+  privacyAppIgnoreListEl.innerHTML = items
+    .map(
+      (item) => `
+        <section class="home-transfer-group privacy-app-item">
+          <div class="privacy-app-item__head">
+            <div class="privacy-app-item__meta">
+              <span class="home-badge">排除</span>
+            </div>
+            <button
+              class="home-chip home-chip--danger"
+              type="button"
+              data-action="remove-privacy-ignore-item"
+              data-item-id="${escapeHtml(item.id)}"
+            >
+              删除
+            </button>
+          </div>
+          <div class="privacy-app-item__editor">
+            <input
+              class="privacy-app-item__input"
+              type="text"
+              value="${escapeHtml(item.text)}"
+              data-role="privacy-ignore-text"
+              data-item-id="${escapeHtml(item.id)}"
+              placeholder="输入排除词"
+            />
+            <p class="privacy-app-item__hint">加入这里后，这个词不会再被自动隐私覆盖。</p>
+          </div>
+        </section>
+      `
+    )
+    .join("");
+  renderPrivacyIgnorelistSummary();
+}
+
+function renderPrivacyRecentSummary() {
+  if (!privacyAppRecentSummaryEl) {
+    return;
+  }
+  const total = homeState.privacyRecentHitItems.length;
+  privacyAppRecentSummaryEl.textContent = total
+    ? `最近命中了 ${total} 个真实屏蔽词；你可以直接改名后加入白名单，或加入排除避免误伤。`
+    : "当前还没有最近实际屏蔽词记录；先触发一次 API 请求再回来查看。";
+}
+
+function renderPrivacyRecentHitItems() {
+  if (!privacyAppRecentListEl) {
+    return;
+  }
+  const allowlistSet = new Set(homeState.privacyAllowlistItems.map((item) => item.text));
+  const ignorelistSet = new Set(homeState.privacyIgnorelistItems.map((item) => item.text));
+  const items = homeState.privacyRecentHitItems;
+  if (!items.length) {
+    privacyAppRecentListEl.innerHTML =
+      '<div class="privacy-app__empty">当前还没有最近实际屏蔽词记录。</div>';
+    renderPrivacyRecentSummary();
+    return;
+  }
+
+  privacyAppRecentListEl.innerHTML = items
+    .map((item) => {
+      const text = String(item.text || "").trim();
+      const inAllowlist = allowlistSet.has(text);
+      const inIgnorelist = ignorelistSet.has(text);
+      return `
+        <section class="home-transfer-group privacy-app-item">
+          <div class="privacy-app-item__head">
+            <div class="home-transfer-group__meta">
+              <span>${escapeHtml(item.placeholder || text)}</span>
+              <span class="home-transfer-group__desc">${escapeHtml(item.source || "未记录")}</span>
+            </div>
+            <div class="privacy-app-item__actions">
+              <button
+                class="home-chip"
+                type="button"
+                data-action="add-recent-hit-to-allowlist"
+                data-item-id="${escapeHtml(item.id)}"
+                ${inAllowlist ? "disabled" : ""}
+              >
+                ${inAllowlist ? "已在白名单" : "加入白名单"}
+              </button>
+              <button
+                class="home-chip"
+                type="button"
+                data-action="add-recent-hit-to-ignorelist"
+                data-item-id="${escapeHtml(item.id)}"
+                ${inIgnorelist ? "disabled" : ""}
+              >
+                ${inIgnorelist ? "已排除" : "加入排除"}
+              </button>
+            </div>
+          </div>
+          <div class="privacy-app-item__editor">
+            <input
+              class="privacy-app-item__input"
+              type="text"
+              value="${escapeHtml(text)}"
+              data-role="privacy-recent-text"
+              data-item-id="${escapeHtml(item.id)}"
+              placeholder="可直接编辑最近命中的词"
+            />
+            <div class="privacy-app-item__meta">
+              <span class="home-badge">${escapeHtml(item.category)}</span>
+              <span class="home-field-hint">${escapeHtml(item.placeholder || "未记录占位符")}</span>
+            </div>
+          </div>
+        </section>
+      `;
+    })
+    .join("");
+  renderPrivacyRecentSummary();
+}
+
 function renderPrivacyPendingSummary() {
   if (!privacyAppPendingSummaryEl) {
     return;
@@ -1323,6 +1856,8 @@ function renderPrivacyPendingCandidates() {
 
 function renderPrivacyApp() {
   renderPrivacyAllowlistItems();
+  renderPrivacyIgnorelistItems();
+  renderPrivacyRecentHitItems();
   renderPrivacyPendingCandidates();
 }
 
@@ -1396,7 +1931,8 @@ function applyPrivacyPendingCandidates() {
   );
   persistPrivacyPendingCandidates(
     homeState.privacyPendingCandidates,
-    homeState.privacyAllowlistItems.map((item) => item.text)
+    homeState.privacyAllowlistItems.map((item) => item.text),
+    homeState.privacyIgnorelistItems.map((item) => item.text)
   );
   renderPrivacyApp();
   setPrivacyAppStatus(`已确认 ${selectedCandidates.length} 个候选词，已加入白名单。`, "success");
@@ -1419,11 +1955,13 @@ function scanCurrentPrivacyAllowlistCandidates() {
 
   homeState.privacyPendingCandidates = normalizePrivacyPendingCandidates(
     [...homeState.privacyPendingCandidates, ...nextCandidates],
-    homeState.privacyAllowlistItems.map((item) => item.text)
+    homeState.privacyAllowlistItems.map((item) => item.text),
+    homeState.privacyIgnorelistItems.map((item) => item.text)
   );
   persistPrivacyPendingCandidates(
     homeState.privacyPendingCandidates,
-    homeState.privacyAllowlistItems.map((item) => item.text)
+    homeState.privacyAllowlistItems.map((item) => item.text),
+    homeState.privacyIgnorelistItems.map((item) => item.text)
   );
   renderPrivacyPendingCandidates();
 
@@ -1447,13 +1985,32 @@ function removePrivacyAllowlistItem(itemId) {
   setPrivacyAppStatus("已从白名单中删除该词条。", "success");
 }
 
+function removePrivacyIgnorelistItem(itemId) {
+  homeState.privacyIgnorelistItems = homeState.privacyIgnorelistItems.filter((item) => item.id !== itemId);
+  persistPrivacyIgnorelistItems(homeState.privacyIgnorelistItems);
+  renderPrivacyApp();
+  setPrivacyAppStatus("已从自动屏蔽排除词中删除该词条。", "success");
+}
+
+function addPrivacyIgnorelistItemsByLines(value) {
+  const nextItems = normalizePrivacyIgnorelistItems([
+    ...homeState.privacyIgnorelistItems,
+    ...normalizePrivacyAllowlist(value).map((text) => ({
+      text
+    }))
+  ]);
+  persistPrivacyIgnorelistItems(nextItems);
+  renderPrivacyApp();
+}
+
 function removePrivacyPendingItem(itemId) {
   homeState.privacyPendingCandidates = homeState.privacyPendingCandidates.filter(
     (item) => item.id !== itemId
   );
   persistPrivacyPendingCandidates(
     homeState.privacyPendingCandidates,
-    homeState.privacyAllowlistItems.map((item) => item.text)
+    homeState.privacyAllowlistItems.map((item) => item.text),
+    homeState.privacyIgnorelistItems.map((item) => item.text)
   );
   renderPrivacyPendingCandidates();
 }
@@ -1473,10 +2030,33 @@ function confirmPrivacyPendingItem(itemId) {
   addPrivacyAllowlistItemsByLines([nextText], "scan");
   persistPrivacyPendingCandidates(
     homeState.privacyPendingCandidates,
-    homeState.privacyAllowlistItems.map((item) => item.text)
+    homeState.privacyAllowlistItems.map((item) => item.text),
+    homeState.privacyIgnorelistItems.map((item) => item.text)
   );
   renderPrivacyApp();
   setPrivacyAppStatus(`已将“${nextText}”加入白名单。`, "success");
+}
+
+function addRecentPrivacyHitToAllowlist(itemId) {
+  const targetItem = homeState.privacyRecentHitItems.find((item) => item.id === itemId) || null;
+  const nextText = String(targetItem?.text || "").trim();
+  if (!nextText) {
+    setPrivacyAppStatus("这个最近命中词为空，无法加入白名单。", "error");
+    return;
+  }
+  addPrivacyAllowlistItemsByLines([nextText], "scan");
+  setPrivacyAppStatus(`已将“${nextText}”加入白名单。`, "success");
+}
+
+function addRecentPrivacyHitToIgnorelist(itemId) {
+  const targetItem = homeState.privacyRecentHitItems.find((item) => item.id === itemId) || null;
+  const nextText = String(targetItem?.text || "").trim();
+  if (!nextText) {
+    setPrivacyAppStatus("这个最近命中词为空，无法加入排除。", "error");
+    return;
+  }
+  addPrivacyIgnorelistItemsByLines([nextText]);
+  setPrivacyAppStatus(`已将“${nextText}”加入自动屏蔽排除词。`, "success");
 }
 
 function handlePrivacyAllowlistInput(event) {
@@ -1504,6 +2084,49 @@ function handlePrivacyAllowlistChange(event) {
   setPrivacyAppStatus("白名单修改已生效。", "success");
 }
 
+function handlePrivacyIgnorelistInput(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement) || target.dataset.role !== "privacy-ignore-text") {
+    return;
+  }
+  const itemId = String(target.dataset.itemId || "").trim();
+  if (!itemId) {
+    return;
+  }
+  homeState.privacyIgnorelistItems = homeState.privacyIgnorelistItems.map((item) =>
+    item.id === itemId ? { ...item, text: String(target.value || "") } : item
+  );
+  persistPrivacyIgnorelistItems(homeState.privacyIgnorelistItems);
+}
+
+function handlePrivacyIgnorelistChange(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement) || target.dataset.role !== "privacy-ignore-text") {
+    return;
+  }
+  persistPrivacyIgnorelistItems(homeState.privacyIgnorelistItems);
+  renderPrivacyApp();
+  setPrivacyAppStatus("自动屏蔽排除词修改已生效。", "success");
+}
+
+function handlePrivacyRecentHitChange(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement) || target.dataset.role !== "privacy-recent-text") {
+    return;
+  }
+  const itemId = String(target.dataset.itemId || "").trim();
+  if (!itemId) {
+    return;
+  }
+  homeState.privacyRecentHitItems = homeState.privacyRecentHitItems.map((item) =>
+    item.id === itemId ? { ...item, text: String(target.value || "") } : item
+  );
+  if (event.type === "change") {
+    renderPrivacyRecentHitItems();
+    setPrivacyAppStatus("最近实际屏蔽词修改已更新，可直接加入白名单或加入排除。", "success");
+  }
+}
+
 function handlePrivacyPendingChange(event) {
   const target = event.target;
   if (!(target instanceof HTMLInputElement)) {
@@ -1523,7 +2146,8 @@ function handlePrivacyPendingChange(event) {
     );
     persistPrivacyPendingCandidates(
       homeState.privacyPendingCandidates,
-      homeState.privacyAllowlistItems.map((item) => item.text)
+      homeState.privacyAllowlistItems.map((item) => item.text),
+      homeState.privacyIgnorelistItems.map((item) => item.text)
     );
     renderPrivacyPendingCandidates();
     return;
@@ -1535,7 +2159,8 @@ function handlePrivacyPendingChange(event) {
     );
     persistPrivacyPendingCandidates(
       homeState.privacyPendingCandidates,
-      homeState.privacyAllowlistItems.map((item) => item.text)
+      homeState.privacyAllowlistItems.map((item) => item.text),
+      homeState.privacyIgnorelistItems.map((item) => item.text)
     );
     if (event.type === "change") {
       renderPrivacyPendingCandidates();
@@ -1558,6 +2183,12 @@ function handlePrivacyAppClick(event) {
   }
   if (actionEl.dataset.action === "remove-privacy-allowlist-item") {
     removePrivacyAllowlistItem(itemId);
+  } else if (actionEl.dataset.action === "remove-privacy-ignore-item") {
+    removePrivacyIgnorelistItem(itemId);
+  } else if (actionEl.dataset.action === "add-recent-hit-to-allowlist") {
+    addRecentPrivacyHitToAllowlist(itemId);
+  } else if (actionEl.dataset.action === "add-recent-hit-to-ignorelist") {
+    addRecentPrivacyHitToIgnorelist(itemId);
   } else if (actionEl.dataset.action === "confirm-privacy-pending-item") {
     confirmPrivacyPendingItem(itemId);
   } else if (actionEl.dataset.action === "remove-privacy-pending-item") {
@@ -1568,8 +2199,11 @@ function handlePrivacyAppClick(event) {
 function initPrivacyAppState() {
   homeState.settings = loadSettings({ forceActiveConfig: false });
   homeState.privacyAllowlistItems = loadPrivacyAllowlistItems();
+  homeState.privacyIgnorelistItems = loadPrivacyIgnorelistItems();
+  homeState.privacyRecentHitItems = loadRecentPrivacyHitItems();
   homeState.privacyPendingCandidates = loadPrivacyPendingCandidates(
-    homeState.privacyAllowlistItems.map((item) => item.text)
+    homeState.privacyAllowlistItems.map((item) => item.text),
+    homeState.privacyIgnorelistItems.map((item) => item.text)
   );
 }
 
@@ -1745,9 +2379,14 @@ function buildTransferSections(payload, options = {}) {
   const contacts = normalizeObjectArray(payload?.contacts?.contacts).filter((item) =>
     String(item.name || "").trim()
   );
+  const chatThreads = normalizeConversationThreadPayloadItems(payload?.contacts?.chatThreads || []);
+  const chatThreadMap = new Map(
+    chatThreads.map((thread) => [String(thread.contactId || "").trim(), thread])
+  );
   const scheduleEntries = normalizeObjectArray(payload?.schedules?.entries).filter(
     (item) => String(item.title || "").trim() && String(item.date || "").trim()
   );
+  const scheduleActorItems = buildScheduleActorTransferItems(scheduleEntries, contacts);
   const commonPlaceEntries = normalizeObjectArray(payload?.commonPlaces?.entries).filter((item) =>
     String(item.name || "").trim()
   );
@@ -1842,37 +2481,48 @@ function buildTransferSections(payload, options = {}) {
     {
       id: "contacts",
       label: "通讯录",
-      description: "支持按联系人局部导入导出；包含头像、人设、用户特别人设与察觉设置。",
+      description: "支持按联系人导入导出；联系人下可额外勾选是否附带该角色的聊天记录。",
       checked: contacts.length > 0,
       disabled: contacts.length === 0,
-      items: contacts.map((contact) => ({
-        id: String(contact.id || "").trim(),
-        label: String(contact.name || "联系人").trim() || "联系人",
-        description: truncateText(
-          [
-            String(contact.personaPrompt || "").trim(),
-            String(contact.specialUserPersona || "").trim(),
-            String(contact.awarenessText || "").trim()
-          ]
-            .filter(Boolean)
-            .join(" · ") || "未设置人设。",
-          80
-        ),
-        checked: true
-      }))
+      items: contacts.map((contact) => {
+        const contactId = String(contact.id || "").trim();
+        const thread = chatThreadMap.get(contactId) || null;
+        const chatMessageCount = normalizeObjectArray(thread?.messages).length;
+        return {
+          id: contactId,
+          label: String(contact.name || "联系人").trim() || "联系人",
+          description: truncateText(
+            [
+              String(contact.personaPrompt || "").trim(),
+              String(contact.specialUserPersona || "").trim(),
+              String(contact.awarenessText || "").trim()
+            ]
+              .filter(Boolean)
+              .join(" · ") || "未设置人设。",
+            80
+          ),
+          checked: true,
+          children:
+            chatMessageCount > 0
+              ? [
+                  {
+                    id: `${TRANSFER_CONTACT_CHAT_HISTORY_PREFIX}${contactId}`,
+                    label: "聊天记录",
+                    description: `${chatMessageCount} 条消息`,
+                    checked: mode === "import"
+                  }
+                ]
+              : []
+        };
+      })
     },
     {
       id: "schedules",
       label: "日程",
-      description: "支持按日程局部导入导出；包含用户 / 角色日程、可见范围与同行人信息。",
-      checked: scheduleEntries.length > 0,
-      disabled: scheduleEntries.length === 0,
-      items: scheduleEntries.map((entry) => ({
-        id: String(entry.id || "").trim(),
-        label: buildScheduleTransferLabel(entry),
-        description: buildScheduleTransferDescription(entry),
-        checked: true
-      }))
+      description: "按用户 / 角色维度导入导出相关日程；会自动带出对应人的全部相关安排。",
+      checked: scheduleActorItems.length > 0,
+      disabled: scheduleActorItems.length === 0,
+      items: scheduleActorItems
     },
     {
       id: "commonPlaces",
@@ -1914,7 +2564,7 @@ function buildTransferSections(payload, options = {}) {
     {
       id: "contactChatSettings",
       label: "通讯录对应的聊天设置",
-      description: "1v1 聊天页右上角设置内的历史轮数、时间感知、热点挂载与世界书挂载。",
+      description: "1v1 聊天页右上角设置内的历史轮数、时间感知、热点挂载、世界书挂载与自动行程配置。",
       checked: Boolean(
         payload?.contactChatSettings && typeof payload.contactChatSettings === "object"
       ),
@@ -1931,13 +2581,22 @@ function buildTransferSections(payload, options = {}) {
     }
   ];
 
+  sections.forEach((section) => {
+    syncTransferSectionChecked(section);
+  });
+
   return sections.filter((section) => mode === "export" || !section.disabled);
 }
 
 function cloneTransferSections(sections = []) {
   return sections.map((section) => ({
     ...section,
-    items: Array.isArray(section.items) ? section.items.map((item) => ({ ...item })) : []
+    items: Array.isArray(section.items)
+      ? section.items.map((item) => ({
+          ...item,
+          children: normalizeObjectArray(item.children).map((child) => ({ ...child }))
+        }))
+      : []
   }));
 }
 
@@ -1951,7 +2610,14 @@ function setTransferSectionChecked(section, checked) {
   }
   section.checked = Boolean(checked);
   if (section.items.length) {
-    section.items = section.items.map((item) => ({ ...item, checked: Boolean(checked) }));
+    section.items = section.items.map((item) => ({
+      ...item,
+      checked: Boolean(checked),
+      children: normalizeObjectArray(item.children).map((child) => ({
+        ...child,
+        checked: Boolean(checked)
+      }))
+    }));
   }
 }
 
@@ -1960,10 +2626,40 @@ function toggleTransferItemSelection(selection, sectionId, itemId, checked) {
   if (!section || section.disabled) {
     return;
   }
-  section.items = section.items.map((item) =>
-    item.id === itemId ? { ...item, checked: Boolean(checked) } : item
-  );
-  section.checked = section.items.some((item) => item.checked);
+  section.items = section.items.map((item) => {
+    if (item.id !== itemId) {
+      return item;
+    }
+    return {
+      ...item,
+      checked: Boolean(checked),
+      children: normalizeObjectArray(item.children).map((child) => ({
+        ...child,
+        checked: checked ? Boolean(child.checked) : false
+      }))
+    };
+  });
+  syncTransferSectionChecked(section);
+}
+
+function toggleTransferChildSelection(selection, sectionId, itemId, childId, checked) {
+  const section = getTransferSection(selection, sectionId);
+  if (!section || section.disabled) {
+    return;
+  }
+  section.items = section.items.map((item) => {
+    if (item.id !== itemId) {
+      return item;
+    }
+    return {
+      ...item,
+      checked: item.checked || Boolean(checked),
+      children: normalizeObjectArray(item.children).map((child) =>
+        child.id === childId ? { ...child, checked: Boolean(checked) } : child
+      )
+    };
+  });
+  syncTransferSectionChecked(section);
 }
 
 function setAllTransferSections(selection, checked) {
@@ -1976,8 +2672,8 @@ function buildTransferGroupCountText(section) {
   if (!section.items.length) {
     return section.disabled ? "当前没有可选内容" : "当前项可整体导入 / 导出";
   }
-  const selectedCount = section.items.filter((item) => item.checked).length;
-  return `已选择 ${selectedCount} / ${section.items.length}`;
+  const { checked, total } = getTransferLeafStats(section);
+  return `已选择 ${checked} / ${total}`;
 }
 
 function renderTransferSelection(containerEl, selection, scope) {
@@ -2020,21 +2716,57 @@ function renderTransferSelection(containerEl, selection, scope) {
                   ${section.items
                     .map(
                       (item) => `
-                        <label class="home-transfer-item">
-                          <input
-                            type="checkbox"
-                            data-scope="${escapeHtml(scope)}"
-                            data-role="item"
-                            data-section-id="${escapeHtml(section.id)}"
-                            data-item-id="${escapeHtml(item.id)}"
-                            ${item.checked ? "checked" : ""}
-                            ${section.disabled ? "disabled" : ""}
-                          />
-                          <span class="home-transfer-item__meta">
-                            <span class="home-transfer-item__title">${escapeHtml(item.label)}</span>
-                            <span class="home-transfer-item__desc">${escapeHtml(item.description || "")}</span>
-                          </span>
-                        </label>
+                        <div class="home-transfer-item-wrap">
+                          <label class="home-transfer-item">
+                            <input
+                              type="checkbox"
+                              data-scope="${escapeHtml(scope)}"
+                              data-role="item"
+                              data-section-id="${escapeHtml(section.id)}"
+                              data-item-id="${escapeHtml(item.id)}"
+                              ${item.checked ? "checked" : ""}
+                              ${section.disabled ? "disabled" : ""}
+                            />
+                            <span class="home-transfer-item__meta">
+                              <span class="home-transfer-item__title">${escapeHtml(item.label)}</span>
+                              <span class="home-transfer-item__desc">${escapeHtml(item.description || "")}</span>
+                            </span>
+                          </label>
+                          ${
+                            normalizeObjectArray(item.children).length
+                              ? `
+                                <div class="home-transfer-subitems">
+                                  ${normalizeObjectArray(item.children)
+                                    .map(
+                                      (child) => `
+                                        <label class="home-transfer-subitem${
+                                          !item.checked ? " is-disabled" : ""
+                                        }">
+                                          <input
+                                            type="checkbox"
+                                            data-scope="${escapeHtml(scope)}"
+                                            data-role="item-child"
+                                            data-section-id="${escapeHtml(section.id)}"
+                                            data-item-id="${escapeHtml(item.id)}"
+                                            data-child-id="${escapeHtml(child.id)}"
+                                            ${child.checked ? "checked" : ""}
+                                            ${section.disabled || !item.checked ? "disabled" : ""}
+                                          />
+                                          <span class="home-transfer-item__meta">
+                                            <span class="home-transfer-item__title">${escapeHtml(child.label)}</span>
+                                            <span class="home-transfer-item__desc">${escapeHtml(
+                                              child.description || ""
+                                            )}</span>
+                                          </span>
+                                        </label>
+                                      `
+                                    )
+                                    .join("")}
+                                </div>
+                              `
+                              : ""
+                          }
+                        </div>
                       `
                     )
                     .join("")}
@@ -2057,8 +2789,8 @@ function renderTransferSelection(containerEl, selection, scope) {
     if (!(input instanceof HTMLInputElement)) {
       return;
     }
-    const checkedCount = section.items.filter((item) => item.checked).length;
-    input.indeterminate = checkedCount > 0 && checkedCount < section.items.length;
+    const { checked, total } = getTransferLeafStats(section);
+    input.indeterminate = checked > 0 && checked < total;
   });
 }
 
@@ -2081,7 +2813,8 @@ function renderHomeExportReviewSummary() {
     if (!section.items.length) {
       return total + 1;
     }
-    return total + section.items.filter((item) => item.checked).length;
+    const stats = getTransferLeafStats(section);
+    return total + stats.checked;
   }, 0);
   homeExportReviewSummaryEl.textContent = `已选择 ${sectionCount} 个分组、${itemCount} 项内容；确认后将写入本次导出的 JSON。`;
 }
@@ -2195,19 +2928,39 @@ function buildSelectedTransferPayload(payload, selection) {
   const contactsSection = sectionMap.get("contacts");
   if (contactsSection?.checked && payload.contacts) {
     const selectedIds = new Set(contactsSection.items.filter((item) => item.checked).map((item) => item.id));
+    const selectedChatHistoryIds = new Set(
+      contactsSection.items
+        .filter((item) => item.checked)
+        .flatMap((item) =>
+          normalizeObjectArray(item.children)
+            .filter((child) => child.checked && String(child.id || "").startsWith(TRANSFER_CONTACT_CHAT_HISTORY_PREFIX))
+            .map(() => item.id)
+        )
+    );
     selected.contacts = {
       contacts: normalizeObjectArray(payload.contacts.contacts).filter((contact) =>
         selectedIds.has(String(contact.id || "").trim())
+      ),
+      chatThreads: normalizeConversationThreadPayloadItems(payload.contacts.chatThreads || []).filter((thread) =>
+        selectedChatHistoryIds.has(String(thread.contactId || "").trim())
       )
     };
   }
 
   const schedulesSection = sectionMap.get("schedules");
   if (schedulesSection?.checked && payload.schedules) {
-    const selectedIds = new Set(schedulesSection.items.filter((item) => item.checked).map((item) => item.id));
+    const selectedScheduleIds = new Set(
+      schedulesSection.items
+        .filter((item) => item.checked)
+        .flatMap((item) =>
+          (Array.isArray(item.scheduleIds) ? item.scheduleIds : []).map((scheduleId) =>
+            String(scheduleId || "").trim()
+          )
+        )
+    );
     selected.schedules = {
       entries: normalizeObjectArray(payload.schedules.entries).filter((entry) =>
-        selectedIds.has(String(entry.id || "").trim())
+        selectedScheduleIds.has(String(entry.id || "").trim())
       )
     };
   }
@@ -2254,7 +3007,7 @@ function buildHomeConfigExportPayload(selection = homeState.exportTransferSelect
   const fullPayload = buildTransferPayloadFromCurrentState();
   return {
     schema: CONFIG_EXPORT_SCHEMA,
-    version: 8,
+    version: 9,
     exportedAt: new Date().toISOString(),
     data: buildSelectedTransferPayload(fullPayload, selection)
   };
@@ -2442,6 +3195,13 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
 
   if (imported.contacts) {
     nextContacts = mergeById(nextContacts, imported.contacts.contacts);
+    if (Array.isArray(imported.contacts.chatThreads)) {
+      nextMessageThreads = mergeConversationThreads(
+        nextMessageThreads,
+        imported.contacts.chatThreads,
+        nextContacts
+      );
+    }
   }
 
   if (imported.schedules) {
@@ -3071,6 +3831,14 @@ function handleTransferSelectionChange(event) {
     }
   } else if (role === "item") {
     toggleTransferItemSelection(selection, sectionId, String(target.dataset.itemId || ""), target.checked);
+  } else if (role === "item-child") {
+    toggleTransferChildSelection(
+      selection,
+      sectionId,
+      String(target.dataset.itemId || ""),
+      String(target.dataset.childId || ""),
+      target.checked
+    );
   }
 
   if (scope === "import") {
@@ -3266,7 +4034,8 @@ function attachHomeSettingsEvents() {
       }));
       persistPrivacyPendingCandidates(
         homeState.privacyPendingCandidates,
-        homeState.privacyAllowlistItems.map((item) => item.text)
+        homeState.privacyAllowlistItems.map((item) => item.text),
+        homeState.privacyIgnorelistItems.map((item) => item.text)
       );
       renderPrivacyPendingCandidates();
     });
@@ -3280,7 +4049,8 @@ function attachHomeSettingsEvents() {
       }));
       persistPrivacyPendingCandidates(
         homeState.privacyPendingCandidates,
-        homeState.privacyAllowlistItems.map((item) => item.text)
+        homeState.privacyAllowlistItems.map((item) => item.text),
+        homeState.privacyIgnorelistItems.map((item) => item.text)
       );
       renderPrivacyPendingCandidates();
     });
@@ -3296,6 +4066,18 @@ function attachHomeSettingsEvents() {
     privacyAppWhitelistListEl.addEventListener("input", handlePrivacyAllowlistInput);
     privacyAppWhitelistListEl.addEventListener("change", handlePrivacyAllowlistChange);
     privacyAppWhitelistListEl.addEventListener("click", handlePrivacyAppClick);
+  }
+
+  if (privacyAppIgnoreListEl) {
+    privacyAppIgnoreListEl.addEventListener("input", handlePrivacyIgnorelistInput);
+    privacyAppIgnoreListEl.addEventListener("change", handlePrivacyIgnorelistChange);
+    privacyAppIgnoreListEl.addEventListener("click", handlePrivacyAppClick);
+  }
+
+  if (privacyAppRecentListEl) {
+    privacyAppRecentListEl.addEventListener("input", handlePrivacyRecentHitChange);
+    privacyAppRecentListEl.addEventListener("change", handlePrivacyRecentHitChange);
+    privacyAppRecentListEl.addEventListener("click", handlePrivacyAppClick);
   }
 
   if (privacyAppPendingListEl) {

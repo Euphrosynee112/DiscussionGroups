@@ -719,7 +719,8 @@ button {
 }
 
 .home-transfer-group__label input,
-.home-transfer-item input {
+.home-transfer-item input,
+.home-transfer-subitem input {
   margin-top: 2px;
 }
 
@@ -742,11 +743,33 @@ button {
   padding-left: 30px;
 }
 
+.home-transfer-item-wrap {
+  display: grid;
+  gap: 8px;
+}
+
 .home-transfer-item {
   display: inline-flex;
   align-items: flex-start;
   gap: 10px;
   color: var(--text);
+}
+
+.home-transfer-subitems {
+  display: grid;
+  gap: 6px;
+  padding-left: 28px;
+}
+
+.home-transfer-subitem {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--text);
+}
+
+.home-transfer-subitem.is-disabled {
+  opacity: 0.54;
 }
 
 .home-transfer-item__meta {

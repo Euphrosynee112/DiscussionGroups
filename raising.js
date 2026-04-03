@@ -32,6 +32,36 @@ const raisingCreateOptionsEl = document.querySelector("#raising-create-options")
 function prependGlobalPromptGuard(text) {
   return String(text || "").trim();
 }
+
+function buildPromptSectionText(value, fallback = "") {
+  const text = (Array.isArray(value) ? value : [value])
+    .flatMap((item) => (Array.isArray(item) ? item : [item]))
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+  return text || String(fallback || "").trim();
+}
+
+function buildStructuredPromptSections(sections = {}) {
+  const resolvedSections = sections && typeof sections === "object" ? sections : {};
+  return prependGlobalPromptGuard(
+    [
+      `<context_library>\n${buildPromptSectionText(
+        resolvedSections.contextLibrary,
+        "暂无额外背景信息。"
+      )}\n</context_library>`,
+      `<persona_alignment>\n${buildPromptSectionText(
+        resolvedSections.personaAlignment,
+        "按当前已知身份与语境自然输出。"
+      )}\n</persona_alignment>`,
+      `<output_standard>\n${buildPromptSectionText(
+        resolvedSections.outputStandard,
+        "只输出符合要求的最终结果。"
+      )}\n</output_standard>`
+    ].join("\n\n")
+  );
+}
 const raisingCreateStatusEl = document.querySelector("#raising-create-status");
 const raisingCreateCancelBtnEl = document.querySelector("#raising-create-cancel-btn");
 const raisingCreateConfirmBtnEl = document.querySelector("#raising-create-confirm-btn");
@@ -1343,29 +1373,33 @@ function parseJsonObjectWithRepair(jsonText, errorMessage) {
 }
 
 function buildKidArchivePrompt(profile, partner, record) {
-  return prependGlobalPromptGuard([
-    "你正在为一个“养崽”文字游戏生成宝宝的成长档案。",
-    "请只输出一个 JSON 对象，不要输出额外解释，也不要用 markdown。",
-    "字段必须严格包含：appearanceRating, appearanceSummary, hobbies, habits。",
-    "appearanceRating：字符串，例如 A+、A、B+，不要超过 3 个字符。",
-    "appearanceSummary：1 段 45-90 字中文，描述这位宝宝长到幼儿期后会呈现出的颜值与整体气质。",
-    "hobbies：数组，输出 3 个兴趣爱好短语，每项不超过 10 个字。",
-    "habits：数组，输出 2 个待纠正的小毛病，每项不超过 16 个字。",
-    "请直接生成这位宝宝在 3 岁幼儿期的成长档案。",
-    "整体语气要温柔、可爱、像角色设定卡，不要写成医学描述，不要出现危险内容。",
-    `用户昵称：${profile.username}`,
-    `用户人设：${profile.personaPrompt || "温柔、细腻、会认真照顾孩子。"}`,
-    `共同抚养人：${partner.name}`,
-    `共同抚养人人设：${partner.personaPrompt || "有鲜明性格，会把自己的气质投射到孩子身上。"}`,
-    partner.specialUserPersona
-      ? `这个共同抚养人对用户的特别认知：${partner.specialUserPersona}。这部分比用户通用人设更私人、更贴近两人的相处感受，请适度提高参考权重。`
-      : "",
-    `宝宝名字：${record.childName}`,
-    `宝宝性别：${getGenderLabel(record.childGender)}`,
-    "请根据双方人设混合后的气质来推演这位宝宝的成长档案。"
-  ]
-    .filter(Boolean)
-    .join("\n\n"));
+  return buildStructuredPromptSections({
+    contextLibrary: [
+      `宝宝名字：${record.childName}`,
+      `宝宝性别：${getGenderLabel(record.childGender)}`,
+      "请直接生成这位宝宝在 3 岁幼儿期的成长档案。"
+    ],
+    personaAlignment: [
+      "你正在为一个“养崽”文字游戏生成宝宝的成长档案。",
+      `用户昵称：${profile.username}`,
+      `用户人设：${profile.personaPrompt || "温柔、细腻、会认真照顾孩子。"}`,
+      `共同抚养人：${partner.name}`,
+      `共同抚养人人设：${partner.personaPrompt || "有鲜明性格，会把自己的气质投射到孩子身上。"}`,
+      partner.specialUserPersona
+        ? `这个共同抚养人对用户的特别认知：${partner.specialUserPersona}。这部分比用户通用人设更私人、更贴近两人的相处感受，请适度提高参考权重。`
+        : "",
+      "请根据双方人设混合后的气质来推演这位宝宝的成长档案。"
+    ],
+    outputStandard: [
+      "请只输出一个 JSON 对象，不要输出额外解释，也不要用 markdown。",
+      "字段必须严格包含：appearanceRating, appearanceSummary, hobbies, habits。",
+      "appearanceRating：字符串，例如 A+、A、B+，不要超过 3 个字符。",
+      "appearanceSummary：1 段 45-90 字中文，描述这位宝宝长到幼儿期后会呈现出的颜值与整体气质。",
+      "hobbies：数组，输出 3 个兴趣爱好短语，每项不超过 10 个字。",
+      "habits：数组，输出 2 个待纠正的小毛病，每项不超过 16 个字。",
+      "整体语气要温柔、可爱、像角色设定卡，不要写成医学描述，不要出现危险内容。"
+    ]
+  });
 }
 
 async function requestKidArchive(settings, profile, partner, record) {

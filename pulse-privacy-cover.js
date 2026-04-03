@@ -4,6 +4,7 @@
   }
 
   const PRIVACY_ALLOWLIST_TERMS_KEY = "x_style_generator_privacy_allowlist_terms_v1";
+  const PRIVACY_IGNORELIST_TERMS_KEY = "x_style_generator_privacy_ignorelist_terms_v1";
   const CATEGORY_ORDER = ["NAME", "HANDLE", "ORG", "TITLE", "ADDR", "COORD", "TERM"];
   const NAME_KEYS = new Set([
     "name",
@@ -26,7 +27,7 @@
   const ORG_REGEX =
     /(?:[A-Za-z0-9\u4e00-\u9fa5·&（）()\-_\s]{2,60}(?:有限责任公司|株式会社|公司|集团|工作室|研究院|实验室|事务所|出版社|大学|学院|学校|医院|银行|资本|娱乐|传媒|影业|科技|网络|Inc\.?|Ltd\.?|LLC|Corp\.?|Company))/gi;
   const ADDRESS_REGEX =
-    /(?:[\u4e00-\u9fa5A-Za-z0-9·-]{2,24}(?:省|市|区|县|镇|乡|村|路|街|道|巷|号|栋|楼|室)[\u4e00-\u9fa5A-Za-z0-9·-]{0,24})/g;
+    /(?:[\u4e00-\u9fa5A-Za-z0-9·-]{2,24}(?:省|市|区|县|镇|乡|村|路|街|道|巷)[\u4e00-\u9fa5A-Za-z0-9·-]{0,24}|(?:\d{1,6}|[A-Za-z]?\d{1,4}[A-Za-z]?)(?:号|栋|楼|室)[\u4e00-\u9fa5A-Za-z0-9·-]{0,24})/g;
   const QUOTED_TERM_REGEX =
     /(?:“([^”\n]{1,60})”|‘([^’\n]{1,60})’|「([^」\n]{1,60})」|『([^』\n]{1,60})』|"([^"\n]{1,60})"|'([^'\n]{1,60})')/g;
   const BRACKET_TERM_REGEX =
@@ -157,7 +158,7 @@
       return "ORG";
     }
     ORG_REGEX.lastIndex = 0;
-    if (ADDRESS_REGEX.test(text) || /(?:地址|住址|定位|位置)/.test(text)) {
+    if (ADDRESS_REGEX.test(text) || /(?:地址|住址|定位|位置名称)/.test(text)) {
       ADDRESS_REGEX.lastIndex = 0;
       return "ADDR";
     }
@@ -181,11 +182,29 @@
     }
   }
 
+  function readStoredPrivacyIgnorelistTerms() {
+    try {
+      const raw = window.localStorage?.getItem(PRIVACY_IGNORELIST_TERMS_KEY);
+      if (!raw) {
+        return [];
+      }
+      return normalizeAllowlist(JSON.parse(raw));
+    } catch (_error) {
+      return [];
+    }
+  }
+
   function getManualAllowlist(settings = {}) {
     const defaultTerms = normalizeAllowlist(window.PulsePrivacyAllowlistDefaults || []);
     const customTerms = normalizeAllowlist(settings?.privacyAllowlist || []);
     const storedTerms = readStoredPrivacyAllowlistTerms();
     return normalizeAllowlist([...defaultTerms, ...storedTerms, ...customTerms]);
+  }
+
+  function getManualIgnorelist(settings = {}) {
+    const customTerms = normalizeAllowlist(settings?.privacyIgnorelist || []);
+    const storedTerms = readStoredPrivacyIgnorelistTerms();
+    return normalizeAllowlist([...storedTerms, ...customTerms]);
   }
 
   function registerTerm(session, rawTerm, category = "", source = "") {
@@ -194,6 +213,9 @@
     }
     const normalized = trimText(rawTerm);
     if (!normalized || isDataLikeString(normalized)) {
+      return null;
+    }
+    if (session.ignoreSet?.has(normalized)) {
       return null;
     }
 
@@ -543,6 +565,14 @@
       return text.length > 36 || (SCAN_WEAK_FRAGMENT_REGEX.test(text) && text.length > 12);
     }
     if (resolvedCategory === "ADDR") {
+      if (
+        /(?:逗号|句号|问号|叹号|冒号|分号|引号|括号|书名号|省略号|波浪号|符号)$/.test(text)
+      ) {
+        return true;
+      }
+      if (!/\d/.test(text) && !/(?:省|市|区|县|镇|乡|村|路|街|道|巷)/.test(text) && text.length <= 3) {
+        return true;
+      }
       return text.length > 32 || (SCAN_WEAK_FRAGMENT_REGEX.test(text) && text.length > 10);
     }
 
@@ -766,8 +796,11 @@
       placeholderMap: new Map(),
       counters: Object.fromEntries(CATEGORY_ORDER.map((category) => [category, 0])),
       sourceTexts: [],
-      allowlist: getManualAllowlist(options.settings)
+      allowlist: getManualAllowlist(options.settings),
+      ignorelist: getManualIgnorelist(options.settings),
+      ignoreSet: new Set()
     };
+    session.ignoreSet = new Set(normalizeAllowlist(session.ignorelist));
     const seen = new WeakSet();
 
     Object.entries(options || {}).forEach(([key, value]) => {

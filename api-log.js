@@ -5,6 +5,7 @@
 
   const API_LOG_KEY = "x_style_generator_api_logs_v1";
   const API_LOG_PRIVACY_KEY = "x_style_generator_api_log_privacy_v1";
+  const API_LOG_FULL_FIELDS_KEY = "x_style_generator_api_log_full_fields_v1";
   const API_LOG_LIMIT = 120;
   const API_LOG_MIN_LIMIT = 24;
   const memoryStorage = {};
@@ -158,6 +159,24 @@
     }
   }
 
+  function readFullFieldEntries() {
+    const raw = safeGetItem(API_LOG_FULL_FIELDS_KEY);
+    if (!raw) {
+      return {};
+    }
+
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (_error) {
+      return {};
+    }
+  }
+
+  function writeFullFieldEntries(entries = {}) {
+    safeSetItem(API_LOG_FULL_FIELDS_KEY, JSON.stringify(entries));
+  }
+
   function writePrivacyEntries(entries = {}) {
     safeSetItem(API_LOG_PRIVACY_KEY, JSON.stringify(entries));
   }
@@ -196,6 +215,18 @@
     writePrivacyEntries(next);
   }
 
+  function pruneFullFieldEntries(validIds = []) {
+    const valid = new Set(validIds.map((item) => String(item || "").trim()).filter(Boolean));
+    const current = readFullFieldEntries();
+    const next = {};
+    Object.entries(current).forEach(([logId, fields]) => {
+      if (valid.has(logId)) {
+        next[logId] = fields;
+      }
+    });
+    writeFullFieldEntries(next);
+  }
+
   function storePrivacySession(logId, session, validIds = []) {
     const normalizedId = String(logId || "").trim();
     if (!normalizedId) {
@@ -217,6 +248,75 @@
       });
     }
     writePrivacyEntries(next);
+  }
+
+  function sanitizeFullString(value = "") {
+    const text = String(value || "");
+    if (!text) {
+      return "";
+    }
+    if (/^data:image\/[a-z0-9.+-]+;base64,/i.test(text)) {
+      return `[image data omitted, ${text.length} chars]`;
+    }
+    return text;
+  }
+
+  function sanitizeFullValue(value, depth = 0) {
+    if (depth > 8) {
+      return "[max depth]";
+    }
+
+    if (value == null) {
+      return value;
+    }
+    if (typeof value === "string") {
+      return sanitizeFullString(value);
+    }
+    if (typeof value === "number" || typeof value === "boolean") {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      return value.map((item) => sanitizeFullValue(item, depth + 1));
+    }
+    if (typeof value === "object") {
+      const result = {};
+      Object.entries(value).forEach(([key, itemValue]) => {
+        if (/token|authorization|api[-_]?key|secret|password/i.test(key)) {
+          result[key] = maskSecret(itemValue);
+          return;
+        }
+        result[key] = sanitizeFullValue(itemValue, depth + 1);
+      });
+      return result;
+    }
+    return sanitizeFullString(String(value));
+  }
+
+  function storeFullFields(logId, entry = {}, validIds = []) {
+    const normalizedId = String(logId || "").trim();
+    if (!normalizedId) {
+      return;
+    }
+    const next = readFullFieldEntries();
+    next[normalizedId] = {
+      prompt: sanitizeFullString(entry.prompt || ""),
+      requestBody: sanitizeFullValue(entry.requestBody),
+      responseText: sanitizeFullString(entry.responseText || ""),
+      responseBody: sanitizeFullValue(entry.responseBody)
+    };
+    if (validIds.length) {
+      const valid = new Set(validIds.map((item) => String(item || "").trim()).filter(Boolean));
+      Object.keys(next).forEach((key) => {
+        if (!valid.has(key)) {
+          delete next[key];
+        }
+      });
+    }
+    writeFullFieldEntries(next);
+  }
+
+  function getFullFields(logId) {
+    return readFullFieldEntries()[String(logId || "").trim()] || null;
   }
 
   function getPrivacySession(logId) {
@@ -306,6 +406,7 @@
     let serialized = JSON.stringify(nextEntries);
     if (safeSetItem(API_LOG_KEY, serialized)) {
       prunePrivacyEntries(nextEntries.map((entry) => entry.id));
+      pruneFullFieldEntries(nextEntries.map((entry) => entry.id));
       return;
     }
 
@@ -314,6 +415,7 @@
       serialized = JSON.stringify(nextEntries);
       if (safeSetItem(API_LOG_KEY, serialized)) {
         prunePrivacyEntries(nextEntries.map((entry) => entry.id));
+        pruneFullFieldEntries(nextEntries.map((entry) => entry.id));
         return;
       }
     }
@@ -327,6 +429,7 @@
 
     safeSetItem(API_LOG_KEY, serialized);
     prunePrivacyEntries(nextEntries.map((entry) => entry.id));
+    pruneFullFieldEntries(nextEntries.map((entry) => entry.id));
   }
 
   function downloadJson(filename, payload) {
@@ -383,6 +486,7 @@
     entries.push(nextEntry);
     write(entries);
     const validIds = read().map((item) => item.id);
+    storeFullFields(nextEntry.id, entry, validIds);
     if (privacySession) {
       storePrivacySession(nextEntry.id, privacySession, validIds);
     } else {
@@ -394,6 +498,7 @@
   function clear() {
     safeRemoveItem(API_LOG_KEY);
     safeRemoveItem(API_LOG_PRIVACY_KEY);
+    safeRemoveItem(API_LOG_FULL_FIELDS_KEY);
   }
 
   function exportLogs() {
@@ -417,6 +522,7 @@
     exportLogs,
     formatTimestamp,
     getPrivacySession,
-    decodeValueByLogId
+    decodeValueByLogId,
+    getFullFields
   };
 })();

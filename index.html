@@ -4,15 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Pulse Generator v2.0</title>
-    <link rel="stylesheet" href="./home.css?v=20260403-122055" />
+    <link rel="stylesheet" href="./home.css?v=20260403-163443" />
   </head>
   <body>
     <main class="home-scene">
       <section class="phone-home" aria-label="手机首页">
         <header class="status-bar" aria-label="前端版本信息">
           <div class="status-build">
-            <span id="status-version" class="status-build__version">FE v20260403-122055</span>
-            <span id="status-updated" class="status-build__updated">更新于 2026-04-03 11:33:26</span>
+            <span id="status-version" class="status-build__version">FE v20260403-163443</span>
+            <span id="status-updated" class="status-build__updated">更新于 2026-04-03 16:34:43</span>
           </div>
         </header>
 
@@ -363,6 +363,32 @@
           <section class="home-import-review">
             <div class="home-import-review__head">
               <div>
+                <p class="home-settings-kicker">Exclude</p>
+                <h4 class="home-import-review__title">自动屏蔽排除词</h4>
+              </div>
+            </div>
+            <p id="privacy-app-ignore-summary" class="home-field-hint">
+              加到这里的词不会再被自动隐私覆盖；支持直接改名、删除，改动会自动生效。
+            </p>
+            <div id="privacy-app-ignore-list" class="home-transfer-options"></div>
+          </section>
+
+          <section class="home-import-review">
+            <div class="home-import-review__head">
+              <div>
+                <p class="home-settings-kicker">Recent Hits</p>
+                <h4 class="home-import-review__title">最近实际屏蔽词</h4>
+              </div>
+            </div>
+            <p id="privacy-app-recent-summary" class="home-field-hint">
+              这里展示最近请求里真实命中的屏蔽词；支持直接改名后加入白名单或加入排除。
+            </p>
+            <div id="privacy-app-recent-list" class="home-transfer-options"></div>
+          </section>
+
+          <section class="home-import-review">
+            <div class="home-import-review__head">
+              <div>
                 <p class="home-settings-kicker">Scan Queue</p>
                 <h4 class="home-import-review__title">待确认扫描候选</h4>
               </div>
@@ -432,9 +458,10 @@
       </div>
     </section>
 
-    <script src="./privacy-allowlist.js?v=20260403-122055"></script>
-    <script src="./pulse-privacy-cover.js?v=20260403-122055"></script>
-    <script src="./pulse-message-banner.js?v=20260403-122055"></script>
-    <script src="./home.js?v=20260403-122055"></script>
+    <script src="./privacy-allowlist.js?v=20260403-163443"></script>
+    <script src="./pulse-privacy-cover.js?v=20260403-163443"></script>
+    <script src="./pulse-message-banner.js?v=20260403-163443"></script>
+    <script src="./api-log.js?v=20260403-163443"></script>
+    <script src="./home.js?v=20260403-163443"></script>
   </body>
 </html>

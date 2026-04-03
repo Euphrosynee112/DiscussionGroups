@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <title>Pulse Generator · Chat</title>
-    <link rel="stylesheet" href="./messages.css?v=20260403-122055" />
+    <link rel="stylesheet" href="./messages.css?v=20260403-163443" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -20,8 +20,12 @@
             class="messages-topbar__icon"
             type="button"
             aria-label="返回"
-            hidden
-          ></button>
+            onclick="try{window.parent&&window.parent.postMessage&&window.parent.postMessage({type:'pulse-generator-close-app'},'*')}catch(e){};window.location.href='./index.html';"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M7 7l10 10M17 7 7 17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+            </svg>
+          </button>
           <h1 id="messages-page-title" class="messages-topbar__title">微信</h1>
           <div class="messages-topbar__actions">
             <button
@@ -77,7 +81,6 @@
               class="messages-topbar__icon"
               type="button"
               aria-label="更多操作"
-              hidden
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path
@@ -261,8 +264,9 @@
           <button
             id="messages-contact-save-btn"
             class="messages-sheet-modal__button messages-sheet-modal__button--primary"
-            type="submit"
+            type="button"
             form="messages-contact-form"
+            onclick="(function(){var f=document.getElementById('messages-contact-form');if(!f){return;} if(typeof f.requestSubmit==='function'){f.requestSubmit();return;} var ev=document.createEvent('Event');ev.initEvent('submit',true,true);f.dispatchEvent(ev);}())"
           >
             保存
           </button>
@@ -543,6 +547,21 @@
             </span>
           </label>
 
+          <label class="messages-form-field">
+            <span>Bubble 感知时间（分钟）</span>
+            <input
+              id="messages-chat-bubble-focus-minutes-input"
+              type="number"
+              min="1"
+              max="1440"
+              step="1"
+              placeholder="60"
+            />
+            <small class="messages-form-field__hint">
+              如果最近一轮 Bubble 发送时间超过这个窗口，就不带进 prompt。
+            </small>
+          </label>
+
           <section class="messages-form-field">
             <div class="messages-form-field__head">
               <span>聊天头像显示</span>
@@ -584,37 +603,42 @@
             </span>
           </label>
 
-          <label class="messages-form-field">
-            <span>自动行程天数</span>
-            <input
-              id="messages-chat-auto-schedule-days-input"
-              type="number"
-              min="1"
-              max="14"
-              inputmode="numeric"
-              placeholder="默认 3 天"
-              autocomplete="off"
-            />
-            <small class="messages-form-field__hint">
-              仅作用于自动生成与“立即生成行程”；行程会按小时填充未来空白时间。
-            </small>
-          </label>
-
-          <section class="messages-form-field">
+          <section class="messages-form-field messages-form-field--auto-schedule">
             <div class="messages-form-field__head">
-              <span>立即生成行程</span>
+              <span>自动生成行程</span>
             </div>
-            <div class="messages-form-field__actions">
+            <div class="messages-form-field__inline-grid messages-form-field__inline-grid--triple">
+              <label class="messages-inline-input">
+                <span>生成天数</span>
+                <input
+                  id="messages-chat-auto-schedule-days-input"
+                  type="number"
+                  min="1"
+                  max="14"
+                  inputmode="numeric"
+                  placeholder="默认 3 天"
+                  autocomplete="off"
+                />
+              </label>
+              <label class="messages-inline-input">
+                <span>自动触发时间</span>
+                <input
+                  id="messages-chat-auto-schedule-time-input"
+                  type="time"
+                  step="60"
+                  autocomplete="off"
+                />
+              </label>
               <button
                 id="messages-chat-auto-schedule-generate-btn"
-                class="messages-text-button"
+                class="messages-text-button messages-text-button--primary"
                 type="button"
               >
                 立即生成行程
               </button>
             </div>
             <small class="messages-form-field__hint">
-              只补齐空白时段，不覆盖现有安排；会优先贴近角色人设与已挂载的世界书背景。
+              只补齐空白时段，不覆盖现有安排；若填写自动触发时间，则到达本地该时间后会自动补齐当天往后的空白小时行程。
             </small>
           </section>
 
@@ -648,6 +672,74 @@
               仅作用于当前聊天对象；聊天记录与记忆会分别独立清理。
             </small>
           </section>
+        </form>
+      </div>
+    </section>
+
+    <section
+      id="messages-chat-auto-schedule-modal"
+      class="messages-sheet-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div
+        class="messages-sheet-modal__panel messages-sheet-modal__panel--worldbook"
+        role="dialog"
+        aria-modal="true"
+        aria-label="立即生成行程"
+      >
+        <header class="messages-sheet-modal__header">
+          <button
+            id="messages-chat-auto-schedule-close-btn"
+            class="messages-sheet-modal__button"
+            type="button"
+            aria-label="关闭行程生成设置"
+          >
+            取消
+          </button>
+          <strong>立即生成行程</strong>
+          <button
+            id="messages-chat-auto-schedule-confirm-btn"
+            class="messages-sheet-modal__button messages-sheet-modal__button--primary"
+            type="submit"
+            form="messages-chat-auto-schedule-form"
+          >
+            生成
+          </button>
+        </header>
+
+        <form id="messages-chat-auto-schedule-form" class="messages-editor-form">
+          <section class="messages-form-field">
+            <div class="messages-form-field__head">
+              <span>本次附带的世界书</span>
+            </div>
+            <div
+              id="messages-chat-auto-schedule-worldbook-list"
+              class="messages-worldbook-selector"
+            ></div>
+            <small class="messages-form-field__hint">
+              这里的选择只对这一次“立即生成行程”生效，不会改动你平时聊天的挂载设置。
+            </small>
+          </section>
+
+          <label class="messages-form-field">
+            <span>附加要求</span>
+            <textarea
+              id="messages-chat-auto-schedule-note-input"
+              rows="5"
+              maxlength="600"
+              placeholder="例如：周末尽量休息；工作日以学习为主；保证 23:30 前睡觉；周三晚上固定健身。"
+            ></textarea>
+            <small class="messages-form-field__hint">
+              可补充这次生成时需要注意的作息、学习 / 工作重心，或任何特殊安排偏好；若与默认周末休息规则冲突，以这里为准。
+            </small>
+          </label>
+
+          <p
+            id="messages-chat-auto-schedule-status"
+            class="messages-editor-status"
+            aria-live="polite"
+          ></p>
         </form>
       </div>
     </section>
@@ -2123,11 +2215,11 @@
 
     <input id="messages-image-file-input" type="file" accept="image/*" hidden />
 
-    <script src="./privacy-allowlist.js?v=20260403-122055"></script>
-    <script src="./pulse-privacy-cover.js?v=20260403-122055"></script>
-    <script src="./pulse-message-banner.js?v=20260403-122055"></script>
-    <script src="./api-log.js?v=20260403-122055"></script>
-    <script src="./messages-awareness-config.js?v=20260402b"></script>
-    <script src="./messages.js?v=20260403-122055"></script>
+    <script src="./privacy-allowlist.js?v=20260403-163443"></script>
+    <script src="./pulse-privacy-cover.js?v=20260403-163443"></script>
+    <script src="./pulse-message-banner.js?v=20260403-163443"></script>
+    <script src="./api-log.js?v=20260403-163443"></script>
+    <script src="./messages-awareness-config.js?v=20260403-163443"></script>
+    <script src="./messages.js?v=20260403-163443"></script>
   </body>
 </html>
