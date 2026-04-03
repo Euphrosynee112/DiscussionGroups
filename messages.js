@@ -604,6 +604,7 @@ const state = {
   regenerateInstruction: "",
   locationModalOpen: false,
   awarenessModalOpen: false,
+  awarenessFormResetRequested: false,
   locationDraftName: "",
   locationDraftCoordinates: "",
   journalOpen: false,
@@ -5134,7 +5135,23 @@ function buildConversationSystemPrompt(
   const bubbleFocusContext = buildBubbleFocusContext(promptSettings);
   const scheduleAwarenessContext = buildScheduleAwarenessContext(contact, history, promptSettings);
   const timeAwarenessContext = buildTimeAwarenessContext(promptSettings);
+  const triggeredAwarenessContext = requestOptions.triggeredAwareness?.text
+    ? [
+        `你刚刚自己忽然想起了一条并非来自用户当前对话、而是你此前独自察觉到的额外信息；这条信息和最近几轮聊天记录具有同等优先级，需要和当前聊天一起理解：${String(
+          requestOptions.triggeredAwareness.text || ""
+        ).trim()}。`,
+        requestOptions.triggeredAwareness.emotionShift
+          ? `这让你此刻的心绪与态度轻微转向：${String(
+              requestOptions.triggeredAwareness.emotionShift || ""
+            ).trim()}。`
+          : "",
+        "请把它当作你自己突然联想到的隐性线索，而不是用户刚刚告诉你的内容；它的重要程度不要低于最近聊天记录。你可以自然地主动带起相关话题，但仍然要先接住当前聊天。"
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : "";
   const importantContextSections = [
+    triggeredAwarenessContext ? `当前触发的察觉信息：\n${triggeredAwarenessContext}` : "",
     presenceContext ? `当前场景与状态：\n${presenceContext}` : "",
     timeAwarenessContext || "",
     scheduleAwarenessContext ? `当前日程感知：\n${scheduleAwarenessContext}` : "",
@@ -5163,21 +5180,6 @@ function buildConversationSystemPrompt(
       String(contact.specialUserPersona || "").trim()
         ? `你对这个用户的特别认知：${String(contact.specialUserPersona || "").trim()}。这部分是你基于相处形成的更私人、更具体的认识，重要程度略高于用户的通用画像。`
         : "",
-      requestOptions.triggeredAwareness?.text
-        ? [
-            `你刚刚自己忽然想起了一条并非来自用户当前对话、而是你此前独自察觉到的额外信息；这条信息和最近几轮聊天记录具有同等优先级，需要和当前聊天一起理解：${String(
-              requestOptions.triggeredAwareness.text || ""
-            ).trim()}。`,
-            requestOptions.triggeredAwareness.emotionShift
-              ? `这让你此刻的心绪与态度轻微转向：${String(
-                  requestOptions.triggeredAwareness.emotionShift || ""
-                ).trim()}。`
-              : "",
-            "请把它当作你自己突然联想到的隐性线索，而不是用户刚刚告诉你的内容；它的重要程度不要低于最近聊天记录。你可以自然地主动带起相关话题，但仍然要先接住当前聊天。"
-          ]
-            .filter(Boolean)
-            .join("\n")
-        : "",
       importantContextSections.length
         ? `以下是你当前需要优先关注的重要信息；它们比 context_library 更重要：\n${importantContextSections.join(
             "\n\n"
@@ -5200,6 +5202,7 @@ function buildConversationSystemPrompt(
       "回复时优先接住当前对话中的情绪、语气和潜台词，再决定是否回应具体内容，不要只做信息回答。",
       "表达需要口语化，可以有停顿、转折和即时反应，可以使用“……” “！”以及自然语气词，允许有一点碎碎念或临场感。",
       `每一行代表一条单独发送的消息，总行数不超过${promptSettings.replySentenceLimit}行，长句可以拆成多行表达。`,
+      "一句话遇到逗号或句号时，请分行输出；并且这一行结尾原本用于收尾的逗号、句号要省略，不得省略感叹号、问号、省略号、波浪号等表达情绪的标点。",
       "不要使用列表、编号或说明性结构，不要添加角色标签、前缀或解释性文字。",
       "不要出现“根据设定”“从背景来看”“你的人设是”等表达，不要解释设定、总结对话或进行分析，不要刻意展示你记得很多背景信息。",
       "context_library 只有在聊天语境中自然联想到时才可以使用，如果没有触发，就不要主动提及。",
@@ -6901,6 +6904,24 @@ function renderAwarenessHistory(contact = null, conversation = null) {
 function applyAwarenessToForm(contact = null) {
   const resolvedContact = contact && typeof contact === "object" ? contact : null;
   const conversation = getConversationById();
+  if (state.awarenessFormResetRequested) {
+    if (messagesAwarenessTitleInputEl) {
+      messagesAwarenessTitleInputEl.value = "";
+    }
+    if (messagesAwarenessTextInputEl) {
+      messagesAwarenessTextInputEl.value = "";
+    }
+    if (messagesAwarenessEmotionInputEl) {
+      messagesAwarenessEmotionInputEl.value = "";
+    }
+    if (messagesAwarenessSensitivityInputEl) {
+      messagesAwarenessSensitivityInputEl.value = "medium";
+    }
+    state.awarenessFormResetRequested = false;
+    renderAwarenessHistory(resolvedContact, conversation);
+    setAwarenessStatus("察觉已保存。", "success");
+    return;
+  }
   if (messagesAwarenessTitleInputEl) {
     messagesAwarenessTitleInputEl.value = String(
       resolvedContact?.awarenessTitle || ""
@@ -12283,6 +12304,7 @@ function attachEvents() {
       renderMessagesPage();
       setAwarenessStatus("察觉已保存。", "success");
       setMessagesStatus("角色察觉已更新。", "success");
+      state.awarenessFormResetRequested = true;
       if (messagesAwarenessTitleInputEl) {
         messagesAwarenessTitleInputEl.value = "";
       }

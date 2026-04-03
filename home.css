@@ -934,6 +934,53 @@ button {
   gap: 8px;
 }
 
+.privacy-app-item__meta--stacked {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  align-items: stretch;
+  gap: 10px;
+}
+
+.privacy-app-item__field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.privacy-app-item__field span {
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--muted);
+}
+
+.privacy-app-item__select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 18px;
+  padding: 11px 14px;
+  font: inherit;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.45),
+    0 1px 0 rgba(255, 255, 255, 0.24);
+}
+
+.privacy-app-item__select:focus {
+  outline: none;
+  border-color: rgba(29, 155, 240, 0.48);
+  box-shadow:
+    0 0 0 4px rgba(29, 155, 240, 0.14),
+    inset 0 1px 1px rgba(255, 255, 255, 0.45);
+}
+
+.privacy-app-item__input--compact {
+  min-height: 44px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
 .privacy-app-item__hint {
   margin: 0;
   color: var(--muted);
@@ -1160,6 +1207,10 @@ button {
   .privacy-app__panel {
     padding-left: 14px;
     padding-right: 14px;
+  }
+
+  .privacy-app-item__meta--stacked {
+    grid-template-columns: 1fr;
   }
 
   .home-browser-modal__panel {

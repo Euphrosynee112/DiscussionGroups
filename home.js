@@ -2,8 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260403-171130";
-const APP_BUILD_UPDATED_AT = "2026-04-03 17:11:30";
+const APP_BUILD_VERSION = "20260403-182131";
+const APP_BUILD_UPDATED_AT = "2026-04-03 18:21:31";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -1104,6 +1104,7 @@ function buildTransferPayloadFromCurrentState() {
           }
         : null,
     privacyAllowlist: normalizePrivacyAllowlist(settings.privacyAllowlist || []),
+    privacyAllowlistMeta: loadPrivacyAllowlistMetaItems(),
     contactChatSettings:
       (settings.messagePromptSettings && typeof settings.messagePromptSettings === "object") ||
       (settings.chatGlobalSettings && typeof settings.chatGlobalSettings === "object") ||
@@ -1160,6 +1161,51 @@ function requestEmbeddedClose() {
 
 function normalizePrivacyAllowlistItemSource(value) {
   return value === "scan" ? "scan" : "manual";
+}
+
+function normalizePrivacyAllowlistCategory(value = "", fallbackText = "") {
+  const detected = window.PulsePrivacyCover?.detectCategory
+    ? window.PulsePrivacyCover.detectCategory(fallbackText, value)
+    : String(value || "").trim().toUpperCase();
+  if (detected === "NAME" || detected === "TITLE") {
+    return detected;
+  }
+  return "TERM";
+}
+
+function normalizePrivacyNameAliasLevel(value = "") {
+  if (window.PulsePrivacyCover?.normalizeNameAliasLevel) {
+    return window.PulsePrivacyCover.normalizeNameAliasLevel(value);
+  }
+  const normalized = String(value || "").trim().toUpperCase();
+  return ["FULL", "COMMON", "NICK", "PET", "HONOR"].includes(normalized)
+    ? normalized
+    : "COMMON";
+}
+
+function normalizePrivacyNameGroupId(value = "", fallbackText = "") {
+  return String(value || "").trim().slice(0, 40) || String(fallbackText || "").trim().slice(0, 40);
+}
+
+function getPrivacyAllowlistCategoryLabel(category = "") {
+  if (category === "NAME") {
+    return "人名";
+  }
+  if (category === "TITLE") {
+    return "标题";
+  }
+  return "普通词";
+}
+
+function getPrivacyNameLevelLabel(level = "") {
+  const map = {
+    FULL: "全名",
+    COMMON: "常规",
+    NICK: "昵称",
+    PET: "爱称",
+    HONOR: "称谓"
+  };
+  return map[normalizePrivacyNameAliasLevel(level)] || "常规";
 }
 
 function getPrivacyLogSourceLabel(source = "") {
@@ -1219,7 +1265,10 @@ function normalizePrivacyAllowlistMetaItems(value = []) {
   return items
     .map((item) => ({
       text: String(item.text || "").trim(),
-      source: normalizePrivacyAllowlistItemSource(item.source)
+      source: normalizePrivacyAllowlistItemSource(item.source),
+      category: normalizePrivacyAllowlistCategory(item.category, item.text),
+      nameGroupId: normalizePrivacyNameGroupId(item.nameGroupId, item.text),
+      nameLevel: normalizePrivacyNameAliasLevel(item.nameLevel)
     }))
     .filter((item) => {
       if (!item.text || unique.has(item.text)) {
@@ -1357,12 +1406,15 @@ function loadPrivacyAllowlistItems() {
   const settings = loadSettings({ forceActiveConfig: false });
   const terms = getEffectivePrivacyAllowlistTerms(settings);
   const metaMap = new Map(
-    loadPrivacyAllowlistMetaItems().map((item) => [item.text, item.source])
+    loadPrivacyAllowlistMetaItems().map((item) => [item.text, item])
   );
   return terms.map((text) => ({
     id: buildPrivacyItemId(text, "privacy_allowlist"),
     text,
-    source: normalizePrivacyAllowlistItemSource(metaMap.get(text) || "manual")
+    source: normalizePrivacyAllowlistItemSource(metaMap.get(text)?.source || "manual"),
+    category: normalizePrivacyAllowlistCategory(metaMap.get(text)?.category, text),
+    nameGroupId: normalizePrivacyNameGroupId(metaMap.get(text)?.nameGroupId, text),
+    nameLevel: normalizePrivacyNameAliasLevel(metaMap.get(text)?.nameLevel)
   }));
 }
 
@@ -1387,11 +1439,15 @@ function normalizePrivacyAllowlistItems(items = []) {
       }
       return;
     }
+    const category = normalizePrivacyAllowlistCategory(item.category, text);
     indexMap.set(text, result.length);
     result.push({
       id: String(item.id || buildPrivacyItemId(text, "privacy_allowlist")).trim(),
       text,
-      source
+      source,
+      category,
+      nameGroupId: category === "NAME" ? normalizePrivacyNameGroupId(item.nameGroupId, text) : "",
+      nameLevel: category === "NAME" ? normalizePrivacyNameAliasLevel(item.nameLevel) : "COMMON"
     });
   });
   return result;
@@ -1456,7 +1512,10 @@ function persistPrivacyAllowlistItems(items = []) {
   persistPrivacyAllowlistMetaItems(
     normalizedItems.map((item) => ({
       text: item.text,
-      source: item.source
+      source: item.source,
+      category: normalizePrivacyAllowlistCategory(item.category, item.text),
+      nameGroupId: normalizePrivacyNameGroupId(item.nameGroupId, item.text),
+      nameLevel: normalizePrivacyNameAliasLevel(item.nameLevel)
     }))
   );
   homeState.settings = buildNormalizedSettingsSnapshot(nextSettings, {
@@ -1585,8 +1644,9 @@ function renderPrivacyAllowlistSummary() {
   const total = items.length;
   const manualCount = items.filter((item) => item.source === "manual").length;
   const scanCount = total - manualCount;
+  const groupedNameCount = items.filter((item) => item.category === "NAME").length;
   privacyAppWhitelistSummaryEl.textContent = total
-    ? `共 ${total} 个白名单词条，其中手动 ${manualCount} 个、扫描确认 ${scanCount} 个；直接修改输入框会自动生效。`
+    ? `共 ${total} 个白名单词条，其中手动 ${manualCount} 个、扫描确认 ${scanCount} 个；当前有 ${groupedNameCount} 个人名别称条目。直接修改会自动生效。`
     : "当前还没有白名单词条。点击右上角新增，或先扫描配置后确认加入。";
 }
 
@@ -1611,6 +1671,7 @@ function renderPrivacyAllowlistItems() {
           <div class="privacy-app-item__head">
             <div class="privacy-app-item__meta">
               <span class="home-badge">${escapeHtml(item.source === "manual" ? "手动" : "扫描确认")}</span>
+              <span class="home-badge">${escapeHtml(getPrivacyAllowlistCategoryLabel(item.category))}</span>
             </div>
             <button
               class="home-chip home-chip--danger"
@@ -1630,11 +1691,58 @@ function renderPrivacyAllowlistItems() {
               data-item-id="${escapeHtml(item.id)}"
               placeholder="输入白名单词条"
             />
+            <div class="privacy-app-item__meta privacy-app-item__meta--stacked">
+              <label class="privacy-app-item__field">
+                <span>类型</span>
+                <select
+                  class="privacy-app-item__select"
+                  data-role="privacy-allowlist-category"
+                  data-item-id="${escapeHtml(item.id)}"
+                >
+                  <option value="TERM" ${item.category === "TERM" ? "selected" : ""}>普通词</option>
+                  <option value="TITLE" ${item.category === "TITLE" ? "selected" : ""}>标题</option>
+                  <option value="NAME" ${item.category === "NAME" ? "selected" : ""}>人名</option>
+                </select>
+              </label>
+              ${
+                item.category === "NAME"
+                  ? `
+                    <label class="privacy-app-item__field">
+                      <span>同一人分组</span>
+                      <input
+                        class="privacy-app-item__input privacy-app-item__input--compact"
+                        type="text"
+                        value="${escapeHtml(item.nameGroupId || item.text)}"
+                        data-role="privacy-allowlist-name-group"
+                        data-item-id="${escapeHtml(item.id)}"
+                        placeholder="相同分组 = 同一个人"
+                      />
+                    </label>
+                    <label class="privacy-app-item__field">
+                      <span>称呼层级</span>
+                      <select
+                        class="privacy-app-item__select"
+                        data-role="privacy-allowlist-name-level"
+                        data-item-id="${escapeHtml(item.id)}"
+                      >
+                        <option value="FULL" ${item.nameLevel === "FULL" ? "selected" : ""}>全名</option>
+                        <option value="COMMON" ${item.nameLevel === "COMMON" ? "selected" : ""}>常规</option>
+                        <option value="NICK" ${item.nameLevel === "NICK" ? "selected" : ""}>昵称</option>
+                        <option value="PET" ${item.nameLevel === "PET" ? "selected" : ""}>爱称</option>
+                        <option value="HONOR" ${item.nameLevel === "HONOR" ? "selected" : ""}>称谓</option>
+                      </select>
+                    </label>
+                  `
+                  : ""
+              }
+            </div>
             <p class="privacy-app-item__hint">
               ${escapeHtml(
-                item.source === "manual"
-                  ? "这是手动加入的词条，会在扫描预览中高亮区分。"
-                  : "这是从扫描候选确认加入的词条。"
+                item.category === "NAME"
+                  ? "同一人物的多个称呼请设置成同一个“同一人分组”；称呼层级会保留亲密度差异。"
+                  : item.source === "manual"
+                    ? "这是手动加入的词条，会在扫描预览中高亮区分。"
+                    : "这是从扫描候选确认加入的词条。"
               )}
             </p>
           </div>
@@ -1899,12 +2007,33 @@ function setPrivacyAppAddModalOpen(isOpen) {
 }
 
 function addPrivacyAllowlistItemsByLines(value, source = "manual") {
+  const normalizedValues = Array.isArray(value) ? value : [value];
   const nextItems = normalizePrivacyAllowlistItems([
     ...homeState.privacyAllowlistItems,
-    ...normalizePrivacyAllowlist(value).map((text) => ({
-      text,
-      source
-    }))
+    ...normalizedValues.flatMap((item) => {
+      if (typeof item === "string") {
+        return normalizePrivacyAllowlist(item).map((text) => ({
+          text,
+          source
+        }));
+      }
+      if (item && typeof item === "object") {
+        const text = String(item.text || "").trim();
+        if (!text) {
+          return [];
+        }
+        return [
+          {
+            text,
+            source: normalizePrivacyAllowlistItemSource(item.source || source),
+            category: normalizePrivacyAllowlistCategory(item.category, text),
+            nameGroupId: normalizePrivacyNameGroupId(item.nameGroupId, text),
+            nameLevel: normalizePrivacyNameAliasLevel(item.nameLevel)
+          }
+        ];
+      }
+      return [];
+    })
   ]);
   persistPrivacyAllowlistItems(nextItems);
   renderPrivacyApp();
@@ -1915,7 +2044,8 @@ function applyPrivacyPendingCandidates() {
     .filter((item) => item.selected)
     .map((item) => ({
       text: String(item.text || "").trim(),
-      source: "scan"
+      source: "scan",
+      category: normalizePrivacyAllowlistCategory(item.category, item.text)
     }))
     .filter((item) => item.text);
 
@@ -1924,7 +2054,7 @@ function applyPrivacyPendingCandidates() {
     return;
   }
 
-  addPrivacyAllowlistItemsByLines(selectedCandidates.map((item) => item.text), "scan");
+  addPrivacyAllowlistItemsByLines(selectedCandidates, "scan");
   const selectedTexts = new Set(selectedCandidates.map((item) => item.text));
   homeState.privacyPendingCandidates = homeState.privacyPendingCandidates.filter(
     (item) => !selectedTexts.has(String(item.text || "").trim())
@@ -2027,7 +2157,16 @@ function confirmPrivacyPendingItem(itemId) {
   homeState.privacyPendingCandidates = homeState.privacyPendingCandidates.filter(
     (item) => item.id !== itemId
   );
-  addPrivacyAllowlistItemsByLines([nextText], "scan");
+  addPrivacyAllowlistItemsByLines(
+    [
+      {
+        text: nextText,
+        source: "scan",
+        category: normalizePrivacyAllowlistCategory(targetItem?.category, nextText)
+      }
+    ],
+    "scan"
+  );
   persistPrivacyPendingCandidates(
     homeState.privacyPendingCandidates,
     homeState.privacyAllowlistItems.map((item) => item.text),
@@ -2044,7 +2183,16 @@ function addRecentPrivacyHitToAllowlist(itemId) {
     setPrivacyAppStatus("这个最近命中词为空，无法加入白名单。", "error");
     return;
   }
-  addPrivacyAllowlistItemsByLines([nextText], "scan");
+  addPrivacyAllowlistItemsByLines(
+    [
+      {
+        text: nextText,
+        source: "scan",
+        category: normalizePrivacyAllowlistCategory(targetItem?.category, nextText)
+      }
+    ],
+    "scan"
+  );
   setPrivacyAppStatus(`已将“${nextText}”加入白名单。`, "success");
 }
 
@@ -2061,24 +2209,87 @@ function addRecentPrivacyHitToIgnorelist(itemId) {
 
 function handlePrivacyAllowlistInput(event) {
   const target = event.target;
-  if (!(target instanceof HTMLInputElement) || target.dataset.role !== "privacy-allowlist-text") {
+  if (
+    !(target instanceof HTMLInputElement) ||
+    ![
+      "privacy-allowlist-text",
+      "privacy-allowlist-name-group"
+    ].includes(target.dataset.role || "")
+  ) {
     return;
   }
   const itemId = String(target.dataset.itemId || "").trim();
   if (!itemId) {
     return;
   }
-  homeState.privacyAllowlistItems = homeState.privacyAllowlistItems.map((item) =>
-    item.id === itemId ? { ...item, text: String(target.value || "") } : item
-  );
+  homeState.privacyAllowlistItems = homeState.privacyAllowlistItems.map((item) => {
+    if (item.id !== itemId) {
+      return item;
+    }
+    if (target.dataset.role === "privacy-allowlist-name-group") {
+      return {
+        ...item,
+        nameGroupId: normalizePrivacyNameGroupId(target.value, item.text)
+      };
+    }
+    return { ...item, text: String(target.value || "") };
+  });
   persistPrivacyAllowlistItems(homeState.privacyAllowlistItems);
 }
 
 function handlePrivacyAllowlistChange(event) {
   const target = event.target;
-  if (!(target instanceof HTMLInputElement) || target.dataset.role !== "privacy-allowlist-text") {
+  if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) {
     return;
   }
+  const role = String(target.dataset.role || "").trim();
+  if (
+    ![
+      "privacy-allowlist-text",
+      "privacy-allowlist-name-group",
+      "privacy-allowlist-category",
+      "privacy-allowlist-name-level"
+    ].includes(role)
+  ) {
+    return;
+  }
+  const itemId = String(target.dataset.itemId || "").trim();
+  if (!itemId) {
+    return;
+  }
+  homeState.privacyAllowlistItems = homeState.privacyAllowlistItems.map((item) => {
+    if (item.id !== itemId) {
+      return item;
+    }
+    if (role === "privacy-allowlist-category") {
+      const nextCategory = normalizePrivacyAllowlistCategory(target.value, item.text);
+      return {
+        ...item,
+        category: nextCategory,
+        nameGroupId:
+          nextCategory === "NAME"
+            ? normalizePrivacyNameGroupId(item.nameGroupId, item.text)
+            : "",
+        nameLevel: nextCategory === "NAME" ? normalizePrivacyNameAliasLevel(item.nameLevel) : "COMMON"
+      };
+    }
+    if (role === "privacy-allowlist-name-level") {
+      return {
+        ...item,
+        nameLevel: normalizePrivacyNameAliasLevel(target.value)
+      };
+    }
+    if (role === "privacy-allowlist-name-group") {
+      return {
+        ...item,
+        nameGroupId: normalizePrivacyNameGroupId(target.value, item.text)
+      };
+    }
+    return {
+      ...item,
+      text: String(target.value || "").trim()
+    };
+  });
   persistPrivacyAllowlistItems(homeState.privacyAllowlistItems);
   renderPrivacyApp();
   setPrivacyAppStatus("白名单修改已生效。", "success");
@@ -2289,6 +2500,7 @@ function normalizeTransferPayload(parsed) {
       presenceState:
         source.presenceState && typeof source.presenceState === "object" ? source.presenceState : null,
       privacyAllowlist: normalizePrivacyAllowlist(source.privacyAllowlist || []),
+      privacyAllowlistMeta: normalizePrivacyAllowlistMetaItems(source.privacyAllowlistMeta || []),
       contactChatSettings:
         source.contactChatSettings && typeof source.contactChatSettings === "object"
           ? source.contactChatSettings
@@ -2359,6 +2571,7 @@ function normalizeTransferPayload(parsed) {
     presenceState:
       parsed.presenceState && typeof parsed.presenceState === "object" ? parsed.presenceState : null,
     privacyAllowlist: normalizePrivacyAllowlist(parsed.privacyAllowlist || []),
+    privacyAllowlistMeta: normalizePrivacyAllowlistMetaItems(parsed.privacyAllowlistMeta || []),
     contactChatSettings:
       settings?.messagePromptSettings && typeof settings.messagePromptSettings === "object"
         ? { ...settings.messagePromptSettings }
@@ -2391,6 +2604,7 @@ function buildTransferSections(payload, options = {}) {
     String(item.name || "").trim()
   );
   const privacyAllowlist = normalizePrivacyAllowlist(payload?.privacyAllowlist || []);
+  const privacyAllowlistMeta = normalizePrivacyAllowlistMetaItems(payload?.privacyAllowlistMeta || []);
   const hasPresenceState = hasPresenceTransferStateData(payload?.presenceState || {});
   const hasApiSecrets = Boolean(
     payload?.apiSecrets &&
@@ -2556,9 +2770,9 @@ function buildTransferSections(payload, options = {}) {
     {
       id: "privacyAllowlist",
       label: "隐私白名单",
-      description: "首页设置里手动补充的强制匿名化名单；代码内的默认白名单不在这里导出。",
-      checked: privacyAllowlist.length > 0,
-      disabled: privacyAllowlist.length === 0,
+      description: "首页设置里手动补充的强制匿名化名单，以及人名同人分组 / 称呼层级元数据；代码内默认白名单不在这里导出。",
+      checked: privacyAllowlist.length > 0 || privacyAllowlistMeta.length > 0,
+      disabled: privacyAllowlist.length === 0 && privacyAllowlistMeta.length === 0,
       items: []
     },
     {
@@ -2985,8 +3199,12 @@ function buildSelectedTransferPayload(payload, selection) {
   const privacyAllowlistSection = sectionMap.get("privacyAllowlist");
   if (privacyAllowlistSection?.checked) {
     const terms = normalizePrivacyAllowlist(payload.privacyAllowlist || []);
+    const meta = normalizePrivacyAllowlistMetaItems(payload.privacyAllowlistMeta || []);
     if (terms.length) {
       selected.privacyAllowlist = terms;
+    }
+    if (meta.length) {
+      selected.privacyAllowlistMeta = meta;
     }
   }
 
@@ -3007,7 +3225,7 @@ function buildHomeConfigExportPayload(selection = homeState.exportTransferSelect
   const fullPayload = buildTransferPayloadFromCurrentState();
   return {
     schema: CONFIG_EXPORT_SCHEMA,
-    version: 9,
+    version: 10,
     exportedAt: new Date().toISOString(),
     data: buildSelectedTransferPayload(fullPayload, selection)
   };
@@ -3216,9 +3434,16 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
     nextPresenceState = normalizePresenceTransferState(imported.presenceState);
   }
 
+  const shouldApplyPrivacyAllowlist =
+    Object.prototype.hasOwnProperty.call(imported, "privacyAllowlist") ||
+    Object.prototype.hasOwnProperty.call(imported, "privacyAllowlistMeta");
+
   if (Array.isArray(imported.privacyAllowlist) || typeof imported.privacyAllowlist === "string") {
     nextSettings.privacyAllowlist = normalizePrivacyAllowlist(imported.privacyAllowlist);
   }
+  const importedPrivacyAllowlistMeta = normalizePrivacyAllowlistMetaItems(
+    imported.privacyAllowlistMeta || []
+  );
 
   if (imported.contactChatSettings && typeof imported.contactChatSettings === "object") {
     const nestedPromptSettings =
@@ -3274,6 +3499,10 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
   safeSetItem(MESSAGE_COMMON_PLACES_KEY, JSON.stringify(nextCommonPlaces));
   safeSetItem(MESSAGE_PRESENCE_STATE_KEY, JSON.stringify(nextPresenceState));
   safeSetItem(MESSAGE_THREADS_KEY, JSON.stringify(nextMessageThreads));
+  if (shouldApplyPrivacyAllowlist) {
+    persistPrivacyAllowlistMetaItems(importedPrivacyAllowlistMeta);
+    persistStoredPrivacyAllowlistTerms(nextSettings.privacyAllowlist || []);
+  }
 
   homeState.settings = loadSettings();
   persistSettings(homeState.settings);

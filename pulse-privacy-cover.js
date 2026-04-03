@@ -4,9 +4,11 @@
   }
 
   const PRIVACY_ALLOWLIST_TERMS_KEY = "x_style_generator_privacy_allowlist_terms_v1";
+  const PRIVACY_ALLOWLIST_META_KEY = "x_style_generator_privacy_allowlist_meta_v1";
   const PRIVACY_IGNORELIST_TERMS_KEY = "x_style_generator_privacy_ignorelist_terms_v1";
   const CATEGORY_ORDER = ["NAME", "HANDLE", "ORG", "TITLE", "ADDR", "COORD", "TERM"];
   const AUTO_MASK_ALLOWED_CATEGORIES = new Set(["NAME", "TITLE", "TERM"]);
+  const NAME_ALIAS_LEVELS = ["FULL", "COMMON", "NICK", "PET", "HONOR"];
   const NAME_KEYS = new Set([
     "name",
     "username",
@@ -114,6 +116,11 @@
     return normalized;
   }
 
+  function normalizeNameAliasLevel(value = "") {
+    const normalized = trimText(value).toUpperCase();
+    return NAME_ALIAS_LEVELS.includes(normalized) ? normalized : "COMMON";
+  }
+
   function isDataLikeString(value) {
     const text = String(value || "").trim();
     return /^data:/i.test(text) || /^https?:\/\//i.test(text);
@@ -167,6 +174,29 @@
     return "TERM";
   }
 
+  function normalizeAllowlistMetaItems(value = []) {
+    const items = Array.isArray(value) ? value : [];
+    const unique = new Set();
+    return items
+      .map((item) => {
+        const text = trimText(item?.text);
+        return {
+          text,
+          source: trimText(item?.source) === "scan" ? "scan" : "manual",
+          category: detectCategory(text, item?.category),
+          nameGroupId: trimText(item?.nameGroupId || ""),
+          nameLevel: normalizeNameAliasLevel(item?.nameLevel)
+        };
+      })
+      .filter((item) => {
+        if (!item.text || unique.has(item.text)) {
+          return false;
+        }
+        unique.add(item.text);
+        return true;
+      });
+  }
+
   function createSessionId() {
     return `privacy_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   }
@@ -178,6 +208,18 @@
         return [];
       }
       return normalizeAllowlist(JSON.parse(raw));
+    } catch (_error) {
+      return [];
+    }
+  }
+
+  function readStoredPrivacyAllowlistMetaItems() {
+    try {
+      const raw = window.localStorage?.getItem(PRIVACY_ALLOWLIST_META_KEY);
+      if (!raw) {
+        return [];
+      }
+      return normalizeAllowlistMetaItems(JSON.parse(raw));
     } catch (_error) {
       return [];
     }
@@ -220,7 +262,30 @@
     return AUTO_MASK_ALLOWED_CATEGORIES.has(resolvedCategory);
   }
 
-  function registerTerm(session, rawTerm, category = "", source = "") {
+  function buildNameGroupKey(nameGroupId = "", fallback = "") {
+    return trimText(nameGroupId || fallback).toLowerCase();
+  }
+
+  function buildNamePlaceholder(session, rawTerm, meta = {}) {
+    const groupKey = buildNameGroupKey(meta.nameGroupId, rawTerm);
+    if (!groupKey) {
+      return "";
+    }
+    if (!session.nameEntityMap.has(groupKey)) {
+      session.counters.NAME = (session.counters.NAME || 0) + 1;
+      session.nameEntityMap.set(groupKey, session.counters.NAME);
+    }
+    const entityIndex = session.nameEntityMap.get(groupKey);
+    const level = normalizeNameAliasLevel(meta.nameLevel);
+    const variantKey = `${groupKey}::${level}`;
+    const variantIndex = (session.nameLevelVariantCounters.get(variantKey) || 0) + 1;
+    session.nameLevelVariantCounters.set(variantKey, variantIndex);
+    return variantIndex === 1
+      ? `__PG_NAME_${String(entityIndex).padStart(2, "0")}_${level}__`
+      : `__PG_NAME_${String(entityIndex).padStart(2, "0")}_${level}_${String(variantIndex).padStart(2, "0")}__`;
+  }
+
+  function registerTerm(session, rawTerm, category = "", source = "", meta = null) {
     if (!session || typeof session !== "object") {
       return null;
     }
@@ -232,7 +297,11 @@
       return null;
     }
 
-    const resolvedCategory = detectCategory(normalized, category);
+    const matchedMeta =
+      (meta && typeof meta === "object" ? meta : null) ||
+      session.allowlistMetaMap?.get(normalized) ||
+      null;
+    const resolvedCategory = detectCategory(normalized, matchedMeta?.category || category);
     if (!shouldAutoMaskCategory(resolvedCategory, source)) {
       return null;
     }
@@ -250,14 +319,28 @@
       return session.replacementMap.get(normalized);
     }
 
-    session.counters[resolvedCategory] = (session.counters[resolvedCategory] || 0) + 1;
-    const placeholder = `__PG_${resolvedCategory}_${String(
-      session.counters[resolvedCategory]
-    ).padStart(2, "0")}__`;
+    const placeholder =
+      resolvedCategory === "NAME"
+        ? buildNamePlaceholder(session, normalized, {
+            ...(matchedMeta || {}),
+            nameGroupId: trimText(matchedMeta?.nameGroupId || normalized),
+            nameLevel: normalizeNameAliasLevel(matchedMeta?.nameLevel)
+          })
+        : (() => {
+            session.counters[resolvedCategory] = (session.counters[resolvedCategory] || 0) + 1;
+            return `__PG_${resolvedCategory}_${String(
+              session.counters[resolvedCategory]
+            ).padStart(2, "0")}__`;
+          })();
     const entry = {
       raw: normalized,
       placeholder,
-      category: resolvedCategory
+      category: resolvedCategory,
+      nameGroupId:
+        resolvedCategory === "NAME"
+          ? trimText(matchedMeta?.nameGroupId || normalized)
+          : "",
+      nameLevel: resolvedCategory === "NAME" ? normalizeNameAliasLevel(matchedMeta?.nameLevel) : ""
     };
     session.replacementMap.set(normalized, entry);
     session.placeholderMap.set(placeholder, entry);
@@ -284,8 +367,9 @@
       if (!text) {
         return;
       }
+      const matchedMeta = session.allowlistMetaMap?.get(text) || null;
       if (NAME_KEYS.has(key)) {
-        registerTerm(session, text, "NAME", "structured");
+        registerTerm(session, text, matchedMeta?.category || "NAME", "structured", matchedMeta);
       } else if (HANDLE_KEYS.has(key)) {
         registerTerm(session, text, "HANDLE", "structured");
       } else if (ORG_KEYS.has(key)) {
@@ -294,6 +378,8 @@
         registerTerm(session, text, "ADDR", "structured");
       } else if (COORD_KEYS.has(key)) {
         registerTerm(session, text, "COORD", "structured");
+      } else if (matchedMeta) {
+        registerTerm(session, text, matchedMeta.category || "", "structured", matchedMeta);
       }
       return;
     }
@@ -415,7 +501,10 @@
     if (!session?.replacements?.length) {
       return "";
     }
-    return "注意：文中形如 __PG_NAME_01__、__PG_ADDR_01__ 的内容是本地匿名占位符，对应真实人物、组织、作品、地点等敏感信息。请直接按上下文理解，并保留这些占位符原样输出，不要猜测、补全、替换或搜索真实信息。";
+    const hasGroupedNames = session.replacements.some((entry) => String(entry?.category || "") === "NAME");
+    return hasGroupedNames
+      ? "注意：文中形如 __PG_NAME_01_COMMON__、__PG_NAME_01_NICK__、__PG_TITLE_01__ 的内容是本地匿名占位符。同一个人物会共享同一个 NAME 编号，后缀表示称呼方式与亲疏层级；它们仍然是同一个人。请直接按上下文理解，并保留这些占位符原样输出，不要猜测、补全、替换或搜索真实信息。"
+      : "注意：文中形如 __PG_NAME_01__、__PG_TITLE_01__ 的内容是本地匿名占位符，对应真实人物、作品等敏感信息。请直接按上下文理解，并保留这些占位符原样输出，不要猜测、补全、替换或搜索真实信息。";
   }
 
   function preparePrompt(value, session) {
@@ -440,7 +529,9 @@
       replacements: session.replacements.map((entry) => ({
         raw: entry.raw,
         placeholder: entry.placeholder,
-        category: entry.category
+        category: entry.category,
+        nameGroupId: entry.nameGroupId || "",
+        nameLevel: entry.nameLevel || ""
       }))
     };
   }
@@ -459,8 +550,11 @@
       replacementMap: new Map(),
       placeholderMap: new Map(),
       counters: Object.fromEntries(CATEGORY_ORDER.map((category) => [category, 0])),
+      nameEntityMap: new Map(),
+      nameLevelVariantCounters: new Map(),
       sourceTexts: [],
-      allowlist: []
+      allowlist: [],
+      allowlistMetaMap: new Map()
     };
     replacements.forEach((entry) => {
       const raw = trimText(entry?.raw);
@@ -469,7 +563,13 @@
         return;
       }
       const category = detectCategory(raw, entry?.category);
-      const hydrated = { raw, placeholder, category };
+      const hydrated = {
+        raw,
+        placeholder,
+        category,
+        nameGroupId: trimText(entry?.nameGroupId || ""),
+        nameLevel: category === "NAME" ? normalizeNameAliasLevel(entry?.nameLevel) : ""
+      };
       session.replacements.push(hydrated);
       session.replacementMap.set(raw, hydrated);
       session.placeholderMap.set(placeholder, hydrated);
@@ -791,8 +891,13 @@
       replacementMap: new Map(),
       placeholderMap: new Map(),
       counters: Object.fromEntries(CATEGORY_ORDER.map((category) => [category, 0])),
+      nameEntityMap: new Map(),
+      nameLevelVariantCounters: new Map(),
       sourceTexts: [],
       allowlist: getManualAllowlist(options.settings),
+      allowlistMetaMap: new Map(
+        readStoredPrivacyAllowlistMetaItems().map((item) => [item.text, item])
+      ),
       ignorelist: getManualIgnorelist(options.settings),
       ignoreSet: new Set()
     };
@@ -807,7 +912,8 @@
     });
 
     normalizeAllowlist(session.allowlist).forEach((term) => {
-      registerTerm(session, term, detectCategory(term, "TERM"), "allowlist");
+      const matchedMeta = session.allowlistMetaMap.get(term) || null;
+      registerTerm(session, term, matchedMeta?.category || detectCategory(term, "TERM"), "allowlist", matchedMeta);
     });
 
     const extraTerms = Array.isArray(options.extraTerms) ? options.extraTerms : [];
@@ -832,6 +938,8 @@
   window.PulsePrivacyCover = {
     createSession,
     normalizeAllowlist,
+    normalizeNameAliasLevel,
+    detectCategory,
     encodeText,
     encodeValue,
     decodeText,
