@@ -2619,7 +2619,7 @@ function persistProfile(profile) {
     storedProfile = {};
   }
 
-  safeSetItem(
+  return safeSetItem(
     PROFILE_KEY,
     JSON.stringify({
       ...storedProfile,
@@ -11388,10 +11388,22 @@ function attachEvents() {
   if (messagesProfileFormEl) {
     messagesProfileFormEl.addEventListener("submit", (event) => {
       event.preventDefault();
-      state.profile = getCurrentProfileDraft();
-      persistProfile(state.profile);
-      syncProfileStateFromStorage();
+      const draft = getCurrentProfileDraft();
+      state.profile = draft;
+      const persisted = persistProfile(draft);
+      if (persisted) {
+        syncProfileStateFromStorage();
+      }
       renderMessagesPage();
+      if (!persisted) {
+        setEditorStatus(
+          messagesProfileEditorStatusEl,
+          "个人资料已更新到当前页面，但本地缓存写入失败，请清理缓存后再试一次。",
+          "error"
+        );
+        setMessagesStatus("个人资料已更新到当前页面，但本地缓存写入失败。", "error");
+        return;
+      }
       setEditorStatus(messagesProfileEditorStatusEl, "资料已保存。", "success");
       setMessagesStatus("个人资料已同步更新。", "success");
       window.setTimeout(() => {

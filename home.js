@@ -2,8 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260403-183145";
-const APP_BUILD_UPDATED_AT = "2026-04-03 18:31:45";
+const APP_BUILD_VERSION = "20260403-184320";
+const APP_BUILD_UPDATED_AT = "2026-04-03 18:43:20";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -84,6 +84,7 @@ const privacyAppIgnoreSummaryEl = document.querySelector("#privacy-app-ignore-su
 const privacyAppIgnoreListEl = document.querySelector("#privacy-app-ignore-list");
 const privacyAppRecentSummaryEl = document.querySelector("#privacy-app-recent-summary");
 const privacyAppRecentListEl = document.querySelector("#privacy-app-recent-list");
+const privacyAppClearRecentBtn = document.querySelector("#privacy-app-clear-recent-btn");
 const privacyAppPendingSummaryEl = document.querySelector("#privacy-app-pending-summary");
 const privacyAppPendingListEl = document.querySelector("#privacy-app-pending-list");
 const privacyAppPendingSelectAllBtn = document.querySelector("#privacy-app-pending-select-all-btn");
@@ -2231,6 +2232,12 @@ function addRecentPrivacyHitToIgnorelist(itemId) {
   setPrivacyAppStatus(`已将“${nextText}”加入自动屏蔽排除词。`, "success");
 }
 
+function clearPrivacyRecentHits() {
+  resetPrivacyRecentHitsBaseline();
+  renderPrivacyRecentHitItems();
+  setPrivacyAppStatus("已清空最近命中；后续只显示新的真实命中。", "success");
+}
+
 function handlePrivacyAllowlistInput(event) {
   const target = event.target;
   if (
@@ -4280,6 +4287,12 @@ function attachHomeSettingsEvents() {
   if (privacyAppScanBtn) {
     privacyAppScanBtn.addEventListener("click", () => {
       scanCurrentPrivacyAllowlistCandidates();
+    });
+  }
+
+  if (privacyAppClearRecentBtn) {
+    privacyAppClearRecentBtn.addEventListener("click", () => {
+      clearPrivacyRecentHits();
     });
   }
 

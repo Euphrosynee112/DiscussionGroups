@@ -956,7 +956,8 @@ body.embedded .messages-shell {
   border-radius: 999px;
   background: #ffffff;
   outline: none;
-  font-size: 11px;
+  font-size: 13px;
+  line-height: 1.55;
   transform: translateY(6px);
 }
 
