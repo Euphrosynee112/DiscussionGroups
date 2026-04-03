@@ -2,8 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260403-182131";
-const APP_BUILD_UPDATED_AT = "2026-04-03 18:21:31";
+const APP_BUILD_VERSION = "20260403-183145";
+const APP_BUILD_UPDATED_AT = "2026-04-03 18:31:45";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -20,6 +20,7 @@ const PRIVACY_ALLOWLIST_META_KEY = "x_style_generator_privacy_allowlist_meta_v1"
 const PRIVACY_PENDING_SCAN_KEY = "x_style_generator_privacy_scan_pending_v1";
 const PRIVACY_ALLOWLIST_TERMS_KEY = "x_style_generator_privacy_allowlist_terms_v1";
 const PRIVACY_IGNORELIST_TERMS_KEY = "x_style_generator_privacy_ignorelist_terms_v1";
+const PRIVACY_RECENT_HITS_SINCE_KEY = "x_style_generator_privacy_recent_hits_since_v1";
 const DEFAULT_AUTO_SCHEDULE_DAYS = 3;
 const API_CONFIG_LIMIT = 12;
 const CONFIG_EXPORT_SCHEMA = "pulse-generator-config";
@@ -1309,6 +1310,22 @@ function persistStoredPrivacyIgnorelistTerms(terms = []) {
   );
 }
 
+function readPrivacyRecentHitsSince() {
+  return Number(readStoredJson(PRIVACY_RECENT_HITS_SINCE_KEY, 0)) || 0;
+}
+
+function persistPrivacyRecentHitsSince(value = 0) {
+  const timestamp = Number(value) || 0;
+  safeSetItem(PRIVACY_RECENT_HITS_SINCE_KEY, JSON.stringify(timestamp));
+  return timestamp;
+}
+
+function resetPrivacyRecentHitsBaseline(value = Date.now()) {
+  const nextValue = persistPrivacyRecentHitsSince(value);
+  homeState.privacyRecentHitItems = loadRecentPrivacyHitItems();
+  return nextValue;
+}
+
 function normalizePrivacyIgnorelistItems(items = []) {
   const unique = new Set();
   return normalizeObjectArray(items)
@@ -1336,6 +1353,7 @@ function persistPrivacyIgnorelistItems(items = []) {
   const normalizedItems = normalizePrivacyIgnorelistItems(items);
   persistStoredPrivacyIgnorelistTerms(normalizedItems.map((item) => item.text));
   homeState.privacyIgnorelistItems = normalizedItems;
+  resetPrivacyRecentHitsBaseline();
   persistPrivacyPendingCandidates(
     homeState.privacyPendingCandidates,
     homeState.privacyAllowlistItems.map((item) => item.text),
@@ -1366,11 +1384,16 @@ function normalizePrivacyRecentHitItems(items = []) {
 
 function loadRecentPrivacyHitItems(limit = 80) {
   const logs = window.PulseApiLog?.read ? window.PulseApiLog.read() : [];
+  const since = readPrivacyRecentHitsSince();
   const result = [];
   logs
     .slice()
     .reverse()
     .forEach((entry) => {
+      const createdAt = Number(entry?.createdAt) || 0;
+      if (since && createdAt && createdAt < since) {
+        return;
+      }
       const session = window.PulseApiLog?.getPrivacySession
         ? window.PulseApiLog.getPrivacySession(entry.id)
         : null;
@@ -1386,7 +1409,7 @@ function loadRecentPrivacyHitItems(limit = 80) {
           placeholder: String(replacement?.placeholder || "").trim(),
           category: String(replacement?.category || "TERM").trim() || "TERM",
           source: `${getPrivacyLogSourceLabel(entry.source)} · ${getPrivacyLogActionLabel(entry.action)}`,
-          createdAt: Number(entry.createdAt) || 0,
+          createdAt,
           logId: String(entry.id || "").trim()
         });
       });
@@ -1509,6 +1532,7 @@ function persistPrivacyAllowlistItems(items = []) {
   nextSettings.privacyAllowlist = normalizedItems.map((item) => item.text);
   persistSettings(nextSettings);
   persistStoredPrivacyAllowlistTerms(nextSettings.privacyAllowlist);
+  resetPrivacyRecentHitsBaseline();
   persistPrivacyAllowlistMetaItems(
     normalizedItems.map((item) => ({
       text: item.text,
@@ -1817,7 +1841,7 @@ function renderPrivacyRecentSummary() {
   }
   const total = homeState.privacyRecentHitItems.length;
   privacyAppRecentSummaryEl.textContent = total
-    ? `最近命中了 ${total} 个真实屏蔽词；你可以直接改名后加入白名单，或加入排除避免误伤。`
+    ? `最近命中了 ${total} 个真实屏蔽词；这里只显示最近一次白名单/排除词调整之后的新命中。`
     : "当前还没有最近实际屏蔽词记录；先触发一次 API 请求再回来查看。";
 }
 
@@ -2408,6 +2432,9 @@ function handlePrivacyAppClick(event) {
 }
 
 function initPrivacyAppState() {
+  if (!readPrivacyRecentHitsSince()) {
+    persistPrivacyRecentHitsSince(Date.now());
+  }
   homeState.settings = loadSettings({ forceActiveConfig: false });
   homeState.privacyAllowlistItems = loadPrivacyAllowlistItems();
   homeState.privacyIgnorelistItems = loadPrivacyIgnorelistItems();
@@ -3502,6 +3529,7 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
   if (shouldApplyPrivacyAllowlist) {
     persistPrivacyAllowlistMetaItems(importedPrivacyAllowlistMeta);
     persistStoredPrivacyAllowlistTerms(nextSettings.privacyAllowlist || []);
+    resetPrivacyRecentHitsBaseline();
   }
 
   homeState.settings = loadSettings();
@@ -4570,7 +4598,9 @@ function initHome() {
           SETTINGS_KEY,
           PRIVACY_ALLOWLIST_TERMS_KEY,
           PRIVACY_ALLOWLIST_META_KEY,
-          PRIVACY_PENDING_SCAN_KEY
+          PRIVACY_PENDING_SCAN_KEY,
+          PRIVACY_IGNORELIST_TERMS_KEY,
+          PRIVACY_RECENT_HITS_SINCE_KEY
         ].includes(targetKey)
       ) {
         return;
