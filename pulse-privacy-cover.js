@@ -6,6 +6,7 @@
   const PRIVACY_ALLOWLIST_TERMS_KEY = "x_style_generator_privacy_allowlist_terms_v1";
   const PRIVACY_IGNORELIST_TERMS_KEY = "x_style_generator_privacy_ignorelist_terms_v1";
   const CATEGORY_ORDER = ["NAME", "HANDLE", "ORG", "TITLE", "ADDR", "COORD", "TERM"];
+  const AUTO_MASK_ALLOWED_CATEGORIES = new Set(["NAME", "TITLE", "TERM"]);
   const NAME_KEYS = new Set([
     "name",
     "username",
@@ -207,6 +208,18 @@
     return normalizeAllowlist([...storedTerms, ...customTerms]);
   }
 
+  function shouldAutoMaskCategory(category = "", source = "") {
+    const resolvedCategory = trimText(category).toUpperCase();
+    const resolvedSource = trimText(source).toLowerCase();
+    if (!resolvedCategory) {
+      return false;
+    }
+    if (resolvedSource === "allowlist") {
+      return true;
+    }
+    return AUTO_MASK_ALLOWED_CATEGORIES.has(resolvedCategory);
+  }
+
   function registerTerm(session, rawTerm, category = "", source = "") {
     if (!session || typeof session !== "object") {
       return null;
@@ -220,6 +233,9 @@
     }
 
     const resolvedCategory = detectCategory(normalized, category);
+    if (!shouldAutoMaskCategory(resolvedCategory, source)) {
+      return null;
+    }
     const minLength =
       source === "allowlist" || resolvedCategory === "HANDLE" || resolvedCategory === "COORD"
         ? 1
@@ -312,26 +328,6 @@
       registerTerm(session, match[0], "TITLE", "detected");
     }
     BOOK_TITLE_REGEX.lastIndex = 0;
-
-    while ((match = COORD_REGEX.exec(value))) {
-      registerTerm(session, match[0], "COORD", "detected");
-    }
-    COORD_REGEX.lastIndex = 0;
-
-    while ((match = ADDRESS_LABEL_REGEX.exec(value))) {
-      registerTerm(session, match[1], "ADDR", "detected");
-    }
-    ADDRESS_LABEL_REGEX.lastIndex = 0;
-
-    while ((match = ORG_REGEX.exec(value))) {
-      registerTerm(session, match[0], "ORG", "detected");
-    }
-    ORG_REGEX.lastIndex = 0;
-
-    while ((match = ADDRESS_REGEX.exec(value))) {
-      registerTerm(session, match[0], "ADDR", "detected");
-    }
-    ADDRESS_REGEX.lastIndex = 0;
   }
 
   function getSortedReplacements(session) {

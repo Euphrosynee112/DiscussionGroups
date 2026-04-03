@@ -39,6 +39,7 @@ const MAX_CONTEXT_FOCUS_MINUTES = 1440;
 const DEFAULT_AUTO_SCHEDULE_DAYS = 3;
 const MAX_AUTO_SCHEDULE_DAYS = 14;
 const MAX_AWARENESS_HISTORY_ITEMS = 12;
+const MAX_AWARENESS_MONITOR_ROUNDS = 20;
 const AUTO_SCHEDULE_TIMER_INTERVAL_MS = 60 * 1000;
 const CONVERSATION_RENDER_BATCH_SIZE = 50;
 const CONVERSATION_SOFT_MESSAGE_LIMIT = 240;
@@ -1944,6 +1945,14 @@ function normalizeAutoScheduleTime(value = "") {
   return /^\d{2}:\d{2}$/.test(trimmed) ? trimmed : "";
 }
 
+function normalizeAwarenessResolvedState(value = "", legacyConsumed = false) {
+  const resolved = String(value || "").trim().toLowerCase();
+  if (resolved === "triggered" || resolved === "expired") {
+    return resolved;
+  }
+  return legacyConsumed ? "triggered" : "";
+}
+
 function resolveAwarenessTitle(title = "", awarenessText = "") {
   const resolvedTitle = String(title || "").trim();
   if (resolvedTitle) {
@@ -1984,6 +1993,18 @@ function buildAwarenessHistoryItem(triggered = false, roundCount = 0, note = "",
 function appendAwarenessHistory(contact = {}, entry = {}) {
   const history = normalizeAwarenessHistory(contact?.awarenessHistory || []);
   return normalizeAwarenessHistory([entry, ...history]);
+}
+
+function hasConfiguredAwareness(contact = null) {
+  return Boolean(String(contact?.awarenessText || "").trim());
+}
+
+function canAwarenessStillTrigger(contact = null) {
+  const resolvedState = normalizeAwarenessResolvedState(
+    contact?.awarenessResolvedState,
+    contact?.awarenessConsumed
+  );
+  return hasConfiguredAwareness(contact) && resolvedState !== "triggered" && resolvedState !== "expired";
 }
 
 function normalizeReplyTask(task, index = 0) {
@@ -2632,6 +2653,11 @@ function normalizeContact(contact, index = 0) {
     awarenessEmotionShift: String(source.awarenessEmotionShift || "").trim(),
     awarenessSensitivity: normalizeAwarenessSensitivity(source.awarenessSensitivity),
     awarenessConsumed: Boolean(source.awarenessConsumed),
+    awarenessResolvedState: normalizeAwarenessResolvedState(
+      source.awarenessResolvedState,
+      source.awarenessConsumed
+    ),
+    awarenessHistoryHidden: Boolean(source.awarenessHistoryHidden),
     awarenessCheckCount: Math.max(
       0,
       Number.parseInt(String(source.awarenessCheckCount || 0), 10) || 0
@@ -6818,15 +6844,26 @@ function renderAwarenessHistory(contact = null, conversation = null) {
     resolvedContact.awarenessTitle,
     resolvedContact.awarenessText
   );
+  const resolvedState = normalizeAwarenessResolvedState(
+    resolvedContact.awarenessResolvedState,
+    resolvedContact.awarenessConsumed
+  );
+  if (resolvedContact.awarenessHistoryHidden) {
+    messagesAwarenessHistoryEl.innerHTML =
+      '<div class="messages-awareness-history__empty">这条察觉已超过 20 轮，已从历史监控中移除。重新保存后会重新开始。</div>';
+    return;
+  }
   const summaryParts = [
     `当前察觉：${currentTitle}`,
     `累计判断 ${Math.max(0, Number.parseInt(String(resolvedContact.awarenessCheckCount || 0), 10) || 0)} 次`,
     `命中 ${Math.max(0, Number.parseInt(String(resolvedContact.awarenessTriggerCount || 0), 10) || 0)} 次`,
-    `当前进度 ${Math.min(currentRounds, threshold)}/${threshold} 轮`,
-    `每满 ${threshold} 轮才会判断一次`
+    `已监控 ${Math.min(currentRounds, MAX_AWARENESS_MONITOR_ROUNDS)}/${MAX_AWARENESS_MONITOR_ROUNDS} 轮`,
+    `可命中判断 ${Math.min(currentRounds, threshold)}/${threshold} 次`
   ];
-  if (resolvedContact.awarenessConsumed) {
+  if (resolvedState === "triggered") {
     summaryParts.push("当前察觉已触发并锁定");
+  } else if (resolvedState === "expired") {
+    summaryParts.push(`已满 ${threshold} 轮未命中，后续不再触发`);
   }
 
   messagesAwarenessHistoryEl.innerHTML = `
@@ -6856,7 +6893,7 @@ function renderAwarenessHistory(contact = null, conversation = null) {
                 .join("")}
             </div>
           `
-        : '<div class="messages-awareness-history__empty">还没有进入过察觉判断；达到设置的轮数后，这里会记录每次是否触发。</div>'
+        : '<div class="messages-awareness-history__empty">还没有进入过察觉判断；每成功获取 1 次 API 回复都会判断一次，直到命中或达到上限轮数。</div>'
     }
   `;
 }
@@ -6882,11 +6919,19 @@ function applyAwarenessToForm(contact = null) {
       resolvedContact?.awarenessSensitivity
     );
   }
-  setAwarenessStatus(
+  const resolvedState = normalizeAwarenessResolvedState(
+    resolvedContact?.awarenessResolvedState,
     resolvedContact?.awarenessConsumed
-      ? "这条察觉已经触发过；重新保存后会重新参与后续概率判断。"
-      : "",
-    resolvedContact?.awarenessConsumed ? "success" : ""
+  );
+  setAwarenessStatus(
+    resolvedContact?.awarenessHistoryHidden
+      ? "这条察觉已结束监控；重新保存后会重新开始。"
+      : resolvedState === "triggered"
+        ? "这条察觉已经触发过；重新保存后会重新参与后续概率判断。"
+        : resolvedState === "expired"
+          ? "这条察觉已满设定轮数仍未命中；重新保存后会重新参与后续概率判断。"
+          : "",
+    resolvedContact?.awarenessHistoryHidden || resolvedState ? "success" : ""
   );
   renderAwarenessHistory(resolvedContact, conversation);
 }
@@ -9194,6 +9239,11 @@ function getCurrentContactDraft() {
     awarenessEmotionShift: String(existingContact?.awarenessEmotionShift || "").trim(),
     awarenessSensitivity: normalizeAwarenessSensitivity(existingContact?.awarenessSensitivity),
     awarenessConsumed: Boolean(existingContact?.awarenessConsumed),
+    awarenessResolvedState: normalizeAwarenessResolvedState(
+      existingContact?.awarenessResolvedState,
+      existingContact?.awarenessConsumed
+    ),
+    awarenessHistoryHidden: Boolean(existingContact?.awarenessHistoryHidden),
     awarenessCheckCount: Math.max(
       0,
       Number.parseInt(String(existingContact?.awarenessCheckCount || 0), 10) || 0
@@ -10631,11 +10681,19 @@ async function requestConversationReply(options = {}) {
     0,
     Number.parseInt(String(conversation.awarenessCounter || 0), 10) || 0
   );
-  const shouldEvaluateAwareness =
+  const awarenessResolvedState = normalizeAwarenessResolvedState(
+    contact.awarenessResolvedState,
+    contact.awarenessConsumed
+  );
+  const hasAwarenessMonitor =
     !isRegenerate &&
-    currentAwarenessCounter + 1 >= promptSettings.awarenessIntervalRounds;
-  const hasActiveAwareness =
-    Boolean(String(contact.awarenessText || "").trim()) && !Boolean(contact.awarenessConsumed);
+    hasConfiguredAwareness(contact) &&
+    !Boolean(contact.awarenessHistoryHidden);
+  const shouldEvaluateAwareness =
+    hasAwarenessMonitor &&
+    currentAwarenessCounter < promptSettings.awarenessIntervalRounds &&
+    awarenessResolvedState !== "triggered" &&
+    awarenessResolvedState !== "expired";
   let triggeredAwareness = null;
   let awarenessTriggered = false;
   let awarenessHistoryEntry = null;
@@ -10684,15 +10742,20 @@ async function requestConversationReply(options = {}) {
     return task;
   }
 
-  if (shouldEvaluateAwareness && hasActiveAwareness) {
+  if (shouldEvaluateAwareness) {
     const probability = getAwarenessSensitivityProbability(contact.awarenessSensitivity);
     awarenessTriggered = Math.random() < probability;
+    const nextAwarenessRound = currentAwarenessCounter + 1;
+    const isFinalMissRound =
+      !awarenessTriggered && nextAwarenessRound >= promptSettings.awarenessIntervalRounds;
     awarenessHistoryEntry = buildAwarenessHistoryItem(
       awarenessTriggered,
-      currentAwarenessCounter + 1,
+      nextAwarenessRound,
       awarenessTriggered
         ? "已命中这次察觉判断，后续会主动把这条额外信息带入对话。"
-        : "本次未命中察觉判断，等待下一轮满足轮数后再判断。",
+        : isFinalMissRound
+          ? `已满 ${promptSettings.awarenessIntervalRounds} 轮仍未命中，后续不再触发。`
+          : "本次未命中察觉判断，下一轮会继续判断。",
       contact.awarenessTitle || contact.awarenessText
     );
     if (awarenessTriggered) {
@@ -10770,59 +10833,56 @@ async function requestConversationReply(options = {}) {
     pushConversationReplyNotification(contact, updatedConversation, createdMessages);
     repairPersistedChatWorldbookMounts(promptSettings);
     if (!isRegenerate) {
-      updatedConversation.awarenessCounter = shouldEvaluateAwareness
-        ? 0
-        : currentAwarenessCounter + 1;
-      if (awarenessTriggered) {
+      const nextAwarenessCounter = hasAwarenessMonitor ? currentAwarenessCounter + 1 : currentAwarenessCounter;
+      updatedConversation.awarenessCounter = nextAwarenessCounter;
+      if (awarenessTriggered || shouldEvaluateAwareness || (hasAwarenessMonitor && nextAwarenessCounter > MAX_AWARENESS_MONITOR_ROUNDS)) {
         const contactIndex = state.contacts.findIndex((item) => item.id === contact.id);
         if (contactIndex >= 0) {
+          const previousContact = state.contacts[contactIndex];
+          const nextResolvedState = awarenessTriggered
+            ? "triggered"
+            : shouldEvaluateAwareness && nextAwarenessCounter >= promptSettings.awarenessIntervalRounds
+              ? "expired"
+              : normalizeAwarenessResolvedState(
+                  previousContact.awarenessResolvedState,
+                  previousContact.awarenessConsumed
+                );
+          const shouldHideAwarenessMonitor =
+            Boolean(previousContact.awarenessHistoryHidden) ||
+            nextAwarenessCounter > MAX_AWARENESS_MONITOR_ROUNDS;
           state.contacts[contactIndex] = {
-            ...state.contacts[contactIndex],
-            awarenessConsumed: true,
+            ...previousContact,
+            awarenessConsumed: nextResolvedState === "triggered",
+            awarenessResolvedState: nextResolvedState,
+            awarenessHistoryHidden: shouldHideAwarenessMonitor,
             awarenessCheckCount:
               Math.max(
                 0,
                 Number.parseInt(
-                  String(state.contacts[contactIndex].awarenessCheckCount || 0),
+                  String(previousContact.awarenessCheckCount || 0),
                   10
                 ) || 0
-              ) + 1,
+              ) + (shouldEvaluateAwareness ? 1 : 0),
             awarenessTriggerCount:
               Math.max(
                 0,
                 Number.parseInt(
-                  String(state.contacts[contactIndex].awarenessTriggerCount || 0),
+                  String(previousContact.awarenessTriggerCount || 0),
                   10
                 ) || 0
-              ) + 1,
-            awarenessLastCheckedAt: awarenessHistoryEntry?.checkedAt || Date.now(),
-            awarenessLastTriggeredAt: awarenessHistoryEntry?.checkedAt || Date.now(),
-            awarenessHistory: appendAwarenessHistory(
-              state.contacts[contactIndex],
-              awarenessHistoryEntry || buildAwarenessHistoryItem(true, currentAwarenessCounter + 1)
-            ),
-            updatedAt: Date.now()
-          };
-          persistContacts();
-        }
-      } else if (shouldEvaluateAwareness && awarenessHistoryEntry) {
-        const contactIndex = state.contacts.findIndex((item) => item.id === contact.id);
-        if (contactIndex >= 0) {
-          state.contacts[contactIndex] = {
-            ...state.contacts[contactIndex],
-            awarenessCheckCount:
-              Math.max(
-                0,
-                Number.parseInt(
-                  String(state.contacts[contactIndex].awarenessCheckCount || 0),
-                  10
-                ) || 0
-              ) + 1,
-            awarenessLastCheckedAt: awarenessHistoryEntry.checkedAt || Date.now(),
-            awarenessHistory: appendAwarenessHistory(
-              state.contacts[contactIndex],
-              awarenessHistoryEntry
-            ),
+              ) + (awarenessTriggered ? 1 : 0),
+            awarenessLastCheckedAt:
+              shouldEvaluateAwareness
+                ? awarenessHistoryEntry?.checkedAt || Date.now()
+                : Number(previousContact.awarenessLastCheckedAt) || 0,
+            awarenessLastTriggeredAt:
+              awarenessTriggered
+                ? awarenessHistoryEntry?.checkedAt || Date.now()
+                : Number(previousContact.awarenessLastTriggeredAt) || 0,
+            awarenessHistory:
+              shouldEvaluateAwareness && awarenessHistoryEntry
+                ? appendAwarenessHistory(previousContact, awarenessHistoryEntry)
+                : normalizeAwarenessHistory(previousContact.awarenessHistory || []),
             updatedAt: Date.now()
           };
           persistContacts();
@@ -12136,7 +12196,12 @@ function attachEvents() {
     });
   }
 
-  [messagesAwarenessTextInputEl, messagesAwarenessEmotionInputEl, messagesAwarenessSensitivityInputEl]
+  [
+    messagesAwarenessTitleInputEl,
+    messagesAwarenessTextInputEl,
+    messagesAwarenessEmotionInputEl,
+    messagesAwarenessSensitivityInputEl
+  ]
     .filter(Boolean)
     .forEach((input) => {
       input.addEventListener("input", () => {
@@ -12192,6 +12257,10 @@ function attachEvents() {
         awarenessEmotionShift: draft.awarenessEmotionShift,
         awarenessSensitivity: draft.awarenessSensitivity,
         awarenessConsumed: changed ? false : Boolean(previous.awarenessConsumed),
+        awarenessResolvedState: changed
+          ? ""
+          : normalizeAwarenessResolvedState(previous.awarenessResolvedState, previous.awarenessConsumed),
+        awarenessHistoryHidden: changed ? false : Boolean(previous.awarenessHistoryHidden),
         awarenessCheckCount: changed
           ? 0
           : Math.max(0, Number.parseInt(String(previous.awarenessCheckCount || 0), 10) || 0),
@@ -12214,6 +12283,15 @@ function attachEvents() {
       renderMessagesPage();
       setAwarenessStatus("察觉已保存。", "success");
       setMessagesStatus("角色察觉已更新。", "success");
+      if (messagesAwarenessTitleInputEl) {
+        messagesAwarenessTitleInputEl.value = "";
+      }
+      if (messagesAwarenessTextInputEl) {
+        messagesAwarenessTextInputEl.value = "";
+      }
+      if (messagesAwarenessEmotionInputEl) {
+        messagesAwarenessEmotionInputEl.value = "";
+      }
       window.setTimeout(() => {
         setAwarenessModalOpen(false);
       }, 220);

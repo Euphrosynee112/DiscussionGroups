@@ -1430,10 +1430,13 @@ body.embedded {
 
 .messages-dialog-modal__panel {
   width: min(360px, 100%);
+  max-height: min(760px, calc(var(--messages-app-height) - 28px));
   border-radius: 22px;
   background: #ffffff;
   box-shadow: 0 28px 54px rgba(15, 23, 42, 0.22);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .messages-dialog-modal__header {
@@ -1470,6 +1473,9 @@ body.embedded {
   padding: 18px 16px 16px;
   display: grid;
   gap: 18px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  flex: 1 1 auto;
 }
 
 .messages-dialog-modal__field {
