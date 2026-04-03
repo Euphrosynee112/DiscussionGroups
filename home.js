@@ -2,8 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260402-235904";
-const APP_BUILD_UPDATED_AT = "2026-04-02 23:59:04";
+const APP_BUILD_VERSION = "20260403-122055";
+const APP_BUILD_UPDATED_AT = "2026-04-03 12:20:55";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -12,10 +12,14 @@ const PROFILE_POSTS_KEY = "x_style_generator_profile_posts_v1";
 const DISCUSSIONS_KEY = "x_style_generator_discussions_v1";
 const WORLD_BOOKS_KEY = "x_style_generator_message_worldbooks_v1";
 const MESSAGE_CONTACTS_KEY = "x_style_generator_message_contacts_v1";
+const MESSAGE_THREADS_KEY = "x_style_generator_message_threads_v1";
 const SCHEDULE_ENTRIES_KEY = "x_style_generator_schedule_entries_v1";
+const MESSAGE_COMMON_PLACES_KEY = "x_style_generator_common_places_v1";
+const MESSAGE_PRESENCE_STATE_KEY = "x_style_generator_presence_state_v1";
 const PRIVACY_ALLOWLIST_META_KEY = "x_style_generator_privacy_allowlist_meta_v1";
 const PRIVACY_PENDING_SCAN_KEY = "x_style_generator_privacy_scan_pending_v1";
 const PRIVACY_ALLOWLIST_TERMS_KEY = "x_style_generator_privacy_allowlist_terms_v1";
+const DEFAULT_AUTO_SCHEDULE_DAYS = 3;
 const API_CONFIG_LIMIT = 12;
 const CONFIG_EXPORT_SCHEMA = "pulse-generator-config";
 const TRANSFER_FORUM_BASE_ITEM_ID = "__forum_base__";
@@ -83,6 +87,7 @@ const privacyAppAddCloseBtn = document.querySelector("#privacy-app-add-close-btn
 const privacyAppAddCancelBtn = document.querySelector("#privacy-app-add-cancel-btn");
 const privacyAppAddApplyBtn = document.querySelector("#privacy-app-add-apply-btn");
 const privacyAppAddTextareaEl = document.querySelector("#privacy-app-add-textarea");
+let homeBackgroundMessagesFrameEl = null;
 
 const weekdayLabels = [
   "星期日",
@@ -107,7 +112,10 @@ const DEFAULT_SETTINGS = {
   translationApiConfigId: "",
   summaryApiEnabled: false,
   summaryApiConfigId: "",
-  privacyAllowlist: []
+  privacyAllowlist: [],
+  chatGlobalSettings: {
+    userPresenceScope: "global"
+  }
 };
 
 const homeState = {
@@ -266,6 +274,21 @@ function normalizePrivacyAllowlist(value) {
     });
 }
 
+function normalizeChatGlobalSettings(source = {}) {
+  const resolved = source && typeof source === "object" ? source : {};
+  return {
+    userPresenceScope: resolved.userPresenceScope === "per_contact" ? "per_contact" : "global"
+  };
+}
+
+function normalizeAutoScheduleDays(value, fallback = DEFAULT_AUTO_SCHEDULE_DAYS) {
+  const parsed = Number.parseInt(String(value ?? fallback), 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(14, Math.max(1, parsed));
+}
+
 function normalizeOpenAICompatibleEndpoint(endpoint) {
   const trimmed = String(endpoint || "").trim();
   if (!trimmed) {
@@ -397,6 +420,9 @@ function buildNormalizedSettingsSnapshot(source, options = {}) {
     merged.summaryApiEnabled = false;
   }
   merged.summaryApiEnabled = Boolean(merged.summaryApiEnabled && merged.summaryApiConfigId);
+  merged.chatGlobalSettings = normalizeChatGlobalSettings(
+    merged.chatGlobalSettings || source?.chatGlobalSettings || {}
+  );
   merged.privacyAllowlist = normalizePrivacyAllowlist(
     hasExplicitPrivacyAllowlist
       ? merged.privacyAllowlist || source?.privacyAllowlist || []
@@ -539,13 +565,209 @@ function buildScheduleTransferDescription(entry = {}) {
   return `${ownerType} · ${timeText}`;
 }
 
+function buildCommonPlaceTransferDescription(place = {}) {
+  const typeMap = {
+    home: "住宅",
+    family: "家庭",
+    work: "工作",
+    school: "学校",
+    leisure: "娱乐",
+    other: "其他"
+  };
+  const typeLabel = typeMap[String(place.type || "").trim()] || "其他";
+  const visibilityMode = String(place.visibilityMode || "").trim();
+  const visibilityLabel =
+    visibilityMode === "all_contacts"
+      ? "全部角色可见"
+      : visibilityMode === "selected_contacts"
+        ? "指定角色可见"
+        : "仅自己知道";
+  return `${typeLabel} · ${visibilityLabel}`;
+}
+
+function pickConversationChatSettingsPayload(conversation = {}) {
+  const source = conversation && typeof conversation === "object" ? conversation : {};
+  const contactId = String(source.contactId || "").trim();
+  if (!contactId) {
+    return null;
+  }
+  return {
+    contactId,
+    sceneMode: String(source.sceneMode || "").trim() === "offline" ? "offline" : "online",
+    allowAiPresenceUpdate: Boolean(source.allowAiPresenceUpdate),
+    allowAiAutoSchedule: Boolean(source.allowAiAutoSchedule),
+    autoScheduleDays: normalizeAutoScheduleDays(source.autoScheduleDays, DEFAULT_AUTO_SCHEDULE_DAYS)
+  };
+}
+
+function normalizeConversationChatSettingsPayloadItems(items = []) {
+  return normalizeObjectArray(items)
+    .map((item) => pickConversationChatSettingsPayload(item))
+    .filter(Boolean);
+}
+
+function buildContactAvatarTextFallback(contact = {}) {
+  const name = String(contact?.name || "").trim();
+  return name ? name.slice(0, 1).toUpperCase() : "联";
+}
+
+function mergeConversationChatSettings(existingThreads = [], incomingItems = [], contacts = []) {
+  const nextThreads = normalizeObjectArray(existingThreads).map((item) => ({
+    ...item,
+    messages: Array.isArray(item.messages) ? item.messages.map((message) => ({ ...message })) : []
+  }));
+  const normalizedIncoming = normalizeConversationChatSettingsPayloadItems(incomingItems);
+  const contactMap = new Map(
+    normalizeObjectArray(contacts).map((contact) => [String(contact.id || "").trim(), contact])
+  );
+
+  normalizedIncoming.forEach((item, index) => {
+    const contactId = String(item.contactId || "").trim();
+    if (!contactId) {
+      return;
+    }
+    const existingIndex = nextThreads.findIndex(
+      (thread) => String(thread.contactId || "").trim() === contactId
+    );
+    if (existingIndex >= 0) {
+      nextThreads[existingIndex] = {
+        ...nextThreads[existingIndex],
+        sceneMode: item.sceneMode,
+        allowAiPresenceUpdate: Boolean(item.allowAiPresenceUpdate),
+        allowAiAutoSchedule: Boolean(item.allowAiAutoSchedule),
+        autoScheduleDays: normalizeAutoScheduleDays(
+          item.autoScheduleDays,
+          nextThreads[existingIndex].autoScheduleDays || DEFAULT_AUTO_SCHEDULE_DAYS
+        )
+      };
+      return;
+    }
+    const contact = contactMap.get(contactId) || {};
+    nextThreads.push({
+      id: `conversation_imported_${Date.now()}_${index}_${contactId}`,
+      contactId,
+      contactNameSnapshot: String(contact.name || "").trim(),
+      contactAvatarImageSnapshot: String(contact.avatarImage || "").trim(),
+      contactAvatarTextSnapshot: String(
+        contact.avatarText || buildContactAvatarTextFallback(contact)
+      ).trim(),
+      sceneMode: item.sceneMode,
+      allowAiPresenceUpdate: Boolean(item.allowAiPresenceUpdate),
+      allowAiAutoSchedule: Boolean(item.allowAiAutoSchedule),
+      autoScheduleDays: normalizeAutoScheduleDays(
+        item.autoScheduleDays,
+        DEFAULT_AUTO_SCHEDULE_DAYS
+      ),
+      messages: [],
+      awarenessCounter: 0,
+      memorySummaryCounter: 0,
+      memorySummaryLastMessageCount: 0,
+      updatedAt: Date.now()
+    });
+  });
+
+  return nextThreads;
+}
+
+function normalizePresenceTransferEntry(source = {}) {
+  const resolved = source && typeof source === "object" ? source : {};
+  return {
+    presenceType: String(resolved.presenceType || "").trim() === "in_transit" ? "in_transit" : "at_place",
+    placeId: String(resolved.placeId || "").trim(),
+    fromPlaceId: String(resolved.fromPlaceId || "").trim(),
+    toPlaceId: String(resolved.toPlaceId || "").trim(),
+    updatedAt: Number(resolved.updatedAt) || 0
+  };
+}
+
+function normalizePresenceTransferState(value = {}) {
+  const resolved = value && typeof value === "object" ? value : {};
+  return {
+    userGlobal: normalizePresenceTransferEntry(resolved.userGlobal),
+    userByContact: Object.fromEntries(
+      Object.entries(resolved.userByContact || {}).map(([contactId, entry]) => [
+        String(contactId || "").trim(),
+        normalizePresenceTransferEntry(entry)
+      ])
+    ),
+    contacts: Object.fromEntries(
+      Object.entries(resolved.contacts || {}).map(([contactId, entry]) => [
+        String(contactId || "").trim(),
+        normalizePresenceTransferEntry(entry)
+      ])
+    )
+  };
+}
+
+function hasPresenceTransferEntryData(entry = {}) {
+  const normalized = normalizePresenceTransferEntry(entry);
+  return Boolean(
+    normalized.placeId ||
+      normalized.fromPlaceId ||
+      normalized.toPlaceId ||
+      normalized.updatedAt ||
+      normalized.presenceType === "in_transit"
+  );
+}
+
+function hasPresenceTransferStateData(value = {}) {
+  const normalized = normalizePresenceTransferState(value);
+  return (
+    hasPresenceTransferEntryData(normalized.userGlobal) ||
+    Object.values(normalized.userByContact).some((entry) => hasPresenceTransferEntryData(entry)) ||
+    Object.values(normalized.contacts).some((entry) => hasPresenceTransferEntryData(entry))
+  );
+}
+
+function sanitizePresenceTransferStateForPlaces(value = {}, commonPlaces = []) {
+  const normalized = normalizePresenceTransferState(value);
+  const validPlaceIds = new Set(
+    normalizeObjectArray(commonPlaces)
+      .map((place) => String(place.id || "").trim())
+      .filter(Boolean)
+  );
+  const sanitizeEntry = (entry) => {
+    const resolved = normalizePresenceTransferEntry(entry);
+    return {
+      ...resolved,
+      placeId: validPlaceIds.has(resolved.placeId) ? resolved.placeId : "",
+      fromPlaceId: validPlaceIds.has(resolved.fromPlaceId) ? resolved.fromPlaceId : "",
+      toPlaceId: validPlaceIds.has(resolved.toPlaceId) ? resolved.toPlaceId : ""
+    };
+  };
+
+  return {
+    userGlobal: sanitizeEntry(normalized.userGlobal),
+    userByContact: Object.fromEntries(
+      Object.entries(normalized.userByContact).map(([contactId, entry]) => [
+        contactId,
+        sanitizeEntry(entry)
+      ])
+    ),
+    contacts: Object.fromEntries(
+      Object.entries(normalized.contacts).map(([contactId, entry]) => [
+        contactId,
+        sanitizeEntry(entry)
+      ])
+    )
+  };
+}
+
 function buildTransferPayloadFromCurrentState() {
   const settings = loadSettings();
   const profile = readStoredJson(PROFILE_KEY, {}) || {};
   const chatProfile = pickChatProfilePayload(profile);
   const worldbooks = readStoredJson(WORLD_BOOKS_KEY, { categories: [], entries: [] }) || {};
   const contacts = readStoredJson(MESSAGE_CONTACTS_KEY, []) || [];
+  const messageThreads = readStoredJson(MESSAGE_THREADS_KEY, []) || [];
   const scheduleEntries = readStoredJson(SCHEDULE_ENTRIES_KEY, []) || [];
+  const commonPlaces = readStoredJson(MESSAGE_COMMON_PLACES_KEY, []) || [];
+  const presenceState =
+    readStoredJson(MESSAGE_PRESENCE_STATE_KEY, {
+      userGlobal: {},
+      userByContact: {},
+      contacts: {}
+    }) || {};
   const apiConfigs = normalizeApiConfigs(settings.apiConfigs || []);
 
   return {
@@ -599,10 +821,44 @@ function buildTransferPayloadFromCurrentState() {
         (item) => String(item.title || "").trim() && String(item.date || "").trim()
       )
     },
+    commonPlaces: {
+      entries: normalizeObjectArray(commonPlaces).filter((item) => String(item.name || "").trim())
+    },
+    presenceState:
+      presenceState && typeof presenceState === "object"
+        ? {
+            userGlobal:
+              presenceState.userGlobal && typeof presenceState.userGlobal === "object"
+                ? { ...presenceState.userGlobal }
+                : {},
+            userByContact:
+              presenceState.userByContact && typeof presenceState.userByContact === "object"
+                ? { ...presenceState.userByContact }
+                : {},
+            contacts:
+              presenceState.contacts && typeof presenceState.contacts === "object"
+                ? { ...presenceState.contacts }
+                : {}
+          }
+        : null,
     privacyAllowlist: normalizePrivacyAllowlist(settings.privacyAllowlist || []),
     contactChatSettings:
-      settings.messagePromptSettings && typeof settings.messagePromptSettings === "object"
-        ? { ...settings.messagePromptSettings }
+      (settings.messagePromptSettings && typeof settings.messagePromptSettings === "object") ||
+      (settings.chatGlobalSettings && typeof settings.chatGlobalSettings === "object") ||
+      Array.isArray(messageThreads)
+        ? {
+            promptSettings:
+              settings.messagePromptSettings && typeof settings.messagePromptSettings === "object"
+                ? { ...settings.messagePromptSettings }
+                : {},
+            chatGlobalSettings:
+              settings.chatGlobalSettings && typeof settings.chatGlobalSettings === "object"
+                ? { ...settings.chatGlobalSettings }
+                : {},
+            conversations: normalizeObjectArray(messageThreads)
+              .map((item) => pickConversationChatSettingsPayload(item))
+              .filter(Boolean)
+          }
         : null,
     bubbleMountSettings:
       settings.bubblePromptSettings && typeof settings.bubblePromptSettings === "object"
@@ -823,13 +1079,15 @@ function collectPrivacyScanTexts() {
   const profile = readStoredJson(PROFILE_KEY, {}) || {};
   const worldbooks = readStoredJson(WORLD_BOOKS_KEY, { categories: [], entries: [] }) || {};
   const contacts = normalizeObjectArray(readStoredJson(MESSAGE_CONTACTS_KEY, []));
+  const commonPlaces = normalizeObjectArray(readStoredJson(MESSAGE_COMMON_PLACES_KEY, []));
   const texts = [];
   const counts = {
     rolePersona: 0,
     userPersona: 0,
     specialUserPersona: 0,
     worldbook: 0,
-    forum: 0
+    forum: 0,
+    commonPlace: 0
   };
 
   function pushText(bucket, value, source) {
@@ -862,6 +1120,15 @@ function collectPrivacyScanTexts() {
     const entryName = String(entry.name || "未命名世界书").trim() || "未命名世界书";
     pushText("worldbook", entry.name, `世界书标题 · ${entryName}`);
     pushText("worldbook", entry.text, `世界书正文 · ${entryName}`);
+  });
+
+  commonPlaces.forEach((place) => {
+    const placeName = String(place.name || "未命名地点").trim() || "未命名地点";
+    pushText("commonPlace", place.name, `常用地点 · ${placeName} · 名称`);
+    normalizePrivacyAllowlist(place.aliases || []).forEach((alias) => {
+      pushText("commonPlace", alias, `常用地点 · ${placeName} · 别名`);
+    });
+    pushText("commonPlace", place.traitsText, `常用地点 · ${placeName} · 特殊性`);
   });
 
   pushText("forum", settings.worldview, "论坛设置 · 世界观");
@@ -1165,7 +1432,8 @@ function scanCurrentPrivacyAllowlistCandidates() {
     counts.userPersona +
     counts.specialUserPersona +
     counts.worldbook +
-    counts.forum;
+    counts.forum +
+    counts.commonPlace;
   setPrivacyAppStatus(
     `已扫描 ${sourceCount} 段配置文本，新增 ${nextCandidates.length} 个候选词到待确认区。`,
     "success"
@@ -1382,6 +1650,10 @@ function normalizeTransferPayload(parsed) {
         source.worldbooks && typeof source.worldbooks === "object" ? source.worldbooks : null,
       contacts: source.contacts && typeof source.contacts === "object" ? source.contacts : null,
       schedules: source.schedules && typeof source.schedules === "object" ? source.schedules : null,
+      commonPlaces:
+        source.commonPlaces && typeof source.commonPlaces === "object" ? source.commonPlaces : null,
+      presenceState:
+        source.presenceState && typeof source.presenceState === "object" ? source.presenceState : null,
       privacyAllowlist: normalizePrivacyAllowlist(source.privacyAllowlist || []),
       contactChatSettings:
         source.contactChatSettings && typeof source.contactChatSettings === "object"
@@ -1448,6 +1720,10 @@ function normalizeTransferPayload(parsed) {
     worldbooks: parsed.worldbooks && typeof parsed.worldbooks === "object" ? parsed.worldbooks : null,
     contacts: parsed.contacts && typeof parsed.contacts === "object" ? parsed.contacts : null,
     schedules: parsed.schedules && typeof parsed.schedules === "object" ? parsed.schedules : null,
+    commonPlaces:
+      parsed.commonPlaces && typeof parsed.commonPlaces === "object" ? parsed.commonPlaces : null,
+    presenceState:
+      parsed.presenceState && typeof parsed.presenceState === "object" ? parsed.presenceState : null,
     privacyAllowlist: normalizePrivacyAllowlist(parsed.privacyAllowlist || []),
     contactChatSettings:
       settings?.messagePromptSettings && typeof settings.messagePromptSettings === "object"
@@ -1472,7 +1748,11 @@ function buildTransferSections(payload, options = {}) {
   const scheduleEntries = normalizeObjectArray(payload?.schedules?.entries).filter(
     (item) => String(item.title || "").trim() && String(item.date || "").trim()
   );
+  const commonPlaceEntries = normalizeObjectArray(payload?.commonPlaces?.entries).filter((item) =>
+    String(item.name || "").trim()
+  );
   const privacyAllowlist = normalizePrivacyAllowlist(payload?.privacyAllowlist || []);
+  const hasPresenceState = hasPresenceTransferStateData(payload?.presenceState || {});
   const hasApiSecrets = Boolean(
     payload?.apiSecrets &&
       (String(payload.apiSecrets.currentToken || "").trim() ||
@@ -1593,6 +1873,35 @@ function buildTransferSections(payload, options = {}) {
         description: buildScheduleTransferDescription(entry),
         checked: true
       }))
+    },
+    {
+      id: "commonPlaces",
+      label: "常用地点",
+      description: "支持按地点局部导入导出；包含地点名称、别名、特殊性与可见角色。",
+      checked: commonPlaceEntries.length > 0,
+      disabled: commonPlaceEntries.length === 0,
+      items: commonPlaceEntries.map((place) => ({
+        id: String(place.id || "").trim(),
+        label: String(place.name || "常用地点").trim() || "常用地点",
+        description: truncateText(
+          [
+            buildCommonPlaceTransferDescription(place),
+            String(place.traitsText || "").trim()
+          ]
+            .filter(Boolean)
+            .join(" · "),
+          80
+        ),
+        checked: true
+      }))
+    },
+    {
+      id: "presenceState",
+      label: "地点状态",
+      description: "用户与角色当前的“在某地 / 在路上”状态快照。",
+      checked: hasPresenceState,
+      disabled: !hasPresenceState,
+      items: []
     },
     {
       id: "privacyAllowlist",
@@ -1903,6 +2212,23 @@ function buildSelectedTransferPayload(payload, selection) {
     };
   }
 
+  const commonPlacesSection = sectionMap.get("commonPlaces");
+  if (commonPlacesSection?.checked && payload.commonPlaces) {
+    const selectedIds = new Set(
+      commonPlacesSection.items.filter((item) => item.checked).map((item) => item.id)
+    );
+    selected.commonPlaces = {
+      entries: normalizeObjectArray(payload.commonPlaces.entries).filter((place) =>
+        selectedIds.has(String(place.id || "").trim())
+      )
+    };
+  }
+
+  const presenceStateSection = sectionMap.get("presenceState");
+  if (presenceStateSection?.checked && payload.presenceState) {
+    selected.presenceState = normalizePresenceTransferState(payload.presenceState);
+  }
+
   const privacyAllowlistSection = sectionMap.get("privacyAllowlist");
   if (privacyAllowlistSection?.checked) {
     const terms = normalizePrivacyAllowlist(payload.privacyAllowlist || []);
@@ -1928,7 +2254,7 @@ function buildHomeConfigExportPayload(selection = homeState.exportTransferSelect
   const fullPayload = buildTransferPayloadFromCurrentState();
   return {
     schema: CONFIG_EXPORT_SCHEMA,
-    version: 7,
+    version: 8,
     exportedAt: new Date().toISOString(),
     data: buildSelectedTransferPayload(fullPayload, selection)
   };
@@ -2006,6 +2332,15 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
     }) || { categories: [], entries: [] };
   let nextContacts = normalizeObjectArray(readStoredJson(MESSAGE_CONTACTS_KEY, []));
   let nextSchedules = normalizeObjectArray(readStoredJson(SCHEDULE_ENTRIES_KEY, []));
+  let nextCommonPlaces = normalizeObjectArray(readStoredJson(MESSAGE_COMMON_PLACES_KEY, []));
+  let nextPresenceState = normalizePresenceTransferState(
+    readStoredJson(MESSAGE_PRESENCE_STATE_KEY, {
+      userGlobal: {},
+      userByContact: {},
+      contacts: {}
+    }) || {}
+  );
+  let nextMessageThreads = normalizeObjectArray(readStoredJson(MESSAGE_THREADS_KEY, []));
 
   if (imported.apiConfig) {
     nextSettings.mode = normalizeApiMode(imported.apiConfig.current?.mode);
@@ -2113,14 +2448,51 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
     nextSchedules = mergeById(nextSchedules, imported.schedules.entries);
   }
 
+  if (imported.commonPlaces) {
+    nextCommonPlaces = mergeById(nextCommonPlaces, imported.commonPlaces.entries);
+  }
+
+  if (imported.presenceState && typeof imported.presenceState === "object") {
+    nextPresenceState = normalizePresenceTransferState(imported.presenceState);
+  }
+
   if (Array.isArray(imported.privacyAllowlist) || typeof imported.privacyAllowlist === "string") {
     nextSettings.privacyAllowlist = normalizePrivacyAllowlist(imported.privacyAllowlist);
   }
 
   if (imported.contactChatSettings && typeof imported.contactChatSettings === "object") {
-    nextSettings.messagePromptSettings = {
-      ...imported.contactChatSettings
-    };
+    const nestedPromptSettings =
+      imported.contactChatSettings.promptSettings &&
+      typeof imported.contactChatSettings.promptSettings === "object"
+        ? imported.contactChatSettings.promptSettings
+        : null;
+    const legacyPromptSettings =
+      !nestedPromptSettings &&
+      !Object.prototype.hasOwnProperty.call(imported.contactChatSettings, "chatGlobalSettings") &&
+      !Object.prototype.hasOwnProperty.call(imported.contactChatSettings, "conversations")
+        ? imported.contactChatSettings
+        : null;
+
+    if (nestedPromptSettings || legacyPromptSettings) {
+      nextSettings.messagePromptSettings = {
+        ...(nestedPromptSettings || legacyPromptSettings)
+      };
+    }
+    if (
+      imported.contactChatSettings.chatGlobalSettings &&
+      typeof imported.contactChatSettings.chatGlobalSettings === "object"
+    ) {
+      nextSettings.chatGlobalSettings = normalizeChatGlobalSettings(
+        imported.contactChatSettings.chatGlobalSettings
+      );
+    }
+    if (Array.isArray(imported.contactChatSettings.conversations)) {
+      nextMessageThreads = mergeConversationChatSettings(
+        nextMessageThreads,
+        imported.contactChatSettings.conversations,
+        nextContacts
+      );
+    }
   }
 
   if (imported.bubbleMountSettings && typeof imported.bubbleMountSettings === "object") {
@@ -2132,12 +2504,16 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
   nextSettings = buildNormalizedSettingsSnapshot(nextSettings, {
     forceActiveConfig: Boolean(imported.apiConfig || imported.apiSecrets)
   });
+  nextPresenceState = sanitizePresenceTransferStateForPlaces(nextPresenceState, nextCommonPlaces);
 
   safeSetItem(SETTINGS_KEY, JSON.stringify(nextSettings));
   safeSetItem(PROFILE_KEY, JSON.stringify(nextProfile));
   safeSetItem(WORLD_BOOKS_KEY, JSON.stringify(nextWorldbooks));
   safeSetItem(MESSAGE_CONTACTS_KEY, JSON.stringify(nextContacts));
   safeSetItem(SCHEDULE_ENTRIES_KEY, JSON.stringify(nextSchedules));
+  safeSetItem(MESSAGE_COMMON_PLACES_KEY, JSON.stringify(nextCommonPlaces));
+  safeSetItem(MESSAGE_PRESENCE_STATE_KEY, JSON.stringify(nextPresenceState));
+  safeSetItem(MESSAGE_THREADS_KEY, JSON.stringify(nextMessageThreads));
 
   homeState.settings = loadSettings();
   persistSettings(homeState.settings);
@@ -2773,6 +3149,26 @@ function openHomeApp(tabName) {
   setHomeBrowserModalOpen(true, targetUrl, getHomeAppMeta("home"));
 }
 
+function ensureBackgroundMessagesWorker() {
+  if (isPrivacyAppView() || homeBackgroundMessagesFrameEl) {
+    return;
+  }
+  const iframe = document.createElement("iframe");
+  iframe.id = "home-background-messages-frame";
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.tabIndex = -1;
+  iframe.src = `./messages.html?embed=1&background=1&v=${APP_BUILD_VERSION}`;
+  iframe.style.position = "fixed";
+  iframe.style.width = "0";
+  iframe.style.height = "0";
+  iframe.style.border = "0";
+  iframe.style.opacity = "0";
+  iframe.style.pointerEvents = "none";
+  iframe.style.inset = "auto";
+  document.body?.appendChild(iframe);
+  homeBackgroundMessagesFrameEl = iframe;
+}
+
 function attachHomeSettingsEvents() {
   homeAppTriggers.forEach((trigger) => {
     trigger.addEventListener("click", () => {
@@ -2819,12 +3215,17 @@ function attachHomeSettingsEvents() {
 
   window.addEventListener("message", (event) => {
     const frameWindow = homeBrowserFrameEl?.contentWindow || null;
-    if (frameWindow && event.source && event.source !== frameWindow) {
+    const backgroundFrameWindow = homeBackgroundMessagesFrameEl?.contentWindow || null;
+    const acceptedSources = [frameWindow, backgroundFrameWindow].filter(Boolean);
+    if (event.source && acceptedSources.length && !acceptedSources.includes(event.source)) {
       return;
     }
     if (event.data?.type === "pulse-generator-close-app") {
       setHomeBrowserModalOpen(false);
       return;
+    }
+    if (event.data?.type === "pulse-generator-message-notification") {
+      window.PulseMessageNotifications?.push?.(event.data.payload || {});
     }
   });
 
@@ -3175,6 +3576,7 @@ function initHome() {
   }
 
   setPrivacyAppVisible(false);
+  ensureBackgroundMessagesWorker();
   syncHomeActiveConfigSummary();
   refreshHomeTransferExportSelection();
 }

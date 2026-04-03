@@ -2,8 +2,6 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const GLOBAL_PROMPT_GUARD =
-  "虚拟世界观，与真实世界无关。禁止搜索未提供的任何其他信息。";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const PROFILE_KEY = "x_style_generator_profile_v1";
 const PROFILE_POSTS_KEY = "x_style_generator_profile_posts_v1";
@@ -46,14 +44,7 @@ const DEFAULT_PROFILE = {
 };
 
 function prependGlobalPromptGuard(text) {
-  const resolvedText = String(text || "").trim();
-  if (!resolvedText) {
-    return GLOBAL_PROMPT_GUARD;
-  }
-  if (resolvedText.startsWith(GLOBAL_PROMPT_GUARD)) {
-    return resolvedText;
-  }
-  return `${GLOBAL_PROMPT_GUARD}\n\n${resolvedText}`;
+  return String(text || "").trim();
 }
 
 const FAN_EMOJI_POOL = [

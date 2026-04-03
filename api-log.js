@@ -78,7 +78,9 @@
     }
 
     if (text.length > 4000) {
-      return `${text.slice(0, 4000)}\n…[已截断 ${text.length - 4000} 个字符]`;
+      const headLength = 2800;
+      const tailLength = 900;
+      return `${text.slice(0, headLength)}\n…[中间省略 ${text.length - headLength - tailLength} 个字符]…\n${text.slice(-tailLength)}`;
     }
 
     return text;
@@ -239,7 +241,9 @@
       if (!text || text.length <= limit) {
         return text;
       }
-      return `${text.slice(0, limit)}\n…[已截断 ${text.length - limit} 个字符]`;
+      const headLength = Math.max(120, Math.floor(limit * 0.72));
+      const tailLength = Math.max(80, Math.floor(limit * 0.2));
+      return `${text.slice(0, headLength)}\n…[中间省略 ${text.length - headLength - tailLength} 个字符]…\n${text.slice(-tailLength)}`;
     };
     const compactValue = (value, depth = 0) => {
       if (depth > 4) {

@@ -16,6 +16,9 @@ const MESSAGE_JOURNAL_ENTRIES_KEY = "x_style_generator_message_journal_entries_v
 const MESSAGE_WEATHER_CACHE_KEY = "x_style_generator_message_weather_cache_v1";
 const MESSAGE_MEMORIES_KEY = "x_style_generator_message_memories_v1";
 const MESSAGE_RECENT_LOCATIONS_KEY = "x_style_generator_message_recent_locations_v1";
+const MESSAGE_COMMON_PLACES_KEY = "x_style_generator_common_places_v1";
+const MESSAGE_PRESENCE_STATE_KEY = "x_style_generator_presence_state_v1";
+const MESSAGE_REPLY_TASKS_KEY = "x_style_generator_message_reply_tasks_v1";
 const DEFAULT_TEMPERATURE = 0.85;
 const DEFAULT_MESSAGE_HISTORY_ROUNDS = 6;
 const MAX_MESSAGE_HISTORY_ROUNDS = 20;
@@ -33,14 +36,20 @@ const DEFAULT_CORE_MEMORY_THRESHOLD = 80;
 const DEFAULT_SCENE_MEMORY_THRESHOLD = 65;
 const DEFAULT_CONTEXT_FOCUS_MINUTES = 60;
 const MAX_CONTEXT_FOCUS_MINUTES = 1440;
+const DEFAULT_AUTO_SCHEDULE_DAYS = 3;
+const MAX_AUTO_SCHEDULE_DAYS = 14;
+const MAX_AWARENESS_HISTORY_ITEMS = 12;
+const CONVERSATION_RENDER_BATCH_SIZE = 50;
 const CONVERSATION_SOFT_MESSAGE_LIMIT = 240;
 const CONVERSATION_MIN_MESSAGE_LIMIT = 80;
 const CONVERSATION_STORAGE_TARGET_CHARS = 1400000;
 const CONVERSATION_IMAGE_PAYLOAD_KEEP_COUNT = 20;
-const GLOBAL_PROMPT_GUARD =
-  "虚拟世界观，与真实世界无关。禁止搜索未提供的任何其他信息。";
 const DEFAULT_WORLDVIEW =
   "这是一个强调长期主义、产品洞察和公共讨论质量的中文社交世界。用户习惯像在 X 上一样快速表达观点，但会天然追问效率、增长、AI 和平台变迁。整体语气要真实、犀利、能引发跟帖，不要写成官方通稿。";
+
+const DEFAULT_CHAT_GLOBAL_SETTINGS = {
+  userPresenceScope: "global"
+};
 
 const DEFAULT_SETTINGS = {
   mode: "openai",
@@ -55,6 +64,9 @@ const DEFAULT_SETTINGS = {
   summaryApiConfigId: "",
   privacyAllowlist: [],
   worldview: DEFAULT_WORLDVIEW,
+  chatGlobalSettings: {
+    ...DEFAULT_CHAT_GLOBAL_SETTINGS
+  },
   messagePromptSettings: {
     historyRounds: DEFAULT_MESSAGE_HISTORY_ROUNDS,
     replySentenceLimit: DEFAULT_MESSAGE_REPLY_SENTENCE_LIMIT,
@@ -73,6 +85,7 @@ const DEFAULT_SETTINGS = {
     worldbookIds: [],
     forumPostFocusEnabled: false,
     bubbleFocusEnabled: false,
+    sceneMode: "online",
     showContactAvatar: true,
     showUserAvatar: true
   }
@@ -91,6 +104,15 @@ const DEFAULT_PROFILE = {
     "这个用户理性、克制、对产品与内容趋势敏感，说话直接但不失礼貌，偏爱长期主义和结构化表达。"
 };
 
+const COMMON_PLACE_TYPE_OPTIONS = [
+  { value: "home", label: "住宅" },
+  { value: "family", label: "家庭" },
+  { value: "work", label: "工作" },
+  { value: "school", label: "学校" },
+  { value: "leisure", label: "娱乐" },
+  { value: "other", label: "其他" }
+];
+
 const TAB_TITLES = {
   chat: "微信",
   contacts: "通讯录",
@@ -101,6 +123,7 @@ const CONTACT_ENTRY_GROUPS = [
   [
     { id: "memory", label: "记忆", icon: "memory" },
     { id: "worldbook", label: "世界书", icon: "cube" },
+    { id: "places", label: "常用地点", icon: "pin" },
     { id: "favorites", label: "收藏", icon: "star" },
     { id: "moments", label: "朋友圈", icon: "image" },
     { id: "emoji", label: "表情", icon: "smile" }
@@ -130,6 +153,7 @@ const CHAT_UTILITY_ITEMS = [
 ];
 
 const messagesNavBtnEl = document.querySelector("#messages-nav-btn");
+const messagesChatSceneBtnEl = document.querySelector("#messages-chat-scene-btn");
 const messagesChatSettingsBtnEl = document.querySelector("#messages-chat-settings-btn");
 const messagesSearchBtnEl = document.querySelector("#messages-search-btn");
 const messagesAddBtnEl = document.querySelector("#messages-add-btn");
@@ -219,9 +243,134 @@ const messagesChatShowContactAvatarInputEl = document.querySelector(
 const messagesChatShowUserAvatarInputEl = document.querySelector(
   "#messages-chat-show-user-avatar-input"
 );
+const messagesChatAllowAiPresenceUpdateInputEl = document.querySelector(
+  "#messages-chat-allow-ai-presence-update-input"
+);
+const messagesChatAllowAiAutoScheduleInputEl = document.querySelector(
+  "#messages-chat-allow-ai-auto-schedule-input"
+);
+const messagesChatAutoScheduleDaysInputEl = document.querySelector(
+  "#messages-chat-auto-schedule-days-input"
+);
+const messagesChatAutoScheduleGenerateBtnEl = document.querySelector(
+  "#messages-chat-auto-schedule-generate-btn"
+);
 const messagesChatClearHistoryBtnEl = document.querySelector("#messages-chat-clear-history-btn");
 const messagesChatClearMemoryBtnEl = document.querySelector("#messages-chat-clear-memory-btn");
 const messagesChatSettingsStatusEl = document.querySelector("#messages-chat-settings-status");
+const messagesSceneModalEl = document.querySelector("#messages-scene-modal");
+const messagesSceneCloseBtnEl = document.querySelector("#messages-scene-close-btn");
+const messagesSceneFormEl = document.querySelector("#messages-scene-form");
+const messagesSceneSaveBtnEl = document.querySelector("#messages-scene-save-btn");
+const messagesSceneOnlineBtnEl = document.querySelector("#messages-scene-online-btn");
+const messagesSceneOfflineBtnEl = document.querySelector("#messages-scene-offline-btn");
+const messagesSceneStatusEl = document.querySelector("#messages-scene-status");
+const messagesSceneUserScopeNoteEl = document.querySelector("#messages-scene-user-scope-note");
+const messagesSceneUserPresenceTypeInputEl = document.querySelector(
+  "#messages-scene-user-presence-type-input"
+);
+const messagesSceneUserAtPlaceFieldsEl = document.querySelector(
+  "#messages-scene-user-at-place-fields"
+);
+const messagesSceneUserTransitFieldsEl = document.querySelector(
+  "#messages-scene-user-transit-fields"
+);
+const messagesSceneUserPlaceSelectEl = document.querySelector("#messages-scene-user-place-select");
+const messagesSceneUserFromPlaceSelectEl = document.querySelector(
+  "#messages-scene-user-from-place-select"
+);
+const messagesSceneUserToPlaceSelectEl = document.querySelector(
+  "#messages-scene-user-to-place-select"
+);
+const messagesSceneContactPresenceTypeInputEl = document.querySelector(
+  "#messages-scene-contact-presence-type-input"
+);
+const messagesSceneContactAtPlaceFieldsEl = document.querySelector(
+  "#messages-scene-contact-at-place-fields"
+);
+const messagesSceneContactTransitFieldsEl = document.querySelector(
+  "#messages-scene-contact-transit-fields"
+);
+const messagesSceneContactPlaceSelectEl = document.querySelector(
+  "#messages-scene-contact-place-select"
+);
+const messagesSceneContactFromPlaceSelectEl = document.querySelector(
+  "#messages-scene-contact-from-place-select"
+);
+const messagesSceneContactToPlaceSelectEl = document.querySelector(
+  "#messages-scene-contact-to-place-select"
+);
+const messagesSceneSyncPlaceBtnEl = document.querySelector("#messages-scene-sync-place-btn");
+const messagesSceneManagePlacesBtnEl = document.querySelector("#messages-scene-manage-places-btn");
+const messagesChatGlobalSettingsModalEl = document.querySelector(
+  "#messages-chat-global-settings-modal"
+);
+const messagesChatGlobalSettingsCloseBtnEl = document.querySelector(
+  "#messages-chat-global-settings-close-btn"
+);
+const messagesChatGlobalSettingsCancelBtnEl = document.querySelector(
+  "#messages-chat-global-settings-cancel-btn"
+);
+const messagesChatGlobalSettingsFormEl = document.querySelector(
+  "#messages-chat-global-settings-form"
+);
+const messagesChatUserPresenceScopeInputEl = document.querySelector(
+  "#messages-chat-user-presence-scope-input"
+);
+const messagesChatGlobalSettingsStatusEl = document.querySelector(
+  "#messages-chat-global-settings-status"
+);
+const messagesPlacesModalEl = document.querySelector("#messages-places-modal");
+const messagesPlacesCloseBtnEl = document.querySelector("#messages-places-close-btn");
+const messagesPlacesAddBtnEl = document.querySelector("#messages-places-add-btn");
+const messagesPlaceSearchInputEl = document.querySelector("#messages-place-search-input");
+const messagesPlaceSearchBtnEl = document.querySelector("#messages-place-search-btn");
+const messagesPlaceFilterSelectEl = document.querySelector("#messages-place-filter-select");
+const messagesPlacesStatusEl = document.querySelector("#messages-places-status");
+const messagesPlacesListEl = document.querySelector("#messages-places-list");
+const messagesPlaceEditorModalEl = document.querySelector("#messages-place-editor-modal");
+const messagesPlaceEditorCloseBtnEl = document.querySelector("#messages-place-editor-close-btn");
+const messagesPlaceEditorTitleEl = document.querySelector("#messages-place-editor-title");
+const messagesPlaceEditorFormEl = document.querySelector("#messages-place-editor-form");
+const messagesPlaceNameInputEl = document.querySelector("#messages-place-name-input");
+const messagesPlaceTypeSelectEl = document.querySelector("#messages-place-type-select");
+const messagesPlaceAliasesInputEl = document.querySelector("#messages-place-aliases-input");
+const messagesPlaceTraitsInputEl = document.querySelector("#messages-place-traits-input");
+const messagesPlaceVisibilitySelectEl = document.querySelector("#messages-place-visibility-select");
+const messagesPlaceVisibleContactsFieldEl = document.querySelector(
+  "#messages-place-visible-contacts-field"
+);
+const messagesPlaceVisibleContactsListEl = document.querySelector(
+  "#messages-place-visible-contacts-list"
+);
+const messagesPlaceEditorStatusEl = document.querySelector("#messages-place-editor-status");
+const messagesPlaceEditorSetUserBtnEl = document.querySelector(
+  "#messages-place-editor-set-user-btn"
+);
+const messagesPlaceEditorSetContactBtnEl = document.querySelector(
+  "#messages-place-editor-set-contact-btn"
+);
+const messagesPlaceEditorDeleteBtnEl = document.querySelector(
+  "#messages-place-editor-delete-btn"
+);
+const messagesSceneSyncModalEl = document.querySelector("#messages-scene-sync-modal");
+const messagesSceneSyncCloseBtnEl = document.querySelector("#messages-scene-sync-close-btn");
+const messagesSceneSyncDescriptionEl = document.querySelector(
+  "#messages-scene-sync-description"
+);
+const messagesSceneSyncPlaceSelectEl = document.querySelector(
+  "#messages-scene-sync-place-select"
+);
+const messagesSceneSyncStatusEl = document.querySelector("#messages-scene-sync-status");
+const messagesSceneSyncUseUserBtnEl = document.querySelector(
+  "#messages-scene-sync-use-user-btn"
+);
+const messagesSceneSyncUseContactBtnEl = document.querySelector(
+  "#messages-scene-sync-use-contact-btn"
+);
+const messagesSceneSyncUseCustomBtnEl = document.querySelector(
+  "#messages-scene-sync-use-custom-btn"
+);
 
 const messagesWorldbookModalEl = document.querySelector("#messages-worldbook-modal");
 const messagesWorldbookCloseBtnEl = document.querySelector("#messages-worldbook-close-btn");
@@ -282,6 +431,7 @@ const messagesAwarenessEmotionInputEl = document.querySelector(
 const messagesAwarenessSensitivityInputEl = document.querySelector(
   "#messages-awareness-sensitivity-input"
 );
+const messagesAwarenessHistoryEl = document.querySelector("#messages-awareness-history");
 const messagesAwarenessStatusEl = document.querySelector("#messages-awareness-status");
 const messagesJournalModalEl = document.querySelector("#messages-journal-modal");
 const messagesJournalCloseBtnEl = document.querySelector("#messages-journal-close-btn");
@@ -365,10 +515,13 @@ const state = {
   contacts: loadContacts(),
   conversations: loadConversations(),
   worldbooks: loadWorldbooks(),
+  commonPlaces: loadCommonPlaces(),
+  presenceState: loadPresenceState(),
   journalEntries: loadJournalEntries(),
   memories: loadMessageMemories(),
   recentLocations: loadRecentLocations(),
   chatPromptSettings: loadSettings().messagePromptSettings,
+  chatGlobalSettings: normalizeChatGlobalSettings(loadSettings().chatGlobalSettings),
   activeTab: "chat",
   activeConversationId: "",
   query: "",
@@ -380,8 +533,14 @@ const state = {
   contactEditorAvatarImage: "",
   conversationPickerOpen: false,
   chatSettingsOpen: false,
+  chatGlobalSettingsOpen: false,
   worldbookManagerOpen: false,
   worldbookEditorOpen: false,
+  placesManagerOpen: false,
+  placeEditorOpen: false,
+  placeEditorId: "",
+  placeQuery: "",
+  placeFilterType: "all",
   worldbookEditorMode: "entry",
   worldbookEditingEntryId: "",
   worldbookCollapsedGroupIds: [],
@@ -412,7 +571,11 @@ const state = {
   journalWeatherError: "",
   journalStatusMessage: "",
   journalStatusTone: "",
+  backgroundReplyTaskBusy: false,
   windowFocusPrimed: initialWindowFocusPrimed,
+  conversationVisibleCounts: {},
+  sceneModalOpen: false,
+  sceneSyncModalOpen: false,
   pendingConversationRenderOptions: null
 };
 
@@ -423,6 +586,19 @@ function isEmbeddedView() {
   } catch (_error) {
     return false;
   }
+}
+
+function isBackgroundMessagesWorker() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("background") === "1";
+  } catch (_error) {
+    return false;
+  }
+}
+
+function canUseBackgroundReplyWorker() {
+  return isEmbeddedView() && !isBackgroundMessagesWorker();
 }
 
 function requestEmbeddedClose() {
@@ -530,6 +706,135 @@ function safeSetItem(key, value) {
   }
 }
 
+function loadReplyTasks() {
+  const raw = safeGetItem(MESSAGE_REPLY_TASKS_KEY);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed
+          .map((item, index) => normalizeReplyTask(item, index))
+          .filter((item) => item.conversationId)
+      : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function persistReplyTasks(tasks = []) {
+  const normalizedTasks = (Array.isArray(tasks) ? tasks : [])
+    .map((item, index) => normalizeReplyTask(item, index))
+    .filter((item) => item.conversationId)
+    .sort((left, right) => (left.createdAt || 0) - (right.createdAt || 0));
+  safeSetItem(MESSAGE_REPLY_TASKS_KEY, JSON.stringify(normalizedTasks));
+  return normalizedTasks;
+}
+
+function getReplyTaskForConversation(conversationId = "") {
+  const resolvedConversationId = String(conversationId || "").trim();
+  if (!resolvedConversationId) {
+    return null;
+  }
+  return (
+    loadReplyTasks().find(
+      (task) =>
+        task.conversationId === resolvedConversationId &&
+        (task.status === "pending" || task.status === "processing")
+    ) || null
+  );
+}
+
+function enqueueReplyTask(conversationId = "", options = {}) {
+  const resolvedConversationId = String(conversationId || "").trim();
+  if (!resolvedConversationId) {
+    return null;
+  }
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const tasks = loadReplyTasks();
+  const existingTask =
+    tasks.find(
+      (task) =>
+        task.conversationId === resolvedConversationId &&
+        task.regenerate === Boolean(requestOptions.regenerate) &&
+        task.status !== "error"
+    ) || null;
+  if (existingTask) {
+    return existingTask;
+  }
+  const nextTask = normalizeReplyTask({
+    id: `reply_task_${Date.now()}_${hashText(`${resolvedConversationId}_${requestOptions.regenerate ? "regen" : "reply"}`)}`,
+    conversationId: resolvedConversationId,
+    regenerate: Boolean(requestOptions.regenerate),
+    regenerateInstruction: String(requestOptions.regenerateInstruction || "").trim(),
+    status: "pending",
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  });
+  persistReplyTasks([...tasks, nextTask]);
+  return nextTask;
+}
+
+function updateReplyTask(taskId = "", updates = {}) {
+  const resolvedTaskId = String(taskId || "").trim();
+  if (!resolvedTaskId) {
+    return null;
+  }
+  let updatedTask = null;
+  const tasks = loadReplyTasks().map((task) => {
+    if (task.id !== resolvedTaskId) {
+      return task;
+    }
+    updatedTask = normalizeReplyTask({
+      ...task,
+      ...(updates && typeof updates === "object" ? updates : {}),
+      id: task.id,
+      updatedAt: Date.now()
+    });
+    return updatedTask;
+  });
+  persistReplyTasks(tasks);
+  return updatedTask;
+}
+
+function removeReplyTask(taskId = "") {
+  const resolvedTaskId = String(taskId || "").trim();
+  if (!resolvedTaskId) {
+    return;
+  }
+  persistReplyTasks(loadReplyTasks().filter((task) => task.id !== resolvedTaskId));
+}
+
+function getNextPendingReplyTask() {
+  return loadReplyTasks().find((task) => task.status === "pending") || null;
+}
+
+function getReplyTaskErrorForConversation(conversationId = "") {
+  const resolvedConversationId = String(conversationId || "").trim();
+  if (!resolvedConversationId) {
+    return null;
+  }
+  return (
+    loadReplyTasks()
+      .filter((task) => task.conversationId === resolvedConversationId && task.status === "error")
+      .sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0))[0] || null
+  );
+}
+
+function loadStoredScheduleEntries() {
+  return loadScheduleEntries();
+}
+
+function persistStoredScheduleEntries(entries = []) {
+  safeSetItem(
+    SCHEDULE_ENTRIES_KEY,
+    JSON.stringify(
+      normalizeObjectArray(entries).map((entry, index) => normalizeScheduleEntry(entry, index))
+    )
+  );
+}
+
 function normalizeRecentLocation(entry, index = 0) {
   const source = entry && typeof entry === "object" ? entry : {};
   const locationName = String(source.locationName || source.name || "").trim();
@@ -567,6 +872,262 @@ function loadRecentLocations() {
 
 function persistRecentLocations() {
   safeSetItem(MESSAGE_RECENT_LOCATIONS_KEY, JSON.stringify(state.recentLocations.slice(0, 5)));
+}
+
+function loadCommonPlaces() {
+  const raw = safeGetItem(MESSAGE_COMMON_PLACES_KEY);
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed
+          .map((item, index) => normalizeCommonPlace(item, index))
+          .filter((item) => String(item.name || "").trim())
+          .sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0))
+      : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function persistCommonPlaces() {
+  safeSetItem(MESSAGE_COMMON_PLACES_KEY, JSON.stringify(state.commonPlaces));
+}
+
+function loadPresenceState() {
+  const raw = safeGetItem(MESSAGE_PRESENCE_STATE_KEY);
+  if (!raw) {
+    return {
+      userGlobal: normalizePresenceEntry({}),
+      userByContact: {},
+      contacts: {}
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    const userByContact = Object.fromEntries(
+      Object.entries(parsed?.userByContact || {}).map(([contactId, entry]) => [
+        String(contactId || "").trim(),
+        normalizePresenceEntry(entry)
+      ])
+    );
+    const contacts = Object.fromEntries(
+      Object.entries(parsed?.contacts || {}).map(([contactId, entry]) => [
+        String(contactId || "").trim(),
+        normalizePresenceEntry(entry)
+      ])
+    );
+    return {
+      userGlobal: normalizePresenceEntry(parsed?.userGlobal),
+      userByContact,
+      contacts
+    };
+  } catch (_error) {
+    return {
+      userGlobal: normalizePresenceEntry({}),
+      userByContact: {},
+      contacts: {}
+    };
+  }
+}
+
+function persistPresenceState() {
+  safeSetItem(MESSAGE_PRESENCE_STATE_KEY, JSON.stringify(state.presenceState));
+}
+
+function getCommonPlaceById(placeId = "") {
+  const resolvedId = String(placeId || "").trim();
+  if (!resolvedId) {
+    return null;
+  }
+  return state.commonPlaces.find((item) => item.id === resolvedId) || null;
+}
+
+function getCommonPlaceVisibilityLabel(place) {
+  const resolvedPlace = place && typeof place === "object" ? place : {};
+  if (resolvedPlace.visibilityMode === "all_contacts") {
+    return "全部角色可见";
+  }
+  if (resolvedPlace.visibilityMode === "selected_contacts") {
+    const names = normalizeMountedIds(resolvedPlace.visibleContactIds)
+      .map((contactId) => getContactById(contactId)?.name || "")
+      .filter(Boolean);
+    return names.length ? `指定角色 · ${names.slice(0, 2).join("、")}${names.length > 2 ? "…" : ""}` : "指定角色";
+  }
+  return "仅自己知道";
+}
+
+function getCommonPlaceSearchTokens(place) {
+  const source = place && typeof place === "object" ? place : {};
+  return [
+    String(source.name || "").trim(),
+    ...normalizeCommonPlaceAliases(source.aliases),
+    String(source.traitsText || "").trim()
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+}
+
+function buildCommonPlaceAliasList(place) {
+  return normalizeCommonPlaceAliases(place?.aliases || []).filter(
+    (alias) => alias.toLowerCase() !== String(place?.name || "").trim().toLowerCase()
+  );
+}
+
+function isCommonPlaceVisibleToContact(place, contactId = "") {
+  const resolvedPlace = place && typeof place === "object" ? place : null;
+  const resolvedContactId = String(contactId || "").trim();
+  if (!resolvedPlace || !resolvedContactId) {
+    return false;
+  }
+  if (resolvedPlace.visibilityMode === "all_contacts") {
+    return true;
+  }
+  if (resolvedPlace.visibilityMode === "selected_contacts") {
+    return normalizeMountedIds(resolvedPlace.visibleContactIds).includes(resolvedContactId);
+  }
+  return false;
+}
+
+function getVisibleCommonPlacesForContact(contactId = "") {
+  return state.commonPlaces.filter((place) => isCommonPlaceVisibleToContact(place, contactId));
+}
+
+function getAllCommonPlaceSelectOptions() {
+  return state.commonPlaces.slice();
+}
+
+function findCommonPlaceByName(name = "", contactId = "") {
+  const needle = String(name || "").trim().toLowerCase();
+  if (!needle) {
+    return null;
+  }
+  const candidates = contactId ? getVisibleCommonPlacesForContact(contactId) : state.commonPlaces;
+  return (
+    candidates.find((place) => {
+      const names = [String(place.name || "").trim(), ...buildCommonPlaceAliasList(place)].map((item) =>
+        item.toLowerCase()
+      );
+      return names.includes(needle);
+    }) || null
+  );
+}
+
+function sanitizePresenceEntryForExistingPlaces(entry) {
+  const normalized = normalizePresenceEntry(entry);
+  const hasPlace = (placeId) => Boolean(getCommonPlaceById(placeId));
+  return {
+    ...normalized,
+    placeId: hasPlace(normalized.placeId) ? normalized.placeId : "",
+    fromPlaceId: hasPlace(normalized.fromPlaceId) ? normalized.fromPlaceId : "",
+    toPlaceId: hasPlace(normalized.toPlaceId) ? normalized.toPlaceId : ""
+  };
+}
+
+function sanitizePresenceStateReferences() {
+  state.presenceState = {
+    userGlobal: sanitizePresenceEntryForExistingPlaces(state.presenceState?.userGlobal),
+    userByContact: Object.fromEntries(
+      Object.entries(state.presenceState?.userByContact || {}).map(([contactId, entry]) => [
+        contactId,
+        sanitizePresenceEntryForExistingPlaces(entry)
+      ])
+    ),
+    contacts: Object.fromEntries(
+      Object.entries(state.presenceState?.contacts || {}).map(([contactId, entry]) => [
+        contactId,
+        sanitizePresenceEntryForExistingPlaces(entry)
+      ])
+    )
+  };
+}
+
+function getUserPresenceScope() {
+  return state.chatGlobalSettings?.userPresenceScope === "per_contact" ? "per_contact" : "global";
+}
+
+function getUserPresenceForContact(contactId = "") {
+  const resolvedContactId = String(contactId || "").trim();
+  if (getUserPresenceScope() === "per_contact" && resolvedContactId) {
+    const scopedEntry = normalizePresenceEntry(state.presenceState?.userByContact?.[resolvedContactId]);
+    if (
+      scopedEntry.placeId ||
+      scopedEntry.fromPlaceId ||
+      scopedEntry.toPlaceId ||
+      scopedEntry.updatedAt
+    ) {
+      return scopedEntry;
+    }
+  }
+  return normalizePresenceEntry(state.presenceState?.userGlobal);
+}
+
+function getContactPresence(contactId = "") {
+  const resolvedContactId = String(contactId || "").trim();
+  return normalizePresenceEntry(state.presenceState?.contacts?.[resolvedContactId]);
+}
+
+function setUserPresenceEntry(contactId = "", entry = {}) {
+  const resolvedEntry = sanitizePresenceEntryForExistingPlaces(entry);
+  if (getUserPresenceScope() === "per_contact" && String(contactId || "").trim()) {
+    state.presenceState = {
+      ...state.presenceState,
+      userByContact: {
+        ...(state.presenceState?.userByContact || {}),
+        [String(contactId || "").trim()]: resolvedEntry
+      }
+    };
+    persistPresenceState();
+    return;
+  }
+  state.presenceState = {
+    ...state.presenceState,
+    userGlobal: resolvedEntry
+  };
+  persistPresenceState();
+}
+
+function setContactPresenceEntry(contactId = "", entry = {}) {
+  const resolvedContactId = String(contactId || "").trim();
+  if (!resolvedContactId) {
+    return;
+  }
+  state.presenceState = {
+    ...state.presenceState,
+    contacts: {
+      ...(state.presenceState?.contacts || {}),
+      [resolvedContactId]: sanitizePresenceEntryForExistingPlaces(entry)
+    }
+  };
+  persistPresenceState();
+}
+
+function buildPresenceTypeLabel(type = "") {
+  return String(type || "").trim() === "in_transit" ? "在路上" : "在某地";
+}
+
+function buildPresenceSummaryText(entry, contactId = "") {
+  const resolved = normalizePresenceEntry(entry);
+  if (resolved.presenceType === "in_transit") {
+    const fromPlace = getCommonPlaceById(resolved.fromPlaceId);
+    const toPlace = getCommonPlaceById(resolved.toPlaceId);
+    if (toPlace) {
+      return fromPlace
+        ? `在路上 · ${fromPlace.name} → ${toPlace.name}`
+        : `在路上 · 正前往 ${toPlace.name}`;
+    }
+    return "在路上";
+  }
+  const place = getCommonPlaceById(resolved.placeId);
+  if (!place) {
+    return contactId ? "地点未设置" : "未设置地点";
+  }
+  return `在 ${place.name}`;
 }
 
 function escapeHtml(value) {
@@ -975,14 +1536,7 @@ function clampNumber(value, min, max) {
 }
 
 function prependGlobalPromptGuard(text) {
-  const resolvedText = String(text || "").trim();
-  if (!resolvedText) {
-    return GLOBAL_PROMPT_GUARD;
-  }
-  if (resolvedText.startsWith(GLOBAL_PROMPT_GUARD)) {
-    return resolvedText;
-  }
-  return `${GLOBAL_PROMPT_GUARD}\n\n${resolvedText}`;
+  return String(text || "").trim();
 }
 
 function appendApiLog(entry) {
@@ -1076,6 +1630,9 @@ function buildMessageApiLogBase(action, settings, endpoint, prompt, requestBody,
 function normalizeMessagePromptSettings(source = {}) {
   const resolved = source && typeof source === "object" ? source : {};
   const legacyEventAwareness = Boolean(resolved.eventAwareness);
+  const sceneMode = String(resolved.sceneMode || "").trim().toLowerCase() === "offline"
+    ? "offline"
+    : "online";
   return {
     historyRounds: clampNumber(
       normalizePositiveInteger(resolved.historyRounds, DEFAULT_MESSAGE_HISTORY_ROUNDS),
@@ -1146,9 +1703,126 @@ function normalizeMessagePromptSettings(source = {}) {
       : [],
     forumPostFocusEnabled: Boolean(resolved.forumPostFocusEnabled),
     bubbleFocusEnabled: Boolean(resolved.bubbleFocusEnabled),
+    sceneMode,
     showContactAvatar:
       typeof resolved.showContactAvatar === "boolean" ? resolved.showContactAvatar : true,
     showUserAvatar: typeof resolved.showUserAvatar === "boolean" ? resolved.showUserAvatar : true
+  };
+}
+
+function normalizeAutoScheduleDays(value, fallback = DEFAULT_AUTO_SCHEDULE_DAYS) {
+  return clampNumber(
+    normalizePositiveInteger(value, fallback),
+    1,
+    MAX_AUTO_SCHEDULE_DAYS
+  );
+}
+
+function normalizeAwarenessHistory(items = []) {
+  return normalizeObjectArray(items)
+    .map((item, index) => ({
+      id: String(item.id || `awareness_history_${index}_${Date.now()}`).trim(),
+      checkedAt: Number(item.checkedAt) || Date.now(),
+      triggered: Boolean(item.triggered),
+      roundCount: Math.max(0, Number.parseInt(String(item.roundCount || 0), 10) || 0),
+      note: String(item.note || "").trim()
+    }))
+    .sort((left, right) => (right.checkedAt || 0) - (left.checkedAt || 0))
+    .slice(0, MAX_AWARENESS_HISTORY_ITEMS);
+}
+
+function buildAwarenessHistoryItem(triggered = false, roundCount = 0, note = "") {
+  return {
+    id: `awareness_history_${Date.now()}_${hashText(`${triggered}_${roundCount}_${note}`)}`,
+    checkedAt: Date.now(),
+    triggered: Boolean(triggered),
+    roundCount: Math.max(0, Number.parseInt(String(roundCount || 0), 10) || 0),
+    note: String(note || "").trim()
+  };
+}
+
+function appendAwarenessHistory(contact = {}, entry = {}) {
+  const history = normalizeAwarenessHistory(contact?.awarenessHistory || []);
+  return normalizeAwarenessHistory([entry, ...history]);
+}
+
+function normalizeReplyTask(task, index = 0) {
+  const source = task && typeof task === "object" ? task : {};
+  const status = ["pending", "processing", "error"].includes(String(source.status || "").trim())
+    ? String(source.status || "").trim()
+    : "pending";
+  return {
+    id: String(source.id || `reply_task_${Date.now()}_${index}`),
+    conversationId: String(source.conversationId || "").trim(),
+    regenerate: Boolean(source.regenerate),
+    regenerateInstruction: String(source.regenerateInstruction || "").trim(),
+    status,
+    errorMessage: String(source.errorMessage || "").trim(),
+    createdAt: Number(source.createdAt) || Date.now(),
+    updatedAt: Number(source.updatedAt) || Date.now()
+  };
+}
+
+function normalizeChatGlobalSettings(source = {}) {
+  const resolved = source && typeof source === "object" ? source : {};
+  return {
+    userPresenceScope: resolved.userPresenceScope === "per_contact" ? "per_contact" : "global"
+  };
+}
+
+function normalizeCommonPlaceType(value = "") {
+  const resolved = String(value || "").trim().toLowerCase();
+  return COMMON_PLACE_TYPE_OPTIONS.some((item) => item.value === resolved) ? resolved : "other";
+}
+
+function getCommonPlaceTypeLabel(type = "") {
+  return (
+    COMMON_PLACE_TYPE_OPTIONS.find((item) => item.value === normalizeCommonPlaceType(type))?.label ||
+    "其他"
+  );
+}
+
+function normalizeCommonPlaceAliases(value) {
+  const lines = Array.isArray(value) ? value : String(value || "").split(/\r?\n/g);
+  return [...new Set(lines.map((item) => String(item || "").trim()).filter(Boolean))].slice(0, 20);
+}
+
+function normalizeCommonPlaceVisibilityMode(value = "") {
+  const resolved = String(value || "").trim();
+  if (resolved === "all_contacts" || resolved === "selected_contacts") {
+    return resolved;
+  }
+  return "self";
+}
+
+function normalizeCommonPlace(place, index = 0) {
+  const source = place && typeof place === "object" ? place : {};
+  const name = String(source.name || "").trim() || `常用地点 ${index + 1}`;
+  return {
+    id: String(source.id || `common_place_${index}_${hashText(name)}`),
+    name: name.slice(0, 40),
+    type: normalizeCommonPlaceType(source.type),
+    aliases: normalizeCommonPlaceAliases(source.aliases),
+    traitsText: String(source.traitsText || source.specialText || source.description || "").trim(),
+    visibilityMode: normalizeCommonPlaceVisibilityMode(source.visibilityMode),
+    visibleContactIds: normalizeMountedIds(source.visibleContactIds || source.contactIds || []),
+    lastUsedAt: Number(source.lastUsedAt) || 0,
+    createdAt: Number(source.createdAt) || Date.now(),
+    updatedAt: Number(source.updatedAt) || Date.now()
+  };
+}
+
+function normalizePresenceEntry(entry) {
+  const source = entry && typeof entry === "object" ? entry : {};
+  const presenceType = String(source.presenceType || "").trim() === "in_transit"
+    ? "in_transit"
+    : "at_place";
+  return {
+    presenceType,
+    placeId: String(source.placeId || "").trim(),
+    fromPlaceId: String(source.fromPlaceId || "").trim(),
+    toPlaceId: String(source.toPlaceId || "").trim(),
+    updatedAt: Number(source.updatedAt) || 0
   };
 }
 
@@ -1319,6 +1993,9 @@ function buildNormalizedSettingsSnapshot(source) {
         getDefaultModelByMode(merged.mode);
   merged.worldview = String(merged.worldview || DEFAULT_WORLDVIEW).trim() || DEFAULT_WORLDVIEW;
   merged.apiConfigs = normalizeApiConfigs(merged.apiConfigs || []);
+  merged.chatGlobalSettings = normalizeChatGlobalSettings(
+    merged.chatGlobalSettings || source?.chatGlobalSettings || {}
+  );
   merged.messagePromptSettings = normalizeMessagePromptSettings(
     merged.messagePromptSettings || source?.messagePromptSettings || {}
   );
@@ -1714,6 +2391,17 @@ function normalizeContact(contact, index = 0) {
     awarenessEmotionShift: String(source.awarenessEmotionShift || "").trim(),
     awarenessSensitivity: normalizeAwarenessSensitivity(source.awarenessSensitivity),
     awarenessConsumed: Boolean(source.awarenessConsumed),
+    awarenessCheckCount: Math.max(
+      0,
+      Number.parseInt(String(source.awarenessCheckCount || 0), 10) || 0
+    ),
+    awarenessTriggerCount: Math.max(
+      0,
+      Number.parseInt(String(source.awarenessTriggerCount || 0), 10) || 0
+    ),
+    awarenessLastCheckedAt: Number(source.awarenessLastCheckedAt) || 0,
+    awarenessLastTriggeredAt: Number(source.awarenessLastTriggeredAt) || 0,
+    awarenessHistory: normalizeAwarenessHistory(source.awarenessHistory || []),
     createdAt: Number(source.createdAt) || Date.now(),
     updatedAt: Number(source.updatedAt) || Date.now()
   };
@@ -2081,6 +2769,10 @@ function normalizeConversation(conversation, index = 0) {
     contactNameSnapshot: String(source.contactNameSnapshot || "").trim(),
     contactAvatarImageSnapshot: String(source.contactAvatarImageSnapshot || "").trim(),
     contactAvatarTextSnapshot: String(source.contactAvatarTextSnapshot || "").trim(),
+    sceneMode: String(source.sceneMode || "").trim().toLowerCase() === "offline" ? "offline" : "online",
+    allowAiPresenceUpdate: Boolean(source.allowAiPresenceUpdate),
+    allowAiAutoSchedule: Boolean(source.allowAiAutoSchedule),
+    autoScheduleDays: normalizeAutoScheduleDays(source.autoScheduleDays, DEFAULT_AUTO_SCHEDULE_DAYS),
     messages,
     awarenessCounter: Math.max(
       0,
@@ -2231,6 +2923,67 @@ function getConversationById(conversationId = state.activeConversationId) {
   return state.conversations.find((item) => item.id === conversationId) || null;
 }
 
+function resolveConversationVisibleMessageCount(conversationId = state.activeConversationId) {
+  const conversation = getConversationById(conversationId);
+  const total = Array.isArray(conversation?.messages) ? conversation.messages.length : 0;
+  const key = String(conversationId || "").trim();
+  if (!key) {
+    return 0;
+  }
+  if (!total) {
+    state.conversationVisibleCounts[key] = 0;
+    return 0;
+  }
+  const stored = Number.parseInt(String(state.conversationVisibleCounts[key] || 0), 10);
+  const nextCount =
+    Number.isFinite(stored) && stored > 0
+      ? Math.min(total, stored)
+      : Math.min(total, CONVERSATION_RENDER_BATCH_SIZE);
+  state.conversationVisibleCounts[key] = nextCount;
+  return nextCount;
+}
+
+function resetConversationVisibleMessageCount(conversationId = state.activeConversationId) {
+  const conversation = getConversationById(conversationId);
+  const key = String(conversationId || "").trim();
+  if (!key) {
+    return 0;
+  }
+  const total = Array.isArray(conversation?.messages) ? conversation.messages.length : 0;
+  const nextCount = Math.min(total, CONVERSATION_RENDER_BATCH_SIZE);
+  state.conversationVisibleCounts[key] = nextCount;
+  return nextCount;
+}
+
+function expandConversationVisibleMessageCount(
+  conversationId = state.activeConversationId,
+  amount = CONVERSATION_RENDER_BATCH_SIZE
+) {
+  const conversation = getConversationById(conversationId);
+  const key = String(conversationId || "").trim();
+  if (!conversation || !key) {
+    return 0;
+  }
+  const total = Array.isArray(conversation.messages) ? conversation.messages.length : 0;
+  const current = resolveConversationVisibleMessageCount(conversationId);
+  const nextCount = Math.min(total, current + Math.max(1, Number(amount) || 0));
+  state.conversationVisibleCounts[key] = nextCount;
+  return nextCount;
+}
+
+function buildConversationRenderWindow(conversation) {
+  const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];
+  const total = messages.length;
+  const visibleCount = resolveConversationVisibleMessageCount(conversation?.id);
+  const hiddenCount = Math.max(0, total - visibleCount);
+  return {
+    total,
+    visibleCount,
+    hiddenCount,
+    visibleMessages: hiddenCount ? messages.slice(total - visibleCount) : messages
+  };
+}
+
 function getConversationMeta(conversation) {
   const contact = getContactById(conversation.contactId);
   if (contact) {
@@ -2298,6 +3051,10 @@ function createConversation(contact) {
     contactNameSnapshot: contact.name,
     contactAvatarImageSnapshot: contact.avatarImage,
     contactAvatarTextSnapshot: contact.avatarText || getContactAvatarFallback(contact),
+    sceneMode: "online",
+    allowAiPresenceUpdate: false,
+    allowAiAutoSchedule: false,
+    autoScheduleDays: DEFAULT_AUTO_SCHEDULE_DAYS,
     messages: [],
     awarenessCounter: 0,
     memorySummaryCounter: 0,
@@ -2740,6 +3497,10 @@ function normalizeScheduleEntry(entry, index = 0) {
       source.endTime,
       scheduleType === "hour" || scheduleType === "week" ? "10:00" : ""
     ),
+    inviteDecisions:
+      source.inviteDecisions && typeof source.inviteDecisions === "object"
+        ? { ...source.inviteDecisions }
+        : {},
     createdAt: Number(source.createdAt) || Date.now(),
     updatedAt: Number(source.updatedAt) || Date.now()
   };
@@ -3301,7 +4062,7 @@ function buildScheduleAwarenessContext(contact, history = [], promptSettings = {
   const windowMinutes = normalizeMessagePromptSettings(promptSettings).scheduleAwarenessWindowMinutes;
   const entries = getVisibleScheduleEntriesForContact(contact?.id || "");
   if (!entries.length) {
-    return "";
+    return "当前没有检测到你需要处理的已知行程；除非对话里另有明确说明，否则不要凭空说自己要去忙、赶时间，或拿不存在的安排结束对话。";
   }
 
   const now = new Date();
@@ -3323,7 +4084,7 @@ function buildScheduleAwarenessContext(contact, history = [], promptSettings = {
     .slice(0, 4);
 
   if (!activeEntries.length) {
-    return "";
+    return "当前没有检测到你在最近窗口内的行程压力；除非聊天里另有明确说明，否则不要把自己写成正忙着别的事。";
   }
 
   return [
@@ -3331,6 +4092,457 @@ function buildScheduleAwarenessContext(contact, history = [], promptSettings = {
     ...activeEntries.map((item) => `- ${buildScheduleAwarenessLine(item.entry, item.awareness)}`),
     "如果这些行程和当前聊天自然相关，你可以顺带表达一句关心、提醒或配合；不要为了提行程而生硬转移话题，也不要重复提起刚刚已经主动说过的同一条行程。"
   ].join("\n");
+}
+
+function buildAutoScheduleDateValues(days = DEFAULT_AUTO_SCHEDULE_DAYS, startDateText = getTodayDateValue()) {
+  const resolvedDays = normalizeAutoScheduleDays(days, DEFAULT_AUTO_SCHEDULE_DAYS);
+  const startDate = parseLocalDateValue(startDateText) || new Date();
+  return Array.from({ length: resolvedDays }, (_, index) =>
+    formatDateToValue(addDays(startDate, index))
+  );
+}
+
+function doScheduleEntriesOverlap(left, right) {
+  if (!left || !right) {
+    return false;
+  }
+  if (left.scheduleType === "day" || right.scheduleType === "day") {
+    return String(left.date || "") === String(right.date || "");
+  }
+  const leftStart = parseLocalDateTimeValue(left.date, left.startTime);
+  const leftEnd = parseLocalDateTimeValue(left.date, left.endTime);
+  const rightStart = parseLocalDateTimeValue(right.date, right.startTime);
+  const rightEnd = parseLocalDateTimeValue(right.date, right.endTime);
+  if (!leftStart || !leftEnd || !rightStart || !rightEnd) {
+    return false;
+  }
+  return leftStart < rightEnd && rightStart < leftEnd;
+}
+
+function getAutoScheduleExistingEntries(contactId = "", dateValues = []) {
+  const dateSet = new Set(
+    (Array.isArray(dateValues) ? dateValues : []).map((item) => String(item || "").trim()).filter(Boolean)
+  );
+  return getVisibleScheduleEntriesForContact(contactId)
+    .filter((entry) => !dateSet.size || dateSet.has(String(entry.date || "").trim()))
+    .map((entry) => ({ ...entry }));
+}
+
+function buildAutoScheduleOccupiedContext(contactId = "", dateValues = []) {
+  const entries = getAutoScheduleExistingEntries(contactId, dateValues);
+  const grouped = dateValues.map((dateValue) => {
+    const currentEntries = entries
+      .filter((entry) => String(entry.date || "").trim() === dateValue)
+      .sort((left, right) => {
+        const leftWeight = left.scheduleType === "day" ? 0 : 1;
+        const rightWeight = right.scheduleType === "day" ? 0 : 1;
+        return (
+          leftWeight - rightWeight ||
+          parseTimeToMinutes(left.startTime) - parseTimeToMinutes(right.startTime) ||
+          (right.updatedAt || 0) - (left.updatedAt || 0)
+        );
+      });
+    return {
+      date: dateValue,
+      entries: currentEntries
+    };
+  });
+
+  return grouped
+    .map((group) => {
+      if (!group.entries.length) {
+        return `- ${group.date}：当前没有已占用时段，可从空白时间开始安排。`;
+      }
+      return [
+        `- ${group.date}：`,
+        ...group.entries.map((entry) =>
+          `  - ${entry.scheduleType === "day" ? "全天已占用" : `${entry.startTime}-${entry.endTime}`}：${entry.title}`
+        )
+      ].join("\n");
+    })
+    .join("\n");
+}
+
+function buildAutoScheduleWorldbookContext(promptSettings = {}) {
+  const context = buildWorldbookContext(promptSettings);
+  return context ? `${context}\n` : "";
+}
+
+function buildAutoScheduleGenerationSystemPrompt(contact, promptSettings = {}, dayCount = DEFAULT_AUTO_SCHEDULE_DAYS) {
+  const resolvedContact = contact && typeof contact === "object" ? contact : {};
+  const resolvedDayCount = normalizeAutoScheduleDays(dayCount, DEFAULT_AUTO_SCHEDULE_DAYS);
+  return prependGlobalPromptGuard(
+    [
+      `你需要为 ${resolvedContact.name || "这个角色"} 设计未来 ${resolvedDayCount} 天的生活行程。`,
+      "这不是聊天回复，而是纯粹的日程规划任务。",
+      `角色稳定人设：${resolvedContact.personaPrompt || "作息自然、贴近真实生活。"}。`,
+      buildAutoScheduleWorldbookContext(promptSettings),
+      [
+        "只根据角色人设和世界书背景去安排，不要引用用户人设，不要写用户相关内容。",
+        "要尽量真实，有正常的起居、吃饭、工作/学习/休息/娱乐节奏。",
+        "不要覆盖已占用时段，只能补空白。",
+        "所有结果都必须是按小时的日程，使用同一天内的 startTime / endTime。",
+        "不要输出跨天时段；如果是睡眠，可安排为当日 00:00-07:00 这类同日块。",
+        "如果某一天空白很少，只补最合理的几个空档，不要硬塞满。",
+        '只输出 JSON 数组，格式为：[{"date":"YYYY-MM-DD","title":"安排名称","startTime":"HH:00","endTime":"HH:00"}]。'
+      ].join(" ")
+    ]
+      .filter(Boolean)
+      .join("\n\n")
+  );
+}
+
+function buildAutoScheduleGenerationInstruction(contactId = "", dateValues = []) {
+  return [
+    "请根据以下日期和已占用时段，补全这个角色未来几天的空白小时行程：",
+    ...dateValues.map((dateValue) => `- 日期：${dateValue}`),
+    "",
+    "已占用时段：",
+    buildAutoScheduleOccupiedContext(contactId, dateValues) || "当前没有已占用时段。",
+    "",
+    "返回时不要解释思路，不要加 markdown，只返回 JSON 数组。"
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function parseAutoScheduleItems(payload, dateValues = []) {
+  const allowedDates = new Set(
+    (Array.isArray(dateValues) ? dateValues : []).map((item) => String(item || "").trim()).filter(Boolean)
+  );
+  const rawValue =
+    parseJsonLikeContent(payload) ||
+    parseJsonLikeContent(resolveMessage(payload)) ||
+    [];
+  const arrayValue = Array.isArray(rawValue)
+    ? rawValue
+    : Array.isArray(rawValue?.items)
+      ? rawValue.items
+      : Array.isArray(rawValue?.schedules)
+        ? rawValue.schedules
+        : [];
+
+  return arrayValue
+    .map((item, index) => {
+      const source = item && typeof item === "object" ? item : {};
+      const date = String(source.date || "").trim();
+      const title = String(source.title || source.name || "").trim();
+      const startTime = String(source.startTime || "").trim();
+      const endTime = String(source.endTime || "").trim();
+      if (!title || !date || (allowedDates.size && !allowedDates.has(date))) {
+        return null;
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return null;
+      }
+      if (!/^\d{2}:00$/.test(startTime) || !/^\d{2}:00$/.test(endTime)) {
+        return null;
+      }
+      if (parseTimeToMinutes(endTime) <= parseTimeToMinutes(startTime)) {
+        return null;
+      }
+      return normalizeScheduleEntry(
+        {
+          id: `schedule_auto_${Date.now()}_${index}_${hashText(`${date}_${title}_${startTime}_${endTime}`)}`,
+          title,
+          scheduleType: "hour",
+          ownerType: "contact",
+          ownerId: "",
+          companionIncludesUser: false,
+          companionContactIds: [],
+          visibilityMode: "all",
+          visibleContactIds: [],
+          date,
+          startTime,
+          endTime,
+          createdAt: Date.now() + index,
+          updatedAt: Date.now() + index
+        },
+        index
+      );
+    })
+    .filter(Boolean)
+    .slice(0, 120);
+}
+
+async function generateAutoSchedulesForConversation(
+  days = DEFAULT_AUTO_SCHEDULE_DAYS,
+  conversationId = state.activeConversationId
+) {
+  const conversation = getConversationById(conversationId);
+  if (!conversation) {
+    throw new Error("当前没有打开的 1v1 会话。");
+  }
+  const contact = getContactById(conversation.contactId);
+  if (!contact) {
+    throw new Error("未找到当前聊天对象。");
+  }
+
+  const resolvedDays = normalizeAutoScheduleDays(days, getConversationAutoScheduleDays(conversation));
+  const settings = loadSettings();
+  const promptSettings = normalizeMessagePromptSettings(state.chatPromptSettings);
+  const dateValues = buildAutoScheduleDateValues(resolvedDays, getTodayDateValue());
+  const systemPrompt = buildAutoScheduleGenerationSystemPrompt(contact, promptSettings, resolvedDays);
+  const userInstruction = buildAutoScheduleGenerationInstruction(contact.id, dateValues);
+  const requestEndpoint = validateApiSettings(settings, "自动生成行程");
+  const privacySession = createPrivacySession({
+    settings,
+    contact,
+    commonPlaces: state.commonPlaces,
+    scheduleEntries: getAutoScheduleExistingEntries(contact.id, dateValues),
+    promptSettings,
+    systemPrompt,
+    userInstruction
+  });
+  const encodedSystemPrompt = preparePromptWithPrivacy(systemPrompt, privacySession);
+  const encodedUserInstruction = encodeTextWithPrivacy(userInstruction, privacySession);
+  const requestBody = buildSingleInstructionRequestBody(
+    settings,
+    encodedSystemPrompt,
+    encodedUserInstruction,
+    "chat_auto_schedule_generate"
+  );
+  const logBase = applyPrivacyToLogEntry(
+    buildMessageApiLogBase(
+      "chat_auto_schedule_generate",
+      settings,
+      requestEndpoint,
+      [encodedSystemPrompt, encodedUserInstruction].join("\n\n"),
+      requestBody,
+      `联系人：${contact.name} · 自动生成未来 ${resolvedDays} 天行程`
+    ),
+    privacySession
+  );
+  let logged = false;
+
+  try {
+    const response = await fetch(requestEndpoint, {
+      method: "POST",
+      headers: buildRequestHeaders(settings),
+      body: JSON.stringify(requestBody)
+    });
+    const rawResponse = await response.text();
+    let payload = rawResponse;
+    try {
+      payload = JSON.parse(rawResponse);
+    } catch (_error) {
+      payload = rawResponse;
+    }
+
+    if (!response.ok) {
+      appendApiLog({
+        ...logBase,
+        ...buildGeminiLogFields(settings, payload),
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: `接口请求失败：HTTP ${response.status}`
+      });
+      logged = true;
+      throw new Error(`接口请求失败：HTTP ${response.status}`);
+    }
+
+    const parsedItems = parseAutoScheduleItems(
+      decodeValueWithPrivacy(payload, privacySession),
+      dateValues
+    );
+    const existingEntries = getAutoScheduleExistingEntries(contact.id, dateValues);
+    const acceptedEntries = [];
+    parsedItems.forEach((entry, index) => {
+      const normalized = normalizeScheduleEntry(
+        {
+          ...entry,
+          ownerType: "contact",
+          ownerId: contact.id,
+          updatedAt: Date.now() + index
+        },
+        index
+      );
+      if (
+        existingEntries.some((current) => doScheduleEntriesOverlap(current, normalized)) ||
+        acceptedEntries.some((current) => doScheduleEntriesOverlap(current, normalized))
+      ) {
+        return;
+      }
+      acceptedEntries.push(normalized);
+    });
+
+    appendApiLog({
+      ...logBase,
+      ...buildGeminiLogFields(settings, payload),
+      status: "success",
+      statusCode: response.status,
+      responseText: rawResponse,
+      responseBody: payload,
+      summary: encodeTextWithPrivacy(
+        `联系人：${contact.name} · 自动补齐 ${acceptedEntries.length} 条小时行程`,
+        privacySession
+      )
+    });
+    logged = true;
+
+    if (!acceptedEntries.length) {
+      throw new Error("AI 已返回内容，但没有生成可落地的空白小时行程。");
+    }
+
+    const nextEntries = [...loadStoredScheduleEntries(), ...acceptedEntries];
+    persistStoredScheduleEntries(nextEntries);
+    return {
+      acceptedEntries,
+      requestedDays: resolvedDays
+    };
+  } catch (error) {
+    if (!logged) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        errorMessage: error?.message || "请求失败"
+      });
+    }
+    throw error;
+  }
+}
+
+function hasParticipantScheduleEntriesInRange(contactId = "", dateValues = []) {
+  const resolvedContactId = String(contactId || "").trim();
+  const allowedDates = new Set(
+    (Array.isArray(dateValues) ? dateValues : []).map((item) => String(item || "").trim()).filter(Boolean)
+  );
+  if (!resolvedContactId) {
+    return false;
+  }
+  return loadScheduleEntries().some((entry) => {
+    if (allowedDates.size && !allowedDates.has(String(entry.date || "").trim())) {
+      return false;
+    }
+    return getScheduleParticipants(entry).some(
+      (participant) => participant.type === "contact" && participant.id === resolvedContactId
+    );
+  });
+}
+
+async function maybeAutoGenerateSchedulesForConversation(conversation = null) {
+  const resolvedConversation = conversation && typeof conversation === "object" ? conversation : null;
+  if (!resolvedConversation || !getConversationAllowAiAutoSchedule(resolvedConversation)) {
+    return null;
+  }
+  const contact = getContactById(resolvedConversation.contactId);
+  if (!contact) {
+    return null;
+  }
+  const days = getConversationAutoScheduleDays(resolvedConversation);
+  const dateValues = buildAutoScheduleDateValues(days, getTodayDateValue());
+  if (hasParticipantScheduleEntriesInRange(contact.id, dateValues)) {
+    return null;
+  }
+  try {
+    return await generateAutoSchedulesForConversation(days, resolvedConversation.id);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function resolvePresencePlaceForPrompt(placeId = "", contactId = "", actor = "user") {
+  const resolvedId = String(placeId || "").trim();
+  if (!resolvedId) {
+    return null;
+  }
+  if (actor === "contact") {
+    return getVisibleCommonPlacesForContact(contactId).find((place) => place.id === resolvedId) || null;
+  }
+  return getCommonPlaceById(resolvedId);
+}
+
+function buildPresencePromptLines(label = "", entry = {}, contactId = "", actor = "user") {
+  const resolvedEntry = normalizePresenceEntry(entry);
+  if (resolvedEntry.presenceType === "in_transit") {
+    const fromPlace = resolvePresencePlaceForPrompt(resolvedEntry.fromPlaceId, contactId, actor);
+    const toPlace = resolvePresencePlaceForPrompt(resolvedEntry.toPlaceId, contactId, actor);
+    if (!fromPlace && !toPlace) {
+      return [];
+    }
+    return [
+      `${label}：正在路上`,
+      `路径：从「${fromPlace?.name || "未说明出发地"}」前往「${toPlace?.name || "未说明目的地"}」`
+    ];
+  }
+
+  const place = resolvePresencePlaceForPrompt(resolvedEntry.placeId, contactId, actor);
+  if (!place) {
+    return [];
+  }
+
+  const lines = [`${label}：在「${place.name}」`];
+  if (String(place.traitsText || "").trim()) {
+    lines.push(`地点特征：${String(place.traitsText || "").trim()}`);
+  }
+  return lines;
+}
+
+function buildPresencePromptContext(contact, conversation) {
+  const resolvedContact = contact && typeof contact === "object" ? contact : null;
+  const resolvedConversation = conversation && typeof conversation === "object" ? conversation : null;
+  const contactId = String(resolvedContact?.id || resolvedConversation?.contactId || "").trim();
+  if (!contactId) {
+    return "";
+  }
+
+  const sceneMode = getConversationSceneMode(resolvedConversation);
+  const userPresence = getUserPresenceForContact(contactId);
+  const contactPresence = getContactPresence(contactId);
+  const userPlace = resolvePresencePlaceForPrompt(userPresence.placeId, contactId, "user");
+  const contactPlace = resolvePresencePlaceForPrompt(contactPresence.placeId, contactId, "contact");
+  const samePlace =
+    sceneMode === "offline" &&
+    userPresence.presenceType === "at_place" &&
+    contactPresence.presenceType === "at_place" &&
+    userPlace &&
+    contactPlace &&
+    userPlace.id === contactPlace.id;
+
+  const lines = [];
+  if (samePlace) {
+    lines.push(`你们现在在同一个地点：「${userPlace.name}」`);
+  }
+  lines.push(...buildPresencePromptLines("用户当前状态", userPresence, contactId, "user"));
+  lines.push(...buildPresencePromptLines("你的当前状态", contactPresence, contactId, "contact"));
+
+  if (!lines.length) {
+    return "";
+  }
+
+  lines.push(
+    "地点与在路上状态只是场景背景。只有在自然相关时，才让它影响你的语气、停顿、关心点与行为反应；不相关时可以完全不提。",
+    "不要机械复述地点说明，也不要为了证明自己记得地点而硬提地点。",
+    "如果你处于“在路上”，不要把自己写成已经到达；可以自然体现赶路、等车、分心或时间压力，但不要每一轮都重复强调。"
+  );
+
+  if (getConversationAllowAiPresenceUpdate(resolvedConversation)) {
+    const visiblePlaceHints = getVisibleCommonPlacesForContact(contactId)
+      .map((place) => {
+        const tags = [getCommonPlaceTypeLabel(place.type)];
+        if (String(place.traitsText || "").trim()) {
+          tags.push(truncate(String(place.traitsText || "").trim(), 18));
+        }
+        return `- ${place.name}：${tags.join(" · ")}`;
+      })
+      .slice(0, 12);
+
+    lines.push(
+      [
+        "如果这一轮回复里自然发生了“到达 / 出发 / 正在赶路 / 刚回到某地”，你可以只更新你自己的状态；不要修改用户状态，也不要修改线上/线下模式。",
+        "若需要更新，请在正常回复正文后另起一行输出：<presence_update>{...}</presence_update>。",
+        '可用格式一：<presence_update>{"presenceType":"at_place","placeName":"地点名"}</presence_update>',
+        '可用格式二：<presence_update>{"presenceType":"in_transit","fromPlaceName":"地点名","toPlaceName":"地点名"}</presence_update>',
+        visiblePlaceHints.length
+          ? `你可切换到的已知地点（仅供状态更新时选择，不要当成正文资料复述）：\n${visiblePlaceHints.join("\n")}`
+          : "当前没有可用于状态更新的已知地点。"
+      ].join("\n")
+    );
+  }
+
+  return lines.join("\n");
 }
 
 function buildConversationSystemPrompt(
@@ -3342,13 +4554,17 @@ function buildConversationSystemPrompt(
   options = {}
 ) {
   const requestOptions = options && typeof options === "object" ? options : {};
+  const sceneMode = requestOptions.sceneMode === "offline" ? "offline" : "online";
   const memoryContexts = buildMemoryPromptContexts(contact, promptSettings);
+  const presenceContext = buildPresencePromptContext(contact, requestOptions.conversation);
   const parts = [
     `你叫 ${contact.name}。`,
-    `现在是你和 ${profile.username || DEFAULT_PROFILE.username} 在即时聊天软件里的一对一私聊。`,
+    sceneMode === "offline"
+      ? `现在是你和 ${profile.username || DEFAULT_PROFILE.username} 正在现实里见面相处，不是在即时聊天软件里远程对话。`
+      : `现在是你和 ${profile.username || DEFAULT_PROFILE.username} 在即时聊天软件里的一对一私聊。`,
     "先像这个人本人一样去理解这段关系、语气和情绪，不要把自己当成解释设定或执行任务的助手。",
     "下面的信息都是你已经拥有的长期记忆与当下语境；只有在自然相关时才轻轻带出，不需要像背资料一样复述。",
-    "如果信息之间出现冲突，请按以下优先级从低到高理解：热点挂载 < 世界书挂载 < INS 关注 < Bubble 关注 < 情景记忆 < 日程感知 < 时间感知 < 核心记忆与自身稳定心态 < 最近对话轮数消息 < 回复格式要求。"
+    "如果信息之间出现冲突，请按以下优先级从低到高理解：热点挂载 < 世界书挂载 < INS 关注 < Bubble 关注 < 情景记忆 < 常用地点状态 < 日程感知 < 时间感知 < 核心记忆与自身稳定心态 < 最近对话轮数消息 < 回复格式要求。"
   ];
 
   const awarenessSections = [
@@ -3369,6 +4585,10 @@ function buildConversationSystemPrompt(
 
   if (memoryContexts.core) {
     parts.push(memoryContexts.core);
+  }
+
+  if (presenceContext) {
+    parts.push(`当前场景补充：\n${presenceContext}`);
   }
 
   if (awarenessSections.length) {
@@ -3440,7 +4660,9 @@ function buildConversationSystemPrompt(
     '如果你也要发送定位，必须单独输出一行严格 JSON，格式固定为：[{"type":"location","locationName":"位置名","coordinates":"116.417E, 40.1277N"}]。',
     "定位 JSON 不要放进代码块，不要添加解释、前缀、序号或额外说明；它本身就算一行回复。",
     "不要去掉感叹号、问号、波浪号、省略号等表达情绪的标点。",
-    "不要输出编号、列表符号、引号包裹、解释说明、舞台指令或心理活动旁白。"
+    sceneMode === "offline"
+      ? "这是见面状态；在自然需要时，可以用中文全角括号（ ）补一小段动作、表情、停顿或视线描写，但不要把每句都写成长舞台指令，也不要写长段心理活动。"
+      : "不要输出编号、列表符号、引号包裹、解释说明、舞台指令或心理活动旁白。"
   );
 
   return prependGlobalPromptGuard(parts.join("\n\n"));
@@ -4142,6 +5364,71 @@ function buildReplyItems(replyText, promptSettings = {}, privacySession = null) 
     : [];
 }
 
+function stripAssistantPresenceUpdateTag(text = "") {
+  return String(text || "")
+    .replace(/<presence_update>[\s\S]*?<\/presence_update>/gi, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function parseAssistantPresenceUpdate(text = "", contactId = "") {
+  const rawText = String(text || "");
+  const match = rawText.match(/<presence_update>([\s\S]*?)<\/presence_update>/i);
+  if (!match) {
+    return {
+      cleanedText: rawText.trim(),
+      update: null
+    };
+  }
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(String(match[1] || "").trim());
+  } catch (_error) {
+    return {
+      cleanedText: stripAssistantPresenceUpdateTag(rawText),
+      update: null
+    };
+  }
+
+  const presenceType =
+    String(parsed?.presenceType || "").trim() === "in_transit" ? "in_transit" : "at_place";
+  if (presenceType === "at_place") {
+    const place = findCommonPlaceByName(parsed?.placeName || "", contactId);
+    return {
+      cleanedText: stripAssistantPresenceUpdateTag(rawText),
+      update: place
+        ? {
+            presenceType: "at_place",
+            placeId: place.id,
+            fromPlaceId: "",
+            toPlaceId: "",
+            updatedAt: Date.now()
+          }
+        : null
+    };
+  }
+
+  const fromPlace = findCommonPlaceByName(parsed?.fromPlaceName || "", contactId);
+  const toPlace = findCommonPlaceByName(parsed?.toPlaceName || "", contactId);
+  if (!fromPlace && !toPlace) {
+    return {
+      cleanedText: stripAssistantPresenceUpdateTag(rawText),
+      update: null
+    };
+  }
+  return {
+    cleanedText: stripAssistantPresenceUpdateTag(rawText),
+    update: {
+      presenceType: "in_transit",
+      placeId: "",
+      fromPlaceId: fromPlace?.id || "",
+      toPlaceId: toPlace?.id || "",
+      updatedAt: Date.now()
+    }
+  };
+}
+
 function recalculateConversationUpdatedAt(conversation) {
   if (!conversation || typeof conversation !== "object") {
     return;
@@ -4189,7 +5476,9 @@ async function appendAssistantReplyBatch(
     recalculateConversationUpdatedAt(activeConversation);
     createdMessages.push(replyMessage);
     persistConversations();
-    renderMessagesPage();
+    if (state.activeTab === "chat") {
+      renderMessagesPage();
+    }
   }
 
   return createdMessages;
@@ -4256,6 +5545,9 @@ async function requestChatReplyText(
       profile,
       contact,
       history,
+      commonPlaces: state.commonPlaces,
+      presenceState: state.presenceState,
+      chatGlobalSettings: state.chatGlobalSettings,
       scheduleEntries: getVisibleScheduleEntriesForContact(contact.id),
       promptSettings: resolvedPromptSettings,
       requestOptions,
@@ -4324,10 +5616,10 @@ async function requestChatReplyText(
         throw new Error(`接口请求失败：HTTP ${response.status}`);
       }
 
-      const message = resolveMessage(payload)
+      const rawMessage = resolveMessage(payload)
         .replace(/^(?:联系人|对方|assistant|AI)[:：]\s*/i, "")
         .trim();
-      if (!message) {
+      if (!rawMessage) {
         const errorMessage =
           requestMode === "gemini"
             ? buildGeminiEmptyResponseErrorMessage(payload)
@@ -4349,6 +5641,29 @@ async function requestChatReplyText(
         throw error;
       }
 
+      const decodedMessage = decodeTextWithPrivacy(rawMessage, privacySession);
+      const parsedPresenceUpdate = getConversationAllowAiPresenceUpdate(requestOptions.conversation)
+        ? parseAssistantPresenceUpdate(decodedMessage, contact.id)
+        : {
+            cleanedText: stripAssistantPresenceUpdateTag(decodedMessage),
+            update: null
+          };
+      const cleanedEncodedMessage = stripAssistantPresenceUpdateTag(rawMessage);
+      if (!String(parsedPresenceUpdate.cleanedText || "").trim()) {
+        const errorMessage = "接口请求成功，但回复里只有状态更新标签，缺少可展示的正文。";
+        appendApiLog({
+          ...logBase,
+          ...buildGeminiLogFields(settings, payload),
+          status: "error",
+          statusCode: response.status,
+          responseText: rawResponse,
+          responseBody: payload,
+          errorMessage
+        });
+        logged = true;
+        throw new Error(errorMessage);
+      }
+
       appendApiLog({
         ...logBase,
         ...buildGeminiLogFields(settings, payload),
@@ -4358,15 +5673,16 @@ async function requestChatReplyText(
         responseBody: payload,
         summary: encodeTextWithPrivacy(
           `联系人：${contact.name} · 已生成 ${
-            buildReplyItems(message, resolvedPromptSettings).length || 1
+            buildReplyItems(cleanedEncodedMessage, resolvedPromptSettings, privacySession).length || 1
           } 行回复${summarySuffix}`,
           privacySession
         )
       });
       logged = true;
       return {
-        text: message,
-        privacySession
+        text: cleanedEncodedMessage,
+        privacySession,
+        assistantPresenceUpdate: parsedPresenceUpdate.update
       };
     } catch (error) {
       if (!logged) {
@@ -4637,8 +5953,13 @@ function updateBodyModalState() {
     state.contactEditorOpen ||
     state.conversationPickerOpen ||
     state.chatSettingsOpen ||
+    state.chatGlobalSettingsOpen ||
+    state.sceneModalOpen ||
+    state.sceneSyncModalOpen ||
     state.worldbookManagerOpen ||
     state.worldbookEditorOpen ||
+    state.placesManagerOpen ||
+    state.placeEditorOpen ||
     state.memoryViewerOpen ||
     state.memoryEditorOpen ||
     state.memorySettingsOpen ||
@@ -4755,8 +6076,68 @@ function setAwarenessStatus(message = "", tone = "") {
   setEditorStatus(messagesAwarenessStatusEl, message, tone);
 }
 
+function renderAwarenessHistory(contact = null, conversation = null) {
+  if (!messagesAwarenessHistoryEl) {
+    return;
+  }
+  const resolvedContact = contact && typeof contact === "object" ? contact : null;
+  const resolvedConversation = conversation && typeof conversation === "object" ? conversation : null;
+  if (!resolvedContact) {
+    messagesAwarenessHistoryEl.innerHTML =
+      '<div class="messages-awareness-history__empty">当前没有可展示的察觉历史。</div>';
+    return;
+  }
+
+  const promptSettings = normalizeMessagePromptSettings(state.chatPromptSettings);
+  const currentRounds = Math.max(
+    0,
+    Number.parseInt(String(resolvedConversation?.awarenessCounter || 0), 10) || 0
+  );
+  const threshold = promptSettings.awarenessIntervalRounds;
+  const history = normalizeAwarenessHistory(resolvedContact.awarenessHistory || []);
+  const summaryParts = [
+    `累计判断 ${Math.max(0, Number.parseInt(String(resolvedContact.awarenessCheckCount || 0), 10) || 0)} 次`,
+    `命中 ${Math.max(0, Number.parseInt(String(resolvedContact.awarenessTriggerCount || 0), 10) || 0)} 次`,
+    `当前进度 ${Math.min(currentRounds, threshold)}/${threshold} 轮`
+  ];
+  if (resolvedContact.awarenessConsumed) {
+    summaryParts.push("当前察觉已触发并锁定");
+  }
+
+  messagesAwarenessHistoryEl.innerHTML = `
+    <div class="messages-awareness-history__summary">${escapeHtml(summaryParts.join(" · "))}</div>
+    ${
+      history.length
+        ? `
+            <div class="messages-awareness-history__list">
+              ${history
+                .map((item) => {
+                  const label = item.triggered ? "已触发" : "未触发";
+                  const tone = item.triggered ? "is-hit" : "is-miss";
+                  const timeText = resolveStoredTimestampLabel(item.checkedAt, formatLocalTime());
+                  const noteText = String(item.note || "").trim();
+                  return `
+                    <article class="messages-awareness-history__item ${tone}">
+                      <div class="messages-awareness-history__item-head">
+                        <strong>${escapeHtml(label)}</strong>
+                        <span>${escapeHtml(timeText)}</span>
+                      </div>
+                      <p>${escapeHtml(`判断时累计轮数：${item.roundCount}`)}</p>
+                      ${noteText ? `<p>${escapeHtml(noteText)}</p>` : ""}
+                    </article>
+                  `;
+                })
+                .join("")}
+            </div>
+          `
+        : '<div class="messages-awareness-history__empty">还没有进入过察觉判断；达到设置的轮数后，这里会记录每次是否触发。</div>'
+    }
+  `;
+}
+
 function applyAwarenessToForm(contact = null) {
   const resolvedContact = contact && typeof contact === "object" ? contact : null;
+  const conversation = getConversationById();
   if (messagesAwarenessTextInputEl) {
     messagesAwarenessTextInputEl.value = String(resolvedContact?.awarenessText || "").trim();
   }
@@ -4776,6 +6157,7 @@ function applyAwarenessToForm(contact = null) {
       : "",
     resolvedContact?.awarenessConsumed ? "success" : ""
   );
+  renderAwarenessHistory(resolvedContact, conversation);
 }
 
 function getCurrentAwarenessDraft() {
@@ -5296,6 +6678,19 @@ function renderTopbar() {
     messagesChatSettingsBtnEl.hidden = !inConversation;
   }
 
+  if (messagesChatSceneBtnEl) {
+    const sceneMode =
+      activeConversation?.sceneMode === "offline"
+        ? "offline"
+        : normalizeMessagePromptSettings(state.chatPromptSettings).sceneMode;
+    messagesChatSceneBtnEl.hidden = !inConversation;
+    messagesChatSceneBtnEl.classList.toggle("is-offline", sceneMode === "offline");
+    messagesChatSceneBtnEl.setAttribute(
+      "aria-label",
+      sceneMode === "offline" ? "当前为线下见面状态" : "当前为线上聊天状态"
+    );
+  }
+
   if (messagesAddBtnEl) {
     messagesAddBtnEl.hidden = !((state.activeTab === "chat" || state.activeTab === "contacts") && !inConversation);
     messagesAddBtnEl.setAttribute(
@@ -5579,7 +6974,40 @@ function renderConversationLocationCard(message) {
   `;
 }
 
-function renderConversationScheduleInviteCard(message) {
+function getConversationScheduleInviteStatus(message, conversation) {
+  const resolvedConversation = conversation && typeof conversation === "object" ? conversation : null;
+  const contactId = String(resolvedConversation?.contactId || "").trim();
+  if (!contactId) {
+    return "pending";
+  }
+  const match = loadStoredScheduleEntries()
+    .filter((entry) => {
+      const sameDate = String(entry.date || "").trim() === String(message?.scheduleInviteDate || "").trim();
+      const sameTitle =
+        String(entry.title || "").trim() === String(message?.scheduleInviteTitle || "").trim();
+      const sameStart =
+        String(entry.startTime || "").trim() === String(message?.scheduleInviteStartTime || "").trim();
+      const sameEnd =
+        String(entry.endTime || "").trim() === String(message?.scheduleInviteEndTime || "").trim();
+      const sameType =
+        String(entry.scheduleType || "").trim() === String(message?.scheduleInviteType || "").trim();
+      return sameDate && sameTitle && sameStart && sameEnd && sameType;
+    })
+    .sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0))[0];
+  if (!match) {
+    return "pending";
+  }
+  const decision = String(match.inviteDecisions?.[contactId] || "").trim().toLowerCase();
+  if (decision === "accept") {
+    return "accepted";
+  }
+  if (decision === "reject") {
+    return "rejected";
+  }
+  return "pending";
+}
+
+function renderConversationScheduleInviteCard(message, conversation) {
   const title = String(message?.scheduleInviteTitle || "").trim() || "未命名日程";
   const timeText = buildScheduleInviteTimeText(
     message?.scheduleInviteDate || "",
@@ -5587,9 +7015,21 @@ function renderConversationScheduleInviteCard(message) {
     message?.scheduleInviteEndTime || "",
     message?.scheduleInviteType || "day"
   );
+  const inviteStatus = getConversationScheduleInviteStatus(message, conversation);
+  const statusLabel =
+    inviteStatus === "accepted"
+      ? "已接收"
+      : inviteStatus === "rejected"
+        ? "已拒绝"
+        : "等待回复";
   return `
     <article class="messages-schedule-invite-card">
-      <div class="messages-schedule-invite-card__kicker">日程邀请</div>
+      <div class="messages-schedule-invite-card__head">
+        <div class="messages-schedule-invite-card__kicker">日程邀请</div>
+        <span class="messages-schedule-invite-card__status messages-schedule-invite-card__status--${inviteStatus}">${escapeHtml(
+          statusLabel
+        )}</span>
+      </div>
       <strong class="messages-schedule-invite-card__title">${escapeHtml(title)}</strong>
       <p class="messages-schedule-invite-card__time">${escapeHtml(timeText)}</p>
     </article>
@@ -5620,7 +7060,7 @@ function renderConversationMessage(message, conversation, promptSettings = state
   const isLocationMessage = isLocationConversationMessage(message);
   const isImageMessage = isImageConversationMessage(message);
   const bubbleMarkup = isScheduleInviteMessage
-    ? renderConversationScheduleInviteCard(message)
+    ? renderConversationScheduleInviteCard(message, conversation)
     : isLocationMessage
     ? renderConversationLocationCard(message)
     : isImageMessage
@@ -5730,12 +7170,31 @@ function renderConversationDetail(options = {}) {
   );
   const promptSettings = normalizeMessagePromptSettings(state.chatPromptSettings);
   const renderOptions = options && typeof options === "object" ? options : {};
+  const renderWindow = buildConversationRenderWindow(conversation);
   messagesContentEl.innerHTML = `
     <section class="messages-conversation">
       <div class="messages-conversation__history">
         ${
-          conversation.messages.length
-            ? conversation.messages
+          renderWindow.hiddenCount
+            ? `
+              <div class="messages-conversation__history-window">
+                <button
+                  class="messages-conversation__history-more"
+                  type="button"
+                  data-action="load-more-conversation-messages"
+                >
+                  加载更早消息（还有 ${renderWindow.hiddenCount} 条）
+                </button>
+                <p class="messages-conversation__history-note">
+                  当前默认仅渲染最近 ${renderWindow.visibleCount} 条气泡，避免长会话卡顿。
+                </p>
+              </div>
+            `
+            : ""
+        }
+        ${
+          renderWindow.visibleMessages.length
+            ? renderWindow.visibleMessages
                 .map((message) => renderConversationMessage(message, conversation, promptSettings))
                 .join("")
             : '<div class="messages-conversation__empty">输入第一条消息，开始和这个角色聊天。</div>'
@@ -5796,7 +7255,16 @@ function renderConversationDetail(options = {}) {
   const historyEl = messagesContentEl.querySelector(".messages-conversation__history");
   if (historyEl) {
     window.requestAnimationFrame(() => {
-      if (renderOptions.scrollBehavior === "preserve" && renderOptions.scrollSnapshot) {
+      if (renderOptions.scrollBehavior === "expand-top" && renderOptions.scrollSnapshot) {
+        const previousTop = Math.max(0, Number(renderOptions.scrollSnapshot.top) || 0);
+        const previousHeight = Math.max(
+          0,
+          Number(renderOptions.scrollSnapshot.scrollHeight) || 0
+        );
+        const maxScrollTop = Math.max(0, historyEl.scrollHeight - historyEl.clientHeight);
+        const delta = Math.max(0, historyEl.scrollHeight - previousHeight);
+        historyEl.scrollTop = Math.min(previousTop + delta, maxScrollTop);
+      } else if (renderOptions.scrollBehavior === "preserve" && renderOptions.scrollSnapshot) {
         const maxScrollTop = Math.max(0, historyEl.scrollHeight - historyEl.clientHeight);
         historyEl.scrollTop = Math.min(
           Math.max(0, Number(renderOptions.scrollSnapshot.top) || 0),
@@ -5907,6 +7375,7 @@ function renderMeTab() {
 
   const profile = state.profile;
   const wechatId = getWechatIdDisplay(profile.userId, profile.username || DEFAULT_PROFILE.username);
+  const scopeLabel = getUserPresenceScope() === "per_contact" ? "按角色独立" : "全局共用";
   messagesContentEl.innerHTML = `
     <section class="messages-me-page">
       <button class="messages-me-profile" type="button" data-action="open-profile-editor">
@@ -5914,7 +7383,7 @@ function renderMeTab() {
         <div class="messages-me-profile__body">
           <strong class="messages-me-profile__name">${escapeHtml(profile.username || DEFAULT_PROFILE.username)}</strong>
           <span class="messages-me-profile__id">微信号：${escapeHtml(wechatId)}</span>
-          <span class="messages-me-profile__status">＋ 状态</span>
+          <span class="messages-me-profile__status">用户状态：${escapeHtml(scopeLabel)}</span>
         </div>
         <div class="messages-me-profile__actions" aria-hidden="true">
           <span class="messages-me-profile__qr">
@@ -5977,6 +7446,766 @@ function renderMessagesPage() {
   }
 
   renderMeTab();
+}
+
+function setSceneStatus(message = "", tone = "") {
+  setEditorStatus(messagesSceneStatusEl, message, tone);
+}
+
+function setPlacesStatus(message = "", tone = "") {
+  setEditorStatus(messagesPlacesStatusEl, message, tone);
+}
+
+function setPlaceEditorStatus(message = "", tone = "") {
+  setEditorStatus(messagesPlaceEditorStatusEl, message, tone);
+}
+
+function setChatGlobalSettingsStatus(message = "", tone = "") {
+  setEditorStatus(messagesChatGlobalSettingsStatusEl, message, tone);
+}
+
+function setSceneSyncStatus(message = "", tone = "") {
+  setEditorStatus(messagesSceneSyncStatusEl, message, tone);
+}
+
+function getConversationSceneMode(conversation = getConversationById()) {
+  return conversation?.sceneMode === "offline" ? "offline" : "online";
+}
+
+function getConversationAllowAiPresenceUpdate(conversation = getConversationById()) {
+  return Boolean(conversation?.allowAiPresenceUpdate);
+}
+
+function getConversationAllowAiAutoSchedule(conversation = getConversationById()) {
+  return Boolean(conversation?.allowAiAutoSchedule);
+}
+
+function getConversationAutoScheduleDays(conversation = getConversationById()) {
+  return normalizeAutoScheduleDays(
+    conversation?.autoScheduleDays,
+    DEFAULT_AUTO_SCHEDULE_DAYS
+  );
+}
+
+function applySceneModeToButtons(sceneMode = "online") {
+  const resolvedMode = sceneMode === "offline" ? "offline" : "online";
+  if (messagesSceneOnlineBtnEl) {
+    messagesSceneOnlineBtnEl.classList.toggle("is-active", resolvedMode === "online");
+  }
+  if (messagesSceneOfflineBtnEl) {
+    messagesSceneOfflineBtnEl.classList.toggle("is-active", resolvedMode === "offline");
+  }
+}
+
+function buildCommonPlaceSelectOptionsMarkup(
+  places = [],
+  selectedId = "",
+  options = {}
+) {
+  const resolvedOptions = options && typeof options === "object" ? options : {};
+  const includeEmpty = resolvedOptions.includeEmpty !== false;
+  const emptyLabel = String(resolvedOptions.emptyLabel || "未设置地点").trim() || "未设置地点";
+  const normalizedPlaces = Array.isArray(places) ? places : [];
+  return [
+    includeEmpty ? `<option value="">${escapeHtml(emptyLabel)}</option>` : "",
+    ...normalizedPlaces.map(
+      (place) =>
+        `<option value="${escapeHtml(place.id)}"${place.id === selectedId ? " selected" : ""}>${escapeHtml(
+          place.name
+        )} · ${escapeHtml(getCommonPlaceTypeLabel(place.type))}</option>`
+    )
+  ]
+    .filter(Boolean)
+    .join("");
+}
+
+function renderCommonPlaceSelect(selectEl, places = [], selectedId = "", options = {}) {
+  if (!(selectEl instanceof HTMLSelectElement)) {
+    return;
+  }
+  const resolvedSelectedId = String(selectedId || "").trim();
+  selectEl.innerHTML = buildCommonPlaceSelectOptionsMarkup(places, resolvedSelectedId, options);
+  selectEl.value = places.some((place) => place.id === resolvedSelectedId) ? resolvedSelectedId : "";
+}
+
+function buildSceneDraft(conversation = getConversationById()) {
+  const contactId = String(conversation?.contactId || "").trim();
+  return {
+    sceneMode: getConversationSceneMode(conversation),
+    userPresence: getUserPresenceForContact(contactId),
+    contactPresence: getContactPresence(contactId)
+  };
+}
+
+function buildSceneScopeNote() {
+  return getUserPresenceScope() === "per_contact"
+    ? "当前仅作用于本角色会话"
+    : "当前使用全局状态";
+}
+
+function updateSceneModalFields(draft = buildSceneDraft()) {
+  const resolvedDraft = draft && typeof draft === "object" ? draft : buildSceneDraft();
+  const { conversation, contact } = getActiveConversationContext();
+  const contactId = String(contact?.id || conversation?.contactId || "").trim();
+  const allPlaces = getAllCommonPlaceSelectOptions();
+  const visibleContactPlaces = getVisibleCommonPlacesForContact(contactId);
+
+  applySceneModeToButtons(resolvedDraft.sceneMode);
+  if (messagesSceneUserScopeNoteEl) {
+    messagesSceneUserScopeNoteEl.textContent = buildSceneScopeNote();
+  }
+
+  if (messagesSceneUserPresenceTypeInputEl) {
+    messagesSceneUserPresenceTypeInputEl.value = resolvedDraft.userPresence.presenceType;
+  }
+  if (messagesSceneContactPresenceTypeInputEl) {
+    messagesSceneContactPresenceTypeInputEl.value = resolvedDraft.contactPresence.presenceType;
+  }
+
+  renderCommonPlaceSelect(messagesSceneUserPlaceSelectEl, allPlaces, resolvedDraft.userPresence.placeId, {
+    emptyLabel: "未设置地点"
+  });
+  renderCommonPlaceSelect(
+    messagesSceneUserFromPlaceSelectEl,
+    allPlaces,
+    resolvedDraft.userPresence.fromPlaceId,
+    { emptyLabel: "未设置出发地" }
+  );
+  renderCommonPlaceSelect(messagesSceneUserToPlaceSelectEl, allPlaces, resolvedDraft.userPresence.toPlaceId, {
+    emptyLabel: "请选择目的地"
+  });
+
+  renderCommonPlaceSelect(
+    messagesSceneContactPlaceSelectEl,
+    visibleContactPlaces,
+    visibleContactPlaces.some((place) => place.id === resolvedDraft.contactPresence.placeId)
+      ? resolvedDraft.contactPresence.placeId
+      : "",
+    { emptyLabel: visibleContactPlaces.length ? "未设置地点" : "暂无可见地点" }
+  );
+  renderCommonPlaceSelect(
+    messagesSceneContactFromPlaceSelectEl,
+    visibleContactPlaces,
+    visibleContactPlaces.some((place) => place.id === resolvedDraft.contactPresence.fromPlaceId)
+      ? resolvedDraft.contactPresence.fromPlaceId
+      : "",
+    { emptyLabel: visibleContactPlaces.length ? "未设置出发地" : "暂无可见地点" }
+  );
+  renderCommonPlaceSelect(
+    messagesSceneContactToPlaceSelectEl,
+    visibleContactPlaces,
+    visibleContactPlaces.some((place) => place.id === resolvedDraft.contactPresence.toPlaceId)
+      ? resolvedDraft.contactPresence.toPlaceId
+      : "",
+    { emptyLabel: visibleContactPlaces.length ? "请选择目的地" : "暂无可见地点" }
+  );
+
+  const userTransit = resolvedDraft.userPresence.presenceType === "in_transit";
+  const contactTransit = resolvedDraft.contactPresence.presenceType === "in_transit";
+  if (messagesSceneUserAtPlaceFieldsEl) {
+    messagesSceneUserAtPlaceFieldsEl.hidden = userTransit;
+  }
+  if (messagesSceneUserTransitFieldsEl) {
+    messagesSceneUserTransitFieldsEl.hidden = !userTransit;
+  }
+  if (messagesSceneContactAtPlaceFieldsEl) {
+    messagesSceneContactAtPlaceFieldsEl.hidden = contactTransit;
+  }
+  if (messagesSceneContactTransitFieldsEl) {
+    messagesSceneContactTransitFieldsEl.hidden = !contactTransit;
+  }
+
+  const syncVisible =
+    resolvedDraft.sceneMode === "offline" &&
+    resolvedDraft.userPresence.presenceType !== "in_transit" &&
+    resolvedDraft.contactPresence.presenceType !== "in_transit";
+  if (messagesSceneSyncPlaceBtnEl) {
+    messagesSceneSyncPlaceBtnEl.hidden = !syncVisible;
+  }
+
+  setSceneStatus(
+    resolvedDraft.sceneMode === "offline"
+      ? "当前为线下见面状态；可结合地点与在路上状态一起调整面对面交流语境。"
+      : "当前为线上聊天状态；地点只作为背景参考，不会自动抢占主话题。",
+    "success"
+  );
+}
+
+function setConversationSceneMode(sceneMode = "online") {
+  const conversation = getConversationById();
+  if (!conversation) {
+    return;
+  }
+  const resolvedMode = sceneMode === "offline" ? "offline" : "online";
+  conversation.sceneMode = resolvedMode;
+  persistConversations();
+  renderTopbar();
+  if (state.sceneModalOpen) {
+    updateSceneModalFields(buildSceneDraft(conversation));
+  }
+  setMessagesStatus(
+    resolvedMode === "offline" ? "已切换为线下见面状态。" : "已切换为线上聊天状态。",
+    "success"
+  );
+}
+
+function getCurrentSceneDraft() {
+  const userPresenceType =
+    String(messagesSceneUserPresenceTypeInputEl?.value || "").trim() === "in_transit"
+      ? "in_transit"
+      : "at_place";
+  const contactPresenceType =
+    String(messagesSceneContactPresenceTypeInputEl?.value || "").trim() === "in_transit"
+      ? "in_transit"
+      : "at_place";
+  return {
+    sceneMode:
+      String(messagesSceneOfflineBtnEl?.classList.contains("is-active") ? "offline" : "online").trim() ===
+      "offline"
+        ? "offline"
+        : "online",
+    userPresence: normalizePresenceEntry({
+      presenceType: userPresenceType,
+      placeId: messagesSceneUserPlaceSelectEl?.value || "",
+      fromPlaceId: messagesSceneUserFromPlaceSelectEl?.value || "",
+      toPlaceId: messagesSceneUserToPlaceSelectEl?.value || "",
+      updatedAt: Date.now()
+    }),
+    contactPresence: normalizePresenceEntry({
+      presenceType: contactPresenceType,
+      placeId: messagesSceneContactPlaceSelectEl?.value || "",
+      fromPlaceId: messagesSceneContactFromPlaceSelectEl?.value || "",
+      toPlaceId: messagesSceneContactToPlaceSelectEl?.value || "",
+      updatedAt: Date.now()
+    })
+  };
+}
+
+function validateSceneDraft(draft = getCurrentSceneDraft()) {
+  if (draft.userPresence.presenceType === "in_transit" && !draft.userPresence.toPlaceId) {
+    throw new Error("用户处于“在路上”时，请至少选择要去哪里。");
+  }
+  if (draft.contactPresence.presenceType === "in_transit" && !draft.contactPresence.toPlaceId) {
+    throw new Error("角色处于“在路上”时，请至少选择要去哪里。");
+  }
+  return draft;
+}
+
+function saveSceneDraft() {
+  const { conversation } = getActiveConversationContext();
+  if (!conversation) {
+    return;
+  }
+  const draft = validateSceneDraft(getCurrentSceneDraft());
+  conversation.sceneMode = draft.sceneMode;
+  persistConversations();
+  setUserPresenceEntry(conversation.contactId, draft.userPresence);
+  setContactPresenceEntry(conversation.contactId, draft.contactPresence);
+  renderTopbar();
+  setSceneStatus("状态已保存。", "success");
+  setMessagesStatus("当前会话的场景与地点状态已更新。", "success");
+}
+
+function setSceneModalOpen(isOpen) {
+  state.sceneModalOpen = Boolean(isOpen);
+  if (messagesSceneModalEl) {
+    messagesSceneModalEl.hidden = !state.sceneModalOpen;
+    messagesSceneModalEl.setAttribute("aria-hidden", String(!state.sceneModalOpen));
+  }
+  if (state.sceneModalOpen) {
+    updateSceneModalFields(buildSceneDraft());
+  } else {
+    setSceneStatus("");
+  }
+  updateBodyModalState();
+}
+
+function setConversationAllowAiPresenceUpdate(enabled = false) {
+  const conversation = getConversationById();
+  if (!conversation) {
+    return;
+  }
+  conversation.allowAiPresenceUpdate = Boolean(enabled);
+  persistConversations();
+}
+
+function setConversationAutoScheduleSettings(
+  enabled = false,
+  autoScheduleDays = DEFAULT_AUTO_SCHEDULE_DAYS
+) {
+  const conversation = getConversationById();
+  if (!conversation) {
+    return;
+  }
+  conversation.allowAiAutoSchedule = Boolean(enabled);
+  conversation.autoScheduleDays = normalizeAutoScheduleDays(
+    autoScheduleDays,
+    DEFAULT_AUTO_SCHEDULE_DAYS
+  );
+  persistConversations();
+}
+
+function getFilteredCommonPlaces() {
+  const keyword = String(state.placeQuery || "").trim().toLowerCase();
+  const filterType = String(state.placeFilterType || "all").trim();
+  return state.commonPlaces.filter((place) => {
+    const matchesType = filterType === "all" ? true : place.type === filterType;
+    const matchesKeyword = keyword ? getCommonPlaceSearchTokens(place).includes(keyword) : true;
+    return matchesType && matchesKeyword;
+  });
+}
+
+function renderPlacesManager() {
+  if (!messagesPlacesListEl) {
+    return;
+  }
+  const { conversation } = getActiveConversationContext();
+  const places = getFilteredCommonPlaces();
+  if (!places.length) {
+    messagesPlacesListEl.innerHTML =
+      '<div class="messages-places-empty">还没有常用地点。<br />点击右上角 +，先创建一个“自己家”或“公司”。</div>';
+    return;
+  }
+
+  messagesPlacesListEl.innerHTML = places
+    .map((place) => {
+      const aliases = buildCommonPlaceAliasList(place);
+      const canSetContact = Boolean(conversation?.contactId) && isCommonPlaceVisibleToContact(place, conversation.contactId);
+      return `
+        <article class="messages-place-card">
+          <div class="messages-place-card__head">
+            <div class="messages-place-card__title">
+              <strong>${escapeHtml(place.name)}</strong>
+              <span class="messages-place-card__type">${escapeHtml(getCommonPlaceTypeLabel(place.type))}</span>
+            </div>
+            <span class="messages-place-card__visibility">${escapeHtml(
+              getCommonPlaceVisibilityLabel(place)
+            )}</span>
+          </div>
+          <p class="messages-place-card__traits">${escapeHtml(
+            place.traitsText || "还没有填写地点特殊性。"
+          )}</p>
+          ${
+            aliases.length
+              ? `
+                <div class="messages-place-card__aliases">
+                  ${aliases
+                    .map((alias) => `<span class="messages-place-card__alias">${escapeHtml(alias)}</span>`)
+                    .join("")}
+                </div>
+              `
+              : ""
+          }
+          <div class="messages-place-card__actions">
+            <button
+              class="messages-text-button"
+              type="button"
+              data-action="set-user-current-place"
+              data-place-id="${escapeHtml(place.id)}"
+            >
+              设为我的当前地点
+            </button>
+            ${
+              canSetContact
+                ? `
+                  <button
+                    class="messages-text-button"
+                    type="button"
+                    data-action="set-contact-current-place"
+                    data-place-id="${escapeHtml(place.id)}"
+                  >
+                    设为 TA 的当前地点
+                  </button>
+                `
+                : ""
+            }
+            <button
+              class="messages-text-button"
+              type="button"
+              data-action="edit-common-place"
+              data-place-id="${escapeHtml(place.id)}"
+            >
+              编辑
+            </button>
+            <button
+              class="messages-text-button messages-text-button--danger"
+              type="button"
+              data-action="delete-common-place"
+              data-place-id="${escapeHtml(place.id)}"
+            >
+              删除
+            </button>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function setPlacesManagerOpen(isOpen) {
+  state.placesManagerOpen = Boolean(isOpen);
+  if (messagesPlacesModalEl) {
+    messagesPlacesModalEl.hidden = !state.placesManagerOpen;
+    messagesPlacesModalEl.setAttribute("aria-hidden", String(!state.placesManagerOpen));
+  }
+  if (state.placesManagerOpen) {
+    if (messagesPlaceSearchInputEl) {
+      messagesPlaceSearchInputEl.value = state.placeQuery;
+    }
+    if (messagesPlaceFilterSelectEl) {
+      messagesPlaceFilterSelectEl.value = state.placeFilterType;
+    }
+    renderPlacesManager();
+    setPlacesStatus("");
+  } else {
+    setPlacesStatus("");
+  }
+  updateBodyModalState();
+}
+
+function renderPlaceVisibleContactsOptions(selectedIds = []) {
+  if (!messagesPlaceVisibleContactsListEl) {
+    return;
+  }
+  if (!state.contacts.length) {
+    messagesPlaceVisibleContactsListEl.innerHTML =
+      '<div class="messages-worldbook-selector__empty">还没有联系人。先去通讯录创建角色，再回来指定可见范围。</div>';
+    return;
+  }
+  const selectedIdSet = new Set(normalizeMountedIds(selectedIds));
+  messagesPlaceVisibleContactsListEl.innerHTML = `
+    <div class="messages-worldbook-selector__group">
+      <div class="messages-worldbook-selector__items">
+        ${state.contacts
+          .map(
+            (contact) => `
+              <label class="messages-worldbook-selector__item">
+                <input
+                  type="checkbox"
+                  value="${escapeHtml(contact.id)}"
+                  ${selectedIdSet.has(contact.id) ? "checked" : ""}
+                />
+                <span>${escapeHtml(contact.name)}</span>
+              </label>
+            `
+          )
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
+function applyPlaceEditorToForm(placeId = "") {
+  const place = getCommonPlaceById(placeId);
+  state.placeEditorId = place?.id || "";
+  if (messagesPlaceEditorTitleEl) {
+    messagesPlaceEditorTitleEl.textContent = place ? "编辑地点" : "新增地点";
+  }
+  if (messagesPlaceNameInputEl) {
+    messagesPlaceNameInputEl.value = place?.name || "";
+  }
+  if (messagesPlaceTypeSelectEl) {
+    messagesPlaceTypeSelectEl.value = normalizeCommonPlaceType(place?.type || "home");
+  }
+  if (messagesPlaceAliasesInputEl) {
+    messagesPlaceAliasesInputEl.value = normalizeCommonPlaceAliases(place?.aliases || []).join("\n");
+  }
+  if (messagesPlaceTraitsInputEl) {
+    messagesPlaceTraitsInputEl.value = String(place?.traitsText || "").trim();
+  }
+  if (messagesPlaceVisibilitySelectEl) {
+    messagesPlaceVisibilitySelectEl.value = normalizeCommonPlaceVisibilityMode(
+      place?.visibilityMode || "self"
+    );
+  }
+  const visibilityMode = normalizeCommonPlaceVisibilityMode(place?.visibilityMode || "self");
+  if (messagesPlaceVisibleContactsFieldEl) {
+    messagesPlaceVisibleContactsFieldEl.hidden = visibilityMode !== "selected_contacts";
+  }
+  renderPlaceVisibleContactsOptions(place?.visibleContactIds || []);
+  if (messagesPlaceEditorDeleteBtnEl) {
+    messagesPlaceEditorDeleteBtnEl.hidden = !place;
+  }
+  if (messagesPlaceEditorSetContactBtnEl) {
+    messagesPlaceEditorSetContactBtnEl.hidden = !getActiveConversationContext().conversation;
+  }
+  setPlaceEditorStatus("");
+}
+
+function setPlaceEditorOpen(isOpen, placeId = "") {
+  state.placeEditorOpen = Boolean(isOpen);
+  if (messagesPlaceEditorModalEl) {
+    messagesPlaceEditorModalEl.hidden = !state.placeEditorOpen;
+    messagesPlaceEditorModalEl.setAttribute("aria-hidden", String(!state.placeEditorOpen));
+  }
+  if (state.placeEditorOpen) {
+    applyPlaceEditorToForm(placeId);
+  } else {
+    state.placeEditorId = "";
+    setPlaceEditorStatus("");
+  }
+  updateBodyModalState();
+}
+
+function getCurrentPlaceDraft() {
+  const selectedVisibleContactIds = messagesPlaceVisibleContactsListEl
+    ? [...messagesPlaceVisibleContactsListEl.querySelectorAll("input[type='checkbox']:checked")]
+        .map((input) => (input instanceof HTMLInputElement ? String(input.value || "").trim() : ""))
+        .filter(Boolean)
+    : [];
+  return normalizeCommonPlace({
+    id: state.placeEditorId,
+    name: messagesPlaceNameInputEl?.value || "",
+    type: messagesPlaceTypeSelectEl?.value || "other",
+    aliases: messagesPlaceAliasesInputEl?.value || "",
+    traitsText: messagesPlaceTraitsInputEl?.value || "",
+    visibilityMode: messagesPlaceVisibilitySelectEl?.value || "self",
+    visibleContactIds: selectedVisibleContactIds,
+    createdAt: getCommonPlaceById(state.placeEditorId)?.createdAt || Date.now(),
+    updatedAt: Date.now()
+  });
+}
+
+function saveCommonPlaceDraft(draft = getCurrentPlaceDraft()) {
+  const place = normalizeCommonPlace(draft);
+  if (!String(place.name || "").trim()) {
+    throw new Error("请输入地点名称。");
+  }
+  if (
+    place.visibilityMode === "selected_contacts" &&
+    !normalizeMountedIds(place.visibleContactIds).length
+  ) {
+    throw new Error("请选择至少一个可见角色。");
+  }
+  const existingIndex = state.commonPlaces.findIndex((item) => item.id === place.id);
+  if (existingIndex >= 0) {
+    state.commonPlaces[existingIndex] = {
+      ...state.commonPlaces[existingIndex],
+      ...place,
+      updatedAt: Date.now()
+    };
+  } else {
+    state.commonPlaces = [{ ...place, createdAt: Date.now(), updatedAt: Date.now() }, ...state.commonPlaces];
+  }
+  state.commonPlaces = state.commonPlaces
+    .map((item, index) => normalizeCommonPlace(item, index))
+    .sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0));
+  persistCommonPlaces();
+  sanitizePresenceStateReferences();
+  persistPresenceState();
+  return place;
+}
+
+function deleteCommonPlace(placeId = "") {
+  const place = getCommonPlaceById(placeId);
+  if (!place) {
+    return;
+  }
+  if (!window.confirm(`确定删除常用地点“${place.name}”吗？`)) {
+    return;
+  }
+  state.commonPlaces = state.commonPlaces.filter((item) => item.id !== place.id);
+  persistCommonPlaces();
+  sanitizePresenceStateReferences();
+  persistPresenceState();
+  renderPlacesManager();
+  updateSceneModalFields(buildSceneDraft());
+  setPlacesStatus(`已删除地点“${place.name}”。`, "success");
+}
+
+function applyPlaceAsCurrentForUser(placeId = "", contactId = "") {
+  if (!getCommonPlaceById(placeId)) {
+    return;
+  }
+  setUserPresenceEntry(contactId, {
+    presenceType: "at_place",
+    placeId,
+    fromPlaceId: "",
+    toPlaceId: "",
+    updatedAt: Date.now()
+  });
+}
+
+function applyPlaceAsCurrentForContact(placeId = "", contactId = "") {
+  if (!getCommonPlaceById(placeId) || !String(contactId || "").trim()) {
+    return;
+  }
+  setContactPresenceEntry(contactId, {
+    presenceType: "at_place",
+    placeId,
+    fromPlaceId: "",
+    toPlaceId: "",
+    updatedAt: Date.now()
+  });
+}
+
+function renderSceneSyncModal() {
+  if (!messagesSceneSyncPlaceSelectEl || !messagesSceneSyncDescriptionEl) {
+    return;
+  }
+  const conversation = getConversationById();
+  const draft = getCurrentSceneDraft();
+  const userPlace = getCommonPlaceById(draft.userPresence.placeId);
+  const contactPlace = getCommonPlaceById(draft.contactPresence.placeId);
+  const visibleContactPlaces = getVisibleCommonPlacesForContact(conversation?.contactId || "");
+  renderCommonPlaceSelect(messagesSceneSyncPlaceSelectEl, visibleContactPlaces, "", {
+    emptyLabel: visibleContactPlaces.length ? "请选择共同地点" : "暂无可供角色使用的地点"
+  });
+  messagesSceneSyncDescriptionEl.textContent =
+    userPlace && contactPlace && userPlace.id !== contactPlace.id
+      ? `当前用户在“${userPlace.name}”，角色在“${contactPlace.name}”。请选择用谁的地点，或改成新的共同地点。`
+      : "请选择一个共同地点，作为这次线下状态下双方共享的场景地点。";
+  if (messagesSceneSyncUseUserBtnEl) {
+    messagesSceneSyncUseUserBtnEl.hidden = !userPlace;
+  }
+  if (messagesSceneSyncUseContactBtnEl) {
+    messagesSceneSyncUseContactBtnEl.hidden = !contactPlace;
+  }
+  setSceneSyncStatus("");
+}
+
+function setSceneSyncModalOpen(isOpen) {
+  state.sceneSyncModalOpen = Boolean(isOpen);
+  if (messagesSceneSyncModalEl) {
+    messagesSceneSyncModalEl.hidden = !state.sceneSyncModalOpen;
+    messagesSceneSyncModalEl.setAttribute("aria-hidden", String(!state.sceneSyncModalOpen));
+  }
+  if (state.sceneSyncModalOpen) {
+    renderSceneSyncModal();
+  } else {
+    setSceneSyncStatus("");
+  }
+  updateBodyModalState();
+}
+
+function applySharedPlaceToSceneDraft(placeId = "") {
+  if (!getCommonPlaceById(placeId)) {
+    setSceneSyncStatus("请选择一个有效的共同地点。", "error");
+    return;
+  }
+  if (messagesSceneUserPresenceTypeInputEl) {
+    messagesSceneUserPresenceTypeInputEl.value = "at_place";
+  }
+  if (messagesSceneContactPresenceTypeInputEl) {
+    messagesSceneContactPresenceTypeInputEl.value = "at_place";
+  }
+  if (messagesSceneUserPlaceSelectEl) {
+    messagesSceneUserPlaceSelectEl.value = placeId;
+  }
+  if (messagesSceneContactPlaceSelectEl) {
+    messagesSceneContactPlaceSelectEl.value = placeId;
+  }
+  updateSceneModalFields(getCurrentSceneDraft());
+  setSceneSyncModalOpen(false);
+  setSceneStatus("已同步为同一地点，记得点击保存。", "success");
+}
+
+function triggerSharedPlaceSync() {
+  const draft = getCurrentSceneDraft();
+  const userPlaceId = String(draft.userPresence.placeId || "").trim();
+  const contactPlaceId = String(draft.contactPresence.placeId || "").trim();
+  if (draft.sceneMode !== "offline") {
+    setSceneStatus("只有在线下模式下才支持同步到同一地点。", "error");
+    return;
+  }
+  if (draft.userPresence.presenceType === "in_transit" || draft.contactPresence.presenceType === "in_transit") {
+    setSceneStatus("任意一方处于“在路上”时，不能直接同步到同一地点。", "error");
+    return;
+  }
+  if (userPlaceId && !contactPlaceId) {
+    if (messagesSceneContactPlaceSelectEl) {
+      messagesSceneContactPlaceSelectEl.value = userPlaceId;
+    }
+    updateSceneModalFields(getCurrentSceneDraft());
+    setSceneStatus("已用用户地点填充角色地点，记得点击保存。", "success");
+    return;
+  }
+  if (!userPlaceId && contactPlaceId) {
+    if (messagesSceneUserPlaceSelectEl) {
+      messagesSceneUserPlaceSelectEl.value = contactPlaceId;
+    }
+    updateSceneModalFields(getCurrentSceneDraft());
+    setSceneStatus("已用角色地点填充用户地点，记得点击保存。", "success");
+    return;
+  }
+  if (userPlaceId && contactPlaceId && userPlaceId === contactPlaceId) {
+    setSceneStatus("双方已经在同一个地点。", "success");
+    return;
+  }
+  setSceneSyncModalOpen(true);
+}
+
+function applyChatGlobalSettingsToForm() {
+  if (messagesChatUserPresenceScopeInputEl) {
+    messagesChatUserPresenceScopeInputEl.value = getUserPresenceScope();
+  }
+  setChatGlobalSettingsStatus("");
+}
+
+function setChatGlobalSettingsOpen(isOpen) {
+  state.chatGlobalSettingsOpen = Boolean(isOpen);
+  if (messagesChatGlobalSettingsModalEl) {
+    messagesChatGlobalSettingsModalEl.hidden = !state.chatGlobalSettingsOpen;
+    messagesChatGlobalSettingsModalEl.setAttribute(
+      "aria-hidden",
+      String(!state.chatGlobalSettingsOpen)
+    );
+  }
+  if (state.chatGlobalSettingsOpen) {
+    applyChatGlobalSettingsToForm();
+  } else {
+    setChatGlobalSettingsStatus("");
+  }
+  updateBodyModalState();
+}
+
+function shouldShowConversationNotification(conversationId = "", createdMessages = []) {
+  if (!Array.isArray(createdMessages) || !createdMessages.length) {
+    return false;
+  }
+  return !(
+    state.activeTab === "chat" &&
+    state.activeConversationId === String(conversationId || "").trim() &&
+    !document.hidden &&
+    document.hasFocus()
+  );
+}
+
+function buildConversationNotificationPreview(messages = []) {
+  if (!Array.isArray(messages) || !messages.length) {
+    return "收到一条新消息";
+  }
+  const firstText = getConversationMessagePreviewText(messages[0]) || "收到一条新消息";
+  return messages.length > 1 ? `${firstText} 等 ${messages.length} 条新消息` : firstText;
+}
+
+function pushConversationReplyNotification(contact, conversation, createdMessages = []) {
+  if (
+    !window.PulseMessageNotifications?.push ||
+    !shouldShowConversationNotification(conversation?.id, createdMessages)
+  ) {
+    return;
+  }
+  const resolvedContact = contact && typeof contact === "object" ? contact : null;
+  const resolvedConversation = conversation && typeof conversation === "object" ? conversation : null;
+  window.PulseMessageNotifications.push({
+    id: `chat_reply_notice_${resolvedConversation?.id || "conversation"}_${createdMessages[0]?.id || Date.now()}`,
+    createdAt: createdMessages[0]?.createdAt || Date.now(),
+    name:
+      String(resolvedContact?.name || resolvedConversation?.contactNameSnapshot || "新消息").trim() ||
+      "新消息",
+    preview: buildConversationNotificationPreview(createdMessages),
+    avatarImage: String(
+      resolvedContact?.avatarImage || resolvedConversation?.contactAvatarImageSnapshot || ""
+    ).trim(),
+    avatarText:
+      String(
+        resolvedContact?.avatarText ||
+          resolvedConversation?.contactAvatarTextSnapshot ||
+          getContactAvatarFallback(resolvedContact || { name: "新消息" })
+      ).trim() || "新",
+    conversationId: String(resolvedConversation?.id || "").trim()
+  });
 }
 
 function renderProfileEditorAvatarPreview() {
@@ -6099,6 +8328,17 @@ function getCurrentContactDraft() {
     awarenessEmotionShift: String(existingContact?.awarenessEmotionShift || "").trim(),
     awarenessSensitivity: normalizeAwarenessSensitivity(existingContact?.awarenessSensitivity),
     awarenessConsumed: Boolean(existingContact?.awarenessConsumed),
+    awarenessCheckCount: Math.max(
+      0,
+      Number.parseInt(String(existingContact?.awarenessCheckCount || 0), 10) || 0
+    ),
+    awarenessTriggerCount: Math.max(
+      0,
+      Number.parseInt(String(existingContact?.awarenessTriggerCount || 0), 10) || 0
+    ),
+    awarenessLastCheckedAt: Number(existingContact?.awarenessLastCheckedAt) || 0,
+    awarenessLastTriggeredAt: Number(existingContact?.awarenessLastTriggeredAt) || 0,
+    awarenessHistory: normalizeAwarenessHistory(existingContact?.awarenessHistory || []),
     createdAt: existingContact?.createdAt || Date.now(),
     updatedAt: Date.now()
   };
@@ -6238,7 +8478,9 @@ function captureConversationScrollSnapshot() {
     return null;
   }
   return {
-    top: historyEl.scrollTop
+    top: historyEl.scrollTop,
+    scrollHeight: historyEl.scrollHeight,
+    clientHeight: historyEl.clientHeight
   };
 }
 
@@ -6880,6 +9122,21 @@ function applyChatPromptSettingsToForm(promptSettings) {
   if (messagesChatShowUserAvatarInputEl) {
     messagesChatShowUserAvatarInputEl.checked = resolved.showUserAvatar;
   }
+  if (messagesChatAllowAiPresenceUpdateInputEl) {
+    messagesChatAllowAiPresenceUpdateInputEl.checked = getConversationAllowAiPresenceUpdate();
+    messagesChatAllowAiPresenceUpdateInputEl.disabled = !Boolean(getConversationById());
+  }
+  if (messagesChatAllowAiAutoScheduleInputEl) {
+    messagesChatAllowAiAutoScheduleInputEl.checked = getConversationAllowAiAutoSchedule();
+    messagesChatAllowAiAutoScheduleInputEl.disabled = !Boolean(getConversationById());
+  }
+  if (messagesChatAutoScheduleDaysInputEl) {
+    messagesChatAutoScheduleDaysInputEl.value = String(getConversationAutoScheduleDays());
+    messagesChatAutoScheduleDaysInputEl.disabled = !Boolean(getConversationById());
+  }
+  if (messagesChatAutoScheduleGenerateBtnEl) {
+    messagesChatAutoScheduleGenerateBtnEl.disabled = !Boolean(getConversationById());
+  }
   renderHotTopicsTabOptions(resolved.hotTopicsTabId);
   renderWorldbookMountOptions(resolved.worldbookIds);
   updateChatSettingsFormState();
@@ -6971,6 +9228,7 @@ function getCurrentChatPromptSettingsDraft() {
     worldbookIds: selectedWorldbookIds,
     forumPostFocusEnabled: Boolean(messagesChatProfilePostFocusInputEl?.checked),
     bubbleFocusEnabled: Boolean(messagesChatBubbleFocusInputEl?.checked),
+    sceneMode: currentSettings.sceneMode,
     showContactAvatar: Boolean(messagesChatShowContactAvatarInputEl?.checked),
     showUserAvatar: Boolean(messagesChatShowUserAvatarInputEl?.checked)
   });
@@ -7080,6 +9338,7 @@ function clearCurrentConversationHistory() {
   conversation.memorySummaryCounter = 0;
   conversation.memorySummaryLastMessageCount = 0;
   conversation.updatedAt = Date.now();
+  resetConversationVisibleMessageCount(conversation.id);
   state.messageActionMessageId = "";
   state.composerPanelOpen = false;
   persistConversations();
@@ -7343,22 +9602,39 @@ function sendConversationMessage(text) {
 
 async function requestConversationReply(options = {}) {
   syncProfileStateFromStorage();
-  const conversation = getConversationById();
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const conversationId = String(requestOptions.conversationId || state.activeConversationId).trim();
+  if (!conversationId) {
+    return;
+  }
+  const conversation = getConversationById(conversationId);
   if (!conversation) {
     return;
   }
-
-  const requestOptions = options && typeof options === "object" ? options : {};
+  const suppressUi = Boolean(requestOptions.suppressUi);
+  const forceDirect = Boolean(requestOptions.forceDirect);
   const isRegenerate = Boolean(requestOptions.regenerate);
   const regenerateInstruction = String(requestOptions.regenerateInstruction || "").trim();
 
-  if (state.sendingConversationId === conversation.id) {
+  const existingTask = !forceDirect ? getReplyTaskForConversation(conversation.id) : null;
+  if (existingTask) {
+    state.sendingConversationId = conversation.id;
+    if (!suppressUi) {
+      renderMessagesPage();
+      setMessagesStatus(isRegenerate ? "当前正在重新生成回复…" : "当前正在等待对方回复…");
+    }
+    return existingTask;
+  }
+
+  if (state.sendingConversationId === conversation.id && !forceDirect) {
     return;
   }
 
   const contact = getContactById(conversation.contactId);
   if (!contact) {
-    setMessagesStatus("未找到对应联系人，请先去通讯录检查人物信息。", "error");
+    if (!suppressUi) {
+      setMessagesStatus("未找到对应联系人，请先去通讯录检查人物信息。", "error");
+    }
     return;
   }
 
@@ -7384,10 +9660,62 @@ async function requestConversationReply(options = {}) {
     Boolean(String(contact.awarenessText || "").trim()) && !Boolean(contact.awarenessConsumed);
   let triggeredAwareness = null;
   let awarenessTriggered = false;
+  let awarenessHistoryEntry = null;
+
+  if (isRegenerate) {
+    const latestReplyBatch = getLatestAssistantReplyBatch(conversation);
+    if (latestReplyBatch?.blocked) {
+      if (!suppressUi) {
+        setMessagesStatus("当前还有待回复的新消息，请先完成这一轮对话。", "error");
+      }
+      return;
+    }
+    if (!latestReplyBatch) {
+      if (!suppressUi) {
+        setMessagesStatus("当前没有可重回的上一轮回复。", "error");
+      }
+      return;
+    }
+  } else {
+    const pendingUserMessages = conversation.messages.filter(
+      (message) => message.role === "user" && message.needsReply
+    );
+    if (!pendingUserMessages.length) {
+      if (!suppressUi) {
+        setMessagesStatus("当前没有待推送到 API 的新消息。");
+      }
+      return;
+    }
+  }
+
+  closeConversationTransientUi();
+
+  if (canUseBackgroundReplyWorker() && !forceDirect) {
+    const task = enqueueReplyTask(conversation.id, {
+      regenerate: isRegenerate,
+      regenerateInstruction
+    });
+    state.sendingConversationId = conversation.id;
+    if (!suppressUi) {
+      renderMessagesPage();
+      setMessagesStatus(
+        isRegenerate ? "已加入重回队列，后台会继续生成回复。" : "已加入回复队列，离开 chat 也会继续收消息。",
+        "success"
+      );
+    }
+    return task;
+  }
 
   if (shouldEvaluateAwareness && hasActiveAwareness) {
     const probability = getAwarenessSensitivityProbability(contact.awarenessSensitivity);
     awarenessTriggered = Math.random() < probability;
+    awarenessHistoryEntry = buildAwarenessHistoryItem(
+      awarenessTriggered,
+      currentAwarenessCounter + 1,
+      awarenessTriggered
+        ? "已命中这次察觉判断，后续会主动把这条额外信息带入对话。"
+        : "本次未命中察觉判断，等待下一轮满足轮数后再判断。"
+    );
     if (awarenessTriggered) {
       triggeredAwareness = {
         text: String(contact.awarenessText || "").trim(),
@@ -7397,40 +9725,27 @@ async function requestConversationReply(options = {}) {
     }
   }
 
-  closeConversationTransientUi();
   state.sendingConversationId = conversation.id;
+  if (!isRegenerate) {
+    await maybeAutoGenerateSchedulesForConversation(conversation);
+  }
   if (isRegenerate) {
     const latestReplyBatch = getLatestAssistantReplyBatch(conversation);
-    if (latestReplyBatch?.blocked) {
-      state.sendingConversationId = "";
-      setMessagesStatus("当前还有待回复的新消息，请先完成这一轮对话。", "error");
-      return;
-    }
-    if (!latestReplyBatch) {
-      state.sendingConversationId = "";
-      setMessagesStatus("当前没有可重回的上一轮回复。", "error");
-      return;
-    }
-
     removedReplyBatch = latestReplyBatch.messages.map((message) => ({ ...message }));
     conversation.messages = conversation.messages.slice(0, latestReplyBatch.startIndex);
     recalculateConversationUpdatedAt(conversation);
     persistConversations();
     history = selectConversationHistory(conversation.messages, promptSettings.historyRounds);
-    renderMessagesPage();
-    setMessagesStatus("正在重新生成回复…");
-  } else {
-    const pendingUserMessages = conversation.messages.filter(
-      (message) => message.role === "user" && message.needsReply
-    );
-    if (!pendingUserMessages.length) {
-      state.sendingConversationId = "";
-      setMessagesStatus("当前没有待推送到 API 的新消息。");
-      return;
+    if (!suppressUi) {
+      renderMessagesPage();
+      setMessagesStatus("正在重新生成回复…");
     }
+  } else {
     history = selectConversationHistory(conversation.messages, promptSettings.historyRounds);
-    renderMessagesPage();
-    setMessagesStatus("正在等待对方回复…");
+    if (!suppressUi) {
+      renderMessagesPage();
+      setMessagesStatus("正在等待对方回复…");
+    }
   }
 
   try {
@@ -7443,7 +9758,9 @@ async function requestConversationReply(options = {}) {
       {
         regenerate: isRegenerate,
         regenerateInstruction,
-        triggeredAwareness
+        triggeredAwareness,
+        sceneMode: conversation.sceneMode === "offline" ? "offline" : "online",
+        conversation
       }
     );
     const updatedConversation = getConversationById(conversation.id);
@@ -7456,12 +9773,16 @@ async function requestConversationReply(options = {}) {
       );
     }
 
-    await appendAssistantReplyBatch(
+    const createdMessages = await appendAssistantReplyBatch(
       updatedConversation,
       replyResult.text,
       promptSettings,
       replyResult.privacySession
     );
+    if (replyResult.assistantPresenceUpdate && updatedConversation.contactId) {
+      setContactPresenceEntry(updatedConversation.contactId, replyResult.assistantPresenceUpdate);
+    }
+    pushConversationReplyNotification(contact, updatedConversation, createdMessages);
     repairPersistedChatWorldbookMounts(promptSettings);
     if (!isRegenerate) {
       updatedConversation.awarenessCounter = shouldEvaluateAwareness
@@ -7473,6 +9794,50 @@ async function requestConversationReply(options = {}) {
           state.contacts[contactIndex] = {
             ...state.contacts[contactIndex],
             awarenessConsumed: true,
+            awarenessCheckCount:
+              Math.max(
+                0,
+                Number.parseInt(
+                  String(state.contacts[contactIndex].awarenessCheckCount || 0),
+                  10
+                ) || 0
+              ) + 1,
+            awarenessTriggerCount:
+              Math.max(
+                0,
+                Number.parseInt(
+                  String(state.contacts[contactIndex].awarenessTriggerCount || 0),
+                  10
+                ) || 0
+              ) + 1,
+            awarenessLastCheckedAt: awarenessHistoryEntry?.checkedAt || Date.now(),
+            awarenessLastTriggeredAt: awarenessHistoryEntry?.checkedAt || Date.now(),
+            awarenessHistory: appendAwarenessHistory(
+              state.contacts[contactIndex],
+              awarenessHistoryEntry || buildAwarenessHistoryItem(true, currentAwarenessCounter + 1)
+            ),
+            updatedAt: Date.now()
+          };
+          persistContacts();
+        }
+      } else if (shouldEvaluateAwareness && awarenessHistoryEntry) {
+        const contactIndex = state.contacts.findIndex((item) => item.id === contact.id);
+        if (contactIndex >= 0) {
+          state.contacts[contactIndex] = {
+            ...state.contacts[contactIndex],
+            awarenessCheckCount:
+              Math.max(
+                0,
+                Number.parseInt(
+                  String(state.contacts[contactIndex].awarenessCheckCount || 0),
+                  10
+                ) || 0
+              ) + 1,
+            awarenessLastCheckedAt: awarenessHistoryEntry.checkedAt || Date.now(),
+            awarenessHistory: appendAwarenessHistory(
+              state.contacts[contactIndex],
+              awarenessHistoryEntry
+            ),
             updatedAt: Date.now()
           };
           persistContacts();
@@ -7483,7 +9848,9 @@ async function requestConversationReply(options = {}) {
       persistConversations();
       void maybeExtractConversationMemories(updatedConversation.id, settings, promptSettings);
     }
-    setMessagesStatus(isRegenerate ? "已重新生成回复。" : "已收到回复。", "success");
+    if (!suppressUi) {
+      setMessagesStatus(isRegenerate ? "已重新生成回复。" : "已收到回复。", "success");
+    }
   } catch (error) {
     if (isRegenerate) {
       const rollbackConversation = getConversationById(conversation.id);
@@ -7493,23 +9860,110 @@ async function requestConversationReply(options = {}) {
         persistConversations();
       }
     }
-    setMessagesStatus(`回复失败：${error?.message || "请求失败"}`, "error");
+    if (!suppressUi) {
+      setMessagesStatus(`回复失败：${error?.message || "请求失败"}`, "error");
+    }
+    if (suppressUi) {
+      throw error;
+    }
   } finally {
     state.sendingConversationId = "";
-    renderMessagesPage();
-    focusConversationInput();
+    if (!suppressUi) {
+      renderMessagesPage();
+      focusConversationInput();
+    }
   }
 }
 
+function syncSendingConversationStateFromReplyTasks() {
+  const activeConversationId = String(state.activeConversationId || "").trim();
+  if (!activeConversationId) {
+    if (!loadReplyTasks().some((task) => task.status === "pending" || task.status === "processing")) {
+      state.sendingConversationId = "";
+    }
+    return;
+  }
+  const activeTask = getReplyTaskForConversation(activeConversationId);
+  if (activeTask) {
+    state.sendingConversationId = activeConversationId;
+    return;
+  }
+  if (state.sendingConversationId === activeConversationId) {
+    state.sendingConversationId = "";
+  }
+}
+
+async function pumpBackgroundReplyTasks() {
+  if (!isBackgroundMessagesWorker() || state.backgroundReplyTaskBusy) {
+    return;
+  }
+  const nextTask = getNextPendingReplyTask();
+  if (!nextTask) {
+    return;
+  }
+
+  state.backgroundReplyTaskBusy = true;
+  updateReplyTask(nextTask.id, {
+    status: "processing",
+    errorMessage: ""
+  });
+  refreshStateFromStorage();
+
+  try {
+    await requestConversationReply({
+      conversationId: nextTask.conversationId,
+      regenerate: nextTask.regenerate,
+      regenerateInstruction: nextTask.regenerateInstruction,
+      forceDirect: true,
+      suppressUi: true
+    });
+    removeReplyTask(nextTask.id);
+  } catch (error) {
+    updateReplyTask(nextTask.id, {
+      status: "error",
+      errorMessage: error?.message || "请求失败"
+    });
+  } finally {
+    state.backgroundReplyTaskBusy = false;
+    if (getNextPendingReplyTask()) {
+      window.setTimeout(() => {
+        void pumpBackgroundReplyTasks();
+      }, 40);
+    }
+  }
+}
+
+function initBackgroundMessagesWorker() {
+  refreshStateFromStorage();
+  sanitizePresenceStateReferences();
+  persistPresenceState();
+  persistConversations();
+  window.addEventListener("storage", (event) => {
+    if (String(event?.key || "").trim() !== MESSAGE_REPLY_TASKS_KEY) {
+      return;
+    }
+    void pumpBackgroundReplyTasks();
+  });
+  window.setTimeout(() => {
+    void pumpBackgroundReplyTasks();
+  }, 80);
+}
+
 function refreshStateFromStorage() {
+  const settings = loadSettings();
   state.profile = loadProfile();
   state.contacts = loadContacts();
   state.conversations = loadConversations();
   state.worldbooks = loadWorldbooks();
+  state.commonPlaces = loadCommonPlaces();
+  state.presenceState = loadPresenceState();
   state.journalEntries = loadJournalEntries();
   state.memories = loadMessageMemories();
   state.recentLocations = loadRecentLocations();
-  state.chatPromptSettings = normalizeMessagePromptSettings(loadSettings().messagePromptSettings);
+  state.chatPromptSettings = normalizeMessagePromptSettings(settings.messagePromptSettings);
+  state.chatGlobalSettings = normalizeChatGlobalSettings(settings.chatGlobalSettings);
+  sanitizePresenceStateReferences();
+  syncSendingConversationStateFromReplyTasks();
 }
 
 function attachEvents() {
@@ -7551,6 +10005,16 @@ function attachEvents() {
       }
       closeConversationTransientUi();
       setChatSettingsOpen(true);
+    });
+  }
+
+  if (messagesChatSceneBtnEl) {
+    messagesChatSceneBtnEl.addEventListener("click", () => {
+      if (!state.activeConversationId) {
+        return;
+      }
+      closeConversationTransientUi();
+      setSceneModalOpen(true);
     });
   }
 
@@ -7628,6 +10092,20 @@ function attachEvents() {
         return;
       }
 
+      if (actionEl.getAttribute("data-action") === "load-more-conversation-messages") {
+        const conversation = getConversationById();
+        if (!conversation) {
+          return;
+        }
+        const scrollSnapshot = captureConversationScrollSnapshot();
+        expandConversationVisibleMessageCount(conversation.id);
+        renderConversationDetail({
+          scrollBehavior: "expand-top",
+          scrollSnapshot
+        });
+        return;
+      }
+
       if (actionEl.getAttribute("data-action") === "toggle-composer-panel") {
         const scrollSnapshot = captureConversationScrollSnapshot();
         state.composerPanelOpen = !state.composerPanelOpen;
@@ -7699,6 +10177,7 @@ function attachEvents() {
       ) {
         closeConversationTransientUi();
         state.activeConversationId = String(actionEl.getAttribute("data-conversation-id") || "");
+        resetConversationVisibleMessageCount(state.activeConversationId);
         setMessagesStatus("");
         renderMessagesPage();
         return;
@@ -7725,6 +10204,14 @@ function attachEvents() {
         }
         if (entryId === "worldbook") {
           setWorldbookManagerOpen(true);
+          return;
+        }
+        if (entryId === "places") {
+          setPlacesManagerOpen(true);
+          return;
+        }
+        if (entryId === "settings") {
+          setChatGlobalSettingsOpen(true);
           return;
         }
         const label = actionEl.textContent?.trim() || "该功能";
@@ -7903,6 +10390,7 @@ function attachEvents() {
       const conversation = createConversation(contact);
       state.activeTab = "chat";
       state.activeConversationId = conversation.id;
+      resetConversationVisibleMessageCount(conversation.id);
       setConversationPickerOpen(false);
       renderMessagesPage();
     });
@@ -7911,6 +10399,69 @@ function attachEvents() {
   if (messagesChatSettingsCloseBtnEl) {
     messagesChatSettingsCloseBtnEl.addEventListener("click", () => {
       setChatSettingsOpen(false);
+    });
+  }
+
+  if (messagesSceneCloseBtnEl) {
+    messagesSceneCloseBtnEl.addEventListener("click", () => {
+      setSceneModalOpen(false);
+    });
+  }
+
+  if (messagesSceneOnlineBtnEl) {
+    messagesSceneOnlineBtnEl.addEventListener("click", () => {
+      applySceneModeToButtons("online");
+      updateSceneModalFields(getCurrentSceneDraft());
+    });
+  }
+
+  if (messagesSceneOfflineBtnEl) {
+    messagesSceneOfflineBtnEl.addEventListener("click", () => {
+      applySceneModeToButtons("offline");
+      updateSceneModalFields(getCurrentSceneDraft());
+    });
+  }
+
+  [
+    messagesSceneUserPresenceTypeInputEl,
+    messagesSceneContactPresenceTypeInputEl,
+    messagesSceneUserPlaceSelectEl,
+    messagesSceneUserFromPlaceSelectEl,
+    messagesSceneUserToPlaceSelectEl,
+    messagesSceneContactPlaceSelectEl,
+    messagesSceneContactFromPlaceSelectEl,
+    messagesSceneContactToPlaceSelectEl
+  ]
+    .filter(Boolean)
+    .forEach((input) => {
+      input.addEventListener("change", () => {
+        updateSceneModalFields(getCurrentSceneDraft());
+      });
+    });
+
+  if (messagesSceneFormEl) {
+    messagesSceneFormEl.addEventListener("submit", (event) => {
+      event.preventDefault();
+      try {
+        saveSceneDraft();
+        window.setTimeout(() => {
+          setSceneModalOpen(false);
+        }, 180);
+      } catch (error) {
+        setSceneStatus(error?.message || "状态保存失败。", "error");
+      }
+    });
+  }
+
+  if (messagesSceneSyncPlaceBtnEl) {
+    messagesSceneSyncPlaceBtnEl.addEventListener("click", () => {
+      triggerSharedPlaceSync();
+    });
+  }
+
+  if (messagesSceneManagePlacesBtnEl) {
+    messagesSceneManagePlacesBtnEl.addEventListener("click", () => {
+      setPlacesManagerOpen(true);
     });
   }
 
@@ -7946,6 +10497,13 @@ function attachEvents() {
       nextSettings.messagePromptSettings = draft;
       persistSettings(nextSettings);
       state.chatPromptSettings = draft;
+      setConversationAllowAiPresenceUpdate(
+        Boolean(messagesChatAllowAiPresenceUpdateInputEl?.checked)
+      );
+      setConversationAutoScheduleSettings(
+        Boolean(messagesChatAllowAiAutoScheduleInputEl?.checked),
+        messagesChatAutoScheduleDaysInputEl?.value || DEFAULT_AUTO_SCHEDULE_DAYS
+      );
       updateChatHotTopicsWarning(draft);
       setEditorStatus(messagesChatSettingsStatusEl, "对话回复设置已保存。", "success");
       setMessagesStatus("对话 prompt 设置已更新。", "success");
@@ -7967,6 +10525,255 @@ function attachEvents() {
   if (messagesChatClearMemoryBtnEl) {
     messagesChatClearMemoryBtnEl.addEventListener("click", () => {
       clearCurrentConversationMemories();
+    });
+  }
+
+  if (messagesChatAutoScheduleGenerateBtnEl) {
+    messagesChatAutoScheduleGenerateBtnEl.addEventListener("click", async () => {
+      if (!getConversationById()) {
+        setEditorStatus(messagesChatSettingsStatusEl, "当前没有打开的会话。", "error");
+        return;
+      }
+      const days = normalizeAutoScheduleDays(
+        messagesChatAutoScheduleDaysInputEl?.value,
+        getConversationAutoScheduleDays()
+      );
+      setEditorStatus(
+        messagesChatSettingsStatusEl,
+        `正在为当前角色补齐未来 ${days} 天的空白小时行程…`
+      );
+      try {
+        setConversationAutoScheduleSettings(
+          Boolean(messagesChatAllowAiAutoScheduleInputEl?.checked),
+          days
+        );
+        const result = await generateAutoSchedulesForConversation(days);
+        setEditorStatus(
+          messagesChatSettingsStatusEl,
+          `已补齐 ${result.acceptedEntries.length} 条小时行程。`,
+          "success"
+        );
+        setMessagesStatus(
+          `已为当前角色补齐未来 ${result.requestedDays} 天的 ${result.acceptedEntries.length} 条行程。`,
+          "success"
+        );
+      } catch (error) {
+        setEditorStatus(
+          messagesChatSettingsStatusEl,
+          error?.message || "自动生成行程失败。",
+          "error"
+        );
+      }
+    });
+  }
+
+  if (messagesChatGlobalSettingsCloseBtnEl) {
+    messagesChatGlobalSettingsCloseBtnEl.addEventListener("click", () => {
+      setChatGlobalSettingsOpen(false);
+    });
+  }
+
+  if (messagesChatGlobalSettingsCancelBtnEl) {
+    messagesChatGlobalSettingsCancelBtnEl.addEventListener("click", () => {
+      setChatGlobalSettingsOpen(false);
+    });
+  }
+
+  if (messagesChatGlobalSettingsFormEl) {
+    messagesChatGlobalSettingsFormEl.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const nextSettings = loadSettings();
+      nextSettings.chatGlobalSettings = normalizeChatGlobalSettings({
+        userPresenceScope: messagesChatUserPresenceScopeInputEl?.value || "global"
+      });
+      persistSettings(nextSettings);
+      state.chatGlobalSettings = normalizeChatGlobalSettings(nextSettings.chatGlobalSettings);
+      setChatGlobalSettingsStatus("Chat 全局设置已保存。", "success");
+      renderMessagesPage();
+      if (state.sceneModalOpen) {
+        updateSceneModalFields(getCurrentSceneDraft());
+      }
+      window.setTimeout(() => {
+        setChatGlobalSettingsOpen(false);
+      }, 180);
+    });
+  }
+
+  if (messagesPlacesCloseBtnEl) {
+    messagesPlacesCloseBtnEl.addEventListener("click", () => {
+      setPlacesManagerOpen(false);
+    });
+  }
+
+  if (messagesPlacesAddBtnEl) {
+    messagesPlacesAddBtnEl.addEventListener("click", () => {
+      setPlaceEditorOpen(true);
+    });
+  }
+
+  if (messagesPlaceSearchInputEl) {
+    messagesPlaceSearchInputEl.addEventListener("input", () => {
+      state.placeQuery = String(messagesPlaceSearchInputEl.value || "").trim();
+      renderPlacesManager();
+    });
+  }
+
+  if (messagesPlaceSearchBtnEl) {
+    messagesPlaceSearchBtnEl.addEventListener("click", () => {
+      state.placeQuery = String(messagesPlaceSearchInputEl?.value || "").trim();
+      renderPlacesManager();
+    });
+  }
+
+  if (messagesPlaceFilterSelectEl) {
+    messagesPlaceFilterSelectEl.addEventListener("change", () => {
+      state.placeFilterType = String(messagesPlaceFilterSelectEl.value || "all").trim() || "all";
+      renderPlacesManager();
+    });
+  }
+
+  if (messagesPlacesListEl) {
+    messagesPlacesListEl.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      const actionEl = target.closest("[data-action]");
+      if (!(actionEl instanceof Element)) {
+        return;
+      }
+      const action = String(actionEl.getAttribute("data-action") || "").trim();
+      const placeId = String(actionEl.getAttribute("data-place-id") || "").trim();
+      const { conversation } = getActiveConversationContext();
+      if (action === "edit-common-place") {
+        setPlaceEditorOpen(true, placeId);
+        return;
+      }
+      if (action === "delete-common-place") {
+        deleteCommonPlace(placeId);
+        return;
+      }
+      if (action === "set-user-current-place") {
+        applyPlaceAsCurrentForUser(placeId, conversation?.contactId || "");
+        setPlacesStatus("已设为我的当前地点。", "success");
+        return;
+      }
+      if (action === "set-contact-current-place") {
+        applyPlaceAsCurrentForContact(placeId, conversation?.contactId || "");
+        setPlacesStatus("已设为 TA 的当前地点。", "success");
+      }
+    });
+  }
+
+  if (messagesPlaceEditorCloseBtnEl) {
+    messagesPlaceEditorCloseBtnEl.addEventListener("click", () => {
+      setPlaceEditorOpen(false);
+    });
+  }
+
+  if (messagesPlaceVisibilitySelectEl) {
+    messagesPlaceVisibilitySelectEl.addEventListener("change", () => {
+      const mode = normalizeCommonPlaceVisibilityMode(messagesPlaceVisibilitySelectEl.value);
+      if (messagesPlaceVisibleContactsFieldEl) {
+        messagesPlaceVisibleContactsFieldEl.hidden = mode !== "selected_contacts";
+      }
+      setPlaceEditorStatus("");
+    });
+  }
+
+  if (messagesPlaceEditorFormEl) {
+    messagesPlaceEditorFormEl.addEventListener("submit", (event) => {
+      event.preventDefault();
+      try {
+        const place = saveCommonPlaceDraft();
+        renderPlacesManager();
+        updateSceneModalFields(buildSceneDraft());
+        setPlaceEditorStatus(`地点“${place.name}”已保存。`, "success");
+        setPlacesStatus(`地点“${place.name}”已保存。`, "success");
+        window.setTimeout(() => {
+          setPlaceEditorOpen(false);
+        }, 180);
+      } catch (error) {
+        setPlaceEditorStatus(error?.message || "保存地点失败。", "error");
+      }
+    });
+  }
+
+  if (messagesPlaceEditorSetUserBtnEl) {
+    messagesPlaceEditorSetUserBtnEl.addEventListener("click", () => {
+      try {
+        const place = saveCommonPlaceDraft();
+        const { conversation } = getActiveConversationContext();
+        applyPlaceAsCurrentForUser(place.id, conversation?.contactId || "");
+        renderPlacesManager();
+        updateSceneModalFields(buildSceneDraft());
+        setPlaceEditorStatus("已设为我的当前地点。", "success");
+      } catch (error) {
+        setPlaceEditorStatus(error?.message || "保存地点失败。", "error");
+      }
+    });
+  }
+
+  if (messagesPlaceEditorSetContactBtnEl) {
+    messagesPlaceEditorSetContactBtnEl.addEventListener("click", () => {
+      const { conversation } = getActiveConversationContext();
+      if (!conversation) {
+        setPlaceEditorStatus("当前不在 1v1 会话中，暂时无法设为 TA 的地点。", "error");
+        return;
+      }
+      try {
+        const place = saveCommonPlaceDraft();
+        applyPlaceAsCurrentForContact(place.id, conversation.contactId);
+        renderPlacesManager();
+        updateSceneModalFields(buildSceneDraft());
+        setPlaceEditorStatus("已设为 TA 的当前地点。", "success");
+      } catch (error) {
+        setPlaceEditorStatus(error?.message || "保存地点失败。", "error");
+      }
+    });
+  }
+
+  if (messagesPlaceEditorDeleteBtnEl) {
+    messagesPlaceEditorDeleteBtnEl.addEventListener("click", () => {
+      if (!state.placeEditorId) {
+        return;
+      }
+      deleteCommonPlace(state.placeEditorId);
+      setPlaceEditorOpen(false);
+    });
+  }
+
+  if (messagesSceneSyncCloseBtnEl) {
+    messagesSceneSyncCloseBtnEl.addEventListener("click", () => {
+      setSceneSyncModalOpen(false);
+    });
+  }
+
+  if (messagesSceneSyncUseUserBtnEl) {
+    messagesSceneSyncUseUserBtnEl.addEventListener("click", () => {
+      const draft = getCurrentSceneDraft();
+      if (!draft.userPresence.placeId) {
+        setSceneSyncStatus("用户还没有可同步的地点。", "error");
+        return;
+      }
+      applySharedPlaceToSceneDraft(draft.userPresence.placeId);
+    });
+  }
+
+  if (messagesSceneSyncUseContactBtnEl) {
+    messagesSceneSyncUseContactBtnEl.addEventListener("click", () => {
+      const draft = getCurrentSceneDraft();
+      if (!draft.contactPresence.placeId) {
+        setSceneSyncStatus("角色还没有可同步的地点。", "error");
+        return;
+      }
+      applySharedPlaceToSceneDraft(draft.contactPresence.placeId);
+    });
+  }
+
+  if (messagesSceneSyncUseCustomBtnEl) {
+    messagesSceneSyncUseCustomBtnEl.addEventListener("click", () => {
+      applySharedPlaceToSceneDraft(messagesSceneSyncPlaceSelectEl?.value || "");
     });
   }
 
@@ -8265,6 +11072,17 @@ function attachEvents() {
         awarenessEmotionShift: draft.awarenessEmotionShift,
         awarenessSensitivity: draft.awarenessSensitivity,
         awarenessConsumed: changed ? false : Boolean(previous.awarenessConsumed),
+        awarenessCheckCount: changed
+          ? 0
+          : Math.max(0, Number.parseInt(String(previous.awarenessCheckCount || 0), 10) || 0),
+        awarenessTriggerCount: changed
+          ? 0
+          : Math.max(0, Number.parseInt(String(previous.awarenessTriggerCount || 0), 10) || 0),
+        awarenessLastCheckedAt: changed ? 0 : Number(previous.awarenessLastCheckedAt) || 0,
+        awarenessLastTriggeredAt: changed ? 0 : Number(previous.awarenessLastTriggeredAt) || 0,
+        awarenessHistory: changed
+          ? []
+          : normalizeAwarenessHistory(previous.awarenessHistory || []),
         updatedAt: Date.now()
       };
       persistContacts();
@@ -8433,7 +11251,9 @@ function attachEvents() {
     messagesPickerModalEl,
     messagesMemoryModalEl,
     messagesWorldbookModalEl,
-    messagesWorldbookEditorModalEl
+    messagesWorldbookEditorModalEl,
+    messagesPlacesModalEl,
+    messagesPlaceEditorModalEl
   ]
     .filter(Boolean)
     .forEach((modal) => {
@@ -8461,6 +11281,14 @@ function attachEvents() {
           setWorldbookManagerOpen(false);
           return;
         }
+        if (modal === messagesPlacesModalEl) {
+          setPlacesManagerOpen(false);
+          return;
+        }
+        if (modal === messagesPlaceEditorModalEl) {
+          setPlaceEditorOpen(false);
+          return;
+        }
         if (modal === messagesWorldbookEditorModalEl) {
           setWorldbookEditorOpen(false);
         }
@@ -8471,6 +11299,30 @@ function attachEvents() {
     messagesChatSettingsModalEl.addEventListener("click", (event) => {
       if (event.target === messagesChatSettingsModalEl) {
         setChatSettingsOpen(false);
+      }
+    });
+  }
+
+  if (messagesSceneModalEl) {
+    messagesSceneModalEl.addEventListener("click", (event) => {
+      if (event.target === messagesSceneModalEl) {
+        setSceneModalOpen(false);
+      }
+    });
+  }
+
+  if (messagesChatGlobalSettingsModalEl) {
+    messagesChatGlobalSettingsModalEl.addEventListener("click", (event) => {
+      if (event.target === messagesChatGlobalSettingsModalEl) {
+        setChatGlobalSettingsOpen(false);
+      }
+    });
+  }
+
+  if (messagesSceneSyncModalEl) {
+    messagesSceneSyncModalEl.addEventListener("click", (event) => {
+      if (event.target === messagesSceneSyncModalEl) {
+        setSceneSyncModalOpen(false);
       }
     });
   }
@@ -8555,6 +11407,11 @@ function attachEvents() {
     if (
       state.profileEditorOpen ||
       state.contactEditorOpen ||
+      state.sceneModalOpen ||
+      state.sceneSyncModalOpen ||
+      state.chatGlobalSettingsOpen ||
+      state.placesManagerOpen ||
+      state.placeEditorOpen ||
       state.awarenessModalOpen ||
       state.conversationPickerOpen ||
       state.chatSettingsOpen ||
@@ -8577,10 +11434,30 @@ function attachEvents() {
   });
 
   window.addEventListener("storage", (event) => {
-    if (event.key && ![PROFILE_KEY, MESSAGE_RECENT_LOCATIONS_KEY, MESSAGE_THREADS_KEY].includes(event.key)) {
+    if (
+      event.key &&
+      ![
+        PROFILE_KEY,
+        SETTINGS_KEY,
+        MESSAGE_CONTACTS_KEY,
+        WORLD_BOOKS_KEY,
+        MESSAGE_MEMORIES_KEY,
+        MESSAGE_RECENT_LOCATIONS_KEY,
+        MESSAGE_REPLY_TASKS_KEY,
+        MESSAGE_THREADS_KEY,
+        SCHEDULE_ENTRIES_KEY,
+        MESSAGE_COMMON_PLACES_KEY,
+        MESSAGE_PRESENCE_STATE_KEY
+      ].includes(event.key)
+    ) {
       return;
     }
-    if (state.profileEditorOpen || state.contactEditorOpen || state.awarenessModalOpen) {
+    if (
+      state.profileEditorOpen ||
+      state.contactEditorOpen ||
+      state.awarenessModalOpen ||
+      state.placeEditorOpen
+    ) {
       return;
     }
     refreshStateFromStorage();
@@ -8607,6 +11484,10 @@ function attachEvents() {
       setChatSettingsOpen(false);
       return;
     }
+    if (event.key === "Escape" && state.chatGlobalSettingsOpen) {
+      setChatGlobalSettingsOpen(false);
+      return;
+    }
     if (event.key === "Escape" && state.memoryEditorOpen) {
       setMemoryEditorOpen(false);
       return;
@@ -8625,6 +11506,14 @@ function attachEvents() {
     }
     if (event.key === "Escape" && state.worldbookManagerOpen) {
       setWorldbookManagerOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.placeEditorOpen) {
+      setPlaceEditorOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.placesManagerOpen) {
+      setPlacesManagerOpen(false);
       return;
     }
     if (event.key === "Escape" && state.regenerateModalOpen) {
@@ -8649,6 +11538,14 @@ function attachEvents() {
     }
     if (event.key === "Escape" && state.journalHistoryOpen) {
       setJournalHistoryOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.sceneModalOpen) {
+      setSceneModalOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.sceneSyncModalOpen) {
+      setSceneSyncModalOpen(false);
       return;
     }
     if (event.key === "Escape" && state.journalOpen) {
@@ -8697,12 +11594,21 @@ function init() {
   const launchView = getMessagesLaunchView();
   if (document.body) {
     document.body.classList.toggle("embedded", isEmbeddedView());
+    document.body.classList.toggle("background-worker", isBackgroundMessagesWorker());
+  }
+  if (isBackgroundMessagesWorker()) {
+    initBackgroundMessagesWorker();
+    notifyEmbeddedReady();
+    return;
   }
   state.memoryStandaloneLaunch = launchView === "memory";
   if (launchView === "memory") {
     state.activeTab = "me";
   }
   bindMessagesViewportHeight();
+  refreshStateFromStorage();
+  sanitizePresenceStateReferences();
+  persistPresenceState();
   persistConversations();
   renderMessagesPage();
   attachEvents();

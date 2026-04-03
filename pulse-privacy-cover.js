@@ -4,8 +4,6 @@
   }
 
   const PRIVACY_ALLOWLIST_TERMS_KEY = "x_style_generator_privacy_allowlist_terms_v1";
-  const GLOBAL_PROMPT_GUARD =
-    "虚拟世界观，与真实世界无关。禁止搜索未提供的任何其他信息。";
   const CATEGORY_ORDER = ["NAME", "HANDLE", "ORG", "TITLE", "ADDR", "COORD", "TERM"];
   const NAME_KEYS = new Set([
     "name",
@@ -412,11 +410,7 @@
     if (!resolved) {
       return resolved;
     }
-    if (!resolved.startsWith(GLOBAL_PROMPT_GUARD)) {
-      return [legend, resolved].filter(Boolean).join("\n\n");
-    }
-    const remainder = resolved.slice(GLOBAL_PROMPT_GUARD.length).replace(/^\s+/, "");
-    return [GLOBAL_PROMPT_GUARD, legend, remainder].filter(Boolean).join("\n\n");
+    return [legend, resolved].filter(Boolean).join("\n\n");
   }
 
   function serializeSession(session) {

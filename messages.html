@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <title>Pulse Generator · Chat</title>
-    <link rel="stylesheet" href="./messages.css?v=20260402-230812" />
+    <link rel="stylesheet" href="./messages.css?v=20260403-122055" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -24,6 +24,18 @@
           ></button>
           <h1 id="messages-page-title" class="messages-topbar__title">微信</h1>
           <div class="messages-topbar__actions">
+            <button
+              id="messages-chat-scene-btn"
+              class="messages-topbar__icon messages-topbar__icon--scene"
+              type="button"
+              aria-label="聊天状态"
+              hidden
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="5.8" fill="currentColor" />
+                <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8" opacity="0.3" />
+              </svg>
+            </button>
             <button
               id="messages-chat-settings-btn"
               class="messages-topbar__icon"
@@ -550,6 +562,62 @@
             </small>
           </section>
 
+          <label class="messages-toggle-field">
+            <div class="messages-toggle-field__body">
+              <strong>允许 AI 调整自己的状态</strong>
+              <p>开启后，AI 可在回复里自然更新自己的地点或“在路上”状态，但不能修改用户状态。</p>
+            </div>
+            <span class="messages-switch">
+              <input id="messages-chat-allow-ai-presence-update-input" type="checkbox" />
+              <span class="messages-switch__slider"></span>
+            </span>
+          </label>
+
+          <label class="messages-toggle-field">
+            <div class="messages-toggle-field__body">
+              <strong>允许 AI 自动生成行程</strong>
+              <p>开启后，可为当前角色补齐未来几天的空白小时行程；不会覆盖已有安排。</p>
+            </div>
+            <span class="messages-switch">
+              <input id="messages-chat-allow-ai-auto-schedule-input" type="checkbox" />
+              <span class="messages-switch__slider"></span>
+            </span>
+          </label>
+
+          <label class="messages-form-field">
+            <span>自动行程天数</span>
+            <input
+              id="messages-chat-auto-schedule-days-input"
+              type="number"
+              min="1"
+              max="14"
+              inputmode="numeric"
+              placeholder="默认 3 天"
+              autocomplete="off"
+            />
+            <small class="messages-form-field__hint">
+              仅作用于自动生成与“立即生成行程”；行程会按小时填充未来空白时间。
+            </small>
+          </label>
+
+          <section class="messages-form-field">
+            <div class="messages-form-field__head">
+              <span>立即生成行程</span>
+            </div>
+            <div class="messages-form-field__actions">
+              <button
+                id="messages-chat-auto-schedule-generate-btn"
+                class="messages-text-button"
+                type="button"
+              >
+                立即生成行程
+              </button>
+            </div>
+            <small class="messages-form-field__hint">
+              只补齐空白时段，不覆盖现有安排；会优先贴近角色人设与已挂载的世界书背景。
+            </small>
+          </section>
+
           <p
             id="messages-chat-settings-status"
             class="messages-editor-status"
@@ -581,6 +649,514 @@
             </small>
           </section>
         </form>
+      </div>
+    </section>
+
+    <section id="messages-scene-modal" class="messages-sheet-modal" hidden aria-hidden="true">
+      <div
+        class="messages-sheet-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="聊天状态"
+      >
+        <header class="messages-sheet-modal__header">
+          <button
+            id="messages-scene-close-btn"
+            class="messages-sheet-modal__button"
+            type="button"
+            aria-label="关闭聊天状态"
+          >
+            取消
+          </button>
+          <strong>状态</strong>
+          <button
+            id="messages-scene-save-btn"
+            class="messages-sheet-modal__button messages-sheet-modal__button--primary"
+            type="submit"
+            form="messages-scene-form"
+          >
+            保存
+          </button>
+        </header>
+
+        <form id="messages-scene-form" class="messages-editor-form">
+          <section class="messages-scene-block">
+            <div class="messages-form-field__head">
+              <span>场景模式</span>
+              <small class="messages-form-field__inline-note">线上为即时聊天，线下允许少量（动作描写）。</small>
+            </div>
+            <div class="messages-scene-picker">
+              <button
+                id="messages-scene-online-btn"
+                class="messages-scene-picker__option"
+                type="button"
+                data-scene-mode="online"
+              >
+                线上
+              </button>
+              <button
+                id="messages-scene-offline-btn"
+                class="messages-scene-picker__option"
+                type="button"
+                data-scene-mode="offline"
+              >
+                线下
+              </button>
+            </div>
+          </section>
+
+          <section class="messages-scene-block">
+            <div class="messages-form-field__head">
+              <span>用户状态</span>
+              <small id="messages-scene-user-scope-note" class="messages-form-field__inline-note"></small>
+            </div>
+
+            <label class="messages-form-field">
+              <span>状态类型</span>
+              <select id="messages-scene-user-presence-type-input">
+                <option value="at_place">在某地</option>
+                <option value="in_transit">在路上</option>
+              </select>
+            </label>
+
+            <div id="messages-scene-user-at-place-fields" class="messages-scene-presence-fields">
+              <label class="messages-form-field">
+                <span>当前地点</span>
+                <select id="messages-scene-user-place-select"></select>
+              </label>
+            </div>
+
+            <div id="messages-scene-user-transit-fields" class="messages-scene-presence-fields" hidden>
+              <label class="messages-form-field">
+                <span>从哪里出发</span>
+                <select id="messages-scene-user-from-place-select"></select>
+              </label>
+              <label class="messages-form-field">
+                <span>要去哪里</span>
+                <select id="messages-scene-user-to-place-select"></select>
+              </label>
+            </div>
+          </section>
+
+          <section class="messages-scene-block">
+            <div class="messages-form-field__head">
+              <span>角色状态</span>
+              <small class="messages-form-field__inline-note">只能从这个角色可见的常用地点中选择。</small>
+            </div>
+
+            <label class="messages-form-field">
+              <span>状态类型</span>
+              <select id="messages-scene-contact-presence-type-input">
+                <option value="at_place">在某地</option>
+                <option value="in_transit">在路上</option>
+              </select>
+            </label>
+
+            <div id="messages-scene-contact-at-place-fields" class="messages-scene-presence-fields">
+              <label class="messages-form-field">
+                <span>当前地点</span>
+                <select id="messages-scene-contact-place-select"></select>
+              </label>
+            </div>
+
+            <div
+              id="messages-scene-contact-transit-fields"
+              class="messages-scene-presence-fields"
+              hidden
+            >
+              <label class="messages-form-field">
+                <span>从哪里出发</span>
+                <select id="messages-scene-contact-from-place-select"></select>
+              </label>
+              <label class="messages-form-field">
+                <span>要去哪里</span>
+                <select id="messages-scene-contact-to-place-select"></select>
+              </label>
+            </div>
+          </section>
+
+          <section class="messages-scene-block messages-scene-block--actions">
+            <div class="messages-form-field__actions">
+              <button
+                id="messages-scene-sync-place-btn"
+                class="messages-text-button"
+                type="button"
+              >
+                同步到同一地点
+              </button>
+              <button
+                id="messages-scene-manage-places-btn"
+                class="messages-text-button"
+                type="button"
+              >
+                管理常用地点
+              </button>
+            </div>
+            <small class="messages-form-field__hint">
+              线下模式下可快速同步双方地点；若双方都在路上，则不会显示同步入口。
+            </small>
+          </section>
+
+          <p id="messages-scene-status" class="messages-editor-status" aria-live="polite"></p>
+        </form>
+      </div>
+    </section>
+
+    <section
+      id="messages-chat-global-settings-modal"
+      class="messages-dialog-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div
+        class="messages-dialog-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Chat 全局设置"
+      >
+        <header class="messages-dialog-modal__header">
+          <strong>Chat 全局设置</strong>
+          <button
+            id="messages-chat-global-settings-close-btn"
+            class="messages-dialog-modal__close"
+            type="button"
+            aria-label="关闭 Chat 全局设置"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M7 7l10 10M17 7 7 17"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </header>
+
+        <form id="messages-chat-global-settings-form" class="messages-dialog-modal__form">
+          <label class="messages-dialog-modal__field">
+            <span>用户状态作用范围</span>
+            <select id="messages-chat-user-presence-scope-input">
+              <option value="global">全局共用</option>
+              <option value="per_contact">按角色独立</option>
+            </select>
+            <small>
+              全局共用时，所有角色聊天读取同一份用户状态；按角色独立时，每个 1v1 会话单独保存用户状态。
+            </small>
+          </label>
+
+          <p
+            id="messages-chat-global-settings-status"
+            class="messages-editor-status"
+            aria-live="polite"
+          ></p>
+
+          <div class="messages-dialog-modal__actions">
+            <button
+              id="messages-chat-global-settings-cancel-btn"
+              class="messages-dialog-modal__button"
+              type="button"
+            >
+              取消
+            </button>
+            <button
+              class="messages-dialog-modal__button messages-dialog-modal__button--primary"
+              type="submit"
+            >
+              保存
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section id="messages-places-modal" class="messages-sheet-modal" hidden aria-hidden="true">
+      <div
+        class="messages-sheet-modal__panel messages-sheet-modal__panel--worldbook"
+        role="dialog"
+        aria-modal="true"
+        aria-label="常用地点"
+      >
+        <header class="messages-sheet-modal__header">
+          <button
+            id="messages-places-close-btn"
+            class="messages-sheet-modal__button"
+            type="button"
+            aria-label="关闭常用地点"
+          >
+            返回
+          </button>
+          <strong>常用地点</strong>
+          <button
+            id="messages-places-add-btn"
+            class="messages-worldbook-header__button"
+            type="button"
+            aria-label="新增地点"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M12 5v14M5 12h14"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </header>
+
+        <section class="messages-memory-modal__controls messages-places-modal__controls">
+          <label class="messages-memory-search" for="messages-place-search-input">
+            <input
+              id="messages-place-search-input"
+              type="search"
+              placeholder="搜索地点名称、别名或特殊性"
+              autocomplete="off"
+            />
+            <button
+              id="messages-place-search-btn"
+              class="messages-memory-search__button"
+              type="button"
+              aria-label="搜索地点"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2" />
+                <path
+                  d="M16 16l4 4"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+          </label>
+
+          <label class="messages-form-field">
+            <span>地点类型</span>
+            <select id="messages-place-filter-select">
+              <option value="all">全部</option>
+              <option value="home">住宅</option>
+              <option value="family">家庭</option>
+              <option value="work">工作</option>
+              <option value="school">学校</option>
+              <option value="leisure">娱乐</option>
+              <option value="other">其他</option>
+            </select>
+          </label>
+        </section>
+
+        <p id="messages-places-status" class="messages-editor-status messages-worldbook-status"></p>
+        <section id="messages-places-list" class="messages-places-list" aria-live="polite"></section>
+      </div>
+    </section>
+
+    <section
+      id="messages-place-editor-modal"
+      class="messages-sheet-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div
+        class="messages-sheet-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="编辑常用地点"
+      >
+        <header class="messages-sheet-modal__header">
+          <button
+            id="messages-place-editor-close-btn"
+            class="messages-sheet-modal__button"
+            type="button"
+            aria-label="关闭地点编辑"
+          >
+            取消
+          </button>
+          <strong id="messages-place-editor-title">新增地点</strong>
+          <button
+            id="messages-place-editor-save-btn"
+            class="messages-sheet-modal__button messages-sheet-modal__button--primary"
+            type="submit"
+            form="messages-place-editor-form"
+          >
+            保存
+          </button>
+        </header>
+
+        <form id="messages-place-editor-form" class="messages-editor-form">
+          <label class="messages-form-field">
+            <span>地点名称</span>
+            <input
+              id="messages-place-name-input"
+              type="text"
+              maxlength="40"
+              placeholder="例如：自己家、爸妈家、公司"
+              autocomplete="off"
+            />
+          </label>
+
+          <label class="messages-form-field">
+            <span>地点类型</span>
+            <select id="messages-place-type-select">
+              <option value="home">住宅</option>
+              <option value="family">家庭</option>
+              <option value="work">工作</option>
+              <option value="school">学校</option>
+              <option value="leisure">娱乐</option>
+              <option value="other">其他</option>
+            </select>
+          </label>
+
+          <label class="messages-form-field messages-form-field--textarea">
+            <span>地点别名</span>
+            <textarea
+              id="messages-place-aliases-input"
+              rows="4"
+              maxlength="400"
+              placeholder="一行一个别名，例如：&#10;回家&#10;回自己家&#10;小窝"
+            ></textarea>
+          </label>
+
+          <label class="messages-form-field messages-form-field--textarea">
+            <span>地点特殊性</span>
+            <textarea
+              id="messages-place-traits-input"
+              rows="5"
+              maxlength="800"
+              placeholder="用来告诉 AI 这个地方对相处和语气的影响，例如：通常有家人在，私密度偏低，容易被打断。"
+            ></textarea>
+          </label>
+
+          <label class="messages-form-field">
+            <span>谁知道这个地点</span>
+            <select id="messages-place-visibility-select">
+              <option value="self">仅自己知道</option>
+              <option value="all_contacts">全部角色都知道</option>
+              <option value="selected_contacts">仅指定角色知道</option>
+            </select>
+          </label>
+
+          <section
+            id="messages-place-visible-contacts-field"
+            class="messages-form-field"
+            hidden
+          >
+            <div class="messages-form-field__head">
+              <span>可见角色</span>
+            </div>
+            <div id="messages-place-visible-contacts-list" class="messages-worldbook-selector"></div>
+          </section>
+
+          <p
+            id="messages-place-editor-status"
+            class="messages-editor-status"
+            aria-live="polite"
+          ></p>
+
+          <section class="messages-form-field">
+            <div class="messages-form-field__head">
+              <span>快捷操作</span>
+            </div>
+            <div class="messages-form-field__actions">
+              <button
+                id="messages-place-editor-set-user-btn"
+                class="messages-text-button"
+                type="button"
+              >
+                设为我的当前地点
+              </button>
+              <button
+                id="messages-place-editor-set-contact-btn"
+                class="messages-text-button"
+                type="button"
+              >
+                设为 TA 的当前地点
+              </button>
+              <button
+                id="messages-place-editor-delete-btn"
+                class="messages-text-button messages-text-button--danger"
+                type="button"
+              >
+                删除地点
+              </button>
+            </div>
+          </section>
+        </form>
+      </div>
+    </section>
+
+    <section
+      id="messages-scene-sync-modal"
+      class="messages-dialog-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div
+        class="messages-dialog-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="同步地点"
+      >
+        <header class="messages-dialog-modal__header">
+          <strong>同步地点</strong>
+          <button
+            id="messages-scene-sync-close-btn"
+            class="messages-dialog-modal__close"
+            type="button"
+            aria-label="关闭同步地点"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M7 7l10 10M17 7 7 17"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </header>
+
+        <div class="messages-dialog-modal__form">
+          <p id="messages-scene-sync-description" class="messages-dialog-modal__description"></p>
+
+          <label class="messages-dialog-modal__field">
+            <span>重新选择共同地点</span>
+            <select id="messages-scene-sync-place-select"></select>
+            <small>当双方地点不同，或两边都未设置时，可以直接选一个新的共同地点。</small>
+          </label>
+
+          <p
+            id="messages-scene-sync-status"
+            class="messages-editor-status"
+            aria-live="polite"
+          ></p>
+
+          <div class="messages-dialog-modal__actions messages-dialog-modal__actions--stacked">
+            <button
+              id="messages-scene-sync-use-user-btn"
+              class="messages-dialog-modal__button"
+              type="button"
+            >
+              以用户地点为准
+            </button>
+            <button
+              id="messages-scene-sync-use-contact-btn"
+              class="messages-dialog-modal__button"
+              type="button"
+            >
+              以角色地点为准
+            </button>
+            <button
+              id="messages-scene-sync-use-custom-btn"
+              class="messages-dialog-modal__button messages-dialog-modal__button--primary"
+              type="button"
+            >
+              使用新的共同地点
+            </button>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -1512,6 +2088,14 @@
             <small>触发概率可在本地配置文件中修改：`messages-awareness-config.js`。</small>
           </label>
 
+          <section class="messages-dialog-modal__field">
+            <div class="messages-dialog-modal__field-head">
+              <span>历史察觉</span>
+              <small>监控是否触发，以及当前已累计进入过几轮判断。</small>
+            </div>
+            <div id="messages-awareness-history" class="messages-awareness-history"></div>
+          </section>
+
           <p
             id="messages-awareness-status"
             class="messages-editor-status"
@@ -1539,10 +2123,11 @@
 
     <input id="messages-image-file-input" type="file" accept="image/*" hidden />
 
-    <script src="./privacy-allowlist.js?v=20260402-235904"></script>
-    <script src="./pulse-privacy-cover.js?v=20260402-235904"></script>
-    <script src="./api-log.js?v=20260402-164825"></script>
+    <script src="./privacy-allowlist.js?v=20260403-122055"></script>
+    <script src="./pulse-privacy-cover.js?v=20260403-122055"></script>
+    <script src="./pulse-message-banner.js?v=20260403-122055"></script>
+    <script src="./api-log.js?v=20260403-122055"></script>
     <script src="./messages-awareness-config.js?v=20260402b"></script>
-    <script src="./messages.js?v=20260402-235904"></script>
+    <script src="./messages.js?v=20260403-122055"></script>
   </body>
 </html>

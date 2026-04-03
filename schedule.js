@@ -9,8 +9,6 @@ const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1bet
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 const DEFAULT_TEMPERATURE = 0.85;
-const GLOBAL_PROMPT_GUARD =
-  "虚拟世界观，与真实世界无关。禁止搜索未提供的任何其他信息。";
 const MAX_SCHEDULE_INVITE_CONCURRENCY = 3;
 const DEFAULT_MESSAGE_HISTORY_ROUNDS = 6;
 
@@ -732,14 +730,7 @@ function formatTimeLabel(timestamp = Date.now()) {
 }
 
 function prependGlobalPromptGuard(text) {
-  const resolvedText = String(text || "").trim();
-  if (!resolvedText) {
-    return GLOBAL_PROMPT_GUARD;
-  }
-  if (resolvedText.startsWith(GLOBAL_PROMPT_GUARD)) {
-    return resolvedText;
-  }
-  return `${GLOBAL_PROMPT_GUARD}\n\n${resolvedText}`;
+  return String(text || "").trim();
 }
 
 function parseJsonLikeContent(value) {
@@ -924,7 +915,7 @@ function buildInviteConflictContext(contact, inviteEntry) {
     .slice(0, 4);
 
   if (!relevantEntries.length) {
-    return "你当前没有明确冲突的已知行程。";
+    return "你当前没有明确冲突的已知行程，也不要凭空说自己要去忙、赶时间，或拿不存在的安排当理由。";
   }
 
   return [
@@ -938,7 +929,7 @@ function buildScheduleInviteSystemPrompt(profile, contact, inviteEntry, options 
   return prependGlobalPromptGuard([
     `你叫 ${contact.name}。`,
     `现在是你和 ${profile.username || DEFAULT_PROFILE.username} 在即时聊天软件里的一对一私聊。`,
-    "这不是任务扮演，而是你本人正在收到对方发来的一个日程邀请。",
+    "你本人正在收到对方发来的一个日程邀请，需要像真实聊天一样做决定并回复。",
     `你的稳定性格、表达习惯和关系底色：${
       contact.personaPrompt || "自然、友好，会根据关系和现实安排做决定。"
     }。`,
@@ -977,19 +968,80 @@ function buildScheduleInviteUserInstruction(inviteEntry, companionNames = []) {
 }
 
 function parseScheduleInviteDecision(payload) {
-  const parsed =
-    (payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null) ||
-    parseJsonLikeContent(payload) ||
-    parseJsonLikeContent(resolveMessage(payload));
-  const decision = String(parsed?.decision || "").trim().toLowerCase();
-  const reply = String(parsed?.reply || "").trim();
-  if (!["accept", "reject"].includes(decision) || !reply) {
-    throw new Error("日程邀请响应格式错误：缺少有效的 accept/reject 决策或回复文本。");
+  function extractDecisionCandidate(value, depth = 0) {
+    if (depth > 6 || value == null) {
+      return null;
+    }
+    if (typeof value === "string") {
+      const parsed = parseJsonLikeContent(value);
+      return parsed ? extractDecisionCandidate(parsed, depth + 1) : null;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const match = extractDecisionCandidate(item, depth + 1);
+        if (match) {
+          return match;
+        }
+      }
+      return null;
+    }
+    if (typeof value !== "object") {
+      return null;
+    }
+    const decision = String(value.decision || "").trim().toLowerCase();
+    const reply = String(value.reply || "").trim();
+    if (["accept", "reject"].includes(decision) && reply) {
+      return {
+        decision,
+        reply
+      };
+    }
+    const nestedKeys = [
+      "message",
+      "text",
+      "content",
+      "data",
+      "output",
+      "choices",
+      "candidates",
+      "parts",
+      "result",
+      "response"
+    ];
+    for (const key of nestedKeys) {
+      if (!Object.prototype.hasOwnProperty.call(value, key)) {
+        continue;
+      }
+      const match = extractDecisionCandidate(value[key], depth + 1);
+      if (match) {
+        return match;
+      }
+    }
+    return null;
   }
-  return {
-    decision,
-    reply
-  };
+
+  const fallbackText = String(resolveMessage(payload) || "").trim();
+  const parsed =
+    extractDecisionCandidate(payload) ||
+    extractDecisionCandidate(parseJsonLikeContent(payload)) ||
+    extractDecisionCandidate(parseJsonLikeContent(fallbackText));
+  if (parsed) {
+    return parsed;
+  }
+  const normalizedText = fallbackText.replace(/\s+/g, " ").trim();
+  const accepts = /(accept|接受|答应|同意|可以|好呀|好啊|行呀|行啊|没问题|可以呀|可以的|去呀|去啊)/i.test(
+    normalizedText
+  );
+  const rejects = /(reject|拒绝|不行|没空|不方便|改天|下次|抱歉|去不了|不能去|撞时间|有安排了)/i.test(
+    normalizedText
+  );
+  if (normalizedText && accepts !== rejects) {
+    return {
+      decision: accepts ? "accept" : "reject",
+      reply: normalizedText
+    };
+  }
+  throw new Error("日程邀请响应格式错误：缺少有效的 accept/reject 决策或回复文本。");
 }
 
 function splitAssistantReplyText(replyText = "") {
@@ -2240,6 +2292,19 @@ function collectEditorDraft() {
   });
 }
 
+function syncDraftFromEditor(overrides = {}, options = {}) {
+  const nextDraft = sanitizeDraftCompanions({
+    ...state.draft,
+    ...collectEditorDraft(),
+    ...(overrides && typeof overrides === "object" ? overrides : {})
+  });
+  state.draft = nextDraft;
+  if (options.render !== false) {
+    renderEditor();
+  }
+  return nextDraft;
+}
+
 function saveDraft(draft) {
   const existingEntry = state.entries.find((entry) => entry.id === state.editingEntryId);
   const base = {
@@ -2260,15 +2325,36 @@ function saveDraft(draft) {
   return normalized;
 }
 
-async function notifyCompanionsForEntry(entry) {
+function pushScheduleInviteNotification(contact, conversation, replyLines = []) {
+  if (!window.PulseMessageNotifications?.push || !Array.isArray(replyLines) || !replyLines.length) {
+    return;
+  }
+  window.PulseMessageNotifications.push({
+    id: `schedule_invite_notice_${conversation?.id || contact?.id || Date.now()}_${Date.now()}`,
+    createdAt: Date.now(),
+    name: String(contact?.name || conversation?.contactNameSnapshot || "新消息").trim() || "新消息",
+    preview: replyLines.length > 1 ? `${replyLines[0]} 等 ${replyLines.length} 条新消息` : replyLines[0],
+    avatarImage: String(contact?.avatarImage || conversation?.contactAvatarImageSnapshot || "").trim(),
+    avatarText:
+      String(contact?.avatarText || conversation?.contactAvatarTextSnapshot || contact?.name?.slice(0, 2) || "新")
+        .trim() || "新",
+    conversationId: String(conversation?.id || "").trim()
+  });
+}
+
+async function notifyCompanionsForEntry(entry, targetInviteeIds = []) {
   const inviteEntry = normalizeScheduleEntry(entry, 0);
-  const inviteeIds = [...new Set(inviteEntry.companionContactIds.map((item) => String(item || "").trim()).filter(Boolean))];
+  const sourceInviteeIds = Array.isArray(targetInviteeIds) && targetInviteeIds.length
+    ? targetInviteeIds
+    : inviteEntry.companionContactIds;
+  const inviteeIds = [...new Set(sourceInviteeIds.map((item) => String(item || "").trim()).filter(Boolean))];
   if (!inviteeIds.length) {
     return {
       total: 0,
       acceptedCount: 0,
       rejectedCount: 0,
-      failedCount: 0
+      failedCount: 0,
+      failedIds: []
     };
   }
 
@@ -2310,7 +2396,7 @@ async function notifyCompanionsForEntry(entry) {
       );
       const replyLines = splitAssistantReplyText(decision.reply);
       if (replyLines.length) {
-        appendMessagesToConversation(
+        const nextConversation = appendMessagesToConversation(
           contact,
           replyLines.map((line, index) => ({
             id: `message_${Date.now()}_${index}_${hashText(`${contact.id}_${line}`)}`,
@@ -2320,6 +2406,7 @@ async function notifyCompanionsForEntry(entry) {
             createdAt: Date.now() + index
           }))
         );
+        pushScheduleInviteNotification(contact, nextConversation, replyLines);
       }
       return {
         contactId: contact.id,
@@ -2333,15 +2420,22 @@ async function notifyCompanionsForEntry(entry) {
   let acceptedCount = 0;
   let rejectedCount = 0;
   let failedCount = 0;
+  const failedIds = [];
   results.forEach((result) => {
     const contactId = String(result?.item || "").trim();
     if (result.status !== "success") {
       failedCount += 1;
+      if (contactId) {
+        failedIds.push(contactId);
+      }
       return;
     }
     const decision = String(result.value?.decision || "").trim();
     if (!contactId || !decision) {
       failedCount += 1;
+      if (contactId) {
+        failedIds.push(contactId);
+      }
       return;
     }
     resultMap[contactId] = decision;
@@ -2380,7 +2474,8 @@ async function notifyCompanionsForEntry(entry) {
     total: inviteeIds.length,
     acceptedCount,
     rejectedCount,
-    failedCount
+    failedCount,
+    failedIds
   };
 }
 
@@ -2419,7 +2514,23 @@ async function handleEditorSubmit(event) {
   if (actionMode === "create" && draft.notifyCompanions && savedEntry?.companionContactIds.length) {
     setStatus("日程已新增，正在通知同行人…", "success");
     try {
-      const summary = await notifyCompanionsForEntry(savedEntry);
+      let summary = await notifyCompanionsForEntry(savedEntry);
+      if (summary.failedCount && summary.failedIds.length) {
+        const shouldRetry = window.confirm(
+          `有 ${summary.failedCount} 位同行人邀请失败，是否再次发送邀请？`
+        );
+        if (shouldRetry) {
+          setStatus("正在重新发送失败的同行人邀请…", "success");
+          const retrySummary = await notifyCompanionsForEntry(savedEntry, summary.failedIds);
+          summary = {
+            total: summary.total,
+            acceptedCount: summary.acceptedCount + retrySummary.acceptedCount,
+            rejectedCount: summary.rejectedCount + retrySummary.rejectedCount,
+            failedCount: retrySummary.failedCount,
+            failedIds: retrySummary.failedIds
+          };
+        }
+      }
       const summaryParts = [];
       if (summary.acceptedCount) {
         summaryParts.push(`${summary.acceptedCount} 位接受`);
@@ -2576,78 +2687,81 @@ function attachEvents() {
   });
 
   scheduleTypeSelectEl?.addEventListener("change", () => {
-    state.draft = { ...state.draft, scheduleType: String(scheduleTypeSelectEl.value || "day").trim() };
-    renderEditor();
+    syncDraftFromEditor({
+      scheduleType: String(scheduleTypeSelectEl.value || "day").trim()
+    });
     setEditorStatus("");
   });
 
   scheduleOwnerTypeSelectEl?.addEventListener("change", () => {
     const ownerType = String(scheduleOwnerTypeSelectEl.value || "user").trim();
-    state.draft = sanitizeDraftCompanions({
-      ...state.draft,
+    syncDraftFromEditor({
       ownerType,
       ownerId: ownerType === "contact" ? state.draft.ownerId : "",
       visibilityMode: ownerType === "user" ? state.draft.visibilityMode : "all"
     });
-    renderEditor();
     setEditorStatus("");
   });
 
   scheduleOwnerContactSelectEl?.addEventListener("change", () => {
-    state.draft = sanitizeDraftCompanions({
-      ...state.draft,
+    syncDraftFromEditor({
       ownerId: String(scheduleOwnerContactSelectEl.value || "").trim()
     });
-    renderEditor();
     setEditorStatus("");
   });
 
   scheduleVisibleAllInputEl?.addEventListener("change", () => {
-    state.draft = {
-      ...state.draft,
+    syncDraftFromEditor(
+      {
       visibilityMode: scheduleVisibleAllInputEl.checked ? "all" : "selected"
-    };
+      },
+      { render: false }
+    );
     renderVisibilityOptions();
     setEditorStatus("");
   });
 
   scheduleVisibleContactsEl?.addEventListener("change", () => {
-    state.draft = {
-      ...state.draft,
+    syncDraftFromEditor(
+      {
       visibleContactIds: collectEditorDraft().visibleContactIds
-    };
+      },
+      { render: false }
+    );
     setEditorStatus("");
   });
 
   scheduleDateInputEl?.addEventListener("change", () => {
-    state.draft = { ...state.draft, date: String(scheduleDateInputEl.value || state.cursorDate).trim() };
-    renderEditor();
+    syncDraftFromEditor({
+      date: String(scheduleDateInputEl.value || state.cursorDate).trim()
+    });
     setEditorStatus("");
   });
 
   scheduleCompanionOptionsEl?.addEventListener("change", () => {
     const draft = collectEditorDraft();
-    state.draft = {
-      ...state.draft,
+    syncDraftFromEditor({
       companionIncludesUser: draft.companionIncludesUser,
       companionContactIds: draft.companionContactIds,
       notifyCompanions:
         draft.companionContactIds.length > 0 && Boolean(scheduleNotifyCompanionsInputEl?.checked)
-    };
-    renderEditor();
+    });
     setEditorStatus("");
   });
 
   scheduleNotifyCompanionsInputEl?.addEventListener("change", () => {
-    state.draft = {
-      ...state.draft,
+    syncDraftFromEditor(
+      {
       notifyCompanions: Boolean(scheduleNotifyCompanionsInputEl.checked)
-    };
+      },
+      { render: false }
+    );
     setEditorStatus("");
   });
 
   [scheduleTitleInputEl, scheduleStartTimeInputEl, scheduleEndTimeInputEl].forEach((input) => {
     input?.addEventListener("input", () => {
+      syncDraftFromEditor({}, { render: false });
       setEditorStatus("");
     });
   });

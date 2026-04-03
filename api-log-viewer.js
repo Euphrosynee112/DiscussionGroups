@@ -2,6 +2,7 @@ const apiLogListEl = document.querySelector("#api-log-list");
 const apiLogStatusEl = document.querySelector("#api-log-status");
 const apiLogSourceFilterEl = document.querySelector("#api-log-source-filter");
 const apiLogStatusFilterEl = document.querySelector("#api-log-status-filter");
+const apiLogActionFilterEl = document.querySelector("#api-log-action-filter");
 const apiLogRefreshBtnEl = document.querySelector("#api-log-refresh-btn");
 const apiLogExportBtnEl = document.querySelector("#api-log-export-btn");
 const apiLogClearBtnEl = document.querySelector("#api-log-clear-btn");
@@ -84,17 +85,58 @@ function getActionLabel(action) {
     translate_post: "翻译帖子",
     translate_reply: "翻译回复",
     chat_reply: "聊天回复",
+    chat_reply_regenerate: "重回回复",
+    chat_memory_summary: "记忆总结",
+    chat_auto_schedule_generate: "自动生成行程",
+    journal_entry: "日记生成",
     fan_reply_generate: "粉丝回复生成",
     fan_reply_translate: "粉丝回复翻译",
-    kid_archive_generate: "成长档案生成"
+    kid_archive_generate: "成长档案生成",
+    schedule_invite: "日程邀请"
   };
   return map[action] || action || "请求";
 }
 
+function getAllEntries() {
+  return window.PulseApiLog?.read ? window.PulseApiLog.read() : [];
+}
+
+function getEntriesForActionOptions() {
+  const source = String(apiLogSourceFilterEl?.value || "").trim();
+  return getAllEntries().filter((entry) => {
+    if (source && entry.source !== source) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function syncActionFilterOptions() {
+  if (!apiLogActionFilterEl) {
+    return;
+  }
+  const currentValue = String(apiLogActionFilterEl.value || "").trim();
+  const optionMap = new Map();
+  getEntriesForActionOptions().forEach((entry) => {
+    const action = String(entry?.action || "").trim();
+    if (action && !optionMap.has(action)) {
+      optionMap.set(action, getActionLabel(action));
+    }
+  });
+  const nextOptions = ['<option value="">全部</option>'].concat(
+    [...optionMap.entries()]
+      .sort((left, right) => left[1].localeCompare(right[1], "zh-CN"))
+      .map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`)
+  );
+  apiLogActionFilterEl.innerHTML = nextOptions.join("");
+  apiLogActionFilterEl.value = optionMap.has(currentValue) ? currentValue : "";
+}
+
 function getFilteredEntries() {
-  const entries = window.PulseApiLog?.read ? window.PulseApiLog.read() : [];
+  const entries = getAllEntries();
   const source = String(apiLogSourceFilterEl?.value || "").trim();
   const status = String(apiLogStatusFilterEl?.value || "").trim();
+  const action = String(apiLogActionFilterEl?.value || "").trim();
 
   return entries
     .slice()
@@ -104,6 +146,9 @@ function getFilteredEntries() {
         return false;
       }
       if (status && entry.status !== status) {
+        return false;
+      }
+      if (action && entry.action !== action) {
         return false;
       }
       return true;
@@ -254,6 +299,7 @@ function renderApiLogList() {
 
 function attachApiLogEvents() {
   apiLogSourceFilterEl?.addEventListener("change", () => {
+    syncActionFilterOptions();
     renderApiLogList();
   });
 
@@ -261,7 +307,12 @@ function attachApiLogEvents() {
     renderApiLogList();
   });
 
+  apiLogActionFilterEl?.addEventListener("change", () => {
+    renderApiLogList();
+  });
+
   apiLogRefreshBtnEl?.addEventListener("click", () => {
+    syncActionFilterOptions();
     renderApiLogList();
     setApiLogStatus("日志已刷新。", "success");
   });
@@ -277,6 +328,7 @@ function attachApiLogEvents() {
       return;
     }
     window.PulseApiLog?.clear?.();
+    syncActionFilterOptions();
     renderApiLogList();
     setApiLogStatus("日志已清空。", "success");
   });
@@ -297,6 +349,7 @@ function initApiLogViewer() {
   if (apiLogCloseBtnEl) {
     apiLogCloseBtnEl.hidden = !isEmbeddedView();
   }
+  syncActionFilterOptions();
   renderApiLogList();
   attachApiLogEvents();
 }
