@@ -172,13 +172,16 @@ function hideLayer(element) {
 }
 
 function safeGetItem(key) {
-  if (Object.prototype.hasOwnProperty.call(memoryStorage, key)) {
-    return memoryStorage[key];
-  }
   try {
-    return window.localStorage.getItem(key);
+    const value = window.localStorage.getItem(key);
+    if (value === null) {
+      delete memoryStorage[key];
+      return null;
+    }
+    memoryStorage[key] = value;
+    return value;
   } catch (_error) {
-    return null;
+    return Object.prototype.hasOwnProperty.call(memoryStorage, key) ? memoryStorage[key] : null;
   }
 }
 

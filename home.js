@@ -2,8 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260402-230812";
-const APP_BUILD_UPDATED_AT = "2026-04-02 23:08:12";
+const APP_BUILD_VERSION = "20260402-235904";
+const APP_BUILD_UPDATED_AT = "2026-04-02 23:59:04";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -143,13 +143,16 @@ function hideHomeLayer(element) {
 }
 
 function safeGetItem(key) {
-  if (Object.prototype.hasOwnProperty.call(memoryStorage, key)) {
-    return memoryStorage[key];
-  }
   try {
-    return window.localStorage.getItem(key);
+    const value = window.localStorage.getItem(key);
+    if (value === null) {
+      delete memoryStorage[key];
+      return null;
+    }
+    memoryStorage[key] = value;
+    return value;
   } catch (_error) {
-    return null;
+    return Object.prototype.hasOwnProperty.call(memoryStorage, key) ? memoryStorage[key] : null;
   }
 }
 
@@ -678,6 +681,14 @@ function loadStoredPrivacyAllowlistTerms() {
   return normalizePrivacyAllowlist(readStoredJson(PRIVACY_ALLOWLIST_TERMS_KEY, []));
 }
 
+function getEffectivePrivacyAllowlistTerms(settings = loadSettings({ forceActiveConfig: false })) {
+  return normalizePrivacyAllowlist([
+    ...(window.PulsePrivacyAllowlistDefaults || []),
+    ...loadStoredPrivacyAllowlistTerms(),
+    ...(settings?.privacyAllowlist || [])
+  ]);
+}
+
 function persistStoredPrivacyAllowlistTerms(terms = []) {
   safeSetItem(
     PRIVACY_ALLOWLIST_TERMS_KEY,
@@ -695,10 +706,7 @@ function persistPrivacyAllowlistMetaItems(items = []) {
 
 function loadPrivacyAllowlistItems() {
   const settings = loadSettings({ forceActiveConfig: false });
-  const terms = normalizePrivacyAllowlist([
-    ...loadStoredPrivacyAllowlistTerms(),
-    ...(settings.privacyAllowlist || [])
-  ]);
+  const terms = getEffectivePrivacyAllowlistTerms(settings);
   const metaMap = new Map(
     loadPrivacyAllowlistMetaItems().map((item) => [item.text, item.source])
   );
@@ -1049,6 +1057,24 @@ function renderPrivacyPendingCandidates() {
 function renderPrivacyApp() {
   renderPrivacyAllowlistItems();
   renderPrivacyPendingCandidates();
+}
+
+function refreshPrivacyAppFromStorage(options = {}) {
+  if (!isPrivacyAppView()) {
+    return;
+  }
+  const { preserveStatus = true } = options;
+  const previousStatus = privacyAppStatusEl?.textContent || "";
+  const previousTone = privacyAppStatusEl?.classList.contains("success")
+    ? "success"
+    : privacyAppStatusEl?.classList.contains("error")
+      ? "error"
+      : "";
+  initPrivacyAppState();
+  renderPrivacyApp();
+  if (preserveStatus && previousStatus) {
+    setPrivacyAppStatus(previousStatus, previousTone);
+  }
 }
 
 function setPrivacyAppAddModalOpen(isOpen) {
@@ -3124,6 +3150,26 @@ function initHome() {
     initPrivacyAppState();
     renderPrivacyApp();
     setPrivacyAppStatus("");
+    window.addEventListener("storage", (event) => {
+      const targetKey = String(event?.key || "").trim();
+      if (
+        !targetKey ||
+        ![
+          SETTINGS_KEY,
+          PRIVACY_ALLOWLIST_TERMS_KEY,
+          PRIVACY_ALLOWLIST_META_KEY,
+          PRIVACY_PENDING_SCAN_KEY
+        ].includes(targetKey)
+      ) {
+        return;
+      }
+      refreshPrivacyAppFromStorage();
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) {
+        refreshPrivacyAppFromStorage();
+      }
+    });
     refreshBodyModalState();
     return;
   }
