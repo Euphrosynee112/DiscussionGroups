@@ -868,6 +868,27 @@ function removeReplyTask(taskId = "") {
   persistReplyTasks(loadReplyTasks().filter((task) => task.id !== resolvedTaskId));
 }
 
+function clearReplyTasksForConversation(conversationId = "", options = {}) {
+  const resolvedConversationId = String(conversationId || "").trim();
+  if (!resolvedConversationId) {
+    return 0;
+  }
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const includeErrors = requestOptions.includeErrors !== false;
+  const tasks = loadReplyTasks();
+  const nextTasks = tasks.filter((task) => {
+    if (task.conversationId !== resolvedConversationId) {
+      return true;
+    }
+    return !includeErrors && task.status === "error";
+  });
+  if (nextTasks.length === tasks.length) {
+    return 0;
+  }
+  persistReplyTasks(nextTasks);
+  return tasks.length - nextTasks.length;
+}
+
 function getNextPendingReplyTask() {
   return loadReplyTasks().find((task) => task.status === "pending") || null;
 }
@@ -3133,6 +3154,10 @@ function normalizeConversation(conversation, index = 0) {
       0,
       Number.parseInt(String(source.awarenessCounter || 0), 10) || 0
     ),
+    replyContextVersion: Math.max(
+      0,
+      Number.parseInt(String(source.replyContextVersion || 0), 10) || 0
+    ),
     memorySummaryCounter: Math.max(
       0,
       Number.parseInt(String(source.memorySummaryCounter || 0), 10) || 0
@@ -3276,6 +3301,49 @@ function getContactById(contactId) {
 
 function getConversationById(conversationId = state.activeConversationId) {
   return state.conversations.find((item) => item.id === conversationId) || null;
+}
+
+function getConversationReplyContextVersion(conversation = null) {
+  return Math.max(
+    0,
+    Number.parseInt(String(conversation?.replyContextVersion || 0), 10) || 0
+  );
+}
+
+function bumpConversationReplyContextVersion(conversation = null) {
+  if (!conversation || typeof conversation !== "object") {
+    return 0;
+  }
+  const nextVersion = getConversationReplyContextVersion(conversation) + 1;
+  conversation.replyContextVersion = nextVersion;
+  return nextVersion;
+}
+
+function cancelConversationReplyWork(conversationId = "", options = {}) {
+  const resolvedConversationId = String(conversationId || "").trim();
+  if (!resolvedConversationId) {
+    return 0;
+  }
+  const removedCount = clearReplyTasksForConversation(resolvedConversationId, options);
+  if (state.sendingConversationId === resolvedConversationId) {
+    state.sendingConversationId = "";
+  }
+  return removedCount;
+}
+
+function isConversationReplyContextCurrent(conversationId = "", expectedVersion = 0) {
+  const resolvedConversationId = String(conversationId || "").trim();
+  if (!resolvedConversationId) {
+    return false;
+  }
+  const conversation = getConversationById(resolvedConversationId);
+  if (!conversation) {
+    return false;
+  }
+  return getConversationReplyContextVersion(conversation) === Math.max(
+    0,
+    Number.parseInt(String(expectedVersion || 0), 10) || 0
+  );
 }
 
 function getResolvedConversationContact(conversation = getConversationById()) {
@@ -3511,6 +3579,7 @@ function createConversation(contact) {
     autoScheduleLastRunDate: "",
     messages: [],
     awarenessCounter: 0,
+    replyContextVersion: 0,
     memorySummaryCounter: 0,
     memorySummaryLastMessageCount: 0,
     updatedAt: Date.now()
@@ -6186,8 +6255,15 @@ async function appendAssistantReplyBatch(
   conversation,
   replyText,
   promptSettings = {},
-  privacySession = null
+  privacySession = null,
+  options = {}
 ) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const parsedExpectedReplyContextVersion = Number.parseInt(
+    String(requestOptions.expectedReplyContextVersion || ""),
+    10
+  );
+  const hasExpectedReplyContextVersion = Number.isFinite(parsedExpectedReplyContextVersion);
   const replyItems = buildReplyItems(replyText, promptSettings, privacySession);
   if (!replyItems.length) {
     throw new Error("接口请求成功，但没有可展示的回复内容。");
@@ -6202,6 +6278,13 @@ async function appendAssistantReplyBatch(
     const item = replyItems[index];
     const activeConversation = conversationId ? getConversationById(conversationId) : conversation;
     if (!activeConversation) {
+      break;
+    }
+    if (
+      conversationId &&
+      hasExpectedReplyContextVersion &&
+      getConversationReplyContextVersion(activeConversation) !== parsedExpectedReplyContextVersion
+    ) {
       break;
     }
     const replyMessage = normalizeConversationMessage(
@@ -10324,6 +10407,8 @@ function editConversationMessage(messageId = "") {
     message.id === targetMessage.id ? { ...message, text: resolved } : message
   );
   recalculateConversationUpdatedAt(conversation);
+  bumpConversationReplyContextVersion(conversation);
+  cancelConversationReplyWork(conversation.id);
   state.messageActionMessageId = "";
   persistConversations();
   queueConversationRenderOptions({
@@ -10355,6 +10440,8 @@ function deleteConversationMessage(messageId = "") {
     state.quotedMessageId = "";
   }
   recalculateConversationUpdatedAt(conversation);
+  bumpConversationReplyContextVersion(conversation);
+  cancelConversationReplyWork(conversation.id);
   state.messageActionMessageId = "";
   persistConversations();
   queueConversationRenderOptions({
@@ -10380,6 +10467,8 @@ function clearCurrentConversationHistory() {
   conversation.memorySummaryCounter = 0;
   conversation.memorySummaryLastMessageCount = 0;
   conversation.updatedAt = Date.now();
+  bumpConversationReplyContextVersion(conversation);
+  cancelConversationReplyWork(conversation.id);
   resetConversationVisibleMessageCount(conversation.id);
   state.messageActionMessageId = "";
   state.quotedMessageId = "";
@@ -10552,6 +10641,7 @@ async function sendConversationImage(file) {
 
   conversation.messages = [...conversation.messages, userMessage];
   conversation.updatedAt = userMessage.createdAt;
+  bumpConversationReplyContextVersion(conversation);
   persistConversations();
   queueConversationRenderOptions({
     scrollBehavior: "bottom"
@@ -10591,6 +10681,7 @@ function sendConversationLocation(locationName, coordinates) {
 
   conversation.messages = [...conversation.messages, userMessage];
   conversation.updatedAt = userMessage.createdAt;
+  bumpConversationReplyContextVersion(conversation);
   saveRecentLocation(resolvedName, resolvedCoordinates);
   persistConversations();
   setLocationModalOpen(false);
@@ -10639,6 +10730,7 @@ function sendConversationMessage(text) {
 
   conversation.messages = [...conversation.messages, userMessage];
   conversation.updatedAt = userMessage.createdAt;
+  bumpConversationReplyContextVersion(conversation);
   state.quotedMessageId = "";
   persistConversations();
   queueConversationRenderOptions({
@@ -10718,6 +10810,7 @@ async function requestConversationReply(options = {}) {
   let triggeredAwareness = null;
   let awarenessTriggered = false;
   let awarenessHistoryEntry = null;
+  let requestedPendingUserMessageIds = [];
 
   if (isRegenerate) {
     const latestReplyBatch = getLatestAssistantReplyBatch(conversation);
@@ -10743,9 +10836,13 @@ async function requestConversationReply(options = {}) {
       }
       return;
     }
+    requestedPendingUserMessageIds = pendingUserMessages.map((message) =>
+      String(message.id || "").trim()
+    );
   }
 
   closeConversationTransientUi();
+  const replyContextVersion = getConversationReplyContextVersion(conversation);
 
   if (canUseBackgroundReplyWorker() && !forceDirect) {
     const task = enqueueReplyTask(conversation.id, {
@@ -10830,18 +10927,50 @@ async function requestConversationReply(options = {}) {
     if (!updatedConversation) {
       return;
     }
+    if (!isConversationReplyContextCurrent(conversation.id, replyContextVersion)) {
+      return;
+    }
     if (!isRegenerate) {
-      updatedConversation.messages = updatedConversation.messages.map((message) =>
-        message.role === "user" && message.needsReply ? { ...message, needsReply: false } : message
+      const requestedPendingUserMessageIdSet = new Set(
+        requestedPendingUserMessageIds.filter(Boolean)
       );
+      if (!requestedPendingUserMessageIdSet.size) {
+        return;
+      }
+      const hasRequestedMessages = updatedConversation.messages.some((message) =>
+        requestedPendingUserMessageIdSet.has(String(message?.id || "").trim())
+      );
+      if (!hasRequestedMessages) {
+        return;
+      }
+      updatedConversation.messages = updatedConversation.messages.map((message) => {
+        const messageId = String(message?.id || "").trim();
+        if (
+          message.role === "user" &&
+          message.needsReply &&
+          requestedPendingUserMessageIdSet.has(messageId)
+        ) {
+          return {
+            ...message,
+            needsReply: false
+          };
+        }
+        return message;
+      });
     }
 
     const createdMessages = await appendAssistantReplyBatch(
       updatedConversation,
       replyResult.text,
       promptSettings,
-      replyResult.privacySession
+      replyResult.privacySession,
+      {
+        expectedReplyContextVersion: replyContextVersion
+      }
     );
+    if (!createdMessages.length || !isConversationReplyContextCurrent(conversation.id, replyContextVersion)) {
+      return;
+    }
     if (replyResult.assistantPresenceUpdate && updatedConversation.contactId) {
       setContactPresenceEntry(updatedConversation.contactId, replyResult.assistantPresenceUpdate);
       if (state.sceneModalOpen) {
