@@ -12601,7 +12601,7 @@ async function requestConversationReply(options = {}) {
   }
 
   try {
-    primeForegroundReplySync(conversation.id);
+    clearForegroundReplySync(conversation.id);
     if (isRegenerate) {
       replyContextVersion = bumpConversationReplyContextVersion(conversation);
       const latestReplyBatch = getLatestAssistantReplyBatch(conversation);
@@ -12694,23 +12694,24 @@ async function requestConversationReply(options = {}) {
     if (!createdMessages.length || !isConversationReplyContextCurrent(conversation.id, replyContextVersion)) {
       return;
     }
-    if (isRegenerate) {
-      primeForegroundReplySync(conversation.id);
+    const latestConversation = getConversationById(conversation.id);
+    if (!latestConversation) {
+      return;
     }
-    if (replyResult.assistantPresenceUpdate && updatedConversation.contactId) {
-      setContactPresenceEntry(updatedConversation.contactId, replyResult.assistantPresenceUpdate);
+    if (replyResult.assistantPresenceUpdate && latestConversation.contactId) {
+      setContactPresenceEntry(latestConversation.contactId, replyResult.assistantPresenceUpdate);
       if (state.sceneModalOpen) {
-        updateSceneModalFields(buildSceneDraft(updatedConversation));
+        updateSceneModalFields(buildSceneDraft(latestConversation));
       }
       if (state.sceneSyncModalOpen) {
         renderSceneSyncModal();
       }
     }
-    pushConversationReplyNotification(contact, updatedConversation, createdMessages);
+    pushConversationReplyNotification(contact, latestConversation, createdMessages);
     repairPersistedChatWorldbookMounts(promptSettings);
     if (!isRegenerate) {
       const nextAwarenessCounter = hasAwarenessMonitor ? currentAwarenessCounter + 1 : currentAwarenessCounter;
-      updatedConversation.awarenessCounter = nextAwarenessCounter;
+      latestConversation.awarenessCounter = nextAwarenessCounter;
       if (awarenessTriggered || shouldEvaluateAwareness || (hasAwarenessMonitor && nextAwarenessCounter > MAX_AWARENESS_MONITOR_ROUNDS)) {
         const contactIndex = state.contacts.findIndex((item) => item.id === contact.id);
         if (contactIndex >= 0) {
@@ -12764,10 +12765,10 @@ async function requestConversationReply(options = {}) {
           persistContacts();
         }
       }
-      updatedConversation.memorySummaryCounter =
-        (Number(updatedConversation.memorySummaryCounter) || 0) + 1;
+      latestConversation.memorySummaryCounter =
+        (Number(latestConversation.memorySummaryCounter) || 0) + 1;
       persistConversations();
-      void maybeExtractConversationMemories(updatedConversation.id, settings, promptSettings);
+      void maybeExtractConversationMemories(latestConversation.id, settings, promptSettings);
     }
     if (!suppressUi) {
       setMessagesStatus(isRegenerate ? "已重新生成回复。" : "已收到回复。", "success");
@@ -12788,9 +12789,25 @@ async function requestConversationReply(options = {}) {
       throw error;
     }
   } finally {
+    const shouldRestoreConversationScroll =
+      !suppressUi &&
+      state.activeTab === "chat" &&
+      String(state.activeConversationId || "").trim() === conversation.id;
+    const scrollSnapshot = shouldRestoreConversationScroll
+      ? captureConversationScrollSnapshot()
+      : null;
+    const shouldStickToBottom = shouldRestoreConversationScroll
+      ? isConversationHistoryNearBottom()
+      : false;
     state.requestingConversationId = "";
     state.sendingConversationId = "";
     if (!suppressUi) {
+      if (shouldRestoreConversationScroll) {
+        queueConversationRenderOptions({
+          scrollBehavior: shouldStickToBottom ? "bottom" : "preserve",
+          scrollSnapshot: shouldStickToBottom ? null : scrollSnapshot
+        });
+      }
       renderMessagesPage();
       focusConversationInput();
     }
@@ -12980,6 +12997,32 @@ function clearForegroundReplySync(conversationId = "") {
   foregroundReplySyncUntil = 0;
 }
 
+function getForegroundReplySyncTask(conversationId = "") {
+  const resolvedConversationId = String(conversationId || "").trim();
+  if (!resolvedConversationId) {
+    return null;
+  }
+  return getReplyTaskForConversation(resolvedConversationId, ["pending", "processing", "error"]);
+}
+
+function isDirectForegroundReplyFlowActive(conversationId = state.activeConversationId) {
+  const resolvedConversationId = String(conversationId || "").trim();
+  if (!resolvedConversationId) {
+    return false;
+  }
+  if (
+    state.activeTab !== "chat" ||
+    String(state.activeConversationId || "").trim() !== resolvedConversationId ||
+    document.hidden
+  ) {
+    return false;
+  }
+  return (
+    state.requestingConversationId === resolvedConversationId &&
+    !getForegroundReplySyncTask(resolvedConversationId)
+  );
+}
+
 function shouldRunForegroundReplySync() {
   if (isBackgroundMessagesWorker() || document.hidden) {
     return false;
@@ -12988,11 +13031,10 @@ function shouldRunForegroundReplySync() {
   if (state.activeTab !== "chat" || !activeConversationId) {
     return false;
   }
-  const hasActiveReplyWork = Boolean(
-    getReplyTaskForConversation(activeConversationId, ["pending", "processing", "error"]) ||
-      state.requestingConversationId === activeConversationId ||
-      state.sendingConversationId === activeConversationId
-  );
+  if (isDirectForegroundReplyFlowActive(activeConversationId)) {
+    return false;
+  }
+  const hasActiveReplyWork = Boolean(getForegroundReplySyncTask(activeConversationId));
   if (hasActiveReplyWork) {
     primeForegroundReplySync(activeConversationId);
     return true;
@@ -13022,11 +13064,7 @@ function syncForegroundConversationFromStorage() {
   refreshStateFromStorage();
   const nextConversation = getConversationById(activeConversationId);
   const nextMessageCount = Array.isArray(nextConversation?.messages) ? nextConversation.messages.length : 0;
-  const hasActiveReplyWork = Boolean(
-    getReplyTaskForConversation(activeConversationId, ["pending", "processing", "error"]) ||
-      state.requestingConversationId === activeConversationId ||
-      state.sendingConversationId === activeConversationId
-  );
+  const hasActiveReplyWork = Boolean(getForegroundReplySyncTask(activeConversationId));
   if (hasActiveReplyWork || nextMessageCount > previousMessageCount) {
     primeForegroundReplySync(activeConversationId);
   }
@@ -14833,6 +14871,9 @@ function attachEvents() {
     ) {
       return;
     }
+    if (isDirectForegroundReplyFlowActive()) {
+      return;
+    }
     refreshStateFromStorage();
     renderMessagesPage();
     if (
@@ -14883,6 +14924,13 @@ function attachEvents() {
       state.innerThoughtModalOpen ||
       state.placeEditorOpen ||
       state.autoScheduleRequestOpen
+    ) {
+      return;
+    }
+    const storageKey = String(event?.key || "").trim();
+    if (
+      isDirectForegroundReplyFlowActive() &&
+      [MESSAGE_THREADS_KEY, MESSAGE_REPLY_TASKS_KEY].includes(storageKey)
     ) {
       return;
     }
