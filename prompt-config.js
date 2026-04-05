@@ -64,6 +64,48 @@
     });
   }
 
+  function parseTemplateSegments(template = "") {
+    const text = String(template || "");
+    const pattern = /\{\{([a-zA-Z0-9_]+)\}\}/g;
+    const segments = [];
+    let lastIndex = 0;
+    let match = pattern.exec(text);
+    while (match) {
+      segments.push({
+        type: "text",
+        value: text.slice(lastIndex, match.index)
+      });
+      segments.push({
+        type: "placeholder",
+        key: String(match[1] || "").trim(),
+        value: match[0]
+      });
+      lastIndex = match.index + match[0].length;
+      match = pattern.exec(text);
+    }
+    segments.push({
+      type: "text",
+      value: text.slice(lastIndex)
+    });
+    return segments;
+  }
+
+  function updateTemplateTextSegment(template = "", segmentIndex = -1, nextValue = "") {
+    const resolvedSegmentIndex = Number.parseInt(String(segmentIndex), 10);
+    const segments = parseTemplateSegments(template);
+    if (!Number.isInteger(resolvedSegmentIndex) || resolvedSegmentIndex < 0 || resolvedSegmentIndex >= segments.length) {
+      return String(template || "");
+    }
+    if (segments[resolvedSegmentIndex]?.type !== "text") {
+      return String(template || "");
+    }
+    segments[resolvedSegmentIndex] = {
+      ...segments[resolvedSegmentIndex],
+      value: String(nextValue ?? "")
+    };
+    return segments.map((segment) => String(segment?.value || "")).join("");
+  }
+
   function normalizeManualTimeSettings(source = {}, fallbackNow = new Date()) {
     const resolved = source && typeof source === "object" ? source : {};
     const now =
@@ -871,6 +913,14 @@
             label: descriptor.label,
             editable: descriptor.kind === "template",
             text: descriptor.kind === "dynamic" ? "" : String(overrideText || ""),
+            templateSegments:
+              descriptor.kind === "template" ? parseTemplateSegments(String(overrideText || "")) : [],
+            hasLockedTemplateSlots:
+              descriptor.kind === "template"
+                ? parseTemplateSegments(String(overrideText || "")).some(
+                    (segment) => segment?.type === "placeholder"
+                  )
+                : false,
             hint:
               descriptor.kind === "dynamic"
                 ? descriptor.runtimeHint || "运行时读取"
@@ -926,6 +976,8 @@
     getPromptCatalogList,
     buildPrompt,
     buildEditorModel,
+    parseTemplateSegments,
+    updateTemplateTextSegment,
     createCustomItemId,
     clonePlain
   };

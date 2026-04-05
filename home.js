@@ -2,8 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260405-222405";
-const APP_BUILD_UPDATED_AT = "2026-04-05 22:24:05";
+const APP_BUILD_VERSION = "20260405-224249";
+const APP_BUILD_UPDATED_AT = "2026-04-05 22:42:49";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -721,6 +721,22 @@ function getHomePromptSectionItemOrder(promptType = "", sectionKey = "") {
   return Array.isArray(targetSection?.items)
     ? targetSection.items.map((item) => String(item?.id || "").trim()).filter(Boolean)
     : [];
+}
+
+function getHomePromptEditorItem(promptType = "", sectionKey = "", itemId = "") {
+  const resolvedPromptType = String(promptType || "").trim();
+  const resolvedSectionKey = String(sectionKey || "").trim();
+  const resolvedItemId = String(itemId || "").trim();
+  if (!resolvedPromptType || !resolvedSectionKey || !resolvedItemId) {
+    return null;
+  }
+  const editorModel =
+    typeof window.PulsePromptConfig?.buildEditorModel === "function"
+      ? window.PulsePromptConfig.buildEditorModel(resolvedPromptType, homeState.settings)
+      : null;
+  const section =
+    editorModel?.sections?.find((item) => String(item?.key || "").trim() === resolvedSectionKey) || null;
+  return section?.items?.find((item) => String(item?.id || "").trim() === resolvedItemId) || null;
 }
 
 function persistHomePromptRules(promptRules, statusMessage = "规则已保存。") {
@@ -4390,7 +4406,34 @@ function renderHomeRulesModal() {
                     : item.kind === "custom"
                       ? " home-rules-badge--custom"
                       : "";
-                const contentMarkup = item.editable
+                const contentMarkup = item.editable && item.hasLockedTemplateSlots
+                  ? `
+                    <div class="home-rules-item__segments">
+                      ${(Array.isArray(item.templateSegments) ? item.templateSegments : [])
+                        .map((segment, segmentIndex) =>
+                          segment?.type === "placeholder"
+                            ? `
+                              <span class="home-rules-item__token" aria-label="运行时变量">
+                                ${escapeHtml(segment.value || "")}
+                              </span>
+                            `
+                            : `
+                              <textarea
+                                class="home-rules-item__segment-input"
+                                data-action="edit-home-rule-template-segment"
+                                data-prompt-type="${escapeHtml(activePromptType)}"
+                                data-section-key="${escapeHtml(sectionKey)}"
+                                data-item-id="${escapeHtml(itemId)}"
+                                data-segment-index="${escapeHtml(segmentIndex)}"
+                                spellcheck="false"
+                                placeholder="可编辑文字"
+                              >${escapeHtml(segment.value || "")}</textarea>
+                            `
+                        )
+                        .join("")}
+                    </div>
+                  `
+                  : item.editable
                   ? `
                     <textarea
                       class="home-rules-item__textarea"
@@ -4444,7 +4487,9 @@ function renderHomeRulesModal() {
                       </div>
                       ${contentMarkup}
                       <p class="home-rules-item__hint">${escapeHtml(
-                        item.hint || "可拖动排序"
+                        item.hasLockedTemplateSlots
+                          ? "可修改普通文字；形如 {{userName}} 的运行时变量已锁定，避免误改。"
+                          : item.hint || "可拖动排序"
                       )}</p>
                     </div>
                     ${removeMarkup}
@@ -4508,6 +4553,39 @@ function updateHomeRuleItemText(promptType = "", sectionKey = "", itemId = "", v
 
   persistHomePromptRules(promptRules, "");
   setHomeRulesStatus("规则已保存。", "success");
+}
+
+function updateHomeRuleTemplateSegmentText(
+  promptType = "",
+  sectionKey = "",
+  itemId = "",
+  segmentIndex = -1,
+  value = ""
+) {
+  const resolvedPromptType = String(promptType || "").trim();
+  const resolvedSectionKey = String(sectionKey || "").trim();
+  const resolvedItemId = String(itemId || "").trim();
+  if (!resolvedPromptType || !resolvedSectionKey || !resolvedItemId) {
+    return;
+  }
+  const targetItem = getHomePromptEditorItem(resolvedPromptType, resolvedSectionKey, resolvedItemId);
+  if (!targetItem) {
+    return;
+  }
+  const nextText =
+    typeof window.PulsePromptConfig?.updateTemplateTextSegment === "function"
+      ? window.PulsePromptConfig.updateTemplateTextSegment(
+          String(targetItem.text || ""),
+          segmentIndex,
+          value
+        )
+      : String(targetItem.text || "");
+  updateHomeRuleItemText(
+    resolvedPromptType,
+    resolvedSectionKey,
+    resolvedItemId,
+    nextText
+  );
 }
 
 function addHomeRuleCustomItem(promptType = "", sectionKey = "") {
@@ -5065,6 +5143,16 @@ function attachHomeSettingsEvents() {
     homeRulesSectionsEl.addEventListener("input", (event) => {
       const target = event.target;
       if (!(target instanceof HTMLTextAreaElement)) {
+        return;
+      }
+      if (target.dataset.action === "edit-home-rule-template-segment") {
+        updateHomeRuleTemplateSegmentText(
+          String(target.dataset.promptType || ""),
+          String(target.dataset.sectionKey || ""),
+          String(target.dataset.itemId || ""),
+          Number.parseInt(String(target.dataset.segmentIndex || ""), 10),
+          target.value
+        );
         return;
       }
       if (target.dataset.action !== "edit-home-rule-item") {

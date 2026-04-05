@@ -42,6 +42,7 @@ const MAX_AWARENESS_HISTORY_ITEMS = 12;
 const MAX_AWARENESS_MONITOR_ROUNDS = 20;
 const AUTO_SCHEDULE_TIMER_INTERVAL_MS = 60 * 1000;
 const FOREGROUND_REPLY_SYNC_INTERVAL_MS = 1200;
+const FOREGROUND_REPLY_SYNC_GRACE_MS = 8000;
 const REPLY_TASK_HEARTBEAT_MS = 4000;
 const REPLY_TASK_STALE_MS = 30000;
 const CONVERSATION_RENDER_BATCH_SIZE = 50;
@@ -295,6 +296,8 @@ const messagesChatAutoScheduleStatusEl = document.querySelector(
 );
 let autoScheduleTimerId = 0;
 let foregroundReplySyncTimerId = 0;
+let foregroundReplySyncConversationId = "";
+let foregroundReplySyncUntil = 0;
 const messagesChatClearHistoryBtnEl = document.querySelector("#messages-chat-clear-history-btn");
 const messagesChatClearMemoryBtnEl = document.querySelector("#messages-chat-clear-memory-btn");
 const messagesChatSettingsStatusEl = document.querySelector("#messages-chat-settings-status");
@@ -12333,6 +12336,7 @@ async function requestConversationReply(options = {}) {
     : null;
   if (processingTask) {
     state.sendingConversationId = conversation.id;
+    primeForegroundReplySync(conversation.id);
     if (!suppressUi) {
       renderMessagesPage();
       setMessagesStatus(
@@ -12448,6 +12452,7 @@ async function requestConversationReply(options = {}) {
       regenerate: isRegenerate,
       regenerateInstruction
     });
+    primeForegroundReplySync(conversation.id);
     if (!suppressUi) {
       renderMessagesPage();
       setMessagesStatus(
@@ -12484,6 +12489,7 @@ async function requestConversationReply(options = {}) {
   }
 
   try {
+    primeForegroundReplySync(conversation.id);
     state.requestingConversationId = conversation.id;
     if (!suppressUi) {
       renderMessagesPage();
@@ -12829,6 +12835,31 @@ function refreshStateFromStorage() {
   persistContacts();
 }
 
+function primeForegroundReplySync(
+  conversationId = state.activeConversationId,
+  durationMs = FOREGROUND_REPLY_SYNC_GRACE_MS
+) {
+  const resolvedConversationId = String(conversationId || "").trim();
+  if (!resolvedConversationId) {
+    return false;
+  }
+  foregroundReplySyncConversationId = resolvedConversationId;
+  foregroundReplySyncUntil = Math.max(
+    Number(foregroundReplySyncUntil) || 0,
+    Date.now() + Math.max(0, Number(durationMs) || 0)
+  );
+  return true;
+}
+
+function clearForegroundReplySync(conversationId = "") {
+  const resolvedConversationId = String(conversationId || "").trim();
+  if (resolvedConversationId && foregroundReplySyncConversationId !== resolvedConversationId) {
+    return;
+  }
+  foregroundReplySyncConversationId = "";
+  foregroundReplySyncUntil = 0;
+}
+
 function shouldRunForegroundReplySync() {
   if (isBackgroundMessagesWorker() || document.hidden) {
     return false;
@@ -12837,11 +12868,25 @@ function shouldRunForegroundReplySync() {
   if (state.activeTab !== "chat" || !activeConversationId) {
     return false;
   }
-  return Boolean(
+  const hasActiveReplyWork = Boolean(
     getReplyTaskForConversation(activeConversationId, ["pending", "processing", "error"]) ||
       state.requestingConversationId === activeConversationId ||
       state.sendingConversationId === activeConversationId
   );
+  if (hasActiveReplyWork) {
+    primeForegroundReplySync(activeConversationId);
+    return true;
+  }
+  if (
+    foregroundReplySyncConversationId === activeConversationId &&
+    Date.now() < (Number(foregroundReplySyncUntil) || 0)
+  ) {
+    return true;
+  }
+  if (foregroundReplySyncConversationId === activeConversationId) {
+    clearForegroundReplySync(activeConversationId);
+  }
+  return false;
 }
 
 function syncForegroundConversationFromStorage() {
@@ -12857,6 +12902,14 @@ function syncForegroundConversationFromStorage() {
   refreshStateFromStorage();
   const nextConversation = getConversationById(activeConversationId);
   const nextMessageCount = Array.isArray(nextConversation?.messages) ? nextConversation.messages.length : 0;
+  const hasActiveReplyWork = Boolean(
+    getReplyTaskForConversation(activeConversationId, ["pending", "processing", "error"]) ||
+      state.requestingConversationId === activeConversationId ||
+      state.sendingConversationId === activeConversationId
+  );
+  if (hasActiveReplyWork || nextMessageCount > previousMessageCount) {
+    primeForegroundReplySync(activeConversationId);
+  }
   queueConversationRenderOptions({
     scrollBehavior: nextMessageCount > previousMessageCount ? "bottom" : "preserve",
     scrollSnapshot

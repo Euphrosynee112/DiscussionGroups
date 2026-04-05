@@ -1239,6 +1239,41 @@ button {
   color: var(--text);
 }
 
+.home-rules-item__segments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.home-rules-item__segment-input {
+  min-width: 96px;
+  min-height: 44px;
+  flex: 1 1 180px;
+  resize: vertical;
+  border-radius: 14px;
+  border: 1px solid rgba(207, 218, 231, 0.94);
+  background: rgba(255, 255, 255, 0.96);
+  padding: 10px 12px;
+  font: inherit;
+  color: var(--text);
+}
+
+.home-rules-item__token {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  max-width: 100%;
+  padding: 0 12px;
+  border-radius: 14px;
+  border: 1px dashed rgba(97, 121, 160, 0.42);
+  background: rgba(236, 241, 248, 0.96);
+  color: rgba(15, 23, 42, 0.76);
+  font-size: 12px;
+  line-height: 1.45;
+  font-family: "SF Mono", "JetBrains Mono", "Menlo", monospace;
+  word-break: break-word;
+}
+
 .home-rules-item__runtime {
   border-radius: 14px;
   border: 1px dashed rgba(193, 205, 223, 0.94);

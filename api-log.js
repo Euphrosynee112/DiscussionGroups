@@ -78,12 +78,6 @@
       return `[image data omitted, ${text.length} chars]`;
     }
 
-    if (text.length > 4000) {
-      const headLength = 2800;
-      const tailLength = 900;
-      return `${text.slice(0, headLength)}\n…[中间省略 ${text.length - headLength - tailLength} 个字符]…\n${text.slice(-tailLength)}`;
-    }
-
     return text;
   }
 
@@ -461,20 +455,20 @@
       endpoint: sanitizeString(entry.endpoint || ""),
       mode: String(entry.mode || "").trim(),
       model: sanitizeString(entry.model || ""),
-      prompt: sanitizeString(entry.prompt || ""),
-      requestBody: sanitizeValue(entry.requestBody),
-      responseText: sanitizeString(entry.responseText || ""),
-      responseBody: sanitizeValue(entry.responseBody),
+      prompt: sanitizeFullString(entry.prompt || ""),
+      requestBody: sanitizeFullValue(entry.requestBody),
+      responseText: sanitizeFullString(entry.responseText || ""),
+      responseBody: sanitizeFullValue(entry.responseBody),
       geminiFinishReason: sanitizeString(
         entry.geminiFinishReason || entry.gemini_finish_reason || ""
       ),
       gemini_finish_reason: sanitizeString(
         entry.gemini_finish_reason || entry.geminiFinishReason || ""
       ),
-      geminiSafetyRatings: sanitizeValue(
+      geminiSafetyRatings: sanitizeFullValue(
         entry.geminiSafetyRatings || entry.gemini_safety_ratings || null
       ),
-      gemini_safety_ratings: sanitizeValue(
+      gemini_safety_ratings: sanitizeFullValue(
         entry.gemini_safety_ratings || entry.geminiSafetyRatings || null
       ),
       status: String(entry.status || "success").trim() || "success",
