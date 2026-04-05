@@ -12364,6 +12364,13 @@ async function requestConversationReply(options = {}) {
       ? requestOptions.regenerateInstruction
       : pendingTask?.regenerateInstruction || ""
   ).trim();
+  const preferDirectVisibleRegenerate =
+    isRegenerate &&
+    !forceDirect &&
+    !suppressUi &&
+    state.activeTab === "chat" &&
+    String(state.activeConversationId || "").trim() === conversation.id &&
+    !document.hidden;
   const shouldResumePendingTaskDirectly = Boolean(pendingTask && !suppressUi);
   if (pendingTask && shouldResumePendingTaskDirectly) {
     removeReplyTask(pendingTask.id);
@@ -12445,9 +12452,14 @@ async function requestConversationReply(options = {}) {
   }
 
   closeConversationTransientUi();
-  const replyContextVersion = getConversationReplyContextVersion(conversation);
+  let replyContextVersion = getConversationReplyContextVersion(conversation);
 
-  if (canUseBackgroundReplyWorker() && !forceDirect && !shouldResumePendingTaskDirectly) {
+  if (
+    canUseBackgroundReplyWorker() &&
+    !forceDirect &&
+    !shouldResumePendingTaskDirectly &&
+    !preferDirectVisibleRegenerate
+  ) {
     const task = enqueueReplyTask(conversation.id, {
       regenerate: isRegenerate,
       regenerateInstruction
@@ -12490,14 +12502,8 @@ async function requestConversationReply(options = {}) {
 
   try {
     primeForegroundReplySync(conversation.id);
-    state.requestingConversationId = conversation.id;
-    if (!suppressUi) {
-      renderMessagesPage();
-    }
-    if (!isRegenerate) {
-      await maybeAutoGenerateSchedulesForConversation(conversation);
-    }
     if (isRegenerate) {
+      replyContextVersion = bumpConversationReplyContextVersion(conversation);
       const latestReplyBatch = getLatestAssistantReplyBatch(conversation);
       removedReplyBatch = latestReplyBatch.messages.map((message) => ({ ...message }));
       conversation.messages = conversation.messages.slice(0, latestReplyBatch.startIndex);
@@ -12505,9 +12511,15 @@ async function requestConversationReply(options = {}) {
       persistConversations();
       history = selectConversationHistory(conversation.messages, promptSettings.historyRounds);
     } else {
+      state.requestingConversationId = conversation.id;
+      if (!suppressUi) {
+        renderMessagesPage();
+      }
+      await maybeAutoGenerateSchedulesForConversation(conversation);
       history = selectConversationHistory(conversation.messages, promptSettings.historyRounds);
     }
 
+    state.requestingConversationId = conversation.id;
     state.sendingConversationId = conversation.id;
     if (!suppressUi) {
       setMessagesStatus(isRegenerate ? "正在重新生成回复…" : "正在等待对方回复…");
@@ -12576,6 +12588,9 @@ async function requestConversationReply(options = {}) {
     );
     if (!createdMessages.length || !isConversationReplyContextCurrent(conversation.id, replyContextVersion)) {
       return;
+    }
+    if (isRegenerate) {
+      primeForegroundReplySync(conversation.id);
     }
     if (replyResult.assistantPresenceUpdate && updatedConversation.contactId) {
       setContactPresenceEntry(updatedConversation.contactId, replyResult.assistantPresenceUpdate);

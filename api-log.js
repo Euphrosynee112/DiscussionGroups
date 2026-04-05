@@ -167,8 +167,30 @@
     }
   }
 
-  function writeFullFieldEntries(entries = {}) {
-    safeSetItem(API_LOG_FULL_FIELDS_KEY, JSON.stringify(entries));
+  function writeFullFieldEntries(entries = {}, orderedIds = []) {
+    const nextEntries = entries && typeof entries === "object" ? { ...entries } : {};
+    const preferredIds = Array.isArray(orderedIds)
+      ? orderedIds.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+    const fallbackIds = Object.keys(nextEntries);
+    const pruneOrder = preferredIds.length ? preferredIds.slice() : fallbackIds;
+    let payload = JSON.stringify(nextEntries);
+    if (safeSetItem(API_LOG_FULL_FIELDS_KEY, payload)) {
+      return true;
+    }
+    const remaining = { ...nextEntries };
+    while (pruneOrder.length > 1) {
+      const oldestId = pruneOrder.shift();
+      if (!oldestId || !Object.prototype.hasOwnProperty.call(remaining, oldestId)) {
+        continue;
+      }
+      delete remaining[oldestId];
+      payload = JSON.stringify(remaining);
+      if (safeSetItem(API_LOG_FULL_FIELDS_KEY, payload)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   function writePrivacyEntries(entries = {}) {
@@ -306,7 +328,7 @@
         }
       });
     }
-    writeFullFieldEntries(next);
+    writeFullFieldEntries(next, validIds);
   }
 
   function getFullFields(logId) {
