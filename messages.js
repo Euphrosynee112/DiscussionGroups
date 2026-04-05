@@ -43,6 +43,7 @@ const MAX_AWARENESS_MONITOR_ROUNDS = 20;
 const AUTO_SCHEDULE_TIMER_INTERVAL_MS = 60 * 1000;
 const FOREGROUND_REPLY_SYNC_INTERVAL_MS = 1200;
 const FOREGROUND_REPLY_SYNC_GRACE_MS = 8000;
+const ASSISTANT_REPLY_REVEAL_INTERVAL_MS = 2000;
 const REPLY_TASK_HEARTBEAT_MS = 4000;
 const REPLY_TASK_STALE_MS = 30000;
 const CONVERSATION_RENDER_BATCH_SIZE = 50;
@@ -5919,7 +5920,13 @@ function buildConversationSystemPrompt(
         special_user_persona: String(contact.specialUserPersona || "").trim()
           ? `你对这个用户的特别认知：${String(contact.specialUserPersona || "").trim()}。这部分是你基于相处形成的更私人、更具体的认识，重要程度略高于用户的通用画像。`
           : "",
-        important_priority: "",
+        important_priority: requestOptions.continueAssistant
+          ? [
+              "当前用户没有发送新消息；这是一次主动续写请求。",
+              "请把它理解成：对方希望你顺着刚才的聊天氛围、情绪或话题，自然继续再发几句，而不是等待新的提问。",
+              "续写时不要重复上一条刚说过的话，也不要机械总结；像真实聊天里临时又想起一件事、补一句、追一句，或自然延伸当前话题。"
+            ].join("\n")
+          : "",
         regenerate_hint: requestOptions.regenerate
           ? [
               "这是一条针对上一版回复的重回请求，需要重新生成这一轮回复。",
@@ -7065,14 +7072,64 @@ async function appendAssistantReplyBatch(
       baseLength + index
     )
   );
-  activeConversation.messages = [...activeConversation.messages, ...createdMessages];
-  recalculateConversationUpdatedAt(activeConversation);
-  persistConversations();
-  if (state.activeTab === "chat") {
-    renderMessagesPage();
+  const shouldAnimateReplyReveal =
+    !Boolean(requestOptions.suppressUi) &&
+    state.activeTab === "chat" &&
+    String(state.activeConversationId || "").trim() === conversationId &&
+    !document.hidden;
+  if (!shouldAnimateReplyReveal) {
+    activeConversation.messages = [...activeConversation.messages, ...createdMessages];
+    recalculateConversationUpdatedAt(activeConversation);
+    persistConversations();
+    if (state.activeTab === "chat") {
+      renderMessagesPage();
+    }
+    return createdMessages;
   }
 
-  return createdMessages;
+  const appendedMessages = [];
+  for (let index = 0; index < createdMessages.length; index += 1) {
+    const nextConversation = getConversationById(conversationId);
+    if (!nextConversation) {
+      break;
+    }
+    if (
+      hasExpectedReplyContextVersion &&
+      getConversationReplyContextVersion(nextConversation) !== parsedExpectedReplyContextVersion
+    ) {
+      break;
+    }
+    if (index > 0) {
+      if (
+        document.hidden ||
+        state.activeTab !== "chat" ||
+        String(state.activeConversationId || "").trim() !== conversationId
+      ) {
+        const remainingMessages = createdMessages.slice(index);
+        nextConversation.messages = [...nextConversation.messages, ...remainingMessages];
+        appendedMessages.push(...remainingMessages);
+        recalculateConversationUpdatedAt(nextConversation);
+        persistConversations();
+        if (state.activeTab === "chat") {
+          renderMessagesPage();
+        }
+        break;
+      }
+      await sleep(ASSISTANT_REPLY_REVEAL_INTERVAL_MS);
+    }
+    nextConversation.messages = [...nextConversation.messages, createdMessages[index]];
+    appendedMessages.push(createdMessages[index]);
+    recalculateConversationUpdatedAt(nextConversation);
+    persistConversations();
+    if (state.activeTab === "chat") {
+      queueConversationRenderOptions({
+        scrollBehavior: "bottom"
+      });
+      renderMessagesPage();
+    }
+  }
+
+  return appendedMessages;
 }
 
 function getLatestAssistantReplyBatch(conversation) {
@@ -9278,6 +9335,9 @@ function renderConversationDetail(options = {}) {
   const hasPendingUserMessages = conversation.messages.some(
     (message) => message.role === "user" && message.needsReply
   );
+  const canRequestContinuation =
+    !hasPendingUserMessages &&
+    conversation.messages.some((message) => message.role === "assistant");
   const promptSettings = normalizeMessagePromptSettings(state.chatPromptSettings);
   const renderOptions = options && typeof options === "object" ? options : {};
   const composerDraft = getConversationDraft(conversation.id);
@@ -9336,11 +9396,13 @@ function renderConversationDetail(options = {}) {
           发送
         </button>
         <button
-          class="messages-conversation__trigger ${hasPendingUserMessages ? "is-ready" : ""}"
+          class="messages-conversation__trigger ${
+            hasPendingUserMessages || canRequestContinuation ? "is-ready" : ""
+          }"
           type="button"
           data-action="request-conversation-reply"
-          aria-label="推送到 API 获取回复"
-          ${isReplyBusy || !hasPendingUserMessages ? "disabled" : ""}
+          aria-label="推送到 API 获取回复或续写"
+          ${isReplyBusy || (!hasPendingUserMessages && !canRequestContinuation) ? "disabled" : ""}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path
@@ -12419,6 +12481,7 @@ async function requestConversationReply(options = {}) {
   let awarenessHistoryEntry = null;
   let requestedPendingUserMessageIds = [];
   let pendingUserMessagesForPrompt = [];
+  let continueAssistant = false;
 
   if (isRegenerate) {
     const latestReplyBatch = getLatestAssistantReplyBatch(conversation);
@@ -12439,15 +12502,22 @@ async function requestConversationReply(options = {}) {
       (message) => message.role === "user" && message.needsReply
     );
     if (!pendingUserMessages.length) {
-      if (!suppressUi) {
-        setMessagesStatus("当前没有待推送到 API 的新消息。");
+      const hasContinuationSource = conversation.messages.some(
+        (message) => message.role === "assistant"
+      );
+      if (!hasContinuationSource) {
+        if (!suppressUi) {
+          setMessagesStatus("当前没有待推送到 API 的新消息。");
+        }
+        return;
       }
-      return;
+      continueAssistant = true;
+    } else {
+      pendingUserMessagesForPrompt = pendingUserMessages.map((message) => ({ ...message }));
+      requestedPendingUserMessageIds = pendingUserMessages.map((message) =>
+        String(message.id || "").trim()
+      );
     }
-    pendingUserMessagesForPrompt = pendingUserMessages.map((message) => ({ ...message }));
-    requestedPendingUserMessageIds = pendingUserMessages.map((message) =>
-      String(message.id || "").trim()
-    );
   }
 
   closeConversationTransientUi();
@@ -12467,7 +12537,11 @@ async function requestConversationReply(options = {}) {
     if (!suppressUi) {
       renderMessagesPage();
       setMessagesStatus(
-        isRegenerate ? "已加入重回队列，后台会继续生成回复。" : "已加入回复队列，离开 chat 也会继续收消息。",
+        isRegenerate
+          ? "已加入重回队列，后台会继续生成回复。"
+          : continueAssistant
+            ? "已加入续写队列，离开 chat 也会继续收消息。"
+            : "已加入回复队列，离开 chat 也会继续收消息。",
         "success"
       );
     }
@@ -12536,6 +12610,7 @@ async function requestConversationReply(options = {}) {
         regenerateInstruction,
         triggeredAwareness,
         pendingUserMessages: pendingUserMessagesForPrompt,
+        continueAssistant,
         sceneMode: conversation.sceneMode === "offline" ? "offline" : "online",
         conversation
       }
@@ -12551,29 +12626,33 @@ async function requestConversationReply(options = {}) {
       const requestedPendingUserMessageIdSet = new Set(
         requestedPendingUserMessageIds.filter(Boolean)
       );
-      if (!requestedPendingUserMessageIdSet.size) {
+      if (!requestedPendingUserMessageIdSet.size && !continueAssistant) {
         return;
       }
-      const hasRequestedMessages = updatedConversation.messages.some((message) =>
-        requestedPendingUserMessageIdSet.has(String(message?.id || "").trim())
-      );
+      const hasRequestedMessages =
+        !requestedPendingUserMessageIdSet.size ||
+        updatedConversation.messages.some((message) =>
+          requestedPendingUserMessageIdSet.has(String(message?.id || "").trim())
+        );
       if (!hasRequestedMessages) {
         return;
       }
-      updatedConversation.messages = updatedConversation.messages.map((message) => {
-        const messageId = String(message?.id || "").trim();
-        if (
-          message.role === "user" &&
-          message.needsReply &&
-          requestedPendingUserMessageIdSet.has(messageId)
-        ) {
-          return {
-            ...message,
-            needsReply: false
-          };
-        }
-        return message;
-      });
+      if (requestedPendingUserMessageIdSet.size) {
+        updatedConversation.messages = updatedConversation.messages.map((message) => {
+          const messageId = String(message?.id || "").trim();
+          if (
+            message.role === "user" &&
+            message.needsReply &&
+            requestedPendingUserMessageIdSet.has(messageId)
+          ) {
+            return {
+              ...message,
+              needsReply: false
+            };
+          }
+          return message;
+        });
+      }
     }
 
     const createdMessages = await appendAssistantReplyBatch(
