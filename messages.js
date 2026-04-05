@@ -669,6 +669,7 @@ const state = {
   sceneModalOpen: false,
   sceneSyncModalOpen: false,
   pendingAssistantReveal: null,
+  suppressForegroundRefreshUntil: 0,
   pendingConversationRenderOptions: null
 };
 
@@ -10897,6 +10898,21 @@ function shouldDismissConversationKeyboardFromTarget(target) {
   return !target.closest(".messages-conversation__composer");
 }
 
+function primeForegroundRefreshSuppression(durationMs = 1200) {
+  state.suppressForegroundRefreshUntil = Math.max(
+    Number(state.suppressForegroundRefreshUntil) || 0,
+    Date.now() + Math.max(0, Number(durationMs) || 0)
+  );
+}
+
+function shouldSuppressForegroundRefresh() {
+  const activeInput = getConversationInputElement();
+  if (activeInput && document.activeElement === activeInput) {
+    return true;
+  }
+  return Date.now() < (Number(state.suppressForegroundRefreshUntil) || 0);
+}
+
 function captureConversationScrollSnapshot() {
   const historyEl = messagesContentEl?.querySelector(".messages-conversation__history");
   if (!(historyEl instanceof HTMLElement)) {
@@ -13429,6 +13445,16 @@ function attachEvents() {
       setConversationDraft(state.activeConversationId, target.value || "");
     });
 
+    messagesContentEl.addEventListener("focusin", (event) => {
+      const target = event.target;
+      if (
+        target instanceof HTMLInputElement &&
+        target.classList.contains("messages-conversation__input")
+      ) {
+        primeForegroundRefreshSuppression(1600);
+      }
+    });
+
     messagesContentEl.addEventListener("click", (event) => {
       const target = event.target;
       if (!(target instanceof Element)) {
@@ -15058,6 +15084,9 @@ function attachEvents() {
       state.windowFocusPrimed = true;
       return;
     }
+    if (shouldSuppressForegroundRefresh()) {
+      return;
+    }
     if (
       state.profileEditorOpen ||
       state.contactEditorOpen ||
@@ -15149,6 +15178,9 @@ function attachEvents() {
       state.placeEditorOpen ||
       state.autoScheduleRequestOpen
     ) {
+      return;
+    }
+    if (shouldSuppressForegroundRefresh()) {
       return;
     }
     const storageKey = String(event?.key || "").trim();
@@ -15293,6 +15325,10 @@ function attachEvents() {
   document.addEventListener(
     "pointerdown",
     (event) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest(".messages-conversation__composer")) {
+        primeForegroundRefreshSuppression(1600);
+      }
       if (shouldDismissConversationKeyboardFromTarget(event.target)) {
         window.setTimeout(() => {
           blurConversationInput();
