@@ -960,7 +960,10 @@ function applyConversationReplyRecovery(conversations = []) {
     if (!missingMessages.length) {
       return;
     }
-    conversation.messages = [...normalizeObjectArray(conversation.messages), ...missingMessages];
+    const appendedMessages = appendUniqueMessagesToConversation(conversation, missingMessages);
+    if (!appendedMessages.length) {
+      return;
+    }
     recalculateConversationUpdatedAt(conversation);
     changed = true;
   });
@@ -3463,11 +3466,12 @@ function normalizeConversation(conversation, index = 0) {
     return null;
   }
 
-  const messages = Array.isArray(source.messages)
+  const normalizedMessages = Array.isArray(source.messages)
     ? source.messages
         .map((item, messageIndex) => normalizeConversationMessage(item, messageIndex))
         .filter((item) => item.text)
     : [];
+  const messages = dedupeConversationMessageList(normalizedMessages).messages;
 
   return {
     id: String(source.id || `conversation_${index}_${hashText(source.contactId)}`),
@@ -7059,6 +7063,83 @@ function hasConversationMessageId(conversation = null, messageId = "") {
   );
 }
 
+function dedupeConversationMessageList(messages = []) {
+  const dedupedMessages = [];
+  const indexByMessageId = new Map();
+  let changed = false;
+  normalizeObjectArray(messages).forEach((message) => {
+    if (!message || typeof message !== "object") {
+      changed = true;
+      return;
+    }
+    const clonedMessage = { ...message };
+    const messageId = String(clonedMessage.id || "").trim();
+    if (!messageId) {
+      dedupedMessages.push(clonedMessage);
+      return;
+    }
+    const existingIndex = indexByMessageId.get(messageId);
+    if (existingIndex == null) {
+      indexByMessageId.set(messageId, dedupedMessages.length);
+      dedupedMessages.push(clonedMessage);
+      return;
+    }
+    dedupedMessages[existingIndex] = {
+      ...dedupedMessages[existingIndex],
+      ...clonedMessage
+    };
+    changed = true;
+  });
+  return {
+    changed,
+    messages: dedupedMessages
+  };
+}
+
+function ensureConversationMessageUniqueness(conversation = null) {
+  if (!conversation || !Array.isArray(conversation.messages)) {
+    return false;
+  }
+  const { changed, messages } = dedupeConversationMessageList(conversation.messages);
+  if (changed) {
+    conversation.messages = messages;
+  }
+  return changed;
+}
+
+function appendUniqueMessagesToConversation(conversation = null, messages = []) {
+  if (!conversation || typeof conversation !== "object") {
+    return [];
+  }
+  const currentMessages = normalizeObjectArray(conversation.messages).map((message) => ({
+    ...(message && typeof message === "object" ? message : {})
+  }));
+  const existingMessageIds = new Set(
+    currentMessages
+      .map((message) => String(message?.id || "").trim())
+      .filter(Boolean)
+  );
+  const appendedMessages = [];
+  normalizeObjectArray(messages).forEach((message) => {
+    if (!message || typeof message !== "object") {
+      return;
+    }
+    const clonedMessage = { ...message };
+    const messageId = String(clonedMessage.id || "").trim();
+    if (messageId && existingMessageIds.has(messageId)) {
+      return;
+    }
+    if (messageId) {
+      existingMessageIds.add(messageId);
+    }
+    currentMessages.push(clonedMessage);
+    appendedMessages.push(clonedMessage);
+  });
+  conversation.messages = currentMessages;
+  ensureConversationMessageUniqueness(conversation);
+  return appendedMessages;
+}
+
 function inferAssistantPresenceUpdateFromText(text = "", contactId = "") {
   const cleanedText = String(text || "").trim();
   if (!cleanedText) {
@@ -7175,6 +7256,7 @@ function recalculateConversationUpdatedAt(conversation) {
   if (!conversation || typeof conversation !== "object") {
     return;
   }
+  ensureConversationMessageUniqueness(conversation);
   const latestMessage = conversation.messages?.[conversation.messages.length - 1] || null;
   conversation.updatedAt = latestMessage?.createdAt || Date.now();
 }
@@ -7258,7 +7340,10 @@ function flushPendingAssistantReveal(conversationId = "", options = {}) {
   ) {
     return [];
   }
-  targetConversation.messages = [...targetConversation.messages, ...revealMessages];
+  const appendedRevealMessages = appendUniqueMessagesToConversation(targetConversation, revealMessages);
+  if (!appendedRevealMessages.length) {
+    return [];
+  }
   recalculateConversationUpdatedAt(targetConversation);
   persistConversations();
   const flushOptions = options && typeof options === "object" ? options : {};
@@ -7272,7 +7357,7 @@ function flushPendingAssistantReveal(conversationId = "", options = {}) {
     });
     renderMessagesPage();
   }
-  return revealMessages;
+  return appendedRevealMessages;
 }
 
 async function appendAssistantReplyBatch(
@@ -7339,13 +7424,16 @@ async function appendAssistantReplyBatch(
     !document.hidden;
   if (!shouldAnimateReplyReveal) {
     clearPendingAssistantReveal(conversationId);
-    activeConversation.messages = [...activeConversation.messages, ...createdMessages];
+    const appendedDirectMessages = appendUniqueMessagesToConversation(activeConversation, createdMessages);
+    if (!appendedDirectMessages.length) {
+      return [];
+    }
     recalculateConversationUpdatedAt(activeConversation);
     persistConversations();
     if (state.activeTab === "chat") {
       renderMessagesPage();
     }
-    return createdMessages;
+    return appendedDirectMessages;
   }
 
   setPendingAssistantReveal(conversationId, createdMessages, {
@@ -7402,19 +7490,19 @@ async function appendAssistantReplyBatch(
       };
     }
     const nextMessage = createdMessages[index];
-    const messageAlreadyExists = hasConversationMessageId(nextConversation, nextMessage.id);
-    if (!messageAlreadyExists) {
-      nextConversation.messages = [...nextConversation.messages, nextMessage];
-      appendedMessages.push(nextMessage);
+    const newlyAppendedMessages = appendUniqueMessagesToConversation(nextConversation, [nextMessage]);
+    const appendedCurrentMessage = newlyAppendedMessages[0] || null;
+    if (appendedCurrentMessage) {
+      appendedMessages.push(appendedCurrentMessage);
       recalculateConversationUpdatedAt(nextConversation);
       persistConversations();
     }
     setPendingAssistantReveal(conversationId, createdMessages.slice(index + 1), {
       expectedReplyContextVersion: parsedExpectedReplyContextVersion
     });
-    if (state.activeTab === "chat" && !messageAlreadyExists) {
+    if (state.activeTab === "chat" && appendedCurrentMessage) {
       const appendedIncrementally = appendConversationMessageToVisibleHistory(
-        nextMessage,
+        appendedCurrentMessage,
         nextConversation,
         promptSettings,
         revealRenderOptions
@@ -7432,19 +7520,11 @@ async function appendAssistantReplyBatch(
     (!hasExpectedReplyContextVersion ||
       getConversationReplyContextVersion(latestConversation) === parsedExpectedReplyContextVersion)
   ) {
-    const existingMessageIds = new Set(
-      (Array.isArray(latestConversation.messages) ? latestConversation.messages : [])
-        .map((message) => String(message?.id || "").trim())
-        .filter(Boolean)
-    );
-    const missingMessages = createdMessages.filter(
-      (message) => !existingMessageIds.has(String(message?.id || "").trim())
-    );
-    if (missingMessages.length) {
-      latestConversation.messages = [...latestConversation.messages, ...missingMessages];
+    const repairedMessages = appendUniqueMessagesToConversation(latestConversation, createdMessages);
+    if (repairedMessages.length) {
       recalculateConversationUpdatedAt(latestConversation);
       persistConversations();
-      appendedMessages.push(...missingMessages);
+      appendedMessages.push(...repairedMessages);
     }
   }
   clearPendingAssistantReveal(conversationId);
@@ -13164,9 +13244,14 @@ async function requestConversationReply(options = {}) {
     if (isRegenerate) {
       const rollbackConversation = getConversationById(conversation.id);
       if (rollbackConversation && removedReplyBatch.length) {
-        rollbackConversation.messages = [...rollbackConversation.messages, ...removedReplyBatch];
-        recalculateConversationUpdatedAt(rollbackConversation);
-        persistConversations();
+        const restoredMessages = appendUniqueMessagesToConversation(
+          rollbackConversation,
+          removedReplyBatch
+        );
+        if (restoredMessages.length) {
+          recalculateConversationUpdatedAt(rollbackConversation);
+          persistConversations();
+        }
       }
     }
     if (!suppressUi) {
