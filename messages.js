@@ -2686,6 +2686,16 @@ function sleep(ms) {
   });
 }
 
+function waitForNextAnimationFrame() {
+  return new Promise((resolve) => {
+    if (typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(() => resolve());
+      return;
+    }
+    window.setTimeout(resolve, 16);
+  });
+}
+
 function resolveGeminiGenerateEndpoint(endpoint, model) {
   const normalizedEndpoint = normalizeGeminiEndpoint(endpoint);
   const normalizedModel = String(model || DEFAULT_GEMINI_MODEL).trim() || DEFAULT_GEMINI_MODEL;
@@ -5988,9 +5998,10 @@ function buildPresencePromptContext(contact, conversation) {
 
     lines.push(
       [
-        "如果这一轮回复里自然发生了“到达 / 出发 / 正在赶路 / 刚回到某地”，你可以只更新你自己的状态；不要修改用户状态，也不要修改线上/线下模式。",
-        "如果你在正文里明确说了“我现在过来 / 我在路上 / 我刚到 / 我已经到了 / 我先回去 / 我出发了”这类状态变化，就必须同步输出 presence_update，而不是只在正文里口头说一下。",
-        "若需要更新，请在正常回复正文后另起一行输出：<presence_update>{...}</presence_update>。",
+        "如果这一轮回复里自然发生了“到达 / 出发 / 正在赶路 / 刚回到某地”，你只能补充你自己的状态更新；不要修改用户状态，也不要修改线上/线下模式。",
+        "presence_update 只是紧跟在聊天正文后的一条附加机器标签，不算聊天正文，绝不能单独输出。",
+        "只有当这轮正文里明确说了“我现在过来 / 我在路上 / 我刚到 / 我已经到了 / 我先回去 / 我出发了”这类状态变化时，才需要同步输出 presence_update；不要只因为看到了地点背景、地点名单或上下文推测，就单独输出状态标签。",
+        "若需要更新，请先输出正常回复正文，再另起一行输出：<presence_update>{...}</presence_update>。如果这轮没有自然正文可说，就不要输出 presence_update。",
         '可用格式一：<presence_update>{"presenceType":"at_place","placeName":"地点名"}</presence_update>',
         '可用格式二：<presence_update>{"presenceType":"in_transit","fromPlaceName":"地点名","toPlaceName":"地点名"}</presence_update>',
         visiblePlaceHints.length
@@ -6077,7 +6088,8 @@ function buildConversationSystemPrompt(
           ? [
               "当前用户没有发送新消息；这是一次主动续写请求。",
               "请把它理解成：对方希望你顺着刚才的聊天氛围、情绪或话题，自然继续再发几句，而不是等待新的提问。",
-              "续写时不要重复上一条刚说过的话，也不要机械总结；像真实聊天里临时又想起一件事、补一句、追一句，或自然延伸当前话题。"
+              "续写时不要重复上一条刚说过的话，也不要机械总结；像真实聊天里临时又想起一件事、补一句、追一句，或自然延伸当前话题。",
+              "续写必须先给出自然聊天正文；如果你只是想更新状态、但没有自然正文可说，那就不要输出 presence_update。"
             ].join("\n")
           : "",
         regenerate_hint: requestOptions.regenerate
@@ -6090,11 +6102,18 @@ function buildConversationSystemPrompt(
             ]
               .filter(Boolean)
               .join("\n")
+          : "",
+        presence_retry_hint: requestOptions.presenceOnlyRetry
+          ? [
+              "上一次你的输出只有 presence_update 标签，没有聊天正文。",
+              "这一次必须先输出自然聊天正文；presence_update 只能作为正文后的附加一行，绝不能单独出现。",
+              "如果这轮没有自然正文可说，就直接输出正常聊天正文，不要输出 presence_update。"
+            ].join("\n")
           : ""
       },
       output_standard: {
         presence_update_rule: getConversationAllowAiPresenceUpdate(requestOptions.conversation)
-          ? "如果这一轮正文里明确出现了你自己的状态变化，例如正在过来、已经在路上、刚刚到达、刚回到某地，就必须同步输出 presence_update，不允许只在正文口头提到却不更新状态。"
+          ? "如果这一轮正文里明确出现了你自己的状态变化，例如正在过来、已经在路上、刚刚到达、刚回到某地，就必须同步输出 presence_update；但 presence_update 只能作为正文后的附加一行，不能替代正文，也不能单独输出。"
           : "",
         quote_rule:
           sceneMode === "online"
@@ -7511,6 +7530,7 @@ async function appendAssistantReplyBatch(
         queueConversationRenderOptions(revealRenderOptions);
         renderMessagesPage();
       }
+      await waitForNextAnimationFrame();
     }
   }
 
@@ -7578,14 +7598,25 @@ async function requestChatReplyText(
   const requestEndpoint = validateApiSettings(settings, "对话回复");
   const requestMode = normalizeApiMode(settings.mode);
 
-  async function executeChatRequest(resolvedPromptSettings, summarySuffix = "") {
+  async function executeChatRequest(
+    resolvedPromptSettings,
+    summarySuffix = "",
+    extraRequestOptions = {}
+  ) {
+    const mergedRequestOptions =
+      extraRequestOptions && typeof extraRequestOptions === "object"
+        ? {
+            ...requestOptions,
+            ...extraRequestOptions
+          }
+        : requestOptions;
     const systemPrompt = buildConversationSystemPrompt(
       profile,
       contact,
       settings,
       resolvedPromptSettings,
       history,
-      requestOptions
+      mergedRequestOptions
     );
     const privacySession = createPrivacySession({
       settings,
@@ -7597,7 +7628,7 @@ async function requestChatReplyText(
       chatGlobalSettings: state.chatGlobalSettings,
       scheduleEntries: getVisibleScheduleEntriesForContact(contact.id),
       promptSettings: resolvedPromptSettings,
-      requestOptions,
+      requestOptions: mergedRequestOptions,
       systemPrompt
     });
     const encodedSystemPrompt = preparePromptWithPrivacy(systemPrompt, privacySession);
@@ -7605,13 +7636,13 @@ async function requestChatReplyText(
     const requestBody = buildChatRequestBody(settings, encodedSystemPrompt, encodedHistory);
     const logBase = applyPrivacyToLogEntry(
       buildMessageApiLogBase(
-        requestOptions.regenerate ? "chat_reply_regenerate" : "chat_reply",
+        mergedRequestOptions.regenerate ? "chat_reply_regenerate" : "chat_reply",
         settings,
         requestEndpoint,
         encodedSystemPrompt,
         requestBody,
         `联系人：${contact.name} · 历史消息 ${history.length} 条${
-          requestOptions.regenerate ? " · 重回" : ""
+          mergedRequestOptions.regenerate ? " · 重回" : ""
         }${summarySuffix}`
       ),
       privacySession
@@ -7689,7 +7720,7 @@ async function requestChatReplyText(
       }
 
       const decodedMessage = decodeTextWithPrivacy(rawMessage, privacySession);
-      const parsedPresenceUpdate = getConversationAllowAiPresenceUpdate(requestOptions.conversation)
+      const parsedPresenceUpdate = getConversationAllowAiPresenceUpdate(mergedRequestOptions.conversation)
         ? parseAssistantPresenceUpdate(decodedMessage, contact.id)
         : {
             cleanedText: stripAssistantPresenceUpdateTag(decodedMessage),
@@ -7746,6 +7777,18 @@ async function requestChatReplyText(
   try {
     return await executeChatRequest(normalizedPromptSettings);
   } catch (error) {
+    if (
+      String(error?.message || "").includes("只有状态更新标签") &&
+      !requestOptions.presenceOnlyRetry
+    ) {
+      return executeChatRequest(
+        normalizedPromptSettings,
+        " · 正文补发重试",
+        {
+          presenceOnlyRetry: true
+        }
+      );
+    }
     const shouldRetryGeminiDirectly =
       requestMode === "gemini" &&
       error?.code === "gemini_empty_response" &&

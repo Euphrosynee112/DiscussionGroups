@@ -488,7 +488,8 @@
           createTemplateItem("user_persona", "用户画像", "你对这个用户已知的整体印象：{{userPersona}}。"),
           createDynamicItem("special_user_persona", "特别用户认知", "读取角色对用户的特别认知"),
           createDynamicItem("important_priority", "优先关注信息", "读取当前比背景更重要的信息"),
-          createDynamicItem("regenerate_hint", "重回要求", "读取重回额外要求")
+          createDynamicItem("regenerate_hint", "重回要求", "读取重回额外要求"),
+          createDynamicItem("presence_retry_hint", "状态重试提醒", "当上一轮只输出 presence_update 时，强制补正文")
         ],
         output_standard: [
           createTemplateItem("human_chat", "真人聊天感", "你的回复必须像即时聊天软件中的真人对话，自然、轻松、有情绪，而不是助手或任务执行结果。"),
