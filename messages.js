@@ -7049,6 +7049,16 @@ function stripAssistantPresenceUpdateTag(text = "") {
     .trim();
 }
 
+function hasConversationMessageId(conversation = null, messageId = "") {
+  const resolvedMessageId = String(messageId || "").trim();
+  if (!resolvedMessageId) {
+    return false;
+  }
+  return normalizeObjectArray(conversation?.messages).some(
+    (message) => String(message?.id || "").trim() === resolvedMessageId
+  );
+}
+
 function inferAssistantPresenceUpdateFromText(text = "", contactId = "") {
   const cleanedText = String(text || "").trim();
   if (!cleanedText) {
@@ -7391,16 +7401,20 @@ async function appendAssistantReplyBatch(
         scrollSnapshot: shouldStickToBottom ? null : scrollSnapshot
       };
     }
-    nextConversation.messages = [...nextConversation.messages, createdMessages[index]];
-    appendedMessages.push(createdMessages[index]);
-    recalculateConversationUpdatedAt(nextConversation);
-    persistConversations();
+    const nextMessage = createdMessages[index];
+    const messageAlreadyExists = hasConversationMessageId(nextConversation, nextMessage.id);
+    if (!messageAlreadyExists) {
+      nextConversation.messages = [...nextConversation.messages, nextMessage];
+      appendedMessages.push(nextMessage);
+      recalculateConversationUpdatedAt(nextConversation);
+      persistConversations();
+    }
     setPendingAssistantReveal(conversationId, createdMessages.slice(index + 1), {
       expectedReplyContextVersion: parsedExpectedReplyContextVersion
     });
-    if (state.activeTab === "chat") {
+    if (state.activeTab === "chat" && !messageAlreadyExists) {
       const appendedIncrementally = appendConversationMessageToVisibleHistory(
-        createdMessages[index],
+        nextMessage,
         nextConversation,
         promptSettings,
         revealRenderOptions
@@ -9557,6 +9571,7 @@ function appendConversationMessageToVisibleHistory(
   promptSettings = state.chatPromptSettings,
   options = {}
 ) {
+  const messageId = String(message?.id || "").trim();
   const historyEl = messagesContentEl?.querySelector(".messages-conversation__history");
   if (!(historyEl instanceof HTMLElement) || !conversation) {
     return false;
@@ -9569,6 +9584,13 @@ function appendConversationMessageToVisibleHistory(
   }
   const renderWindow = buildConversationRenderWindow(conversation);
   if (renderWindow.hiddenCount > 0 || historyEl.querySelector(".messages-conversation__history-window")) {
+    return false;
+  }
+  if (
+    messageId &&
+    [...historyEl.querySelectorAll("[data-message-id]")]
+      .some((element) => String(element?.getAttribute?.("data-message-id") || "").trim() === messageId)
+  ) {
     return false;
   }
   const renderOptions = options && typeof options === "object" ? options : {};
