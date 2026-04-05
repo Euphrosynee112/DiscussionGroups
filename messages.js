@@ -911,6 +911,14 @@ function applyConversationReplyRecovery(conversations = []) {
       recoveryMapChanged = true;
       return;
     }
+    if (
+      String(state.pendingAssistantReveal?.conversationId || "").trim() === resolvedConversationId ||
+      state.requestingConversationId === resolvedConversationId ||
+      state.sendingConversationId === resolvedConversationId ||
+      isConversationReplyBusy(resolvedConversationId)
+    ) {
+      return;
+    }
     const savedAt = Number(entry?.savedAt) || 0;
     if (!savedAt || now - savedAt > MESSAGE_REPLY_RECOVERY_TTL_MS) {
       delete recoveryMap[conversationId];
