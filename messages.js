@@ -12364,8 +12364,7 @@ async function requestConversationReply(options = {}) {
       ? requestOptions.regenerateInstruction
       : pendingTask?.regenerateInstruction || ""
   ).trim();
-  const preferDirectVisibleRegenerate =
-    isRegenerate &&
+  const preferDirectVisibleReply =
     !forceDirect &&
     !suppressUi &&
     state.activeTab === "chat" &&
@@ -12458,7 +12457,7 @@ async function requestConversationReply(options = {}) {
     canUseBackgroundReplyWorker() &&
     !forceDirect &&
     !shouldResumePendingTaskDirectly &&
-    !preferDirectVisibleRegenerate
+    !preferDirectVisibleReply
   ) {
     const task = enqueueReplyTask(conversation.id, {
       regenerate: isRegenerate,
