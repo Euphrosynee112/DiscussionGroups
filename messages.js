@@ -19,6 +19,7 @@ const MESSAGE_RECENT_LOCATIONS_KEY = "x_style_generator_message_recent_locations
 const MESSAGE_COMMON_PLACES_KEY = "x_style_generator_common_places_v1";
 const MESSAGE_PRESENCE_STATE_KEY = "x_style_generator_presence_state_v1";
 const MESSAGE_REPLY_TASKS_KEY = "x_style_generator_message_reply_tasks_v1";
+const MESSAGE_REPLY_RECOVERY_KEY = "x_style_generator_message_reply_recovery_v1";
 const DEFAULT_TEMPERATURE = 0.85;
 const DEFAULT_MESSAGE_HISTORY_ROUNDS = 6;
 const MAX_MESSAGE_HISTORY_ROUNDS = 20;
@@ -53,6 +54,7 @@ const CONVERSATION_STORAGE_TARGET_CHARS = 1400000;
 const CONVERSATION_IMAGE_PAYLOAD_KEEP_COUNT = 20;
 const CONVERSATION_LIST_LONG_PRESS_MS = 560;
 const CONVERSATION_LIST_LONG_PRESS_MOVE_THRESHOLD = 12;
+const MESSAGE_REPLY_RECOVERY_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_WORLDVIEW =
   "这是一个强调长期主义、产品洞察和公共讨论质量的中文社交世界。用户习惯像在 X 上一样快速表达观点，但会天然追问效率、增长、AI 和平台变迁。整体语气要真实、犀利、能引发跟帖，不要写成官方通稿。";
 
@@ -822,6 +824,143 @@ function loadReplyTasks() {
   } catch (_error) {
     return [];
   }
+}
+
+function loadReplyRecoveryMap() {
+  const raw = safeGetItem(MESSAGE_REPLY_RECOVERY_KEY);
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (_error) {
+    return {};
+  }
+}
+
+function persistReplyRecoveryMap(map = {}) {
+  const nextMap = map && typeof map === "object" ? map : {};
+  safeSetItem(MESSAGE_REPLY_RECOVERY_KEY, JSON.stringify(nextMap));
+}
+
+function setConversationReplyRecovery(
+  conversationId = "",
+  messages = [],
+  expectedReplyContextVersion = null
+) {
+  const resolvedConversationId = String(conversationId || "").trim();
+  if (!resolvedConversationId) {
+    return false;
+  }
+  const normalizedMessages = normalizeObjectArray(messages)
+    .map((message, index) => normalizeConversationMessage(message, index))
+    .filter((message) => message && String(message.id || "").trim() && String(message.text || "").trim());
+  if (!normalizedMessages.length) {
+    return false;
+  }
+  const parsedExpectedReplyContextVersion = Number.parseInt(
+    String(expectedReplyContextVersion ?? ""),
+    10
+  );
+  const recoveryMap = loadReplyRecoveryMap();
+  recoveryMap[resolvedConversationId] = {
+    replyContextVersion: Number.isFinite(parsedExpectedReplyContextVersion)
+      ? parsedExpectedReplyContextVersion
+      : null,
+    savedAt: Date.now(),
+    messages: normalizedMessages.map((message) => ({ ...message }))
+  };
+  persistReplyRecoveryMap(recoveryMap);
+  return true;
+}
+
+function clearConversationReplyRecovery(conversationId = "") {
+  const resolvedConversationId = String(conversationId || "").trim();
+  if (!resolvedConversationId) {
+    return false;
+  }
+  const recoveryMap = loadReplyRecoveryMap();
+  if (!Object.prototype.hasOwnProperty.call(recoveryMap, resolvedConversationId)) {
+    return false;
+  }
+  delete recoveryMap[resolvedConversationId];
+  persistReplyRecoveryMap(recoveryMap);
+  return true;
+}
+
+function applyConversationReplyRecovery(conversations = []) {
+  const recoveryMap = loadReplyRecoveryMap();
+  const recoveryEntries = Object.entries(recoveryMap);
+  if (!recoveryEntries.length) {
+    return false;
+  }
+  const now = Date.now();
+  let changed = false;
+  let recoveryMapChanged = false;
+  const conversationById = new Map(
+    normalizeObjectArray(conversations)
+      .map((conversation) => [String(conversation?.id || "").trim(), conversation])
+      .filter((entry) => entry[0])
+  );
+
+  recoveryEntries.forEach(([conversationId, entry]) => {
+    const resolvedConversationId = String(conversationId || "").trim();
+    if (!resolvedConversationId) {
+      delete recoveryMap[conversationId];
+      recoveryMapChanged = true;
+      return;
+    }
+    const savedAt = Number(entry?.savedAt) || 0;
+    if (!savedAt || now - savedAt > MESSAGE_REPLY_RECOVERY_TTL_MS) {
+      delete recoveryMap[conversationId];
+      recoveryMapChanged = true;
+      return;
+    }
+    const conversation = conversationById.get(resolvedConversationId);
+    if (!conversation) {
+      return;
+    }
+    const expectedReplyContextVersion = Number.parseInt(
+      String(entry?.replyContextVersion ?? ""),
+      10
+    );
+    if (
+      Number.isFinite(expectedReplyContextVersion) &&
+      getConversationReplyContextVersion(conversation) !== expectedReplyContextVersion
+    ) {
+      delete recoveryMap[conversationId];
+      recoveryMapChanged = true;
+      return;
+    }
+    const recoveryMessages = normalizeObjectArray(entry?.messages)
+      .map((message, index) => normalizeConversationMessage(message, index))
+      .filter((message) => message && String(message.id || "").trim() && String(message.text || "").trim());
+    if (!recoveryMessages.length) {
+      delete recoveryMap[conversationId];
+      recoveryMapChanged = true;
+      return;
+    }
+    const existingMessageIds = new Set(
+      normalizeObjectArray(conversation.messages)
+        .map((message) => String(message?.id || "").trim())
+        .filter(Boolean)
+    );
+    const missingMessages = recoveryMessages.filter(
+      (message) => !existingMessageIds.has(String(message.id || "").trim())
+    );
+    if (!missingMessages.length) {
+      return;
+    }
+    conversation.messages = [...normalizeObjectArray(conversation.messages), ...missingMessages];
+    recalculateConversationUpdatedAt(conversation);
+    changed = true;
+  });
+
+  if (recoveryMapChanged) {
+    persistReplyRecoveryMap(recoveryMap);
+  }
+  return changed;
 }
 
 function getReplyTaskPulseAt(task = null) {
@@ -7170,6 +7309,11 @@ async function appendAssistantReplyBatch(
       baseLength + index
     )
   );
+  setConversationReplyRecovery(
+    conversationId,
+    createdMessages,
+    hasExpectedReplyContextVersion ? parsedExpectedReplyContextVersion : null
+  );
   const shouldAnimateReplyReveal =
     !Boolean(requestOptions.suppressUi) &&
     state.activeTab === "chat" &&
@@ -13189,6 +13333,10 @@ function refreshStateFromStorage() {
   const currentConversations = Array.isArray(state.conversations) ? state.conversations.slice() : [];
   state.profile = loadProfile();
   state.conversations = mergePreferredLocalConversations(currentConversations, loadConversations());
+  const recoveredConversationMessages = applyConversationReplyRecovery(state.conversations);
+  if (recoveredConversationMessages) {
+    persistConversations();
+  }
   state.contacts = loadContacts(state.conversations);
   state.worldbooks = loadWorldbooks();
   state.commonPlaces = loadCommonPlaces();
