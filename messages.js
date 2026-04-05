@@ -41,6 +41,7 @@ const MAX_AUTO_SCHEDULE_DAYS = 14;
 const MAX_AWARENESS_HISTORY_ITEMS = 12;
 const MAX_AWARENESS_MONITOR_ROUNDS = 20;
 const AUTO_SCHEDULE_TIMER_INTERVAL_MS = 60 * 1000;
+const FOREGROUND_REPLY_SYNC_INTERVAL_MS = 1200;
 const REPLY_TASK_HEARTBEAT_MS = 4000;
 const REPLY_TASK_STALE_MS = 30000;
 const CONVERSATION_RENDER_BATCH_SIZE = 50;
@@ -293,6 +294,7 @@ const messagesChatAutoScheduleStatusEl = document.querySelector(
   "#messages-chat-auto-schedule-status"
 );
 let autoScheduleTimerId = 0;
+let foregroundReplySyncTimerId = 0;
 const messagesChatClearHistoryBtnEl = document.querySelector("#messages-chat-clear-history-btn");
 const messagesChatClearMemoryBtnEl = document.querySelector("#messages-chat-clear-memory-btn");
 const messagesChatSettingsStatusEl = document.querySelector("#messages-chat-settings-status");
@@ -3384,7 +3386,11 @@ function trimConversationMessagesForStorage(conversations = []) {
   });
 }
 
-function stripOldConversationImagePayloads(conversations = []) {
+function stripOldConversationImagePayloads(
+  conversations = [],
+  keepCount = CONVERSATION_IMAGE_PAYLOAD_KEEP_COUNT
+) {
+  const normalizedKeepCount = Math.max(0, Number.parseInt(String(keepCount || 0), 10) || 0);
   return cloneConversationsForStorage(conversations).map((conversation) => {
     const imageIndexes = conversation.messages.reduce((indexes, message, index) => {
       if (String(message?.imageDataUrl || "").trim()) {
@@ -3392,12 +3398,10 @@ function stripOldConversationImagePayloads(conversations = []) {
       }
       return indexes;
     }, []);
-    if (imageIndexes.length <= CONVERSATION_IMAGE_PAYLOAD_KEEP_COUNT) {
+    if (imageIndexes.length <= normalizedKeepCount) {
       return conversation;
     }
-    const keepIndexes = new Set(
-      imageIndexes.slice(-CONVERSATION_IMAGE_PAYLOAD_KEEP_COUNT)
-    );
+    const keepIndexes = new Set(imageIndexes.slice(-normalizedKeepCount));
     conversation.messages = conversation.messages.map((message, index) => {
       if (!String(message?.imageDataUrl || "").trim() || keepIndexes.has(index)) {
         return message;
@@ -3447,6 +3451,7 @@ function pruneOldestConversationBatch(conversations = []) {
 function persistConversations() {
   let nextConversations = trimConversationMessagesForStorage(state.conversations);
   let payload = JSON.stringify(nextConversations);
+  let attemptedAggressiveImageStrip = false;
 
   if (payload.length > CONVERSATION_STORAGE_TARGET_CHARS) {
     nextConversations = stripOldConversationImagePayloads(nextConversations);
@@ -3461,12 +3466,31 @@ function persistConversations() {
     payload = JSON.stringify(nextConversations);
   }
 
-  while (!safeSetItem(MESSAGE_THREADS_KEY, payload)) {
+  let persisted = safeSetItem(MESSAGE_THREADS_KEY, payload);
+  while (!persisted) {
+    if (!attemptedAggressiveImageStrip) {
+      const strippedConversations = stripOldConversationImagePayloads(nextConversations, 0);
+      const strippedPayload = JSON.stringify(strippedConversations);
+      attemptedAggressiveImageStrip = true;
+      if (strippedPayload !== payload) {
+        nextConversations = strippedConversations;
+        payload = strippedPayload;
+        persisted = safeSetItem(MESSAGE_THREADS_KEY, payload);
+        if (persisted) {
+          break;
+        }
+      }
+    }
     const changed = pruneOldestConversationBatch(nextConversations);
     if (!changed) {
       break;
     }
     payload = JSON.stringify(nextConversations);
+    persisted = safeSetItem(MESSAGE_THREADS_KEY, payload);
+  }
+
+  if (!persisted) {
+    console.warn("[Pulse Messages] Conversation storage write failed after fallback pruning.");
   }
 
   state.conversations = nextConversations
@@ -3524,20 +3548,36 @@ function shouldPreferLocalConversationState(localConversation = null, loadedConv
   }
   const localPendingIds = getPendingUserMessageIdSet(localConversation);
   const loadedPendingIds = getPendingUserMessageIdSet(loadedConversation);
+  const localReplyContextVersion = getConversationReplyContextVersion(localConversation);
+  const loadedReplyContextVersion = getConversationReplyContextVersion(loadedConversation);
+  const localUpdatedAt = Number(localConversation.updatedAt) || 0;
+  const loadedUpdatedAt = Number(loadedConversation.updatedAt) || 0;
+  const localMessageCount = Array.isArray(localConversation.messages) ? localConversation.messages.length : 0;
+  const loadedMessageCount = Array.isArray(loadedConversation.messages) ? loadedConversation.messages.length : 0;
+
+  const loadedLooksLikeNewerReplyState =
+    loadedReplyContextVersion >= localReplyContextVersion &&
+    loadedUpdatedAt > localUpdatedAt &&
+    (
+      loadedMessageCount > localMessageCount ||
+      (localPendingIds.size > 0 && loadedPendingIds.size === 0 && loadedMessageCount >= localMessageCount)
+    );
+  if (loadedLooksLikeNewerReplyState) {
+    return false;
+  }
+
+  if (loadedReplyContextVersion > localReplyContextVersion) {
+    return false;
+  }
   if ([...localPendingIds].some((messageId) => !loadedPendingIds.has(messageId))) {
     return true;
   }
-  if (
-    getConversationReplyContextVersion(localConversation) >
-    getConversationReplyContextVersion(loadedConversation)
-  ) {
+  if (localReplyContextVersion > loadedReplyContextVersion) {
     return true;
   }
-  const localUpdatedAt = Number(localConversation.updatedAt) || 0;
-  const loadedUpdatedAt = Number(loadedConversation.updatedAt) || 0;
   if (
     localUpdatedAt > loadedUpdatedAt &&
-    (localConversation.messages?.length || 0) >= (loadedConversation.messages?.length || 0)
+    localMessageCount >= loadedMessageCount
   ) {
     return true;
   }
@@ -12789,6 +12829,65 @@ function refreshStateFromStorage() {
   persistContacts();
 }
 
+function shouldRunForegroundReplySync() {
+  if (isBackgroundMessagesWorker() || document.hidden) {
+    return false;
+  }
+  const activeConversationId = String(state.activeConversationId || "").trim();
+  if (state.activeTab !== "chat" || !activeConversationId) {
+    return false;
+  }
+  return Boolean(
+    getReplyTaskForConversation(activeConversationId, ["pending", "processing", "error"]) ||
+      state.requestingConversationId === activeConversationId ||
+      state.sendingConversationId === activeConversationId
+  );
+}
+
+function syncForegroundConversationFromStorage() {
+  if (!shouldRunForegroundReplySync()) {
+    return false;
+  }
+  const activeConversationId = String(state.activeConversationId || "").trim();
+  const previousConversation = getConversationById(activeConversationId);
+  const previousMessageCount = Array.isArray(previousConversation?.messages)
+    ? previousConversation.messages.length
+    : 0;
+  const scrollSnapshot = captureConversationScrollSnapshot();
+  refreshStateFromStorage();
+  const nextConversation = getConversationById(activeConversationId);
+  const nextMessageCount = Array.isArray(nextConversation?.messages) ? nextConversation.messages.length : 0;
+  queueConversationRenderOptions({
+    scrollBehavior: nextMessageCount > previousMessageCount ? "bottom" : "preserve",
+    scrollSnapshot
+  });
+  renderMessagesPage();
+  return true;
+}
+
+function initForegroundReplySyncClock() {
+  if (foregroundReplySyncTimerId) {
+    window.clearInterval(foregroundReplySyncTimerId);
+  }
+  if (isBackgroundMessagesWorker()) {
+    return;
+  }
+  foregroundReplySyncTimerId = window.setInterval(() => {
+    if (
+      state.profileEditorOpen ||
+      state.contactEditorOpen ||
+      state.chatSettingsOpen ||
+      state.locationModalOpen ||
+      state.photoModalOpen ||
+      state.innerThoughtModalOpen ||
+      state.regenerateModalOpen
+    ) {
+      return;
+    }
+    syncForegroundConversationFromStorage();
+  }, FOREGROUND_REPLY_SYNC_INTERVAL_MS);
+}
+
 function attachEvents() {
   if (messagesNavBtnEl) {
     messagesNavBtnEl.addEventListener("click", () => {
@@ -14788,6 +14887,7 @@ function init() {
       persistPresenceState();
       persistConversations();
       initAutoScheduleClock();
+      initForegroundReplySyncClock();
       renderMessagesPage();
       if (launchView === "memory") {
         setMemoryViewerOpen(true);
