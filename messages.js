@@ -7089,7 +7089,7 @@ async function appendAssistantReplyBatch(
 
   const appendedMessages = [];
   for (let index = 0; index < createdMessages.length; index += 1) {
-    const nextConversation = getConversationById(conversationId);
+    let nextConversation = getConversationById(conversationId);
     if (!nextConversation) {
       break;
     }
@@ -7100,6 +7100,8 @@ async function appendAssistantReplyBatch(
       break;
     }
     if (index > 0) {
+      const scrollSnapshot = captureConversationScrollSnapshot();
+      const shouldStickToBottom = isConversationHistoryNearBottom();
       if (
         document.hidden ||
         state.activeTab !== "chat" ||
@@ -7116,15 +7118,31 @@ async function appendAssistantReplyBatch(
         break;
       }
       await sleep(ASSISTANT_REPLY_REVEAL_INTERVAL_MS);
+      nextConversation = getConversationById(conversationId);
+      if (!nextConversation) {
+        break;
+      }
+      if (
+        hasExpectedReplyContextVersion &&
+        getConversationReplyContextVersion(nextConversation) !== parsedExpectedReplyContextVersion
+      ) {
+        break;
+      }
+      queueConversationRenderOptions({
+        scrollBehavior: shouldStickToBottom ? "bottom" : "preserve",
+        scrollSnapshot: shouldStickToBottom ? null : scrollSnapshot
+      });
     }
     nextConversation.messages = [...nextConversation.messages, createdMessages[index]];
     appendedMessages.push(createdMessages[index]);
     recalculateConversationUpdatedAt(nextConversation);
     persistConversations();
     if (state.activeTab === "chat") {
-      queueConversationRenderOptions({
-        scrollBehavior: "bottom"
-      });
+      if (index === 0) {
+        queueConversationRenderOptions({
+          scrollBehavior: "bottom"
+        });
+      }
       renderMessagesPage();
     }
   }
@@ -10711,6 +10729,15 @@ function captureConversationScrollSnapshot() {
     scrollHeight: historyEl.scrollHeight,
     clientHeight: historyEl.clientHeight
   };
+}
+
+function isConversationHistoryNearBottom(threshold = 36) {
+  const historyEl = messagesContentEl?.querySelector(".messages-conversation__history");
+  if (!(historyEl instanceof HTMLElement)) {
+    return true;
+  }
+  const remaining = Math.max(0, historyEl.scrollHeight - historyEl.clientHeight - historyEl.scrollTop);
+  return remaining <= Math.max(0, Number(threshold) || 0);
 }
 
 function queueConversationRenderOptions(options = {}) {
