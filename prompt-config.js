@@ -1,0 +1,859 @@
+(function initPulsePromptConfig() {
+  if (window.PulsePromptConfig) {
+    return;
+  }
+
+  const SECTION_KEYS = ["context_library", "persona_alignment", "output_standard"];
+  const SECTION_KEY_ALIASES = {
+    context_library: "context_library",
+    contextLibrary: "context_library",
+    persona_alignment: "persona_alignment",
+    personaAlignment: "persona_alignment",
+    output_standard: "output_standard",
+    outputStandard: "output_standard"
+  };
+  const SECTION_LABELS = {
+    context_library: "context_library",
+    persona_alignment: "persona_alignment",
+    output_standard: "output_standard"
+  };
+  const SECTION_FALLBACKS = {
+    context_library: "暂无额外背景信息。",
+    persona_alignment: "按当前已知身份与语境自然输出。",
+    output_standard: "只输出符合要求的最终结果。"
+  };
+
+  function trimText(value) {
+    return String(value || "").trim();
+  }
+
+  function uniqueStrings(values = []) {
+    const unique = new Set();
+    return (Array.isArray(values) ? values : [values])
+      .map((item) => trimText(item))
+      .filter((item) => {
+        if (!item || unique.has(item)) {
+          return false;
+        }
+        unique.add(item);
+        return true;
+      });
+  }
+
+  function normalizeSectionKey(key = "") {
+    return SECTION_KEY_ALIASES[String(key || "").trim()] || "";
+  }
+
+  function clonePlain(value) {
+    if (Array.isArray(value)) {
+      return value.map((item) => clonePlain(item));
+    }
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value).map(([key, item]) => [key, clonePlain(item)])
+      );
+    }
+    return value;
+  }
+
+  function interpolateTemplate(template = "", variables = {}) {
+    return String(template || "").replace(/\{\{([a-zA-Z0-9_]+)\}\}/g, (_match, key) => {
+      return Object.prototype.hasOwnProperty.call(variables || {}, key)
+        ? String(variables[key] ?? "")
+        : "";
+    });
+  }
+
+  function normalizeManualTimeSettings(source = {}) {
+    const resolved = source && typeof source === "object" ? source : {};
+    const value = trimText(resolved.value || resolved.timestamp || "");
+    const parsed = value ? new Date(value) : null;
+    const hasValidValue = Boolean(parsed && Number.isFinite(parsed.getTime()));
+    return {
+      enabled: Boolean(resolved.enabled && hasValidValue),
+      value: hasValidValue ? value : ""
+    };
+  }
+
+  function formatDateTimeInputValue(date = new Date()) {
+    const resolved = date instanceof Date ? date : new Date(date || Date.now());
+    if (!Number.isFinite(resolved.getTime())) {
+      return "";
+    }
+    const year = resolved.getFullYear();
+    const month = String(resolved.getMonth() + 1).padStart(2, "0");
+    const day = String(resolved.getDate()).padStart(2, "0");
+    const hour = String(resolved.getHours()).padStart(2, "0");
+    const minute = String(resolved.getMinutes()).padStart(2, "0");
+    return `${year}-${month}-${day}T${hour}:${minute}`;
+  }
+
+  function resolvePromptNow(settings = {}, fallbackNow = new Date()) {
+    const manualTimeSettings = normalizeManualTimeSettings(settings?.manualTimeSettings);
+    if (manualTimeSettings.enabled && manualTimeSettings.value) {
+      const manualNow = new Date(manualTimeSettings.value);
+      if (Number.isFinite(manualNow.getTime())) {
+        return manualNow;
+      }
+    }
+    if (fallbackNow instanceof Date && Number.isFinite(fallbackNow.getTime())) {
+      return new Date(fallbackNow.getTime());
+    }
+    const nextDate = new Date(fallbackNow || Date.now());
+    return Number.isFinite(nextDate.getTime()) ? nextDate : new Date();
+  }
+
+  function formatPromptTimeLabel(settings = {}, locale = "zh-CN") {
+    const manualTimeSettings = normalizeManualTimeSettings(settings?.manualTimeSettings);
+    if (!manualTimeSettings.enabled || !manualTimeSettings.value) {
+      return "跟随本地时间";
+    }
+    const resolved = resolvePromptNow(settings);
+    return new Intl.DateTimeFormat(locale, {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false
+    })
+      .format(resolved)
+      .replace(/\//g, "-");
+  }
+
+  function createTemplateItem(id, label, defaultText) {
+    return {
+      id,
+      kind: "template",
+      label,
+      defaultText: String(defaultText || "")
+    };
+  }
+
+  function createDynamicItem(id, label, runtimeHint = "") {
+    return {
+      id,
+      kind: "dynamic",
+      label,
+      runtimeHint: trimText(runtimeHint)
+    };
+  }
+
+  const PROMPT_RULE_CATALOG = {
+    discussion_generate_posts: {
+      label: "论坛发帖",
+      group: "论坛",
+      description: "生成首页讨论流",
+      sections: {
+        context_library: [
+          createTemplateItem("worldview_intro", "世界观引导", "所有内容都应遵循以下世界观："),
+          createDynamicItem("worldview_content", "世界观内容", "读取论坛世界观文本"),
+          createDynamicItem("forum_setting", "讨论区一手设定", "读取当前页签设定"),
+          createDynamicItem("time_awareness", "时间感知", "读取当前生效时间"),
+          createDynamicItem("worldbook_reference", "世界书辅助背景", "读取挂载世界书"),
+          createDynamicItem("dominant_hot_topic", "主导热点说明", "读取页签热点"),
+          createDynamicItem("supplemental_topics", "即时讨论语境", "读取 Bubble / 转发挂载"),
+          createDynamicItem("repost_hint", "转发原帖提示", "读取最近论坛动态挂载"),
+          createDynamicItem("history_avoidance", "历史去重提示", "读取最近缓存帖子")
+        ],
+        persona_alignment: [
+          createTemplateItem(
+            "assistant_role",
+            "助手定位",
+            "你是一个负责生成 X 风格中文讨论流的内容助手。"
+          ),
+          createTemplateItem(
+            "feed_target",
+            "目标讨论区",
+            "当前目标论坛讨论区是“{{feedLabel}}”。"
+          )
+        ],
+        output_standard: [
+          createTemplateItem(
+            "json_count",
+            "JSON 数量要求",
+            "请严格输出 JSON 数组，并且包含 {{count}} 个对象，不要输出额外解释。"
+          ),
+          createTemplateItem(
+            "required_fields",
+            "对象字段",
+            "每个对象必须包含以下字段：displayName, handle, text, tags, replies, reposts, likes, views。"
+          ),
+          createTemplateItem(
+            "repost_source_optional",
+            "转发原帖字段",
+            "如需表现转发/引用帖子，可额外输出可选字段 repostSource；其中应包含 displayName, handle, text, time, tags，未使用时可省略。"
+          ),
+          createTemplateItem(
+            "json_valid",
+            "合法 JSON",
+            "输出必须是可以直接被 JSON.parse 解析的合法 JSON，所有字符串都必须使用双引号包裹。"
+          ),
+          createTemplateItem(
+            "text_length",
+            "正文长度",
+            "text 需要像 X 首页上的真实讨论帖，长度控制在 50 到 300 字之间，语气自然、有观点、有轻微冲突感。"
+          ),
+          createTemplateItem(
+            "region_style",
+            "地区风格",
+            "不同帖子需要分别模拟来自中国、日本、韩国、美国社区的用户发言风格。"
+          ),
+          createTemplateItem(
+            "single_language",
+            "单语要求",
+            "每一条帖子必须全文保持单一语言，只能四选一：中文、日文、韩文、英文。不要在同一条帖子里混用多种语言，也不要出现中文正文里夹几句英文或日文的情况。"
+          ),
+          createTemplateItem(
+            "multiline_style",
+            "排版要求",
+            "text 要避免整段大段文字，尽量拆成短句；每条至少 2 段，可使用换行或空一行让版式更像真人发帖。"
+          ),
+          createTemplateItem(
+            "tags_requirement",
+            "标签数量",
+            "tags 必须是数组，至少 2 个、最多 5 个标签；每个标签都必须以 # 开头，例如 #榜单、#行业洞察。"
+          ),
+          createTemplateItem(
+            "tags_quality",
+            "标签质量",
+            "这些标签必须根据该条内容本身提炼，不能空泛重复；text 字段里不要重复输出标签行，标签只放在 tags 数组中。"
+          ),
+          createTemplateItem(
+            "avoid_copy",
+            "避免照抄",
+            "严禁直接复制、引用或轻微改写世界观文本或论坛设定里的原句。你需要先理解这些设定，再把它们转化成更口语化、更具体的讨论表达。"
+          ),
+          createTemplateItem(
+            "uniqueness",
+            "去重要求",
+            "请保证 {{count}} 条内容不重复，角度不同；即使围绕同一大主题，也要主动拆出不同争议点、不同立场、不同细节切口。"
+          )
+        ]
+      }
+    },
+    discussion_generate_replies: {
+      label: "论坛回复",
+      group: "论坛",
+      description: "生成主贴 / 楼中楼回复",
+      sections: {
+        context_library: [
+          createTemplateItem("worldview_intro", "世界观引导", "整体世界观："),
+          createDynamicItem("worldview_content", "世界观内容", "读取论坛世界观文本"),
+          createDynamicItem("forum_setting", "讨论区一手设定", "读取当前页签设定"),
+          createDynamicItem("time_awareness", "时间感知", "读取当前生效时间"),
+          createDynamicItem("worldbook_reference", "世界书辅助背景", "读取挂载世界书"),
+          createDynamicItem("hot_topic", "主导热点", "读取页签热点"),
+          createDynamicItem("supplemental_topics", "即时讨论语境", "读取 Bubble / 转发挂载"),
+          createDynamicItem("root_image_hint", "主楼图片说明", "根据主楼是否附图生成"),
+          createDynamicItem("repost_source", "被转发原帖", "读取主楼引用原帖"),
+          createTemplateItem("root_post_intro", "主楼前缀", "主楼内容："),
+          createDynamicItem("root_post_text", "主楼正文", "读取主楼正文"),
+          createDynamicItem("reply_target_intro", "回复目标前缀", "根据是否楼中楼生成"),
+          createDynamicItem("reply_target_text", "回复目标正文", "读取当前回复目标")
+        ],
+        persona_alignment: [
+          createTemplateItem(
+            "prompt_title",
+            "回复任务",
+            "你正在生成 X 风格中文讨论串中的{{promptTitle}}。"
+          ),
+          createTemplateItem(
+            "feed_target",
+            "所属讨论区",
+            "当前所属论坛讨论区是“{{feedLabel}}”。"
+          ),
+          createTemplateItem("priority_intro", "优先级前缀", "回复生成优先级："),
+          createTemplateItem(
+            "priority_1",
+            "优先级 1",
+            "1. 首先直接回应当前帖子或上一层回复的具体内容，抓住文本里的观点、情绪、判断、细节或矛盾点。"
+          ),
+          createTemplateItem(
+            "priority_2",
+            "优先级 2",
+            "2. 识别当前发帖用户的人设，让回复看起来像是在对这样一个具体的人说话，而不是对匿名文本发言。"
+          ),
+          createTemplateItem(
+            "priority_3",
+            "优先级 3",
+            "3. 再结合整体世界观与论坛讨论区设定补充背景判断，但这些背景只能辅助，不能盖过帖子内容本身。"
+          ),
+          createTemplateItem("author_persona_intro", "发帖用户前缀", "当前发帖用户人设："),
+          createDynamicItem("author_persona_text", "发帖用户人设", "读取当前发帖用户人设")
+        ],
+        output_standard: [
+          createTemplateItem("json_array", "JSON 数组", "请严格输出 JSON 数组，不要输出额外解释。"),
+          createTemplateItem("reply_count", "回复数量", "请生成 {{count}} 条回复，每条都必须是不同用户的口吻。"),
+          createTemplateItem("required_fields", "对象字段", "每个对象必须包含以下字段：displayName, handle, text, likes, replies。"),
+          createTemplateItem("reply_length", "回复长度", "回复语气要像真实网友跟帖，长度控制在 18 到 80 字之间，可以有赞同、反对、补充和追问。"),
+          createTemplateItem("region_style", "地区风格", "不同回复可以分别模拟来自中国、日本、韩国、美国社区的用户发言风格。"),
+          createTemplateItem("single_language", "单语要求", "每一条回复必须全文保持单一语言，只能四选一：中文、日文、韩文、英文。不要在同一条回复里混用多种语言。"),
+          createTemplateItem("readability", "可读性", "避免整段灌水，优先短句，必要时用换行提升可读性。"),
+          createTemplateItem("thread_cohesion", "楼层连贯", "请避免重复句式，并保持楼中讨论的连贯性。")
+        ]
+      }
+    },
+    discussion_translate_text: {
+      label: "论坛文本翻译",
+      group: "论坛",
+      description: "翻译自由文本到中文",
+      sections: {
+        context_library: [
+          createDynamicItem("source_text", "原文内容", "读取待翻译文本")
+        ],
+        persona_alignment: [
+          createTemplateItem(
+            "task_role",
+            "翻译任务",
+            "任务：把提供的内容翻译成中文，并保留原意、语气和换行。"
+          )
+        ],
+        output_standard: [
+          createTemplateItem("only_translation", "仅输出翻译", "只输出翻译结果，不要添加解释。")
+        ]
+      }
+    },
+    discussion_translate_post: {
+      label: "论坛帖子翻译",
+      group: "论坛",
+      description: "翻译帖子正文与标签",
+      sections: {
+        context_library: [
+          createTemplateItem("post_text_intro", "正文前缀", "原文正文："),
+          createDynamicItem("post_text", "原文正文", "读取帖子正文"),
+          createTemplateItem("post_tags_intro", "标签前缀", "原文标签："),
+          createDynamicItem("post_tags", "原文标签", "读取帖子标签")
+        ],
+        persona_alignment: [
+          createTemplateItem(
+            "task_role",
+            "翻译任务",
+            "任务：把帖子翻译成中文，并保留原意、语气和换行。"
+          )
+        ],
+        output_standard: [
+          createTemplateItem("json_array", "JSON 数组", "请严格输出 JSON 数组，并且只包含 1 个对象。"),
+          createTemplateItem("required_fields", "对象字段", "对象必须包含字段：text, tags。"),
+          createTemplateItem("field_meaning", "字段说明", "text 是翻译后的正文，tags 是翻译后的中文标签数组；每个标签都必须以 # 开头。")
+        ]
+      }
+    },
+    chat_auto_schedule_generate: {
+      label: "Chat 自动排程",
+      group: "Chat",
+      description: "为角色补未来空白小时行程",
+      sections: {
+        context_library: [
+          createTemplateItem(
+            "task_background",
+            "任务背景",
+            "任务背景：为 {{contactName}} 设计未来 {{dayCount}} 天的生活行程。"
+          ),
+          createDynamicItem("worldbook_context", "世界书背景", "读取挂载世界书与额外限制")
+        ],
+        persona_alignment: [
+          createTemplateItem("not_chat", "非聊天任务", "这不是聊天回复，而是纯粹的日程规划任务。"),
+          createTemplateItem(
+            "contact_persona",
+            "角色人设",
+            "角色稳定人设：{{contactPersona}}。"
+          ),
+          createTemplateItem(
+            "user_exclusion",
+            "排除用户视角",
+            "只根据角色人设和世界书背景去安排，不要引用用户人设，不要写用户相关内容。"
+          )
+        ],
+        output_standard: [
+          createTemplateItem("reality", "真实感", "要尽量真实，有正常的起居、吃饭、工作/学习/休息/娱乐节奏。"),
+          createTemplateItem("weekend_default", "周末倾向", "默认把周一到周五视为工作日，把周六周日视为休息日；周末更偏向补觉、放松、轻社交、娱乐、家务或恢复性安排。"),
+          createDynamicItem("extra_instruction", "额外要求", "读取本次补充约束"),
+          createTemplateItem("avoid_overlap", "避免冲突", "不要覆盖已占用时段，只能补空白。"),
+          createTemplateItem("hour_only", "小时制", "所有结果都必须是按小时的日程，使用同一天内的 startTime / endTime。"),
+          createTemplateItem("no_cross_day", "禁止跨天", "不要输出跨天时段；如果是睡眠，可安排为当日 00:00-07:00 这类同日块。"),
+          createTemplateItem("sparse_day", "少空档策略", "如果某一天空白很少，只补最合理的几个空档，不要硬塞满。"),
+          createTemplateItem(
+            "json_format",
+            "JSON 格式",
+            "只输出 JSON 数组，格式为：[{\"date\":\"YYYY-MM-DD\",\"title\":\"安排名称\",\"startTime\":\"HH:00\",\"endTime\":\"HH:00\"}]。"
+          )
+        ]
+      }
+    },
+    chat_conversation: {
+      label: "Chat 对话回复",
+      group: "Chat",
+      description: "1v1 聊天回复主 prompt",
+      sections: {
+        context_library: [
+          createDynamicItem("worldbook_context", "世界书背景", "读取挂载世界书"),
+          createDynamicItem("important_context", "重要上下文", "读取时间 / 日程 / 场景 / 热点 / 察觉")
+        ],
+        persona_alignment: [
+          createTemplateItem("contact_name", "角色姓名", "你叫 {{contactName}}。"),
+          createDynamicItem("scene_mode", "当前场景", "读取线上 / 线下场景"),
+          createTemplateItem("role_guard", "角色代入", "先像这个人本人一样去理解这段关系、语气和情绪，不要把自己当成解释设定或执行任务的助手。"),
+          createTemplateItem("contact_persona", "角色人设", "你的稳定性格、表达习惯和关系底色：{{contactPersona}}。"),
+          createDynamicItem("core_memory", "核心记忆", "读取核心记忆"),
+          createTemplateItem("user_name", "用户昵称", "正在和你聊天的用户昵称：{{userName}}。"),
+          createTemplateItem("user_persona", "用户画像", "你对这个用户已知的整体印象：{{userPersona}}。"),
+          createDynamicItem("special_user_persona", "特别用户认知", "读取角色对用户的特别认知"),
+          createDynamicItem("important_priority", "优先关注信息", "读取当前比背景更重要的信息"),
+          createDynamicItem("regenerate_hint", "重回要求", "读取重回额外要求")
+        ],
+        output_standard: [
+          createTemplateItem("human_chat", "真人聊天感", "你的回复必须像即时聊天软件中的真人对话，自然、轻松、有情绪，而不是助手或任务执行结果。"),
+          createTemplateItem("receive_emotion", "先接情绪", "回复时优先接住当前对话中的情绪、语气和潜台词，再决定是否回应具体内容，不要只做信息回答。"),
+          createTemplateItem("colloquial", "口语化", "表达需要口语化，可以有停顿、转折和即时反应，可以使用“……” “！”以及自然语气词，允许有一点碎碎念或临场感。"),
+          createTemplateItem("line_limit", "行数限制", "每一行代表一条单独发送的消息，总行数不超过{{replySentenceLimit}}行，长句可以拆成多行表达。"),
+          createTemplateItem("line_break_rule", "分行规则", "一句话遇到逗号或句号时，请分行输出；并且这一行结尾原本用于收尾的逗号、句号要省略，不得省略感叹号、问号、省略号、波浪号等表达情绪的标点。"),
+          createTemplateItem("no_explainer", "禁止解释设定", "不要使用列表、编号或说明性结构，不要添加角色标签、前缀或解释性文字。"),
+          createTemplateItem("no_meta", "禁止元话术", "不要出现“根据设定”“从背景来看”“你的人设是”等表达，不要解释设定、总结对话或进行分析，不要刻意展示你记得很多背景信息。"),
+          createTemplateItem("context_library_rule", "背景触发规则", "context_library 只有在聊天语境中自然联想到时才可以使用，如果没有触发，就不要主动提及。"),
+          createTemplateItem("conflict_priority", "冲突优先级", "当信息存在冲突时，优先依据当前对话内容和当下语境，其次是性格设定，最后才是背景信息。"),
+          createTemplateItem("goal", "最终目标", "最终目标是让对话看起来像真实的人在聊天，而不是在执行设定或扮演角色。"),
+          createDynamicItem("presence_update_rule", "状态更新规则", "按当前会话设置决定是否加入 presence_update 约束"),
+          createDynamicItem("quote_rule", "引用回复规则", "按线上场景决定是否加入 quote_reply 约束"),
+          createTemplateItem("location_message_rule", "定位消息规则", "如果聊天记录里出现“[定位消息]”，那代表对方真实发送了一条位置卡片，而不是普通文本。"),
+          createTemplateItem("image_message_rule", "图片消息规则", "如果某条用户消息里出现“[图片消息]”，你会直接看到那条消息附带的图片内容；如有需要可以自然参考图片，但不要机械描述图片本身。"),
+          createTemplateItem("location_json_rule", "定位 JSON 规则", "如果需要发送位置，必须单独一行输出如下格式：[{\"type\":\"location\",\"locationName\":\"位置名\",\"coordinates\":\"__PG_COORD_01__\"}]"),
+          createTemplateItem("location_json_plain", "定位 JSON 输出要求", "定位 JSON 不要放进代码块，不要添加解释、前缀、序号或额外说明；它本身就算一行回复。"),
+          createTemplateItem("emotion_punctuation", "情绪标点保留", "不要去掉感叹号、问号、波浪号、省略号等表达情绪的标点。"),
+          createDynamicItem("scene_mode_rule", "线上线下写法", "按当前场景决定动作描写约束")
+        ]
+      }
+    },
+    chat_journal: {
+      label: "Chat 今日日记",
+      group: "Chat",
+      description: "角色日记生成",
+      sections: {
+        context_library: [
+          createTemplateItem("date_text", "日期", "日期：{{dateLabel}}。"),
+          createDynamicItem("reference_context", "补充背景", "读取论坛 / 世界书参考"),
+          createDynamicItem("chat_transcript", "今日日内聊天记录", "读取当天聊天记录")
+        ],
+        persona_alignment: [
+          createTemplateItem("contact_name", "联系人姓名", "你是即时聊天联系人：{{contactName}}。"),
+          createTemplateItem("first_person", "第一人称要求", "现在不是聊天回复，而是以这个角色的第一人称口吻写一篇今日日记。"),
+          createTemplateItem("contact_persona", "角色人设", "角色人设：{{contactPersona}}。"),
+          createTemplateItem("user_name", "用户昵称", "和你聊天的用户昵称：{{userName}}。"),
+          createTemplateItem("user_persona", "用户画像", "用户的人设：{{userPersona}}。")
+        ],
+        output_standard: [
+          createTemplateItem("plain_text", "仅正文", "1. 只输出日记正文，不要标题、署名、编号、项目符号、解释或 markdown。"),
+          createTemplateItem("date_weather", "日期天气", "2. 正文里要自然写出今天是几月几日、星期几；天气只能从今天的聊天记录里提取，若聊天里没有提到天气，就自然写成没特别留意到天气，不要硬编温度、天气现象或城市。"),
+          createTemplateItem("priority", "优先级", "3. 今日聊天记录是核心，挂载的世界书和论坛背景只做辅助参考。"),
+          createTemplateItem("length", "字数限制", "4. 控制在 {{journalLength}} 字以内。"),
+          createTemplateItem("tone", "语气", "5. 语气要像当天稍晚写下来的私人记录，细节真实，不要写成总结报告。"),
+          createTemplateItem("inner_thought", "心理活动", "6. 适当增加一些心理活动、犹豫、回味和没说出口的小念头。")
+        ]
+      }
+    },
+    chat_memory_summary: {
+      label: "Chat 记忆总结",
+      group: "Chat",
+      description: "从聊天提取长期记忆",
+      sections: {
+        context_library: [
+          createTemplateItem("task_background", "任务背景", "任务：为联系人 {{contactName}} 整理一对一聊天里的长期记忆。")
+        ],
+        persona_alignment: [
+          createTemplateItem("contact_persona", "联系人性格", "这个联系人的稳定性格与表达底色：{{contactPersona}}。"),
+          createTemplateItem("user_name", "聊天对象昵称", "聊天对象昵称：{{userName}}。"),
+          createTemplateItem("user_persona", "用户画像", "用户整体画像：{{userPersona}}。"),
+          createTemplateItem("goal", "提取目标", "你的目标不是写摘要，而是从新对话中提取未来聊天真正值得记住的内容。"),
+          createTemplateItem("core_standard", "核心记忆标准", "核心记忆的标准非常严格：只有会改变联系人对用户的态度、距离感、信任、期待、介意点，或改变联系人看待某个话题/事物的心境与立场，才算核心记忆。"),
+          createTemplateItem("scene_standard", "情景记忆标准", "除此之外，其他能在相关话题里帮助回想上下文的内容，都归为情景记忆。"),
+          createTemplateItem("avoid_noise", "避免普通闲聊", "不要把普通闲聊、礼貌回应、表层信息重复写成核心记忆。")
+        ],
+        output_standard: [
+          createTemplateItem("json_format", "JSON 格式", "输出必须是 JSON，对象格式固定为：{\"memories\":[{\"type\":\"core|scene\",\"content\":\"...\",\"importance\":1-100}]}"),
+          createTemplateItem("importance_rule", "重要度", "importance 使用整数。1 越低越不重要，100 越重要。"),
+          createTemplateItem("max_count", "数量限制", "最多输出 6 条；如果没有值得保留的内容，就输出 {\"memories\":[]}。"),
+          createTemplateItem("plain_json", "纯 JSON", "不要输出 markdown，不要代码块，不要解释，不要额外字段。")
+        ]
+      }
+    },
+    bubble_translate_text: {
+      label: "Bubble 文本翻译",
+      group: "Bubble",
+      description: "翻译 Bubble 文本到中文",
+      sections: {
+        context_library: [
+          createDynamicItem("source_text", "原文内容", "读取待翻译文本")
+        ],
+        persona_alignment: [
+          createTemplateItem(
+            "task_role",
+            "翻译任务",
+            "任务：把提供的内容翻译成中文，并保留原意、语气和换行。"
+          )
+        ],
+        output_standard: [
+          createTemplateItem("only_translation", "仅输出翻译", "只输出翻译结果，不要添加解释。")
+        ]
+      }
+    },
+    bubble_fan_reply: {
+      label: "Bubble 粉丝回复",
+      group: "Bubble",
+      description: "为一轮 Bubble 生成粉丝反应",
+      sections: {
+        context_library: [
+          createDynamicItem("worldbook_context", "世界书背景", "读取挂载世界书"),
+          createDynamicItem("hot_topics_context", "共同关注话题", "读取热点挂载"),
+          createDynamicItem("message_intro", "Bubble 消息前缀", "按消息条数生成"),
+          createDynamicItem("message_list", "Bubble 消息列表", "读取本轮 Bubble 消息"),
+          createDynamicItem("message_merge_rule", "整轮消息理解规则", "读取整轮综合回应说明")
+        ],
+        persona_alignment: [
+          createTemplateItem("task_role", "任务定位", "你正在模拟 Bubble 中创作者的粉丝回复列表。"),
+          createTemplateItem("creator_name", "创作者昵称", "创作者昵称：{{creatorName}}"),
+          createTemplateItem("creator_persona", "创作者人设", "创作者人设：{{creatorPersona}}")
+        ],
+        output_standard: [
+          createTemplateItem("json_array", "JSON 数组", "请严格输出 JSON 数组，不要输出额外解释。"),
+          createTemplateItem("count_fields", "对象字段", "请输出 {{count}} 个对象，每个对象只包含字段：language, text。"),
+          createTemplateItem("language_choices", "语言范围", "language 只能是 zh、ja、en、ko 四选一。"),
+          createTemplateItem("language_balance", "语言覆盖", "四种语言都必须出现，尽量平均分配。"),
+          createTemplateItem("fan_reaction", "粉丝视角", "text 是粉丝视角对创作者刚发消息的即时反应。"),
+          createTemplateItem("max_length", "长度限制", "每条 text 不得超过 50 个字符。"),
+          createTemplateItem("tone", "语气", "语气要像真实粉丝：可以可爱、惊讶、夸赞、调侃、尖叫，但都要围绕原消息做反应。"),
+          createTemplateItem("plain_output", "纯输出", "不要加编号、不要加标签、不要解释、不要输出用户名字段。")
+        ]
+      }
+    },
+    schedule_invite: {
+      label: "日程邀请回复",
+      group: "日程",
+      description: "角色对日程邀请做接受 / 拒绝判断",
+      sections: {
+        context_library: [
+          createDynamicItem("conflict_context", "行程冲突", "读取同时间段已有行程"),
+          createDynamicItem("companion_names", "同行人", "读取其他同行角色")
+        ],
+        persona_alignment: [
+          createTemplateItem("contact_name", "角色姓名", "你叫 {{contactName}}。"),
+          createTemplateItem("scene_mode", "聊天场景", "现在是你和 {{userName}} 在即时聊天软件里的一对一私聊。"),
+          createTemplateItem("task_role", "任务定位", "你本人正在收到对方发来的一个日程邀请，需要像真实聊天一样做决定并回复。"),
+          createTemplateItem("contact_persona", "角色人设", "你的稳定性格、表达习惯和关系底色：{{contactPersona}}。"),
+          createTemplateItem("user_name", "用户昵称", "正在和你聊天的用户昵称：{{userName}}。"),
+          createTemplateItem("user_persona", "用户画像", "用户整体画像：{{userPersona}}。"),
+          createDynamicItem("special_user_persona", "特别用户认知", "读取角色对用户的特别认知")
+        ],
+        output_standard: [
+          createTemplateItem("decision_first", "先判断再回复", "你需要先判断是否接受这个邀请，再给出一条自然聊天式回复。"),
+          createTemplateItem("accept_reject_tone", "接受 / 拒绝语气", "接受时要显得像真的愿意赴约；拒绝时要像真实生活中的婉拒，可以简短带一点理由，但不要冷冰冰。"),
+          createTemplateItem("decision_basis", "判断依据", "优先考虑你的人设、和用户的关系、你当前已知的行程冲突，以及这个邀请本身是否合理。"),
+          createTemplateItem("default_bias", "默认倾向", "如果没有明显冲突且关系允许，默认更偏向接受；如果确实撞时间、明显不合适，或以你的性格不想去，就拒绝。"),
+          createTemplateItem("json_format", "JSON 格式", "输出必须是严格 JSON：{\"decision\":\"accept|reject\",\"reply\":\"自然回复\"}。"),
+          createTemplateItem("plain_reply", "reply 字段要求", "reply 只写你真正会发出去的话，不要解释 JSON，不要加 markdown，不要附加其他字段。")
+        ]
+      }
+    },
+    raising_kid_archive: {
+      label: "养崽成长档案",
+      group: "养崽",
+      description: "生成宝宝幼儿期档案",
+      sections: {
+        context_library: [
+          createTemplateItem("child_name", "宝宝名字", "宝宝名字：{{childName}}"),
+          createTemplateItem("child_gender", "宝宝性别", "宝宝性别：{{childGender}}"),
+          createTemplateItem("task_background", "任务背景", "请直接生成这位宝宝在 3 岁幼儿期的成长档案。")
+        ],
+        persona_alignment: [
+          createTemplateItem("task_role", "任务定位", "你正在为一个“养崽”文字游戏生成宝宝的成长档案。"),
+          createTemplateItem("user_name", "用户昵称", "用户昵称：{{userName}}"),
+          createTemplateItem("user_persona", "用户人设", "用户人设：{{userPersona}}"),
+          createTemplateItem("partner_name", "共同抚养人", "共同抚养人：{{partnerName}}"),
+          createTemplateItem("partner_persona", "共同抚养人人设", "共同抚养人人设：{{partnerPersona}}"),
+          createDynamicItem("special_user_persona", "共同抚养人的特别认知", "读取对用户的特别认知"),
+          createTemplateItem("mixed_temperament", "混合气质要求", "请根据双方人设混合后的气质来推演这位宝宝的成长档案。")
+        ],
+        output_standard: [
+          createTemplateItem("plain_json", "纯 JSON", "请只输出一个 JSON 对象，不要输出额外解释，也不要用 markdown。"),
+          createTemplateItem("required_fields", "对象字段", "字段必须严格包含：appearanceRating, appearanceSummary, hobbies, habits。"),
+          createTemplateItem("appearance_rating", "颜值等级", "appearanceRating：字符串，例如 A+、A、B+，不要超过 3 个字符。"),
+          createTemplateItem("appearance_summary", "外貌总结", "appearanceSummary：1 段 45-90 字中文，描述这位宝宝长到幼儿期后会呈现出的颜值与整体气质。"),
+          createTemplateItem("hobbies", "兴趣爱好", "hobbies：数组，输出 3 个兴趣爱好短语，每项不超过 10 个字。"),
+          createTemplateItem("habits", "待纠正小毛病", "habits：数组，输出 2 个待纠正的小毛病，每项不超过 16 个字。"),
+          createTemplateItem("tone", "整体语气", "整体语气要温柔、可爱、像角色设定卡，不要写成医学描述，不要出现危险内容。")
+        ]
+      }
+    }
+  };
+
+  function normalizePromptRuleCustomItems(items = []) {
+    return (Array.isArray(items) ? items : [])
+      .map((item, index) => {
+        const source = item && typeof item === "object" ? item : {};
+        return {
+          id: trimText(source.id || `custom_${index}`),
+          text: String(source.text || "")
+        };
+      })
+      .filter((item) => item.id);
+  }
+
+  function normalizePromptRuleSection(section = {}) {
+    const resolved = section && typeof section === "object" ? section : {};
+    const overrides = {};
+    Object.entries(resolved.overrides || {}).forEach(([itemId, text]) => {
+      const normalizedId = trimText(itemId);
+      if (!normalizedId) {
+        return;
+      }
+      overrides[normalizedId] = String(text ?? "");
+    });
+    return {
+      itemOrder: uniqueStrings(resolved.itemOrder || []),
+      overrides,
+      customItems: normalizePromptRuleCustomItems(resolved.customItems || [])
+    };
+  }
+
+  function normalizePromptRules(source = {}) {
+    const resolved = source && typeof source === "object" ? source : {};
+    return Object.fromEntries(
+      Object.entries(resolved).map(([promptType, config]) => {
+        const promptConfig = config && typeof config === "object" ? config : {};
+        const sections = {};
+        Object.entries(promptConfig.sections || {}).forEach(([sectionKey, sectionValue]) => {
+          const normalizedSectionKey = normalizeSectionKey(sectionKey);
+          if (!normalizedSectionKey) {
+            return;
+          }
+          sections[normalizedSectionKey] = normalizePromptRuleSection(sectionValue);
+        });
+        return [
+          trimText(promptType),
+          {
+            sectionOrder: uniqueStrings(promptConfig.sectionOrder || [])
+              .map((item) => normalizeSectionKey(item))
+              .filter(Boolean),
+            sections
+          }
+        ];
+      }).filter(([promptType]) => promptType)
+    );
+  }
+
+  function mergeOrderedIds(defaultIds = [], preferredIds = []) {
+    const merged = [];
+    const seen = new Set();
+    preferredIds.forEach((item) => {
+      const normalized = trimText(item);
+      if (!normalized || seen.has(normalized)) {
+        return;
+      }
+      seen.add(normalized);
+      merged.push(normalized);
+    });
+    defaultIds.forEach((item) => {
+      const normalized = trimText(item);
+      if (!normalized || seen.has(normalized)) {
+        return;
+      }
+      seen.add(normalized);
+      merged.push(normalized);
+    });
+    return merged;
+  }
+
+  function normalizeRuntimeSections(runtimeSections = {}) {
+    const result = {};
+    Object.entries(runtimeSections && typeof runtimeSections === "object" ? runtimeSections : {}).forEach(
+      ([sectionKey, sectionValue]) => {
+        const normalizedSectionKey = normalizeSectionKey(sectionKey);
+        if (!normalizedSectionKey || !sectionValue || typeof sectionValue !== "object") {
+          return;
+        }
+        result[normalizedSectionKey] = { ...sectionValue };
+      }
+    );
+    return result;
+  }
+
+  function getPromptCatalogList() {
+    return Object.entries(PROMPT_RULE_CATALOG).map(([id, item]) => ({
+      id,
+      label: item.label,
+      group: item.group,
+      description: item.description
+    }));
+  }
+
+  function buildPrompt(promptType = "", runtimeSections = {}, options = {}) {
+    const catalog = PROMPT_RULE_CATALOG[String(promptType || "").trim()];
+    if (!catalog) {
+      return "";
+    }
+    const settings = options && typeof options === "object" ? options.settings || {} : {};
+    const variables =
+      options && typeof options === "object" && options.variables && typeof options.variables === "object"
+        ? options.variables
+        : {};
+    const resolvedPromptRules = normalizePromptRules(settings?.promptRules);
+    const promptConfig = resolvedPromptRules[promptType] || {};
+    const resolvedRuntimeSections = normalizeRuntimeSections(runtimeSections);
+    const sectionOrder = mergeOrderedIds(
+      SECTION_KEYS,
+      (promptConfig.sectionOrder || []).map((item) => normalizeSectionKey(item)).filter(Boolean)
+    );
+
+    const promptParts = sectionOrder.map((sectionKey) => {
+      const descriptors = Array.isArray(catalog.sections?.[sectionKey])
+        ? catalog.sections[sectionKey]
+        : [];
+      const sectionConfig = promptConfig.sections?.[sectionKey] || normalizePromptRuleSection({});
+      const runtimeMap = resolvedRuntimeSections[sectionKey] || {};
+      const itemsById = new Map();
+
+      descriptors.forEach((descriptor) => {
+        const itemId = trimText(descriptor.id);
+        if (!itemId) {
+          return;
+        }
+        let text = "";
+        if (descriptor.kind === "dynamic") {
+          text = String(runtimeMap[itemId] ?? "");
+        } else {
+          const overrideText = Object.prototype.hasOwnProperty.call(
+            sectionConfig.overrides || {},
+            itemId
+          )
+            ? sectionConfig.overrides[itemId]
+            : descriptor.defaultText || "";
+          text = interpolateTemplate(overrideText, variables);
+        }
+        itemsById.set(itemId, {
+          ...descriptor,
+          text
+        });
+      });
+
+      normalizePromptRuleCustomItems(sectionConfig.customItems).forEach((item, index) => {
+        itemsById.set(item.id, {
+          id: item.id || `custom_${index}`,
+          kind: "custom",
+          label: "自定义文字",
+          text: String(item.text || "")
+        });
+      });
+
+      const itemOrder = mergeOrderedIds(
+        [...itemsById.keys()],
+        sectionConfig.itemOrder || []
+      );
+      const sectionText =
+        itemOrder
+          .map((itemId) => itemsById.get(itemId))
+          .filter(Boolean)
+          .map((item) => trimText(item.text))
+          .filter(Boolean)
+          .join("\n\n")
+          .trim() || SECTION_FALLBACKS[sectionKey];
+
+      return `<${sectionKey}>\n${sectionText}\n</${sectionKey}>`;
+    });
+
+    return promptParts.join("\n\n").trim();
+  }
+
+  function buildEditorModel(promptType = "", settings = {}) {
+    const catalog = PROMPT_RULE_CATALOG[String(promptType || "").trim()];
+    if (!catalog) {
+      return null;
+    }
+    const promptRules = normalizePromptRules(settings?.promptRules);
+    const promptConfig = promptRules[promptType] || {};
+    const sectionOrder = mergeOrderedIds(
+      SECTION_KEYS,
+      (promptConfig.sectionOrder || []).map((item) => normalizeSectionKey(item)).filter(Boolean)
+    );
+
+    return {
+      id: promptType,
+      label: catalog.label,
+      group: catalog.group,
+      description: catalog.description,
+      sections: sectionOrder.map((sectionKey) => {
+        const descriptors = Array.isArray(catalog.sections?.[sectionKey])
+          ? catalog.sections[sectionKey]
+          : [];
+        const sectionConfig = promptConfig.sections?.[sectionKey] || normalizePromptRuleSection({});
+        const itemsById = new Map();
+
+        descriptors.forEach((descriptor) => {
+          const overrideText = Object.prototype.hasOwnProperty.call(
+            sectionConfig.overrides || {},
+            descriptor.id
+          )
+            ? sectionConfig.overrides[descriptor.id]
+            : descriptor.defaultText || "";
+          itemsById.set(descriptor.id, {
+            id: descriptor.id,
+            kind: descriptor.kind,
+            label: descriptor.label,
+            editable: descriptor.kind === "template",
+            text: descriptor.kind === "dynamic" ? "" : String(overrideText || ""),
+            hint:
+              descriptor.kind === "dynamic"
+                ? descriptor.runtimeHint || "运行时读取"
+                : "可直接修改这段内置文字"
+          });
+        });
+
+        normalizePromptRuleCustomItems(sectionConfig.customItems).forEach((item) => {
+          itemsById.set(item.id, {
+            id: item.id,
+            kind: "custom",
+            label: "自定义文字",
+            editable: true,
+            text: String(item.text || ""),
+            hint: "自定义补充文字，可拖动排序"
+          });
+        });
+
+        const itemOrder = mergeOrderedIds(
+          [...itemsById.keys()],
+          sectionConfig.itemOrder || []
+        );
+
+        return {
+          key: sectionKey,
+          label: SECTION_LABELS[sectionKey] || sectionKey,
+          items: itemOrder
+            .map((itemId) => itemsById.get(itemId))
+            .filter(Boolean)
+        };
+      })
+    };
+  }
+
+  function createCustomItemId(promptType = "", sectionKey = "") {
+    const promptSeed = trimText(promptType || "prompt");
+    const sectionSeed = normalizeSectionKey(sectionKey) || "section";
+    return `custom_${promptSeed}_${sectionSeed}_${Date.now()}_${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+  }
+
+  window.PulsePromptConfig = {
+    SECTION_KEYS,
+    SECTION_LABELS,
+    SECTION_FALLBACKS,
+    normalizeManualTimeSettings,
+    resolvePromptNow,
+    formatPromptTimeLabel,
+    formatDateTimeInputValue,
+    normalizePromptRules,
+    getPromptCatalogList,
+    buildPrompt,
+    buildEditorModel,
+    createCustomItemId,
+    clonePlain
+  };
+})();

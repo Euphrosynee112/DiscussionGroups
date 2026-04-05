@@ -20,7 +20,6 @@
             class="messages-topbar__icon"
             type="button"
             aria-label="返回"
-            onclick="try{window.parent&&window.parent.postMessage&&window.parent.postMessage({type:'pulse-generator-close-app'},'*')}catch(e){};window.location.href='./index.html';"
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M7 7l10 10M17 7 7 17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
@@ -266,7 +265,6 @@
             class="messages-sheet-modal__button messages-sheet-modal__button--primary"
             type="button"
             form="messages-contact-form"
-            onclick="(function(){var f=document.getElementById('messages-contact-form');if(!f){return;} if(typeof f.requestSubmit==='function'){f.requestSubmit();return;} var ev=document.createEvent('Event');ev.initEvent('submit',true,true);f.dispatchEvent(ev);}())"
           >
             保存
           </button>
@@ -2227,11 +2225,12 @@
 
     <input id="messages-image-file-input" type="file" accept="image/*" hidden />
 
+    <script src="./prompt-config.js?v=20260405-193234"></script>
     <script src="./privacy-allowlist.js?v=20260403-165212"></script>
     <script src="./pulse-privacy-cover.js?v=20260403-170109"></script>
     <script src="./pulse-message-banner.js?v=20260403-165212"></script>
     <script src="./api-log.js?v=20260403-165212"></script>
     <script src="./messages-awareness-config.js?v=20260403-165212"></script>
-    <script src="./messages.js?v=20260405-165622"></script>
+    <script src="./messages.js?v=20260405-193234"></script>
   </body>
 </html>

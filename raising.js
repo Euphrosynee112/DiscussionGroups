@@ -43,8 +43,23 @@ function buildPromptSectionText(value, fallback = "") {
   return text || String(fallback || "").trim();
 }
 
-function buildStructuredPromptSections(sections = {}) {
-  const resolvedSections = sections && typeof sections === "object" ? sections : {};
+function buildStructuredPromptSections(promptTypeOrSections = {}, maybeSections = null, maybeOptions = {}) {
+  if (typeof promptTypeOrSections === "string" && window.PulsePromptConfig?.buildPrompt) {
+    const configuredPrompt = window.PulsePromptConfig.buildPrompt(
+      promptTypeOrSections,
+      maybeSections && typeof maybeSections === "object" ? maybeSections : {},
+      maybeOptions && typeof maybeOptions === "object" ? maybeOptions : {}
+    );
+    if (configuredPrompt) {
+      return prependGlobalPromptGuard(configuredPrompt);
+    }
+  }
+  const resolvedSections =
+    promptTypeOrSections && typeof promptTypeOrSections === "object"
+      ? promptTypeOrSections
+      : maybeSections && typeof maybeSections === "object"
+        ? maybeSections
+        : {};
   return prependGlobalPromptGuard(
     [
       `<context_library>\n${buildPromptSectionText(
@@ -1373,33 +1388,27 @@ function parseJsonObjectWithRepair(jsonText, errorMessage) {
 }
 
 function buildKidArchivePrompt(profile, partner, record) {
-  return buildStructuredPromptSections({
-    contextLibrary: [
-      `宝宝名字：${record.childName}`,
-      `宝宝性别：${getGenderLabel(record.childGender)}`,
-      "请直接生成这位宝宝在 3 岁幼儿期的成长档案。"
-    ],
-    personaAlignment: [
-      "你正在为一个“养崽”文字游戏生成宝宝的成长档案。",
-      `用户昵称：${profile.username}`,
-      `用户人设：${profile.personaPrompt || "温柔、细腻、会认真照顾孩子。"}`,
-      `共同抚养人：${partner.name}`,
-      `共同抚养人人设：${partner.personaPrompt || "有鲜明性格，会把自己的气质投射到孩子身上。"}`,
-      partner.specialUserPersona
-        ? `这个共同抚养人对用户的特别认知：${partner.specialUserPersona}。这部分比用户通用人设更私人、更贴近两人的相处感受，请适度提高参考权重。`
-        : "",
-      "请根据双方人设混合后的气质来推演这位宝宝的成长档案。"
-    ],
-    outputStandard: [
-      "请只输出一个 JSON 对象，不要输出额外解释，也不要用 markdown。",
-      "字段必须严格包含：appearanceRating, appearanceSummary, hobbies, habits。",
-      "appearanceRating：字符串，例如 A+、A、B+，不要超过 3 个字符。",
-      "appearanceSummary：1 段 45-90 字中文，描述这位宝宝长到幼儿期后会呈现出的颜值与整体气质。",
-      "hobbies：数组，输出 3 个兴趣爱好短语，每项不超过 10 个字。",
-      "habits：数组，输出 2 个待纠正的小毛病，每项不超过 16 个字。",
-      "整体语气要温柔、可爱、像角色设定卡，不要写成医学描述，不要出现危险内容。"
-    ]
-  });
+  return buildStructuredPromptSections(
+    "raising_kid_archive",
+    {
+      persona_alignment: {
+        special_user_persona: partner.specialUserPersona
+          ? `这个共同抚养人对用户的特别认知：${partner.specialUserPersona}。这部分比用户通用人设更私人、更贴近两人的相处感受，请适度提高参考权重。`
+          : ""
+      }
+    },
+    {
+      settings: loadSettings(),
+      variables: {
+        childName: record.childName,
+        childGender: getGenderLabel(record.childGender),
+        userName: profile.username,
+        userPersona: profile.personaPrompt || "温柔、细腻、会认真照顾孩子。",
+        partnerName: partner.name,
+        partnerPersona: partner.personaPrompt || "有鲜明性格，会把自己的气质投射到孩子身上。"
+      }
+    }
+  );
 }
 
 async function requestKidArchive(settings, profile, partner, record) {

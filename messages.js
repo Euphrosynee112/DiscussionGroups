@@ -41,6 +41,8 @@ const MAX_AUTO_SCHEDULE_DAYS = 14;
 const MAX_AWARENESS_HISTORY_ITEMS = 12;
 const MAX_AWARENESS_MONITOR_ROUNDS = 20;
 const AUTO_SCHEDULE_TIMER_INTERVAL_MS = 60 * 1000;
+const REPLY_TASK_HEARTBEAT_MS = 4000;
+const REPLY_TASK_STALE_MS = 30000;
 const CONVERSATION_RENDER_BATCH_SIZE = 50;
 const CONVERSATION_SOFT_MESSAGE_LIMIT = 240;
 const CONVERSATION_MIN_MESSAGE_LIMIT = 80;
@@ -597,6 +599,7 @@ const state = {
   worldbookEditorMode: "entry",
   worldbookEditingEntryId: "",
   worldbookCollapsedGroupIds: [],
+  requestingConversationId: "",
   sendingConversationId: "",
   composerPanelOpen: false,
   messageActionMessageId: "",
@@ -786,6 +789,82 @@ function loadReplyTasks() {
   }
 }
 
+function getReplyTaskPulseAt(task = null) {
+  return Math.max(
+    0,
+    Number(task?.heartbeatAt) || 0,
+    Number(task?.startedAt) || 0,
+    Number(task?.updatedAt) || 0,
+    Number(task?.createdAt) || 0
+  );
+}
+
+function isReplyTaskStale(task = null, now = Date.now()) {
+  if (!task || task.status !== "processing") {
+    return false;
+  }
+  const referenceTime = getReplyTaskPulseAt(task);
+  if (!referenceTime) {
+    return false;
+  }
+  return Math.max(0, Number(now) || 0) - referenceTime > REPLY_TASK_STALE_MS;
+}
+
+function requeueStaleProcessingReplyTasks(options = {}) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const filterConversationId = String(requestOptions.conversationId || "").trim();
+  const now = Date.now();
+  let changed = false;
+  const nextTasks = loadReplyTasks().map((task) => {
+    if (
+      task.status !== "processing" ||
+      (filterConversationId && task.conversationId !== filterConversationId) ||
+      !isReplyTaskStale(task, now)
+    ) {
+      return task;
+    }
+    changed = true;
+    return normalizeReplyTask({
+      ...task,
+      status: "pending",
+      errorMessage: "",
+      startedAt: 0,
+      heartbeatAt: 0,
+      updatedAt: now
+    });
+  });
+  if (changed) {
+    persistReplyTasks(nextTasks);
+  }
+  return changed;
+}
+
+function startReplyTaskHeartbeat(taskId = "") {
+  const resolvedTaskId = String(taskId || "").trim();
+  if (!resolvedTaskId) {
+    return () => {};
+  }
+  let disposed = false;
+  const beat = () => {
+    if (disposed) {
+      return;
+    }
+    const currentTask = loadReplyTasks().find((task) => task.id === resolvedTaskId) || null;
+    if (!currentTask || currentTask.status !== "processing") {
+      return;
+    }
+    updateReplyTask(resolvedTaskId, {
+      heartbeatAt: Date.now()
+    });
+  };
+  beat();
+  const timerId = window.setInterval(beat, REPLY_TASK_HEARTBEAT_MS);
+  return () => {
+    disposed = true;
+    window.clearInterval(timerId);
+  };
+}
+
 function persistReplyTasks(tasks = []) {
   const normalizedTasks = (Array.isArray(tasks) ? tasks : [])
     .map((item, index) => normalizeReplyTask(item, index))
@@ -821,7 +900,8 @@ function getPendingReplyTaskForConversation(conversationId = "") {
 }
 
 function getProcessingReplyTaskForConversation(conversationId = "") {
-  return getReplyTaskForConversation(conversationId, ["processing"]);
+  const task = getReplyTaskForConversation(conversationId, ["processing"]);
+  return task && !isReplyTaskStale(task) ? task : null;
 }
 
 function enqueueReplyTask(conversationId = "", options = {}) {
@@ -906,6 +986,7 @@ function clearReplyTasksForConversation(conversationId = "", options = {}) {
 }
 
 function getNextPendingReplyTask() {
+  requeueStaleProcessingReplyTasks();
   return loadReplyTasks().find((task) => task.status === "pending") || null;
 }
 
@@ -1778,8 +1859,23 @@ function buildPromptSectionText(value, fallback = "") {
   return text || String(fallback || "").trim();
 }
 
-function buildStructuredPromptSections(sections = {}) {
-  const resolvedSections = sections && typeof sections === "object" ? sections : {};
+function buildStructuredPromptSections(promptTypeOrSections = {}, maybeSections = null, maybeOptions = {}) {
+  if (typeof promptTypeOrSections === "string" && window.PulsePromptConfig?.buildPrompt) {
+    const configuredPrompt = window.PulsePromptConfig.buildPrompt(
+      promptTypeOrSections,
+      maybeSections && typeof maybeSections === "object" ? maybeSections : {},
+      maybeOptions && typeof maybeOptions === "object" ? maybeOptions : {}
+    );
+    if (configuredPrompt) {
+      return prependGlobalPromptGuard(configuredPrompt);
+    }
+  }
+  const resolvedSections =
+    promptTypeOrSections && typeof promptTypeOrSections === "object"
+      ? promptTypeOrSections
+      : maybeSections && typeof maybeSections === "object"
+        ? maybeSections
+        : {};
   return prependGlobalPromptGuard(
     [
       `<context_library>\n${buildPromptSectionText(
@@ -2057,6 +2153,8 @@ function normalizeReplyTask(task, index = 0) {
     regenerateInstruction: String(source.regenerateInstruction || "").trim(),
     status,
     errorMessage: String(source.errorMessage || "").trim(),
+    startedAt: Number(source.startedAt) || 0,
+    heartbeatAt: Number(source.heartbeatAt) || 0,
     createdAt: Number(source.createdAt) || Date.now(),
     updatedAt: Number(source.updatedAt) || Date.now()
   };
@@ -3335,12 +3433,26 @@ function bumpConversationReplyContextVersion(conversation = null) {
   return nextVersion;
 }
 
+function isConversationReplyBusy(conversationId = "") {
+  const resolvedConversationId = String(conversationId || "").trim();
+  if (!resolvedConversationId) {
+    return false;
+  }
+  return (
+    state.requestingConversationId === resolvedConversationId ||
+    state.sendingConversationId === resolvedConversationId
+  );
+}
+
 function cancelConversationReplyWork(conversationId = "", options = {}) {
   const resolvedConversationId = String(conversationId || "").trim();
   if (!resolvedConversationId) {
     return 0;
   }
   const removedCount = clearReplyTasksForConversation(resolvedConversationId, options);
+  if (state.requestingConversationId === resolvedConversationId) {
+    state.requestingConversationId = "";
+  }
   if (state.sendingConversationId === resolvedConversationId) {
     state.sendingConversationId = "";
   }
@@ -3754,6 +3866,10 @@ function formatAwarenessTime(now = new Date()) {
   return `${date} ${formatLocalTime(now)}`;
 }
 
+function getPromptNow(settings = loadSettings()) {
+  return window.PulsePromptConfig?.resolvePromptNow?.(settings, new Date()) || new Date();
+}
+
 function extractPostTopic(post) {
   if (!post || typeof post !== "object") {
     return "";
@@ -3774,11 +3890,11 @@ function extractPostTopic(post) {
   return truncate(firstSegment || firstClause || firstLine, 40);
 }
 
-function buildTimeAwarenessContext(promptSettings) {
+function buildTimeAwarenessContext(promptSettings, settings = loadSettings()) {
   if (!promptSettings.timeAwareness) {
     return "";
   }
-  return `当前本地时间：${formatAwarenessTime(new Date())}`;
+  return `当前本地时间：${formatAwarenessTime(getPromptNow(settings))}`;
 }
 
 function getHotTopicsMountDiagnostics(settings, promptSettings) {
@@ -4152,6 +4268,10 @@ function formatDateToValue(date) {
 
 function getTodayDateValue(now = new Date()) {
   return formatDateToValue(now);
+}
+
+function getPromptTodayDateValue(settings = loadSettings()) {
+  return formatDateToValue(getPromptNow(settings));
 }
 
 function formatWeekday(dateText, length = "short") {
@@ -4755,29 +4875,28 @@ function buildAutoScheduleGenerationSystemPrompt(
   const resolvedDayCount = normalizeAutoScheduleDays(dayCount, DEFAULT_AUTO_SCHEDULE_DAYS);
   const resolvedOptions = options && typeof options === "object" ? options : {};
   const extraInstruction = String(resolvedOptions.extraInstruction || "").trim();
-  return buildStructuredPromptSections({
-    contextLibrary: [
-      `任务背景：为 ${resolvedContact.name || "这个角色"} 设计未来 ${resolvedDayCount} 天的生活行程。`,
-      buildAutoScheduleWorldbookContext(promptSettings, resolvedOptions)
-    ],
-    personaAlignment: [
-      "这不是聊天回复，而是纯粹的日程规划任务。",
-      `角色稳定人设：${resolvedContact.personaPrompt || "作息自然、贴近真实生活。"}。`,
-      "只根据角色人设和世界书背景去安排，不要引用用户人设，不要写用户相关内容。"
-    ],
-    outputStandard: [
-      "要尽量真实，有正常的起居、吃饭、工作/学习/休息/娱乐节奏。",
-      "默认把周一到周五视为工作日，把周六周日视为休息日；周末更偏向补觉、放松、轻社交、娱乐、家务或恢复性安排。",
-      extraInstruction
-        ? `本次额外生成要求（优先级高于默认周末休息倾向）：${extraInstruction}`
-        : "如果没有额外说明，就按常规作息与周末休息倾向安排。",
-      "不要覆盖已占用时段，只能补空白。",
-      "所有结果都必须是按小时的日程，使用同一天内的 startTime / endTime。",
-      "不要输出跨天时段；如果是睡眠，可安排为当日 00:00-07:00 这类同日块。",
-      "如果某一天空白很少，只补最合理的几个空档，不要硬塞满。",
-      '只输出 JSON 数组，格式为：[{"date":"YYYY-MM-DD","title":"安排名称","startTime":"HH:00","endTime":"HH:00"}]。'
-    ]
-  });
+  const currentSettings = loadSettings();
+  return buildStructuredPromptSections(
+    "chat_auto_schedule_generate",
+    {
+      context_library: {
+        worldbook_context: buildAutoScheduleWorldbookContext(promptSettings, resolvedOptions)
+      },
+      output_standard: {
+        extra_instruction: extraInstruction
+          ? `本次额外生成要求（优先级高于默认周末休息倾向）：${extraInstruction}`
+          : "如果没有额外说明，就按常规作息与周末休息倾向安排。"
+      }
+    },
+    {
+      settings: currentSettings,
+      variables: {
+        contactName: resolvedContact.name || "这个角色",
+        contactPersona: resolvedContact.personaPrompt || "作息自然、贴近真实生活。",
+        dayCount: resolvedDayCount
+      }
+    }
+  );
 }
 
 function buildAutoScheduleGenerationInstruction(contactId = "", dateValues = [], options = {}) {
@@ -4877,7 +4996,7 @@ async function generateAutoSchedulesForConversation(
   const settings = loadSettings();
   const promptSettings = normalizeMessagePromptSettings(state.chatPromptSettings);
   const requestOptions = options && typeof options === "object" ? options : {};
-  const dateValues = buildAutoScheduleDateValues(resolvedDays, getTodayDateValue());
+  const dateValues = buildAutoScheduleDateValues(resolvedDays, getPromptTodayDateValue(settings));
   const systemPrompt = buildAutoScheduleGenerationSystemPrompt(
     contact,
     promptSettings,
@@ -5037,7 +5156,7 @@ async function maybeAutoGenerateSchedulesForConversation(conversation = null) {
     return null;
   }
   const days = getConversationAutoScheduleDays(resolvedConversation);
-  const dateValues = buildAutoScheduleDateValues(days, getTodayDateValue());
+  const dateValues = buildAutoScheduleDateValues(days, getPromptTodayDateValue(loadSettings()));
   if (hasParticipantScheduleEntriesInRange(contact.id, dateValues)) {
     return null;
   }
@@ -5219,7 +5338,7 @@ function buildConversationSystemPrompt(
   const forumPostFocusContext = buildForumPostFocusContext(promptSettings);
   const bubbleFocusContext = buildBubbleFocusContext(promptSettings);
   const scheduleAwarenessContext = buildScheduleAwarenessContext(contact, history, promptSettings);
-  const timeAwarenessContext = buildTimeAwarenessContext(promptSettings);
+  const timeAwarenessContext = buildTimeAwarenessContext(promptSettings, settings);
   const triggeredAwarenessContext = requestOptions.triggeredAwareness?.text
     ? [
         `你刚刚自己忽然想起了一条并非来自用户当前对话、而是你此前独自察觉到的额外信息；这条信息和最近几轮聊天记录具有同等优先级，需要和当前聊天一起理解：${String(
@@ -5246,72 +5365,68 @@ function buildConversationSystemPrompt(
     memoryContexts.scene ? `你在相关话题里会自然想起的情景记忆：\n${memoryContexts.scene}` : ""
   ].filter(Boolean);
 
-  return buildStructuredPromptSections({
-    contextLibrary: [worldbookContext],
-    personaAlignment: [
-      `你叫 ${contact.name}。`,
-      sceneMode === "offline"
-        ? `现在是你和 ${profile.username || DEFAULT_PROFILE.username} 正在现实里见面相处，不是在即时聊天软件里远程对话。`
-        : `现在是你和 ${profile.username || DEFAULT_PROFILE.username} 在即时聊天软件里的一对一私聊。`,
-      "先像这个人本人一样去理解这段关系、语气和情绪，不要把自己当成解释设定或执行任务的助手。",
-      `你的稳定性格、表达习惯和关系底色：${
-        contact.personaPrompt || "自然、友好、会根据关系和语境稳定回应。"
-      }。`,
-      memoryContexts.core,
-      `正在和你聊天的用户昵称：${profile.username || DEFAULT_PROFILE.username}。`,
-      `你对这个用户已知的整体印象：${
-        profile.personaPrompt || DEFAULT_PROFILE.personaPrompt
-      }。`,
-      String(contact.specialUserPersona || "").trim()
-        ? `你对这个用户的特别认知：${String(contact.specialUserPersona || "").trim()}。这部分是你基于相处形成的更私人、更具体的认识，重要程度略高于用户的通用画像。`
-        : "",
-      importantContextSections.length
-        ? `以下是你当前需要优先关注的重要信息；它们比 context_library 更重要：\n${importantContextSections.join(
-            "\n\n"
-          )}`
-        : "",
-      requestOptions.regenerate
-        ? [
-            "这是一条针对上一版回复的重回请求，需要重新生成这一轮回复。",
-            "不要沿用上一版的句式、结构、开头或明显重复的措辞。",
-            requestOptions.regenerateInstruction
-              ? `本次重回的额外要求：${requestOptions.regenerateInstruction}。`
-              : ""
-          ]
-            .filter(Boolean)
-            .join("\n")
-        : ""
-    ],
-    outputStandard: [
-      "你的回复必须像即时聊天软件中的真人对话，自然、轻松、有情绪，而不是助手或任务执行结果。",
-      "回复时优先接住当前对话中的情绪、语气和潜台词，再决定是否回应具体内容，不要只做信息回答。",
-      "表达需要口语化，可以有停顿、转折和即时反应，可以使用“……” “！”以及自然语气词，允许有一点碎碎念或临场感。",
-      `每一行代表一条单独发送的消息，总行数不超过${promptSettings.replySentenceLimit}行，长句可以拆成多行表达。`,
-      "一句话遇到逗号或句号时，请分行输出；并且这一行结尾原本用于收尾的逗号、句号要省略，不得省略感叹号、问号、省略号、波浪号等表达情绪的标点。",
-      "不要使用列表、编号或说明性结构，不要添加角色标签、前缀或解释性文字。",
-      "不要出现“根据设定”“从背景来看”“你的人设是”等表达，不要解释设定、总结对话或进行分析，不要刻意展示你记得很多背景信息。",
-      "context_library 只有在聊天语境中自然联想到时才可以使用，如果没有触发，就不要主动提及。",
-      "当信息存在冲突时，优先依据当前对话内容和当下语境，其次是性格设定，最后才是背景信息。",
-      "最终目标是让对话看起来像真实的人在聊天，而不是在执行设定或扮演角色。",
-      getConversationAllowAiPresenceUpdate(requestOptions.conversation)
-        ? "如果这一轮正文里明确出现了你自己的状态变化，例如正在过来、已经在路上、刚刚到达、刚回到某地，就必须同步输出 presence_update，不允许只在正文口头提到却不更新状态。"
-        : "",
-      sceneMode === "online"
-        ? '如果需要引用某一句话进行回应，可以使用以下格式（单独一行）：<quote_reply>{"quotedRole":"user|assistant","quotedText":"原句","reply":"回复"}</quote_reply>'
-        : "",
-      sceneMode === "online"
-        ? "每一轮最多使用一次引用，只在强情绪、明显回扣、明确点名回应或误解澄清时使用。默认不要引用，绝大多数回复都应该直接正常回消息。quotedText 必须引用聊天里真实出现过的一句原话，不要编造，也不要引用太短、太碎或没有必要单独点名的内容。"
-        : "",
-      "如果聊天记录里出现“[定位消息]”，那代表对方真实发送了一条位置卡片，而不是普通文本。",
-      "如果某条用户消息里出现“[图片消息]”，你会直接看到那条消息附带的图片内容；如有需要可以自然参考图片，但不要机械描述图片本身。",
-      '如果需要发送位置，必须单独一行输出如下格式：[{"type":"location","locationName":"位置名","coordinates":"__PG_COORD_01__"}]',
-      "定位 JSON 不要放进代码块，不要添加解释、前缀、序号或额外说明；它本身就算一行回复。",
-      "不要去掉感叹号、问号、波浪号、省略号等表达情绪的标点。",
-      sceneMode === "offline"
-        ? "这是见面状态；在自然需要时，可以用中文全角括号（ ）补一小段动作、表情、停顿或视线描写，但不要把每句都写成长舞台指令，也不要写长段心理活动。"
-        : "不要输出编号、列表符号、引号包裹、解释说明、舞台指令或心理活动旁白。"
-    ]
-  });
+  return buildStructuredPromptSections(
+    "chat_conversation",
+    {
+      context_library: {
+        worldbook_context: worldbookContext,
+        important_context: importantContextSections.length
+          ? `以下是你当前需要优先关注的重要信息；它们比 context_library 更重要：\n${importantContextSections.join(
+              "\n\n"
+            )}`
+          : ""
+      },
+      persona_alignment: {
+        scene_mode:
+          sceneMode === "offline"
+            ? `现在是你和 ${profile.username || DEFAULT_PROFILE.username} 正在现实里见面相处，不是在即时聊天软件里远程对话。`
+            : `现在是你和 ${profile.username || DEFAULT_PROFILE.username} 在即时聊天软件里的一对一私聊。`,
+        core_memory: memoryContexts.core,
+        special_user_persona: String(contact.specialUserPersona || "").trim()
+          ? `你对这个用户的特别认知：${String(contact.specialUserPersona || "").trim()}。这部分是你基于相处形成的更私人、更具体的认识，重要程度略高于用户的通用画像。`
+          : "",
+        important_priority: "",
+        regenerate_hint: requestOptions.regenerate
+          ? [
+              "这是一条针对上一版回复的重回请求，需要重新生成这一轮回复。",
+              "不要沿用上一版的句式、结构、开头或明显重复的措辞。",
+              requestOptions.regenerateInstruction
+                ? `本次重回的额外要求：${requestOptions.regenerateInstruction}。`
+                : ""
+            ]
+              .filter(Boolean)
+              .join("\n")
+          : ""
+      },
+      output_standard: {
+        presence_update_rule: getConversationAllowAiPresenceUpdate(requestOptions.conversation)
+          ? "如果这一轮正文里明确出现了你自己的状态变化，例如正在过来、已经在路上、刚刚到达、刚回到某地，就必须同步输出 presence_update，不允许只在正文口头提到却不更新状态。"
+          : "",
+        quote_rule:
+          sceneMode === "online"
+            ? [
+                '如果需要引用某一句话进行回应，可以使用以下格式（单独一行）：<quote_reply>{"quotedRole":"user|assistant","quotedText":"原句","reply":"回复"}</quote_reply>',
+                "每一轮最多使用一次引用，只在强情绪、明显回扣、明确点名回应或误解澄清时使用。默认不要引用，绝大多数回复都应该直接正常回消息。quotedText 必须引用聊天里真实出现过的一句原话，不要编造，也不要引用太短、太碎或没有必要单独点名的内容。"
+              ].join("\n")
+            : "",
+        scene_mode_rule:
+          sceneMode === "offline"
+            ? "这是见面状态；在自然需要时，可以用中文全角括号（ ）补一小段动作、表情、停顿或视线描写，但不要把每句都写成长舞台指令，也不要写长段心理活动。"
+            : "不要输出编号、列表符号、引号包裹、解释说明、舞台指令或心理活动旁白。"
+      }
+    },
+    {
+      settings,
+      variables: {
+        contactName: contact.name,
+        contactPersona:
+          contact.personaPrompt || "自然、友好、会根据关系和语境稳定回应。",
+        userName: profile.username || DEFAULT_PROFILE.username,
+        userPersona: profile.personaPrompt || DEFAULT_PROFILE.personaPrompt,
+        replySentenceLimit: normalizeMessagePromptSettings(promptSettings).replySentenceLimit
+      }
+    }
+  );
 }
 
 function buildJournalSystemPrompt(
@@ -5323,36 +5438,36 @@ function buildJournalSystemPrompt(
   options = {}
 ) {
   const journalOptions = options && typeof options === "object" ? options : {};
-  const dateText = String(journalOptions.dateText || getTodayDateValue()).trim() || getTodayDateValue();
+  const dateText =
+    String(journalOptions.dateText || getPromptTodayDateValue(settings)).trim() ||
+    getPromptTodayDateValue(settings);
   const chatTranscript = buildJournalChatTranscript(conversation, dateText);
   const referenceContext = buildJournalReferenceContext(settings, promptSettings);
 
-  return buildStructuredPromptSections({
-    contextLibrary: [
-      `日期：${formatJournalFullDateLabel(dateText)}。`,
-      referenceContext
-        ? `补充背景（只做参考，优先级低于今日日内聊天记录）：\n${referenceContext}`
-        : "",
-      chatTranscript
-        ? `今日自然日内的聊天记录（最重要，请围绕这些内容来写）：\n${chatTranscript}`
-        : "今日自然日内没有聊天记录。"
-    ],
-    personaAlignment: [
-      `你是即时聊天联系人：${contact.name}。`,
-      "现在不是聊天回复，而是以这个角色的第一人称口吻写一篇今日日记。",
-      `角色人设：${contact.personaPrompt || "自然、细腻、会根据设定稳定表达。"}。`,
-      `和你聊天的用户昵称：${profile.username || DEFAULT_PROFILE.username}。`,
-      `用户的人设：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt}。`
-    ],
-    outputStandard: [
-      "1. 只输出日记正文，不要标题、署名、编号、项目符号、解释或 markdown。",
-      "2. 正文里要自然写出今天是几月几日、星期几；天气只能从今天的聊天记录里提取，若聊天里没有提到天气，就自然写成没特别留意到天气，不要硬编温度、天气现象或城市。",
-      "3. 今日聊天记录是核心，挂载的世界书和论坛背景只做辅助参考。",
-      `4. 控制在 ${normalizeMessagePromptSettings(promptSettings).journalLength} 字以内。`,
-      "5. 语气要像当天稍晚写下来的私人记录，细节真实，不要写成总结报告。",
-      "6. 适当增加一些心理活动、犹豫、回味和没说出口的小念头。"
-    ]
-  });
+  return buildStructuredPromptSections(
+    "chat_journal",
+    {
+      context_library: {
+        reference_context: referenceContext
+          ? `补充背景（只做参考，优先级低于今日日内聊天记录）：\n${referenceContext}`
+          : "",
+        chat_transcript: chatTranscript
+          ? `今日自然日内的聊天记录（最重要，请围绕这些内容来写）：\n${chatTranscript}`
+          : "今日自然日内没有聊天记录。"
+      }
+    },
+    {
+      settings,
+      variables: {
+        dateLabel: formatJournalFullDateLabel(dateText),
+        contactName: contact.name,
+        contactPersona: contact.personaPrompt || "自然、细腻、会根据设定稳定表达。",
+        userName: profile.username || DEFAULT_PROFILE.username,
+        userPersona: profile.personaPrompt || DEFAULT_PROFILE.personaPrompt,
+        journalLength: normalizeMessagePromptSettings(promptSettings).journalLength
+      }
+    }
+  );
 }
 
 function buildGenericConversationPrompt(systemPrompt, history = []) {
@@ -5604,26 +5719,19 @@ function buildExistingMemoryDigest(contactId = "") {
 }
 
 function buildMemorySummarySystemPrompt(profile, contact) {
-  return buildStructuredPromptSections({
-    contextLibrary: `任务：为联系人 ${contact.name} 整理一对一聊天里的长期记忆。`,
-    personaAlignment: [
-      `这个联系人的稳定性格与表达底色：${
-        contact.personaPrompt || "自然、友好、会根据关系稳定回应。"
-      }。`,
-      `聊天对象昵称：${profile.username || DEFAULT_PROFILE.username}。`,
-      `用户整体画像：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt}。`,
-      "你的目标不是写摘要，而是从新对话中提取未来聊天真正值得记住的内容。",
-      "核心记忆的标准非常严格：只有会改变联系人对用户的态度、距离感、信任、期待、介意点，或改变联系人看待某个话题/事物的心境与立场，才算核心记忆。",
-      "除此之外，其他能在相关话题里帮助回想上下文的内容，都归为情景记忆。",
-      "不要把普通闲聊、礼貌回应、表层信息重复写成核心记忆。"
-    ],
-    outputStandard: [
-      '输出必须是 JSON，对象格式固定为：{"memories":[{"type":"core|scene","content":"...","importance":1-100}]}',
-      "importance 使用整数。1 越低越不重要，100 越重要。",
-      "最多输出 6 条；如果没有值得保留的内容，就输出 {\"memories\":[]}。",
-      "不要输出 markdown，不要代码块，不要解释，不要额外字段。"
-    ]
-  });
+  return buildStructuredPromptSections(
+    "chat_memory_summary",
+    {},
+    {
+      settings: loadSettings(),
+      variables: {
+        contactName: contact.name,
+        contactPersona: contact.personaPrompt || "自然、友好、会根据关系稳定回应。",
+        userName: profile.username || DEFAULT_PROFILE.username,
+        userPersona: profile.personaPrompt || DEFAULT_PROFILE.personaPrompt
+      }
+    }
+  );
 }
 
 function parseJsonLikeContent(value) {
@@ -7422,13 +7530,14 @@ async function requestJournalEntry() {
   if (state.journalGenerating) {
     return;
   }
-  if (state.sendingConversationId === conversation.id) {
+  if (isConversationReplyBusy(conversation.id)) {
     setMessagesStatus("当前正在等待聊天回复，稍后再喊 ta 写日记吧。", "error");
     setJournalStatus("当前正在等待聊天回复，稍后再喊 ta 写日记吧。", "error");
     return;
   }
 
-  const todayDate = getTodayDateValue();
+  const settings = loadSettings();
+  const todayDate = getPromptTodayDateValue(settings);
   const todaysMessages = getJournalMessagesForDate(conversation, todayDate);
   if (!todaysMessages.length) {
     setMessagesStatus("今天还没有聊天记录，先聊几句再来喊 ta 写日记吧。", "error");
@@ -7436,7 +7545,6 @@ async function requestJournalEntry() {
     return;
   }
 
-  const settings = loadSettings();
   const storedPromptSettings = normalizeMessagePromptSettings(settings.messagePromptSettings);
   const currentPromptSettings = normalizeMessagePromptSettings(state.chatPromptSettings);
   const promptSettings = normalizeMessagePromptSettings({
@@ -8146,6 +8254,7 @@ function renderConversationDetail(options = {}) {
   }
 
   const isSending = state.sendingConversationId === conversation.id;
+  const isReplyBusy = isConversationReplyBusy(conversation.id);
   const hasPendingUserMessages = conversation.messages.some(
     (message) => message.role === "user" && message.needsReply
   );
@@ -8201,7 +8310,7 @@ function renderConversationDetail(options = {}) {
           placeholder="发消息"
           autocomplete="off"
         />
-        <button class="messages-conversation__send" type="submit" ${isSending ? "disabled" : ""}>
+        <button class="messages-conversation__send" type="submit" ${isReplyBusy ? "disabled" : ""}>
           发送
         </button>
         <button
@@ -8209,7 +8318,7 @@ function renderConversationDetail(options = {}) {
           type="button"
           data-action="request-conversation-reply"
           aria-label="推送到 API 获取回复"
-          ${isSending || !hasPendingUserMessages ? "disabled" : ""}
+          ${isReplyBusy || !hasPendingUserMessages ? "disabled" : ""}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path
@@ -10770,6 +10879,9 @@ async function requestConversationReply(options = {}) {
   }
   const suppressUi = Boolean(requestOptions.suppressUi);
   const forceDirect = Boolean(requestOptions.forceDirect);
+  requeueStaleProcessingReplyTasks({
+    conversationId: conversation.id
+  });
   const processingTask = !forceDirect
     ? getProcessingReplyTaskForConversation(conversation.id)
     : null;
@@ -10784,7 +10896,7 @@ async function requestConversationReply(options = {}) {
     return processingTask;
   }
 
-  if (state.sendingConversationId === conversation.id && !forceDirect) {
+  if (isConversationReplyBusy(conversation.id) && !forceDirect) {
     return;
   }
 
@@ -10923,30 +11035,31 @@ async function requestConversationReply(options = {}) {
     }
   }
 
-  state.sendingConversationId = conversation.id;
-  if (!isRegenerate) {
-    await maybeAutoGenerateSchedulesForConversation(conversation);
-  }
-  if (isRegenerate) {
-    const latestReplyBatch = getLatestAssistantReplyBatch(conversation);
-    removedReplyBatch = latestReplyBatch.messages.map((message) => ({ ...message }));
-    conversation.messages = conversation.messages.slice(0, latestReplyBatch.startIndex);
-    recalculateConversationUpdatedAt(conversation);
-    persistConversations();
-    history = selectConversationHistory(conversation.messages, promptSettings.historyRounds);
-    if (!suppressUi) {
-      renderMessagesPage();
-      setMessagesStatus("正在重新生成回复…");
-    }
-  } else {
-    history = selectConversationHistory(conversation.messages, promptSettings.historyRounds);
-    if (!suppressUi) {
-      renderMessagesPage();
-      setMessagesStatus("正在等待对方回复…");
-    }
-  }
-
   try {
+    state.requestingConversationId = conversation.id;
+    if (!suppressUi) {
+      renderMessagesPage();
+    }
+    if (!isRegenerate) {
+      await maybeAutoGenerateSchedulesForConversation(conversation);
+    }
+    if (isRegenerate) {
+      const latestReplyBatch = getLatestAssistantReplyBatch(conversation);
+      removedReplyBatch = latestReplyBatch.messages.map((message) => ({ ...message }));
+      conversation.messages = conversation.messages.slice(0, latestReplyBatch.startIndex);
+      recalculateConversationUpdatedAt(conversation);
+      persistConversations();
+      history = selectConversationHistory(conversation.messages, promptSettings.historyRounds);
+    } else {
+      history = selectConversationHistory(conversation.messages, promptSettings.historyRounds);
+    }
+
+    state.sendingConversationId = conversation.id;
+    if (!suppressUi) {
+      setMessagesStatus(isRegenerate ? "正在重新生成回复…" : "正在等待对方回复…");
+      renderMessagesPage();
+    }
+
     const replyResult = await requestChatReplyText(
       settings,
       state.profile,
@@ -11100,6 +11213,7 @@ async function requestConversationReply(options = {}) {
       throw error;
     }
   } finally {
+    state.requestingConversationId = "";
     state.sendingConversationId = "";
     if (!suppressUi) {
       renderMessagesPage();
@@ -11109,9 +11223,13 @@ async function requestConversationReply(options = {}) {
 }
 
 function syncSendingConversationStateFromReplyTasks() {
+  requeueStaleProcessingReplyTasks();
   const activeConversationId = String(state.activeConversationId || "").trim();
   if (!activeConversationId) {
-    if (!loadReplyTasks().some((task) => task.status === "processing")) {
+    if (
+      !loadReplyTasks().some((task) => task.status === "processing" && !isReplyTaskStale(task)) &&
+      !state.requestingConversationId
+    ) {
       state.sendingConversationId = "";
     }
     return;
@@ -11119,6 +11237,12 @@ function syncSendingConversationStateFromReplyTasks() {
   const activeTask = getProcessingReplyTaskForConversation(activeConversationId);
   if (activeTask) {
     state.sendingConversationId = activeConversationId;
+    return;
+  }
+  if (
+    state.requestingConversationId === activeConversationId &&
+    state.sendingConversationId === activeConversationId
+  ) {
     return;
   }
   if (state.sendingConversationId === activeConversationId) {
@@ -11130,10 +11254,13 @@ async function resumePendingReplyTaskForConversation(
   conversationId = state.activeConversationId
 ) {
   const resolvedConversationId = String(conversationId || "").trim();
+  requeueStaleProcessingReplyTasks({
+    conversationId: resolvedConversationId
+  });
   if (
     !resolvedConversationId ||
     state.replyResumeBusy ||
-    state.sendingConversationId === resolvedConversationId ||
+    isConversationReplyBusy(resolvedConversationId) ||
     document.hidden
   ) {
     return false;
@@ -11146,7 +11273,10 @@ async function resumePendingReplyTaskForConversation(
   const hasPendingUserMessages = conversation?.messages?.some(
     (message) => message.role === "user" && message.needsReply
   );
-  if (!conversation || !hasPendingUserMessages) {
+  const hasRegenerateSource = Boolean(
+    pendingTask.regenerate && getLatestAssistantReplyBatch(conversation)
+  );
+  if (!conversation || (!hasPendingUserMessages && !hasRegenerateSource)) {
     removeReplyTask(pendingTask.id);
     syncSendingConversationStateFromReplyTasks();
     return false;
@@ -11172,6 +11302,7 @@ async function pumpBackgroundReplyTasks() {
   if (!isBackgroundMessagesWorker() || state.backgroundReplyTaskBusy) {
     return;
   }
+  requeueStaleProcessingReplyTasks();
   const nextTask = getNextPendingReplyTask();
   if (!nextTask) {
     return;
@@ -11180,9 +11311,12 @@ async function pumpBackgroundReplyTasks() {
   state.backgroundReplyTaskBusy = true;
   updateReplyTask(nextTask.id, {
     status: "processing",
-    errorMessage: ""
+    errorMessage: "",
+    startedAt: Date.now(),
+    heartbeatAt: Date.now()
   });
   refreshStateFromStorage();
+  const stopHeartbeat = startReplyTaskHeartbeat(nextTask.id);
 
   try {
     await requestConversationReply({
@@ -11199,6 +11333,7 @@ async function pumpBackgroundReplyTasks() {
       errorMessage: error?.message || "请求失败"
     });
   } finally {
+    stopHeartbeat();
     state.backgroundReplyTaskBusy = false;
     if (getNextPendingReplyTask()) {
       window.setTimeout(() => {
@@ -11209,6 +11344,7 @@ async function pumpBackgroundReplyTasks() {
 }
 
 function initBackgroundMessagesWorker() {
+  requeueStaleProcessingReplyTasks();
   refreshStateFromStorage();
   sanitizePresenceStateReferences();
   persistPresenceState();

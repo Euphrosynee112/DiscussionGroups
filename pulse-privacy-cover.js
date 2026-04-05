@@ -445,6 +445,48 @@
     return encoded;
   }
 
+  function getNamePlaceholderEntityIndex(placeholder = "") {
+    const match = String(placeholder || "")
+      .trim()
+      .match(/^__PG_NAME_(\d{2})_[A-Z]+(?:_\d{2})?__$/);
+    return match?.[1] || "";
+  }
+
+  function getNameFallbackPriority(entry = {}) {
+    const level = normalizeNameAliasLevel(entry?.nameLevel || "");
+    const priorityMap = {
+      COMMON: 0,
+      FULL: 1,
+      NICK: 2,
+      PET: 3,
+      HONOR: 4
+    };
+    return Object.prototype.hasOwnProperty.call(priorityMap, level) ? priorityMap[level] : 99;
+  }
+
+  function buildNamePlaceholderFallbackMap(session) {
+    const fallbackMap = new Map();
+    [...(session?.replacements || [])]
+      .filter((entry) => String(entry?.category || "").trim() === "NAME")
+      .forEach((entry) => {
+        const entityIndex = getNamePlaceholderEntityIndex(entry?.placeholder);
+        const raw = trimText(entry?.raw);
+        if (!entityIndex || !raw) {
+          return;
+        }
+        const currentEntry = fallbackMap.get(entityIndex);
+        if (
+          !currentEntry ||
+          getNameFallbackPriority(entry) < getNameFallbackPriority(currentEntry)
+        ) {
+          fallbackMap.set(entityIndex, entry);
+        }
+      });
+    return new Map(
+      [...fallbackMap.entries()].map(([entityIndex, entry]) => [entityIndex, entry.raw])
+    );
+  }
+
   function decodeText(value, session) {
     const text = String(value ?? "");
     if (!text || !session) {
@@ -458,6 +500,15 @@
       }
       decoded = decoded.split(entry.placeholder).join(entry.raw);
     });
+    if (decoded.includes("__PG_NAME_")) {
+      const nameFallbackMap = buildNamePlaceholderFallbackMap(session);
+      if (nameFallbackMap.size) {
+        decoded = decoded.replace(
+          /__PG_NAME_(\d{2})_[A-Z]+(?:_\d{2})?__/g,
+          (match, entityIndex) => nameFallbackMap.get(entityIndex) || match
+        );
+      }
+    }
     return decoded;
   }
 

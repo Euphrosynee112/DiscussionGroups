@@ -2,8 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260405-165622";
-const APP_BUILD_UPDATED_AT = "2026-04-05 16:56:22";
+const APP_BUILD_VERSION = "20260405-193234";
+const APP_BUILD_UPDATED_AT = "2026-04-05 19:32:34";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -32,11 +32,29 @@ const TRANSFER_SCHEDULE_CONTACT_ITEM_PREFIX = "__schedule_owner__contact:";
 const homeSceneEl = document.querySelector(".home-scene");
 const phoneDateEl = document.querySelector("#phone-date");
 const phoneClockEl = document.querySelector("#phone-clock");
+const phoneEffectiveTimeEl = document.querySelector("#phone-effective-time");
 const statusVersionEl = document.querySelector("#status-version");
 const statusUpdatedEl = document.querySelector("#status-updated");
+const homeTimeTriggerBtn = document.querySelector("#home-time-trigger");
 const homeSettingsTriggerBtn = document.querySelector("#home-settings-trigger");
+const homeRulesTriggerBtn = document.querySelector("#home-rules-trigger");
 const homeSettingsModalEl = document.querySelector("#home-settings-modal");
 const homeSettingsCloseBtn = document.querySelector("#home-settings-close-btn");
+const homeTimeModalEl = document.querySelector("#home-time-modal");
+const homeTimeCloseBtn = document.querySelector("#home-time-close-btn");
+const homeTimeEnabledEl = document.querySelector("#home-time-enabled");
+const homeTimeInputEl = document.querySelector("#home-time-input");
+const homeTimeSummaryEl = document.querySelector("#home-time-summary");
+const homeTimeStatusEl = document.querySelector("#home-time-status");
+const homeTimeUseNowBtn = document.querySelector("#home-time-use-now-btn");
+const homeTimeResetBtn = document.querySelector("#home-time-reset-btn");
+const homeRulesModalEl = document.querySelector("#home-rules-modal");
+const homeRulesCloseBtn = document.querySelector("#home-rules-close-btn");
+const homeRulesTypeListEl = document.querySelector("#home-rules-type-list");
+const homeRulesTitleEl = document.querySelector("#home-rules-title");
+const homeRulesDescriptionEl = document.querySelector("#home-rules-description");
+const homeRulesStatusEl = document.querySelector("#home-rules-status");
+const homeRulesSectionsEl = document.querySelector("#home-rules-sections");
 const homeActiveConfigSummaryEl = document.querySelector("#home-active-config-summary");
 const homeApiModeSelect = document.querySelector("#home-api-mode");
 const homeApiEndpointInput = document.querySelector("#home-api-endpoint");
@@ -123,6 +141,11 @@ const DEFAULT_SETTINGS = {
   summaryApiEnabled: false,
   summaryApiConfigId: "",
   privacyAllowlist: [],
+  manualTimeSettings: {
+    enabled: false,
+    value: ""
+  },
+  promptRules: {},
   chatGlobalSettings: {
     userPresenceScope: "global"
   }
@@ -131,9 +154,13 @@ const DEFAULT_SETTINGS = {
 const homeState = {
   settings: loadSettings(),
   modalOpen: false,
+  timeModalOpen: false,
+  rulesModalOpen: false,
   browserOpen: false,
   activeAppUrl: "",
   activeAppTab: "home",
+  rulesActivePromptType: "",
+  rulesDragState: null,
   exportTransferSelection: [],
   pendingImportTransferPayload: null,
   importTransferSelection: [],
@@ -432,6 +459,19 @@ function buildNormalizedSettingsSnapshot(source, options = {}) {
     merged.summaryApiEnabled = false;
   }
   merged.summaryApiEnabled = Boolean(merged.summaryApiEnabled && merged.summaryApiConfigId);
+  merged.manualTimeSettings =
+    typeof window.PulsePromptConfig?.normalizeManualTimeSettings === "function"
+      ? window.PulsePromptConfig.normalizeManualTimeSettings(merged.manualTimeSettings)
+      : {
+          enabled: Boolean(merged.manualTimeSettings?.enabled),
+          value: String(merged.manualTimeSettings?.value || "").trim()
+        };
+  merged.promptRules =
+    typeof window.PulsePromptConfig?.normalizePromptRules === "function"
+      ? window.PulsePromptConfig.normalizePromptRules(merged.promptRules)
+      : merged.promptRules && typeof merged.promptRules === "object"
+        ? { ...merged.promptRules }
+        : {};
   merged.chatGlobalSettings = normalizeChatGlobalSettings(
     merged.chatGlobalSettings || source?.chatGlobalSettings || {}
   );
@@ -483,6 +523,173 @@ function setHomeTransferStatus(message, tone = "") {
   homeConfigTransferStatusEl.className = "home-settings-status";
   if (tone) {
     homeConfigTransferStatusEl.classList.add(tone);
+  }
+}
+
+function setHomeTimeStatus(message, tone = "") {
+  if (!homeTimeStatusEl) {
+    return;
+  }
+  homeTimeStatusEl.textContent = message;
+  homeTimeStatusEl.className = "home-settings-status";
+  if (tone) {
+    homeTimeStatusEl.classList.add(tone);
+  }
+}
+
+function setHomeRulesStatus(message, tone = "") {
+  if (!homeRulesStatusEl) {
+    return;
+  }
+  homeRulesStatusEl.textContent = message;
+  homeRulesStatusEl.className = "home-settings-status";
+  if (tone) {
+    homeRulesStatusEl.classList.add(tone);
+  }
+}
+
+function cloneHomePlain(value) {
+  if (typeof window.PulsePromptConfig?.clonePlain === "function") {
+    return window.PulsePromptConfig.clonePlain(value);
+  }
+  if (value == null) {
+    return value;
+  }
+  return JSON.parse(JSON.stringify(value));
+}
+
+function normalizeHomeManualTimeSettings(settings = homeState.settings) {
+  if (typeof window.PulsePromptConfig?.normalizeManualTimeSettings === "function") {
+    return window.PulsePromptConfig.normalizeManualTimeSettings(settings?.manualTimeSettings);
+  }
+  return {
+    enabled: Boolean(settings?.manualTimeSettings?.enabled),
+    value: String(settings?.manualTimeSettings?.value || "").trim()
+  };
+}
+
+function normalizeHomePromptRules(settings = homeState.settings) {
+  if (typeof window.PulsePromptConfig?.normalizePromptRules === "function") {
+    return window.PulsePromptConfig.normalizePromptRules(settings?.promptRules || {});
+  }
+  return settings?.promptRules && typeof settings.promptRules === "object"
+    ? cloneHomePlain(settings.promptRules)
+    : {};
+}
+
+function getHomePromptCatalogList() {
+  if (typeof window.PulsePromptConfig?.getPromptCatalogList === "function") {
+    return window.PulsePromptConfig.getPromptCatalogList();
+  }
+  return [];
+}
+
+function getActiveHomeRulePromptType() {
+  const promptCatalogList = getHomePromptCatalogList();
+  const activePromptType = String(homeState.rulesActivePromptType || "").trim();
+  if (promptCatalogList.some((item) => item.id === activePromptType)) {
+    return activePromptType;
+  }
+  return promptCatalogList[0]?.id || "";
+}
+
+function renderHomeEffectiveTime(settings = homeState.settings) {
+  if (!phoneEffectiveTimeEl) {
+    return;
+  }
+  const timeLabel =
+    typeof window.PulsePromptConfig?.formatPromptTimeLabel === "function"
+      ? window.PulsePromptConfig.formatPromptTimeLabel(settings)
+      : normalizeHomeManualTimeSettings(settings).enabled
+        ? String(normalizeHomeManualTimeSettings(settings).value || "").trim() || "跟随本地时间"
+        : "跟随本地时间";
+  phoneEffectiveTimeEl.textContent = `Prompt 时间：${timeLabel || "跟随本地时间"}`;
+}
+
+function persistHomeSettingsSnapshot(nextSettings, options = {}) {
+  homeState.settings = buildNormalizedSettingsSnapshot(nextSettings, {
+    forceActiveConfig: Boolean(options.forceActiveConfig)
+  });
+  persistSettings(homeState.settings);
+  renderHomeEffectiveTime(homeState.settings);
+  return homeState.settings;
+}
+
+function ensureHomePromptRuleSectionConfig(promptType = "", sectionKey = "") {
+  const resolvedPromptType = String(promptType || "").trim();
+  const resolvedSectionKey = String(sectionKey || "").trim();
+  const promptRules = normalizeHomePromptRules(homeState.settings);
+  if (!resolvedPromptType || !resolvedSectionKey) {
+    return {
+      promptRules,
+      promptConfig: null,
+      sectionConfig: null
+    };
+  }
+
+  if (!promptRules[resolvedPromptType] || typeof promptRules[resolvedPromptType] !== "object") {
+    promptRules[resolvedPromptType] = {
+      sectionOrder: [],
+      sections: {}
+    };
+  }
+
+  const promptConfig = promptRules[resolvedPromptType];
+  if (!promptConfig.sections || typeof promptConfig.sections !== "object") {
+    promptConfig.sections = {};
+  }
+  if (
+    !promptConfig.sections[resolvedSectionKey] ||
+    typeof promptConfig.sections[resolvedSectionKey] !== "object"
+  ) {
+    promptConfig.sections[resolvedSectionKey] = {
+      itemOrder: [],
+      overrides: {},
+      customItems: []
+    };
+  }
+
+  const sectionConfig = promptConfig.sections[resolvedSectionKey];
+  sectionConfig.itemOrder = Array.isArray(sectionConfig.itemOrder)
+    ? sectionConfig.itemOrder.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  sectionConfig.overrides =
+    sectionConfig.overrides && typeof sectionConfig.overrides === "object"
+      ? { ...sectionConfig.overrides }
+      : {};
+  sectionConfig.customItems = Array.isArray(sectionConfig.customItems)
+    ? sectionConfig.customItems.map((item, index) => ({
+        id: String(item?.id || `custom_${index}`).trim(),
+        text: String(item?.text || "")
+      }))
+    : [];
+
+  return {
+    promptRules,
+    promptConfig,
+    sectionConfig
+  };
+}
+
+function getHomePromptSectionItemOrder(promptType = "", sectionKey = "") {
+  const editorModel =
+    typeof window.PulsePromptConfig?.buildEditorModel === "function"
+      ? window.PulsePromptConfig.buildEditorModel(promptType, homeState.settings)
+      : null;
+  const targetSection =
+    editorModel?.sections?.find((section) => section.key === String(sectionKey || "").trim()) || null;
+  return Array.isArray(targetSection?.items)
+    ? targetSection.items.map((item) => String(item?.id || "").trim()).filter(Boolean)
+    : [];
+}
+
+function persistHomePromptRules(promptRules, statusMessage = "规则已保存。") {
+  persistHomeSettingsSnapshot({
+    ...homeState.settings,
+    promptRules
+  });
+  if (statusMessage) {
+    setHomeRulesStatus(statusMessage, "success");
   }
 }
 
@@ -3543,6 +3750,13 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
   persistSettings(homeState.settings);
   applySettingsToHomeForm(homeState.settings);
   syncHomeActiveConfigSummary();
+  renderHomeEffectiveTime(homeState.settings);
+  if (homeState.timeModalOpen) {
+    renderHomeTimeModal();
+  }
+  if (homeState.rulesModalOpen) {
+    renderHomeRulesModal();
+  }
   refreshHomeTransferExportSelection();
   setHomeImportReviewOpen(false);
 }
@@ -3953,8 +4167,15 @@ function setHomeSettingsModalOpen(isOpen) {
   }
 
   if (homeState.modalOpen) {
+    if (homeState.timeModalOpen) {
+      setHomeTimeModalOpen(false);
+    }
+    if (homeState.rulesModalOpen) {
+      setHomeRulesModalOpen(false);
+    }
     homeState.settings = loadSettings();
     applySettingsToHomeForm(homeState.settings);
+    renderHomeEffectiveTime(homeState.settings);
     refreshHomeTransferExportSelection();
     setHomeExportReviewOpen(false);
     setHomeImportReviewOpen(false);
@@ -3970,6 +4191,422 @@ function setHomeSettingsModalOpen(isOpen) {
   setHomeExportReviewOpen(false);
   setHomeImportReviewOpen(false);
   hideHomeLayer(homeSettingsModalEl);
+  refreshBodyModalState();
+}
+
+function renderHomeTimeModal() {
+  const manualTimeSettings = normalizeHomeManualTimeSettings(homeState.settings);
+  const fallbackPromptNow =
+    typeof window.PulsePromptConfig?.resolvePromptNow === "function"
+      ? window.PulsePromptConfig.resolvePromptNow(homeState.settings, new Date())
+      : new Date();
+  const inputValue =
+    manualTimeSettings.value ||
+    (typeof window.PulsePromptConfig?.formatDateTimeInputValue === "function"
+      ? window.PulsePromptConfig.formatDateTimeInputValue(fallbackPromptNow)
+      : "");
+
+  if (homeTimeEnabledEl) {
+    homeTimeEnabledEl.checked = manualTimeSettings.enabled;
+  }
+  if (homeTimeInputEl) {
+    homeTimeInputEl.value = inputValue;
+  }
+  if (homeTimeSummaryEl) {
+    homeTimeSummaryEl.textContent = manualTimeSettings.enabled
+      ? `当前发送给 prompt 的时间：${
+          typeof window.PulsePromptConfig?.formatPromptTimeLabel === "function"
+            ? window.PulsePromptConfig.formatPromptTimeLabel(homeState.settings)
+            : inputValue || "跟随本地时间"
+        }`
+      : "当前发送给 prompt 的时间：跟随本地时间";
+  }
+}
+
+function saveHomeManualTimeSettings(nextManualTimeSettings, options = {}) {
+  persistHomeSettingsSnapshot({
+    ...homeState.settings,
+    manualTimeSettings: nextManualTimeSettings
+  });
+  renderHomeTimeModal();
+  if (options.statusMessage) {
+    setHomeTimeStatus(options.statusMessage, options.statusTone || "success");
+  }
+}
+
+function commitHomeManualTimeFromControls(options = {}) {
+  const nextEnabled = Boolean(homeTimeEnabledEl?.checked);
+  const nextValue = String(homeTimeInputEl?.value || "").trim();
+  const currentSettings = normalizeHomeManualTimeSettings(homeState.settings);
+  const resolvedValue = nextValue || currentSettings.value || "";
+
+  if (nextEnabled && !resolvedValue) {
+    setHomeTimeStatus("请先选择一个生效时间。", "error");
+    return false;
+  }
+
+  saveHomeManualTimeSettings(
+    {
+      enabled: nextEnabled,
+      value: resolvedValue
+    },
+    {
+      statusMessage: options.statusMessage || "Prompt 时间已保存。",
+      statusTone: options.statusTone || "success"
+    }
+  );
+  return true;
+}
+
+function setHomeTimeModalOpen(isOpen) {
+  homeState.timeModalOpen = Boolean(isOpen);
+  if (!homeTimeModalEl) {
+    return;
+  }
+
+  if (homeState.timeModalOpen) {
+    if (homeState.modalOpen) {
+      setHomeSettingsModalOpen(false);
+    }
+    if (homeState.rulesModalOpen) {
+      setHomeRulesModalOpen(false);
+    }
+    homeState.settings = loadSettings({ forceActiveConfig: false });
+    renderHomeEffectiveTime(homeState.settings);
+    setHomeTimeStatus("");
+    renderHomeTimeModal();
+    showHomeLayer(homeTimeModalEl, "grid");
+    refreshBodyModalState();
+    window.setTimeout(() => {
+      if (homeTimeEnabledEl?.checked) {
+        homeTimeInputEl?.focus();
+        return;
+      }
+      homeTimeEnabledEl?.focus();
+    }, 0);
+    return;
+  }
+
+  hideHomeLayer(homeTimeModalEl);
+  refreshBodyModalState();
+}
+
+function renderHomeRulesModal() {
+  const promptCatalogList = getHomePromptCatalogList();
+  const activePromptType = getActiveHomeRulePromptType();
+  homeState.rulesActivePromptType = activePromptType;
+
+  if (homeRulesTypeListEl) {
+    homeRulesTypeListEl.innerHTML = promptCatalogList.length
+      ? promptCatalogList
+          .map((item) => {
+            const isActive = item.id === activePromptType;
+            return `
+              <button
+                class="home-rules-type-btn${isActive ? " is-active" : ""}"
+                type="button"
+                data-action="select-home-rule-type"
+                data-prompt-type="${escapeHtml(item.id)}"
+              >
+                <p class="home-rules-type-btn__group">${escapeHtml(item.group || "Prompt")}</p>
+                <h3 class="home-rules-type-btn__title">${escapeHtml(item.label || item.id)}</h3>
+                <p class="home-rules-type-btn__desc">${escapeHtml(item.description || "未填写说明")}</p>
+              </button>
+            `;
+          })
+          .join("")
+      : '<p class="home-empty-state">当前没有可编辑的 prompt 规则。</p>';
+  }
+
+  const editorModel =
+    typeof window.PulsePromptConfig?.buildEditorModel === "function"
+      ? window.PulsePromptConfig.buildEditorModel(activePromptType, homeState.settings)
+      : null;
+
+  if (homeRulesTitleEl) {
+    homeRulesTitleEl.textContent = editorModel?.label || "规则配置";
+  }
+  if (homeRulesDescriptionEl) {
+    homeRulesDescriptionEl.textContent = editorModel?.description || "可拖动排序并调整内置文字。";
+  }
+
+  if (!homeRulesSectionsEl) {
+    return;
+  }
+
+  homeRulesSectionsEl.innerHTML =
+    editorModel?.sections?.length
+      ? editorModel.sections
+          .map((section) => {
+            const sectionKey = String(section.key || "").trim();
+            const itemsMarkup = (section.items || [])
+              .map((item) => {
+                const itemId = String(item.id || "").trim();
+                const kindLabel =
+                  item.kind === "dynamic"
+                    ? "运行时读取"
+                    : item.kind === "custom"
+                      ? "自定义文字"
+                      : "内置文字";
+                const kindClass =
+                  item.kind === "dynamic"
+                    ? " home-rules-badge--dynamic"
+                    : item.kind === "custom"
+                      ? " home-rules-badge--custom"
+                      : "";
+                const contentMarkup = item.editable
+                  ? `
+                    <textarea
+                      class="home-rules-item__textarea"
+                      data-action="edit-home-rule-item"
+                      data-prompt-type="${escapeHtml(activePromptType)}"
+                      data-section-key="${escapeHtml(sectionKey)}"
+                      data-item-id="${escapeHtml(itemId)}"
+                      spellcheck="false"
+                    >${escapeHtml(item.text || "")}</textarea>
+                  `
+                  : `
+                    <div class="home-rules-item__runtime">${escapeHtml(
+                      item.hint || "运行时读取"
+                    )}</div>
+                  `;
+                const removeMarkup =
+                  item.kind === "custom"
+                    ? `
+                      <button
+                        class="home-chip home-chip--danger home-rules-item__remove"
+                        type="button"
+                        data-action="remove-home-rule-custom"
+                        data-prompt-type="${escapeHtml(activePromptType)}"
+                        data-section-key="${escapeHtml(sectionKey)}"
+                        data-item-id="${escapeHtml(itemId)}"
+                      >
+                        删除
+                      </button>
+                    `
+                    : '<span aria-hidden="true"></span>';
+                return `
+                  <article
+                    class="home-rules-item"
+                    draggable="true"
+                    data-prompt-type="${escapeHtml(activePromptType)}"
+                    data-section-key="${escapeHtml(sectionKey)}"
+                    data-item-id="${escapeHtml(itemId)}"
+                  >
+                    <button
+                      class="home-rules-item__drag"
+                      type="button"
+                      tabindex="-1"
+                      aria-label="拖动排序"
+                    >
+                      ⋮⋮
+                    </button>
+                    <div class="home-rules-item__body">
+                      <div class="home-rules-item__meta">
+                        <p class="home-rules-item__title">${escapeHtml(item.label || itemId)}</p>
+                        <span class="home-rules-badge${kindClass}">${escapeHtml(kindLabel)}</span>
+                      </div>
+                      ${contentMarkup}
+                      <p class="home-rules-item__hint">${escapeHtml(
+                        item.hint || "可拖动排序"
+                      )}</p>
+                    </div>
+                    ${removeMarkup}
+                  </article>
+                `;
+              })
+              .join("");
+            return `
+              <section class="home-rules-section">
+                <div class="home-rules-section__head">
+                  <h4 class="home-rules-section__title">${escapeHtml(section.label || sectionKey)}</h4>
+                  <button
+                    class="home-chip"
+                    type="button"
+                    data-action="add-home-rule-custom"
+                    data-prompt-type="${escapeHtml(activePromptType)}"
+                    data-section-key="${escapeHtml(sectionKey)}"
+                  >
+                    添加自定义文字
+                  </button>
+                </div>
+                <div
+                  class="home-rules-section__list"
+                  data-prompt-type="${escapeHtml(activePromptType)}"
+                  data-section-key="${escapeHtml(sectionKey)}"
+                >
+                  ${itemsMarkup}
+                </div>
+              </section>
+            `;
+          })
+          .join("")
+      : '<p class="home-empty-state">当前 prompt 暂无可编辑内容。</p>';
+}
+
+function updateHomeRuleItemText(promptType = "", sectionKey = "", itemId = "", value = "") {
+  const resolvedPromptType = String(promptType || "").trim();
+  const resolvedSectionKey = String(sectionKey || "").trim();
+  const resolvedItemId = String(itemId || "").trim();
+  if (!resolvedPromptType || !resolvedSectionKey || !resolvedItemId) {
+    return;
+  }
+
+  const { promptRules, sectionConfig } = ensureHomePromptRuleSectionConfig(
+    resolvedPromptType,
+    resolvedSectionKey
+  );
+  if (!sectionConfig) {
+    return;
+  }
+
+  const customItemIndex = sectionConfig.customItems.findIndex((item) => item.id === resolvedItemId);
+  if (customItemIndex >= 0) {
+    sectionConfig.customItems[customItemIndex] = {
+      ...sectionConfig.customItems[customItemIndex],
+      text: String(value || "")
+    };
+  } else {
+    sectionConfig.overrides[resolvedItemId] = String(value || "");
+  }
+
+  persistHomePromptRules(promptRules, "");
+  setHomeRulesStatus("规则已保存。", "success");
+}
+
+function addHomeRuleCustomItem(promptType = "", sectionKey = "") {
+  const resolvedPromptType = String(promptType || "").trim();
+  const resolvedSectionKey = String(sectionKey || "").trim();
+  if (!resolvedPromptType || !resolvedSectionKey) {
+    return;
+  }
+
+  const { promptRules, sectionConfig } = ensureHomePromptRuleSectionConfig(
+    resolvedPromptType,
+    resolvedSectionKey
+  );
+  if (!sectionConfig) {
+    return;
+  }
+
+  const customItemId =
+    typeof window.PulsePromptConfig?.createCustomItemId === "function"
+      ? window.PulsePromptConfig.createCustomItemId(resolvedPromptType, resolvedSectionKey)
+      : `custom_${resolvedPromptType}_${resolvedSectionKey}_${Date.now()}`;
+  sectionConfig.customItems = [
+    ...sectionConfig.customItems,
+    {
+      id: customItemId,
+      text: ""
+    }
+  ];
+  sectionConfig.itemOrder = [
+    ...getHomePromptSectionItemOrder(resolvedPromptType, resolvedSectionKey),
+    customItemId
+  ];
+  persistHomePromptRules(promptRules, "已新增一条自定义文字。");
+  renderHomeRulesModal();
+  window.setTimeout(() => {
+    homeRulesSectionsEl
+      ?.querySelector(
+        `[data-action="edit-home-rule-item"][data-prompt-type="${CSS.escape(
+          resolvedPromptType
+        )}"][data-section-key="${CSS.escape(resolvedSectionKey)}"][data-item-id="${CSS.escape(
+          customItemId
+        )}"]`
+      )
+      ?.focus();
+  }, 0);
+}
+
+function removeHomeRuleCustomItem(promptType = "", sectionKey = "", itemId = "") {
+  const resolvedPromptType = String(promptType || "").trim();
+  const resolvedSectionKey = String(sectionKey || "").trim();
+  const resolvedItemId = String(itemId || "").trim();
+  if (!resolvedPromptType || !resolvedSectionKey || !resolvedItemId) {
+    return;
+  }
+
+  const { promptRules, sectionConfig } = ensureHomePromptRuleSectionConfig(
+    resolvedPromptType,
+    resolvedSectionKey
+  );
+  if (!sectionConfig) {
+    return;
+  }
+  sectionConfig.customItems = sectionConfig.customItems.filter((item) => item.id !== resolvedItemId);
+  sectionConfig.itemOrder = sectionConfig.itemOrder.filter((item) => item !== resolvedItemId);
+  delete sectionConfig.overrides[resolvedItemId];
+  persistHomePromptRules(promptRules, "已删除这条自定义文字。");
+  renderHomeRulesModal();
+}
+
+function moveHomeRuleItem(promptType = "", sectionKey = "", sourceItemId = "", targetItemId = "") {
+  const resolvedPromptType = String(promptType || "").trim();
+  const resolvedSectionKey = String(sectionKey || "").trim();
+  const resolvedSourceItemId = String(sourceItemId || "").trim();
+  const resolvedTargetItemId = String(targetItemId || "").trim();
+  if (!resolvedPromptType || !resolvedSectionKey || !resolvedSourceItemId) {
+    return;
+  }
+  if (resolvedTargetItemId && resolvedTargetItemId === resolvedSourceItemId) {
+    return;
+  }
+
+  const { promptRules, sectionConfig } = ensureHomePromptRuleSectionConfig(
+    resolvedPromptType,
+    resolvedSectionKey
+  );
+  if (!sectionConfig) {
+    return;
+  }
+
+  const currentOrder = getHomePromptSectionItemOrder(resolvedPromptType, resolvedSectionKey);
+  const nextOrder = currentOrder.filter((item) => item !== resolvedSourceItemId);
+  if (!currentOrder.includes(resolvedSourceItemId)) {
+    return;
+  }
+
+  if (resolvedTargetItemId && nextOrder.includes(resolvedTargetItemId)) {
+    const targetIndex = nextOrder.indexOf(resolvedTargetItemId);
+    nextOrder.splice(targetIndex, 0, resolvedSourceItemId);
+  } else {
+    nextOrder.push(resolvedSourceItemId);
+  }
+
+  sectionConfig.itemOrder = nextOrder;
+  persistHomePromptRules(promptRules, "顺序已更新。");
+  renderHomeRulesModal();
+}
+
+function setHomeRulesModalOpen(isOpen) {
+  homeState.rulesModalOpen = Boolean(isOpen);
+  if (!homeRulesModalEl) {
+    return;
+  }
+
+  if (homeState.rulesModalOpen) {
+    if (homeState.modalOpen) {
+      setHomeSettingsModalOpen(false);
+    }
+    if (homeState.timeModalOpen) {
+      setHomeTimeModalOpen(false);
+    }
+    homeState.settings = loadSettings({ forceActiveConfig: false });
+    homeState.rulesActivePromptType = getActiveHomeRulePromptType();
+    homeState.rulesDragState = null;
+    setHomeRulesStatus("");
+    renderHomeRulesModal();
+    showHomeLayer(homeRulesModalEl, "grid");
+    refreshBodyModalState();
+    window.setTimeout(() => {
+      homeRulesTypeListEl?.querySelector(".home-rules-type-btn.is-active")?.focus();
+    }, 0);
+    return;
+  }
+
+  homeState.rulesDragState = null;
+  hideHomeLayer(homeRulesModalEl);
   refreshBodyModalState();
 }
 
@@ -4033,7 +4670,11 @@ function getHomeAppMeta(tabName = "home") {
 function refreshBodyModalState() {
   document.body.classList.toggle(
     "modal-open",
-    homeState.modalOpen || homeState.browserOpen || homeState.privacyAddModalOpen
+    homeState.modalOpen ||
+      homeState.timeModalOpen ||
+      homeState.rulesModalOpen ||
+      homeState.browserOpen ||
+      homeState.privacyAddModalOpen
   );
 }
 
@@ -4050,6 +4691,12 @@ function setHomeBrowserModalOpen(
   if (homeState.browserOpen) {
     if (homeState.modalOpen) {
       setHomeSettingsModalOpen(false);
+    }
+    if (homeState.timeModalOpen) {
+      setHomeTimeModalOpen(false);
+    }
+    if (homeState.rulesModalOpen) {
+      setHomeRulesModalOpen(false);
     }
     const resolvedAppMeta = appMeta || getHomeAppMeta(homeState.activeAppTab);
     homeState.activeAppUrl = url || homeState.activeAppUrl || "./discussion.html?tab=home";
@@ -4209,15 +4856,39 @@ function attachHomeSettingsEvents() {
     });
   });
 
+  if (homeTimeTriggerBtn) {
+    homeTimeTriggerBtn.addEventListener("click", () => {
+      setHomeTimeModalOpen(true);
+    });
+  }
+
   if (homeSettingsTriggerBtn) {
     homeSettingsTriggerBtn.addEventListener("click", () => {
       setHomeSettingsModalOpen(true);
     });
   }
 
+  if (homeRulesTriggerBtn) {
+    homeRulesTriggerBtn.addEventListener("click", () => {
+      setHomeRulesModalOpen(true);
+    });
+  }
+
   if (homeSettingsCloseBtn) {
     homeSettingsCloseBtn.addEventListener("click", () => {
       setHomeSettingsModalOpen(false);
+    });
+  }
+
+  if (homeTimeCloseBtn) {
+    homeTimeCloseBtn.addEventListener("click", () => {
+      setHomeTimeModalOpen(false);
+    });
+  }
+
+  if (homeRulesCloseBtn) {
+    homeRulesCloseBtn.addEventListener("click", () => {
+      setHomeRulesModalOpen(false);
     });
   }
 
@@ -4229,6 +4900,30 @@ function attachHomeSettingsEvents() {
       }
       if (target.hasAttribute("data-close-home-settings")) {
         setHomeSettingsModalOpen(false);
+      }
+    });
+  }
+
+  if (homeTimeModalEl) {
+    homeTimeModalEl.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      if (target.hasAttribute("data-close-home-time")) {
+        setHomeTimeModalOpen(false);
+      }
+    });
+  }
+
+  if (homeRulesModalEl) {
+    homeRulesModalEl.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      if (target.hasAttribute("data-close-home-rules")) {
+        setHomeRulesModalOpen(false);
       }
     });
   }
@@ -4260,6 +4955,212 @@ function attachHomeSettingsEvents() {
       window.PulseMessageNotifications?.push?.(event.data.payload || {});
     }
   });
+
+  if (homeTimeEnabledEl) {
+    homeTimeEnabledEl.addEventListener("change", () => {
+      if (
+        homeTimeEnabledEl.checked &&
+        !String(homeTimeInputEl?.value || "").trim() &&
+        typeof window.PulsePromptConfig?.formatDateTimeInputValue === "function"
+      ) {
+        homeTimeInputEl.value = window.PulsePromptConfig.formatDateTimeInputValue(new Date());
+      }
+      commitHomeManualTimeFromControls({
+        statusMessage: homeTimeEnabledEl.checked ? "已启用手动时间。" : "已恢复跟随本地时间。"
+      });
+    });
+  }
+
+  if (homeTimeInputEl) {
+    homeTimeInputEl.addEventListener("change", () => {
+      if (!homeTimeEnabledEl?.checked) {
+        renderHomeTimeModal();
+        return;
+      }
+      commitHomeManualTimeFromControls();
+    });
+  }
+
+  if (homeTimeUseNowBtn) {
+    homeTimeUseNowBtn.addEventListener("click", () => {
+      if (typeof window.PulsePromptConfig?.formatDateTimeInputValue === "function") {
+        homeTimeInputEl.value = window.PulsePromptConfig.formatDateTimeInputValue(new Date());
+      }
+      if (homeTimeEnabledEl) {
+        homeTimeEnabledEl.checked = true;
+      }
+      commitHomeManualTimeFromControls({
+        statusMessage: "已设置为当前本地时间。"
+      });
+    });
+  }
+
+  if (homeTimeResetBtn) {
+    homeTimeResetBtn.addEventListener("click", () => {
+      if (homeTimeEnabledEl) {
+        homeTimeEnabledEl.checked = false;
+      }
+      saveHomeManualTimeSettings(
+        {
+          enabled: false,
+          value: String(homeTimeInputEl?.value || "").trim()
+        },
+        {
+          statusMessage: "已恢复跟随本地时间。"
+        }
+      );
+    });
+  }
+
+  if (homeRulesTypeListEl) {
+    homeRulesTypeListEl.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      const actionEl = target.closest("[data-action='select-home-rule-type']");
+      if (!(actionEl instanceof HTMLElement)) {
+        return;
+      }
+      homeState.rulesActivePromptType = String(actionEl.dataset.promptType || "").trim();
+      setHomeRulesStatus("");
+      renderHomeRulesModal();
+    });
+  }
+
+  if (homeRulesSectionsEl) {
+    homeRulesSectionsEl.addEventListener("input", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLTextAreaElement)) {
+        return;
+      }
+      if (target.dataset.action !== "edit-home-rule-item") {
+        return;
+      }
+      updateHomeRuleItemText(
+        String(target.dataset.promptType || ""),
+        String(target.dataset.sectionKey || ""),
+        String(target.dataset.itemId || ""),
+        target.value
+      );
+    });
+
+    homeRulesSectionsEl.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      const actionEl = target.closest("[data-action]");
+      if (!(actionEl instanceof HTMLElement)) {
+        return;
+      }
+      const action = String(actionEl.dataset.action || "").trim();
+      if (action === "add-home-rule-custom") {
+        addHomeRuleCustomItem(
+          String(actionEl.dataset.promptType || ""),
+          String(actionEl.dataset.sectionKey || "")
+        );
+        return;
+      }
+      if (action === "remove-home-rule-custom") {
+        removeHomeRuleCustomItem(
+          String(actionEl.dataset.promptType || ""),
+          String(actionEl.dataset.sectionKey || ""),
+          String(actionEl.dataset.itemId || "")
+        );
+      }
+    });
+
+    homeRulesSectionsEl.addEventListener("dragstart", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      const itemEl = target.closest(".home-rules-item");
+      if (!(itemEl instanceof HTMLElement)) {
+        return;
+      }
+      const promptType = String(itemEl.dataset.promptType || "").trim();
+      const sectionKey = String(itemEl.dataset.sectionKey || "").trim();
+      const itemId = String(itemEl.dataset.itemId || "").trim();
+      if (!promptType || !sectionKey || !itemId) {
+        return;
+      }
+      homeState.rulesDragState = {
+        promptType,
+        sectionKey,
+        itemId
+      };
+      itemEl.classList.add("is-dragging");
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", itemId);
+      }
+    });
+
+    homeRulesSectionsEl.addEventListener("dragover", (event) => {
+      const dragState = homeState.rulesDragState;
+      if (!dragState) {
+        return;
+      }
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      const sectionListEl = target.closest(".home-rules-section__list");
+      if (!(sectionListEl instanceof HTMLElement)) {
+        return;
+      }
+      const promptType = String(sectionListEl.dataset.promptType || "").trim();
+      const sectionKey = String(sectionListEl.dataset.sectionKey || "").trim();
+      if (promptType !== dragState.promptType || sectionKey !== dragState.sectionKey) {
+        return;
+      }
+      event.preventDefault();
+      homeRulesSectionsEl
+        .querySelectorAll(".home-rules-item.drag-over")
+        .forEach((item) => item.classList.remove("drag-over"));
+      const targetItemEl = target.closest(".home-rules-item");
+      if (targetItemEl instanceof HTMLElement) {
+        targetItemEl.classList.add("drag-over");
+      }
+    });
+
+    homeRulesSectionsEl.addEventListener("drop", (event) => {
+      const dragState = homeState.rulesDragState;
+      if (!dragState) {
+        return;
+      }
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      const sectionListEl = target.closest(".home-rules-section__list");
+      if (!(sectionListEl instanceof HTMLElement)) {
+        return;
+      }
+      const promptType = String(sectionListEl.dataset.promptType || "").trim();
+      const sectionKey = String(sectionListEl.dataset.sectionKey || "").trim();
+      if (promptType !== dragState.promptType || sectionKey !== dragState.sectionKey) {
+        return;
+      }
+      event.preventDefault();
+      const targetItemEl = target.closest(".home-rules-item");
+      moveHomeRuleItem(
+        promptType,
+        sectionKey,
+        dragState.itemId,
+        targetItemEl instanceof HTMLElement ? String(targetItemEl.dataset.itemId || "") : ""
+      );
+    });
+
+    homeRulesSectionsEl.addEventListener("dragend", () => {
+      homeState.rulesDragState = null;
+      homeRulesSectionsEl
+        .querySelectorAll(".home-rules-item.is-dragging, .home-rules-item.drag-over")
+        .forEach((item) => item.classList.remove("is-dragging", "drag-over"));
+    });
+  }
 
   [homeApiModeSelect, homeApiEndpointInput, homeApiTokenInput, homeApiModelInput]
     .filter(Boolean)
@@ -4577,6 +5478,14 @@ function attachHomeSettingsEvents() {
       setPrivacyAppAddModalOpen(false);
       return;
     }
+    if (event.key === "Escape" && homeState.timeModalOpen) {
+      setHomeTimeModalOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && homeState.rulesModalOpen) {
+      setHomeRulesModalOpen(false);
+      return;
+    }
     if (event.key === "Escape" && homeState.modalOpen) {
       setHomeSettingsModalOpen(false);
       return;
@@ -4589,12 +5498,16 @@ function attachHomeSettingsEvents() {
 
 function initHome() {
   hideHomeLayer(homeSettingsModalEl);
+  hideHomeLayer(homeTimeModalEl);
+  hideHomeLayer(homeRulesModalEl);
   hideHomeLayer(homeBrowserModalEl);
   hideHomeLayer(privacyAppAddModalEl);
   setHomeExportReviewOpen(false);
   setHomeImportReviewOpen(false);
+  homeState.settings = loadSettings({ forceActiveConfig: false });
   updateLocalClock();
   renderBuildBadge();
+  renderHomeEffectiveTime(homeState.settings);
   setInterval(updateLocalClock, 1000);
   attachHomeSettingsEvents();
 
@@ -4633,6 +5546,8 @@ function initHome() {
   ensureBackgroundMessagesWorker();
   syncHomeActiveConfigSummary();
   refreshHomeTransferExportSelection();
+  renderHomeEffectiveTime(homeState.settings);
+  refreshBodyModalState();
 }
 
 initHome();

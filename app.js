@@ -97,8 +97,23 @@ function buildPromptSectionText(value, fallback = "") {
   return text || String(fallback || "").trim();
 }
 
-function buildStructuredPromptSections(sections = {}) {
-  const resolvedSections = sections && typeof sections === "object" ? sections : {};
+function buildStructuredPromptSections(promptTypeOrSections = {}, maybeSections = null, maybeOptions = {}) {
+  if (typeof promptTypeOrSections === "string" && window.PulsePromptConfig?.buildPrompt) {
+    const configuredPrompt = window.PulsePromptConfig.buildPrompt(
+      promptTypeOrSections,
+      maybeSections && typeof maybeSections === "object" ? maybeSections : {},
+      maybeOptions && typeof maybeOptions === "object" ? maybeOptions : {}
+    );
+    if (configuredPrompt) {
+      return prependGlobalPromptGuard(configuredPrompt);
+    }
+  }
+  const resolvedSections =
+    promptTypeOrSections && typeof promptTypeOrSections === "object"
+      ? promptTypeOrSections
+      : maybeSections && typeof maybeSections === "object"
+        ? maybeSections
+        : {};
   return prependGlobalPromptGuard(
     [
       `<context_library>\n${buildPromptSectionText(
@@ -416,6 +431,10 @@ function formatAwarenessDateTime(now = new Date()) {
     .format(now)
     .replace(/^24:/, "00:");
   return `${date} ${time}`;
+}
+
+function getPromptNow(settings = state.settings || DEFAULT_SETTINGS) {
+  return window.PulsePromptConfig?.resolvePromptNow?.(settings, new Date()) || new Date();
 }
 
 function appendApiLog(entry) {
@@ -899,8 +918,9 @@ function buildCustomTabTimeAwarenessContext(tab) {
   if (!tab?.timeAwareness) {
     return "";
   }
+  const promptNow = getPromptNow(getCurrentSettings());
   return [
-    `当前本地时间：${formatAwarenessDateTime(new Date())}`,
+    `当前本地时间：${formatAwarenessDateTime(promptNow)}`,
     "请结合这个讨论区的长期讨论背景与当前核心热点里提到的日期、星期、倒计时或事件节点来判断时效性。",
     "如果设定内容指向未来某一天，请自然表现期待、等结果、预测或临近发生前的情绪；如果指向已经过去的日期，请自然表现回顾、复盘、后劲、落差或继续争论过去某天发生的事。"
   ].join("\n");
@@ -2641,43 +2661,35 @@ function buildPrompt(
     ? `这个讨论区当前存在一个主导性热点：${customTab.hotTopic}。本轮生成的绝大部分帖子都应围绕这个热点展开，但仍要拆成不同立场、不同情绪、不同细节与不同争议点。`
     : "如果这个讨论区没有单一主导热点，可围绕长期讨论背景自由展开。";
 
-  return buildStructuredPromptSections({
-    contextLibrary: [
-      "所有内容都应遵循以下世界观：",
-      settings.worldview || DEFAULT_SETTINGS.worldview,
-      forumSettingText,
-      forumPromptContext.timeAwarenessText,
-      forumPromptContext.worldbookReferenceText,
-      dominantHotTopicInstruction,
-      forumPromptContext.supplementalTopicTexts.length
-        ? `主导即时讨论语境（与页签热点同级，可共同成为主线）：\n${forumPromptContext.supplementalTopicTexts.join(
-            "\n\n"
-          )}`
-        : "",
-      forumPromptContext.repostSource
-        ? "如果需要围绕用户最近一条论坛动态展开，请把它作为被转发原帖来写，再在外层加上不同用户各自的评论。"
-        : "",
-      historyAvoidanceText || "如果没有历史缓存，可自由生成，但仍要让每条帖子讨论方向明显不同。"
-    ],
-    personaAlignment: [
-      "你是一个负责生成 X 风格中文讨论流的内容助手。",
-      `当前目标论坛讨论区是“${feedLabel}”。`
-    ],
-    outputStandard: [
-      `请严格输出 JSON 数组，并且包含 ${count} 个对象，不要输出额外解释。`,
-      "每个对象必须包含以下字段：displayName, handle, text, tags, replies, reposts, likes, views。",
-      "如需表现转发/引用帖子，可额外输出可选字段 repostSource；其中应包含 displayName, handle, text, time, tags，未使用时可省略。",
-      "输出必须是可以直接被 JSON.parse 解析的合法 JSON，所有字符串都必须使用双引号包裹。",
-      "text 需要像 X 首页上的真实讨论帖，长度控制在 50 到 300 字之间，语气自然、有观点、有轻微冲突感。",
-      "不同帖子需要分别模拟来自中国、日本、韩国、美国社区的用户发言风格。",
-      "每一条帖子必须全文保持单一语言，只能四选一：中文、日文、韩文、英文。不要在同一条帖子里混用多种语言，也不要出现中文正文里夹几句英文或日文的情况。",
-      "text 要避免整段大段文字，尽量拆成短句；每条至少 2 段，可使用换行或空一行让版式更像真人发帖。",
-      "tags 必须是数组，至少 2 个、最多 5 个标签；每个标签都必须以 # 开头，例如 #榜单、#行业洞察。",
-      "这些标签必须根据该条内容本身提炼，不能空泛重复；text 字段里不要重复输出标签行，标签只放在 tags 数组中。",
-      "严禁直接复制、引用或轻微改写世界观文本或论坛设定里的原句。你需要先理解这些设定，再把它们转化成更口语化、更具体的讨论表达。",
-      `请保证 ${count} 条内容不重复，角度不同；即使围绕同一大主题，也要主动拆出不同争议点、不同立场、不同细节切口。`
-    ]
-  });
+  return buildStructuredPromptSections(
+    "discussion_generate_posts",
+    {
+      context_library: {
+        worldview_content: settings.worldview || DEFAULT_SETTINGS.worldview,
+        forum_setting: forumSettingText,
+        time_awareness: forumPromptContext.timeAwarenessText,
+        worldbook_reference: forumPromptContext.worldbookReferenceText,
+        dominant_hot_topic: dominantHotTopicInstruction,
+        supplemental_topics: forumPromptContext.supplementalTopicTexts.length
+          ? `主导即时讨论语境（与页签热点同级，可共同成为主线）：\n${forumPromptContext.supplementalTopicTexts.join(
+              "\n\n"
+            )}`
+          : "",
+        repost_hint: forumPromptContext.repostSource
+          ? "如果需要围绕用户最近一条论坛动态展开，请把它作为被转发原帖来写，再在外层加上不同用户各自的评论。"
+          : "",
+        history_avoidance:
+          historyAvoidanceText || "如果没有历史缓存，可自由生成，但仍要让每条帖子讨论方向明显不同。"
+      }
+    },
+    {
+      settings,
+      variables: {
+        count,
+        feedLabel
+      }
+    }
+  );
 }
 
 function buildFeedSourceText(settings, feedType = state.activeFeed) {
@@ -2778,55 +2790,47 @@ function buildReplyPrompt(
       : "这是一条仅包含图片的帖子。");
   const resolvedTargetText = String(targetText || "").trim() || resolvedRootText;
 
-  return buildStructuredPromptSections({
-    contextLibrary: [
-      "整体世界观：",
-      settings.worldview || DEFAULT_SETTINGS.worldview,
-      forumSettingText,
-      forumPromptContext.timeAwarenessText,
-      forumPromptContext.worldbookReferenceText,
-      String(customTab?.hotTopic || "").trim()
-        ? `当前这个讨论区的主导热点：${customTab.hotTopic}`
-        : "",
-      forumPromptContext.supplementalTopicTexts.length
-        ? `主导即时讨论语境（与页签热点同级，可共同成为主线）：\n${forumPromptContext.supplementalTopicTexts.join(
-            "\n\n"
-          )}`
-        : "",
-      rootHasImage
-        ? "主楼附带了一张图片；如果模型能看到图片，请把图片内容也一起纳入理解和回复。"
-        : "主楼没有附图。",
-      rootPost?.repostSource
-        ? `当前主楼是一条转发/引用帖子，请同时理解被转发的原帖：\n${formatRepostSourceForPrompt(
-            rootPost.repostSource
-          )}`
-        : "",
-      "主楼内容：",
-      resolvedRootText,
-      parentReply ? "当前正在回复的上一层内容：" : "当前需要围绕主楼展开讨论的内容：",
-      resolvedTargetText
-    ],
-    personaAlignment: [
-      `你正在生成 X 风格中文讨论串中的${promptTitle}。`,
-      `当前所属论坛讨论区是“${feedLabel}”。`,
-      "回复生成优先级：",
-      "1. 首先直接回应当前帖子或上一层回复的具体内容，抓住文本里的观点、情绪、判断、细节或矛盾点。",
-      "2. 识别当前发帖用户的人设，让回复看起来像是在对这样一个具体的人说话，而不是对匿名文本发言。",
-      "3. 再结合整体世界观与论坛讨论区设定补充背景判断，但这些背景只能辅助，不能盖过帖子内容本身。",
-      "当前发帖用户人设：",
-      profile?.personaPrompt || DEFAULT_PROFILE.personaPrompt
-    ],
-    outputStandard: [
-      "请严格输出 JSON 数组，不要输出额外解释。",
-      `请生成 ${count} 条回复，每条都必须是不同用户的口吻。`,
-      "每个对象必须包含以下字段：displayName, handle, text, likes, replies。",
-      "回复语气要像真实网友跟帖，长度控制在 18 到 80 字之间，可以有赞同、反对、补充和追问。",
-      "不同回复可以分别模拟来自中国、日本、韩国、美国社区的用户发言风格。",
-      "每一条回复必须全文保持单一语言，只能四选一：中文、日文、韩文、英文。不要在同一条回复里混用多种语言。",
-      "避免整段灌水，优先短句，必要时用换行提升可读性。",
-      "请避免重复句式，并保持楼中讨论的连贯性。"
-    ]
-  });
+  return buildStructuredPromptSections(
+    "discussion_generate_replies",
+    {
+      context_library: {
+        worldview_content: settings.worldview || DEFAULT_SETTINGS.worldview,
+        forum_setting: forumSettingText,
+        time_awareness: forumPromptContext.timeAwarenessText,
+        worldbook_reference: forumPromptContext.worldbookReferenceText,
+        hot_topic: String(customTab?.hotTopic || "").trim()
+          ? `当前这个讨论区的主导热点：${customTab.hotTopic}`
+          : "",
+        supplemental_topics: forumPromptContext.supplementalTopicTexts.length
+          ? `主导即时讨论语境（与页签热点同级，可共同成为主线）：\n${forumPromptContext.supplementalTopicTexts.join(
+              "\n\n"
+            )}`
+          : "",
+        root_image_hint: rootHasImage
+          ? "主楼附带了一张图片；如果模型能看到图片，请把图片内容也一起纳入理解和回复。"
+          : "主楼没有附图。",
+        repost_source: rootPost?.repostSource
+          ? `当前主楼是一条转发/引用帖子，请同时理解被转发的原帖：\n${formatRepostSourceForPrompt(
+              rootPost.repostSource
+            )}`
+          : "",
+        root_post_text: resolvedRootText,
+        reply_target_intro: parentReply ? "当前正在回复的上一层内容：" : "当前需要围绕主楼展开讨论的内容：",
+        reply_target_text: resolvedTargetText
+      },
+      persona_alignment: {
+        author_persona_text: profile?.personaPrompt || DEFAULT_PROFILE.personaPrompt
+      }
+    },
+    {
+      settings,
+      variables: {
+        count,
+        promptTitle,
+        feedLabel
+      }
+    }
+  );
 }
 
 function getReplyPreviewSeedPost(settings) {
@@ -5482,28 +5486,32 @@ async function requestGeneratedPosts(
 }
 
 function buildTranslatePrompt(sourceText) {
-  return buildStructuredPromptSections({
-    contextLibrary: sourceText,
-    personaAlignment: "任务：把提供的内容翻译成中文，并保留原意、语气和换行。",
-    outputStandard: "只输出翻译结果，不要添加解释。"
-  });
+  return buildStructuredPromptSections(
+    "discussion_translate_text",
+    {
+      context_library: {
+        source_text: sourceText
+      }
+    },
+    {
+      settings: getCurrentSettings()
+    }
+  );
 }
 
 function buildTranslatePostPrompt(post) {
-  return buildStructuredPromptSections({
-    contextLibrary: [
-      "原文正文：",
-      post.text || "",
-      "原文标签：",
-      getRenderableTags(post, post.feedType || DEFAULT_CONTENT_FEED).join(" ")
-    ],
-    personaAlignment: "任务：把帖子翻译成中文，并保留原意、语气和换行。",
-    outputStandard: [
-      "请严格输出 JSON 数组，并且只包含 1 个对象。",
-      "对象必须包含字段：text, tags。",
-      "text 是翻译后的正文，tags 是翻译后的中文标签数组；每个标签都必须以 # 开头。"
-    ]
-  });
+  return buildStructuredPromptSections(
+    "discussion_translate_post",
+    {
+      context_library: {
+        post_text: post.text || "",
+        post_tags: getRenderableTags(post, post.feedType || DEFAULT_CONTENT_FEED).join(" ")
+      }
+    },
+    {
+      settings: getCurrentSettings()
+    }
+  );
 }
 
 function buildTranslateRequestBody(settings, prompt) {

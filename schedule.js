@@ -760,8 +760,23 @@ function buildPromptSectionText(value, fallback = "") {
   return text || String(fallback || "").trim();
 }
 
-function buildStructuredPromptSections(sections = {}) {
-  const resolvedSections = sections && typeof sections === "object" ? sections : {};
+function buildStructuredPromptSections(promptTypeOrSections = {}, maybeSections = null, maybeOptions = {}) {
+  if (typeof promptTypeOrSections === "string" && window.PulsePromptConfig?.buildPrompt) {
+    const configuredPrompt = window.PulsePromptConfig.buildPrompt(
+      promptTypeOrSections,
+      maybeSections && typeof maybeSections === "object" ? maybeSections : {},
+      maybeOptions && typeof maybeOptions === "object" ? maybeOptions : {}
+    );
+    if (configuredPrompt) {
+      return prependGlobalPromptGuard(configuredPrompt);
+    }
+  }
+  const resolvedSections =
+    promptTypeOrSections && typeof promptTypeOrSections === "object"
+      ? promptTypeOrSections
+      : maybeSections && typeof maybeSections === "object"
+        ? maybeSections
+        : {};
   return prependGlobalPromptGuard(
     [
       `<context_library>\n${buildPromptSectionText(
@@ -973,35 +988,32 @@ function buildInviteConflictContext(contact, inviteEntry) {
 
 function buildScheduleInviteSystemPrompt(profile, contact, inviteEntry, options = {}) {
   const companionNames = Array.isArray(options.companionNames) ? options.companionNames : [];
-  return buildStructuredPromptSections({
-    contextLibrary: [
-      buildInviteConflictContext(contact, inviteEntry),
-      companionNames.length
-        ? `除你之外，这次同行人还有：${companionNames.join("、")}。`
-        : "这次邀请没有其他角色同行人。"
-    ],
-    personaAlignment: [
-      `你叫 ${contact.name}。`,
-      `现在是你和 ${profile.username || DEFAULT_PROFILE.username} 在即时聊天软件里的一对一私聊。`,
-      "你本人正在收到对方发来的一个日程邀请，需要像真实聊天一样做决定并回复。",
-      `你的稳定性格、表达习惯和关系底色：${
-        contact.personaPrompt || "自然、友好，会根据关系和现实安排做决定。"
-      }。`,
-      `正在和你聊天的用户昵称：${profile.username || DEFAULT_PROFILE.username}。`,
-      `用户整体画像：${profile.personaPrompt || DEFAULT_PROFILE.personaPrompt || "用户有自己稳定的人设和表达方式。"}。`,
-      contact.specialUserPersona
-        ? `你对这个用户的特别认知：${contact.specialUserPersona}。`
-        : ""
-    ],
-    outputStandard: [
-      "你需要先判断是否接受这个邀请，再给出一条自然聊天式回复。",
-      "接受时要显得像真的愿意赴约；拒绝时要像真实生活中的婉拒，可以简短带一点理由，但不要冷冰冰。",
-      "优先考虑你的人设、和用户的关系、你当前已知的行程冲突，以及这个邀请本身是否合理。",
-      "如果没有明显冲突且关系允许，默认更偏向接受；如果确实撞时间、明显不合适，或以你的性格不想去，就拒绝。",
-      '输出必须是严格 JSON：{"decision":"accept|reject","reply":"自然回复"}。',
-      "reply 只写你真正会发出去的话，不要解释 JSON，不要加 markdown，不要附加其他字段。"
-    ]
-  });
+  return buildStructuredPromptSections(
+    "schedule_invite",
+    {
+      context_library: {
+        conflict_context: buildInviteConflictContext(contact, inviteEntry),
+        companion_names: companionNames.length
+          ? `除你之外，这次同行人还有：${companionNames.join("、")}。`
+          : "这次邀请没有其他角色同行人。"
+      },
+      persona_alignment: {
+        special_user_persona: contact.specialUserPersona
+          ? `你对这个用户的特别认知：${contact.specialUserPersona}。`
+          : ""
+      }
+    },
+    {
+      settings: loadSettings(),
+      variables: {
+        contactName: contact.name,
+        contactPersona: contact.personaPrompt || "自然、友好，会根据关系和现实安排做决定。",
+        userName: profile.username || DEFAULT_PROFILE.username,
+        userPersona:
+          profile.personaPrompt || DEFAULT_PROFILE.personaPrompt || "用户有自己稳定的人设和表达方式。"
+      }
+    }
+  );
 }
 
 function buildScheduleInviteUserInstruction(inviteEntry, companionNames = []) {
