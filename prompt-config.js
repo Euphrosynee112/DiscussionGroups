@@ -462,11 +462,37 @@
           createDynamicItem("presence_update_rule", "状态更新规则", "按当前会话设置决定是否加入 presence_update 约束"),
           createDynamicItem("quote_rule", "引用回复规则", "按线上场景决定是否加入 quote_reply 约束"),
           createTemplateItem("location_message_rule", "定位消息规则", "如果聊天记录里出现“[定位消息]”，那代表对方真实发送了一条位置卡片，而不是普通文本。"),
-          createTemplateItem("image_message_rule", "图片消息规则", "如果某条用户消息里出现“[图片消息]”，你会直接看到那条消息附带的图片内容；如有需要可以自然参考图片，但不要机械描述图片本身。"),
+          createTemplateItem("image_message_rule", "图片消息规则", "如果聊天记录里出现“[图片消息]”，那代表对方真实发送了一张照片卡片，而不是普通文本；这条消息可能会额外附带一行“图片说明”，你可以自然参考其中内容，但不要机械复述图片说明。"),
           createTemplateItem("location_json_rule", "定位 JSON 规则", "如果需要发送位置，必须单独一行输出如下格式：[{\"type\":\"location\",\"locationName\":\"位置名\",\"coordinates\":\"__PG_COORD_01__\"}]"),
           createTemplateItem("location_json_plain", "定位 JSON 输出要求", "定位 JSON 不要放进代码块，不要添加解释、前缀、序号或额外说明；它本身就算一行回复。"),
+          createTemplateItem("image_json_rule", "图片 JSON 规则", "如果需要主动发送一张照片，必须单独一行输出如下格式：[{\"type\":\"image\",\"description\":\"照片内容描述\"}]。description 要写成你真正发出去的照片内容，而不是解释你为什么要发。"),
+          createTemplateItem("image_json_plain", "图片 JSON 输出要求", "图片 JSON 不要放进代码块，不要添加解释、前缀、序号或额外说明；它本身就算一行回复。"),
           createTemplateItem("emotion_punctuation", "情绪标点保留", "不要去掉感叹号、问号、波浪号、省略号等表达情绪的标点。"),
           createDynamicItem("scene_mode_rule", "线上线下写法", "按当前场景决定动作描写约束")
+        ]
+      }
+    },
+    chat_inner_thought: {
+      label: "Chat 心声",
+      group: "Chat",
+      description: "分析角色在某条消息附近的心理活动",
+      sections: {
+        context_library: [
+          createDynamicItem("recent_history", "最近会话", "读取目标气泡前最近 10 轮会话"),
+          createDynamicItem("target_message", "目标消息", "读取需要重点分析的最近一条消息")
+        ],
+        persona_alignment: [
+          createTemplateItem("contact_name", "角色姓名", "需要分析心声的角色叫 {{contactName}}。"),
+          createTemplateItem("contact_persona", "角色人设", "这个角色稳定的人设、表达习惯和关系底色：{{contactPersona}}。"),
+          createTemplateItem("user_name", "用户昵称", "和 ta 对话的用户昵称：{{userName}}。"),
+          createTemplateItem("user_persona", "用户画像", "用户画像：{{userPersona}}。"),
+          createTemplateItem("analysis_goal", "分析目标", "你的任务不是续写对话，而是解释这个角色此刻真实的内在心理活动、说这句话的动机，以及没直接说出口的目标。")
+        ],
+        output_standard: [
+          createTemplateItem("stay_in_character", "角色视角", "分析必须严格站在这个角色的立场上，只能基于给定人设和这段聊天推断，不要引入对话外的新事实。"),
+          createTemplateItem("focus_now", "聚焦当下", "重点围绕最后这条目标消息来分析：ta 当时在想什么、为什么会这样说、想达到什么效果。"),
+          createTemplateItem("plain_text", "输出格式", "请直接输出一段到两段自然描述，像在和人解释“ta 当时其实是怎么想的”。内容里要自然覆盖：此刻心声、为什么这么说、潜在目的。"),
+          createTemplateItem("concise", "简洁克制", "整体保持简洁、具体、像真实人物心理，不要写成长篇小说；不要写 1、2、3，不要项目符号，不要固定标签，不要 markdown。")
         ]
       }
     },

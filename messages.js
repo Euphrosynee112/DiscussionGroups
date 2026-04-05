@@ -458,6 +458,12 @@ const messagesLocationNameInputEl = document.querySelector("#messages-location-n
 const messagesLocationRecentListEl = document.querySelector("#messages-location-recent-list");
 const messagesLocationPreviewEl = document.querySelector("#messages-location-preview");
 const messagesLocationStatusEl = document.querySelector("#messages-location-status");
+const messagesPhotoModalEl = document.querySelector("#messages-photo-modal");
+const messagesPhotoCloseBtnEl = document.querySelector("#messages-photo-close-btn");
+const messagesPhotoCancelBtnEl = document.querySelector("#messages-photo-cancel-btn");
+const messagesPhotoFormEl = document.querySelector("#messages-photo-form");
+const messagesPhotoDescriptionInputEl = document.querySelector("#messages-photo-description-input");
+const messagesPhotoStatusEl = document.querySelector("#messages-photo-status");
 const messagesAwarenessModalEl = document.querySelector("#messages-awareness-modal");
 const messagesAwarenessCloseBtnEl = document.querySelector("#messages-awareness-close-btn");
 const messagesAwarenessCancelBtnEl = document.querySelector("#messages-awareness-cancel-btn");
@@ -533,6 +539,10 @@ const messagesMemorySettingsFormEl = document.querySelector("#messages-memory-se
 const messagesMemorySummaryIntervalInputEl = document.querySelector(
   "#messages-memory-summary-interval-input"
 );
+const messagesInnerThoughtModalEl = document.querySelector("#messages-inner-thought-modal");
+const messagesInnerThoughtCloseBtnEl = document.querySelector("#messages-inner-thought-close-btn");
+const messagesInnerThoughtCancelBtnEl = document.querySelector("#messages-inner-thought-cancel-btn");
+const messagesInnerThoughtBodyEl = document.querySelector("#messages-inner-thought-body");
 const messagesMemoryCoreThresholdInputEl = document.querySelector(
   "#messages-memory-core-threshold-input"
 );
@@ -612,10 +622,12 @@ const state = {
   regenerateModalOpen: false,
   regenerateInstruction: "",
   locationModalOpen: false,
+  photoModalOpen: false,
   awarenessModalOpen: false,
   awarenessFormResetRequested: false,
   locationDraftName: "",
   locationDraftCoordinates: "",
+  photoDraftDescription: "",
   journalOpen: false,
   journalHistoryOpen: false,
   journalSettingsOpen: false,
@@ -639,6 +651,14 @@ const state = {
   windowFocusPrimed: initialWindowFocusPrimed,
   conversationVisibleCounts: {},
   quotedMessageId: "",
+  expandedImageMessageId: "",
+  innerThoughtModalOpen: false,
+  innerThoughtLoading: false,
+  innerThoughtError: "",
+  innerThoughtContent: "",
+  innerThoughtTargetMessageId: "",
+  innerThoughtTargetRole: "",
+  innerThoughtTargetPreview: "",
   sceneModalOpen: false,
   sceneSyncModalOpen: false,
   pendingConversationRenderOptions: null
@@ -1419,8 +1439,26 @@ function buildScheduleInviteMessageText(
   ].join("\n");
 }
 
-function buildImageMessageText() {
-  return "[图片消息]";
+function buildImageMessageText(description = "") {
+  const resolvedDescription = String(description || "").trim();
+  return ["[图片消息]", resolvedDescription ? `图片说明：${resolvedDescription}` : ""]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function parseImageMessageText(text = "") {
+  const normalized = String(text || "").replace(/\r/g, "").trim();
+  if (!normalized.startsWith("[图片消息]")) {
+    return null;
+  }
+  const lines = normalized
+    .split("\n")
+    .map((line) => String(line || "").trim())
+    .filter(Boolean);
+  const descriptionLine = lines.find((line) => line.startsWith("图片说明：")) || "";
+  return {
+    imageDescription: descriptionLine.slice("图片说明：".length).trim()
+  };
 }
 
 function buildQuoteMessageText(quotedText = "", quotedRole = "user", replyText = "") {
@@ -1506,7 +1544,10 @@ function isScheduleInviteConversationMessage(message) {
 
 function isImageConversationMessage(message) {
   const explicitType = String(message?.messageType || "").trim() === "image";
-  const hasPayload = Boolean(String(message?.imageDataUrl || "").trim());
+  const legacyPayload = parseImageMessageText(message?.text);
+  const hasPayload =
+    Boolean(String(message?.imageDataUrl || "").trim()) ||
+    Boolean(String(message?.imageDescription || legacyPayload?.imageDescription || "").trim());
   return explicitType || hasPayload;
 }
 
@@ -1541,7 +1582,7 @@ function getConversationMessagePromptText(message = {}) {
     );
   }
   if (isImageConversationMessage(message)) {
-    return buildImageMessageText();
+    return buildImageMessageText(String(message.imageDescription || "").trim());
   }
   if (isQuoteConversationMessage(message)) {
     return buildQuoteMessageText(message.quotedText, message.quotedRole, message.text);
@@ -1557,7 +1598,8 @@ function getConversationMessagePreviewText(message) {
     return `📍 ${String(message.locationName || "").trim() || "分享了位置"}`;
   }
   if (isImageConversationMessage(message)) {
-    return "🖼️ 发送了图片";
+    const description = String(message?.imageDescription || "").trim();
+    return description ? `🖼️ 照片：${truncate(description, 18)}` : "🖼️ 发送了图片";
   }
   if (isQuoteConversationMessage(message)) {
     return `↪ ${String(message.text || "").trim()}`;
@@ -3187,6 +3229,7 @@ function normalizeConversationMessage(message, index = 0) {
     : "day";
   const legacyQuotePayload =
     parseQuoteMessageText(message?.text) || parseInlineQuoteReplyMessage(message?.text);
+  const legacyImagePayload = parseImageMessageText(message?.text);
   const quotedText = String(message?.quotedText || legacyQuotePayload?.quotedText || "").trim();
   const quotedRole =
     String(message?.quotedRole || legacyQuotePayload?.quotedRole || "").trim() === "assistant"
@@ -3204,6 +3247,9 @@ function normalizeConversationMessage(message, index = 0) {
   const locationName = String(message?.locationName || "").trim();
   const coordinates = String(message?.coordinates || "").trim();
   const imageDataUrl = String(message?.imageDataUrl || "").trim();
+  const imageDescription = String(
+    message?.imageDescription || legacyImagePayload?.imageDescription || ""
+  ).trim();
   const replyText = String(message?.text || "").trim();
   const text =
     messageType === "schedule_invite"
@@ -3220,7 +3266,7 @@ function normalizeConversationMessage(message, index = 0) {
           coordinates || buildRandomLocationCoordinates(`${locationName}_${index}`)
         )
       : messageType === "image"
-        ? buildImageMessageText()
+        ? buildImageMessageText(imageDescription)
       : messageType === "quote"
         ? String(message?.text || legacyQuotePayload?.replyText || "").trim()
       : replyText;
@@ -3242,6 +3288,7 @@ function normalizeConversationMessage(message, index = 0) {
         ? coordinates || buildRandomLocationCoordinates(`${locationName}_${index}`)
         : "",
     imageDataUrl: messageType === "image" ? imageDataUrl : "",
+    imageDescription: messageType === "image" ? imageDescription : "",
     quotedText: messageType === "quote" ? quotedText : "",
     quotedRole: messageType === "quote" ? quotedRole : "",
     text,
@@ -3357,7 +3404,7 @@ function stripOldConversationImagePayloads(conversations = []) {
       return {
         ...message,
         imageDataUrl: "",
-        text: buildImageMessageText()
+        text: buildImageMessageText(String(message?.imageDescription || "").trim())
       };
     });
     return conversation;
@@ -4325,6 +4372,110 @@ function formatScheduleDateLabel(dateText = getTodayDateValue()) {
   }).format(date);
 }
 
+const RELATIVE_TIME_WEEKDAY_OFFSET_MAP = {
+  一: 0,
+  二: 1,
+  三: 2,
+  四: 3,
+  五: 4,
+  六: 5,
+  日: 6,
+  天: 6
+};
+
+function startOfWeekMonday(date = new Date()) {
+  const resolved = date instanceof Date ? new Date(date.getTime()) : new Date(date || Date.now());
+  resolved.setHours(0, 0, 0, 0);
+  const weekday = resolved.getDay();
+  const diff = weekday === 0 ? -6 : 1 - weekday;
+  resolved.setDate(resolved.getDate() + diff);
+  return resolved;
+}
+
+function formatMentionDateLabel(dateText = "") {
+  const resolvedDateText = String(dateText || "").trim();
+  if (!resolvedDateText) {
+    return "";
+  }
+  return `${resolvedDateText}（${formatWeekday(resolvedDateText, "long")}）`;
+}
+
+function buildRelativeTimeMentions(text = "", settings = loadSettings()) {
+  const sourceText = String(text || "");
+  if (!sourceText.trim()) {
+    return [];
+  }
+  const promptNow = getPromptNow(settings);
+  const promptBaseDate = new Date(
+    promptNow.getFullYear(),
+    promptNow.getMonth(),
+    promptNow.getDate(),
+    0,
+    0,
+    0,
+    0
+  );
+  const nextWeekMonday = addDays(startOfWeekMonday(promptBaseDate), 7);
+  const matches = [];
+  const pushMention = (mentionText, index, dateValues = []) => {
+    const normalizedMention = String(mentionText || "").trim();
+    const normalizedDates = (Array.isArray(dateValues) ? dateValues : [])
+      .map((item) => String(item || "").trim())
+      .filter(Boolean);
+    if (!normalizedMention || !normalizedDates.length) {
+      return;
+    }
+    matches.push({
+      mentionText: normalizedMention,
+      index: Number.isFinite(index) ? index : sourceText.indexOf(normalizedMention),
+      dateValues: normalizedDates
+    });
+  };
+  const singleDayKeywords = [
+    { token: "今天", offset: 0 },
+    { token: "明天", offset: 1 },
+    { token: "后天", offset: 2 },
+    { token: "昨天", offset: -1 }
+  ];
+
+  singleDayKeywords.forEach((keyword) => {
+    let match = sourceText.indexOf(keyword.token);
+    while (match >= 0) {
+      pushMention(keyword.token, match, [formatDateToValue(addDays(promptBaseDate, keyword.offset))]);
+      match = sourceText.indexOf(keyword.token, match + keyword.token.length);
+    }
+  });
+
+  sourceText.replace(/下周([一二三四五六日天])/g, (fullMatch, weekdayText, offset) => {
+    const weekdayOffset = RELATIVE_TIME_WEEKDAY_OFFSET_MAP[String(weekdayText || "").trim()];
+    if (Number.isInteger(weekdayOffset)) {
+      pushMention(fullMatch, offset, [formatDateToValue(addDays(nextWeekMonday, weekdayOffset))]);
+    }
+    return fullMatch;
+  });
+
+  sourceText.replace(/下周(?![一二三四五六日天])/g, (fullMatch, offset) => {
+    pushMention(
+      fullMatch,
+      offset,
+      Array.from({ length: 7 }, (_item, index) => formatDateToValue(addDays(nextWeekMonday, index)))
+    );
+    return fullMatch;
+  });
+
+  const seen = new Set();
+  return matches
+    .sort((left, right) => left.index - right.index)
+    .filter((item) => {
+      const key = `${item.mentionText}__${item.dateValues.join(",")}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+}
+
 function getJournalEntriesForContact(contactId = "") {
   const resolvedContactId = String(contactId || "").trim();
   if (!resolvedContactId) {
@@ -4910,6 +5061,112 @@ function buildScheduleAwarenessContext(contact, history = [], promptSettings = {
   ].join("\n");
 }
 
+function formatMentionScheduleEntryLine(entry, dateText = "", contactId = "") {
+  const dateLabel = formatMentionDateLabel(dateText);
+  const timeLabel = formatSchedulePreviewTime(entry);
+  const title = String(entry?.title || "未命名行程").trim();
+  const participants = getScheduleParticipants(entry);
+  const companionNames = participants
+    .filter((participant) => participant.type === "contact" && participant.id !== String(contactId || "").trim())
+    .map((participant) => participant.label)
+    .filter(Boolean);
+  const metadata = [];
+  if (entry.ownerType === "user" && companionNames.length) {
+    metadata.push(
+      `同行：${companionNames.slice(0, 2).join("、")}${companionNames.length > 2 ? ` 等 ${companionNames.length} 位` : ""}`
+    );
+  }
+  if (entry.ownerType === "contact" && entry.ownerId && entry.ownerId !== String(contactId || "").trim()) {
+    metadata.push(`发起角色：${getScheduleContactName(entry.ownerId)}`);
+  }
+  return `- ${dateLabel} · ${timeLabel} · ${title}${metadata.length ? ` · ${metadata.join(" · ")}` : ""}`;
+}
+
+function collectMentionScheduleEntriesForDateValues(contactId = "", dateValues = []) {
+  const resolvedContactId = String(contactId || "").trim();
+  const visibleEntries = getVisibleScheduleEntriesForContact(resolvedContactId);
+  const normalizedDateValues = (Array.isArray(dateValues) ? dateValues : [])
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+  const userLines = [];
+  const contactLines = [];
+  const seenUser = new Set();
+  const seenContact = new Set();
+
+  normalizedDateValues.forEach((dateValue) => {
+    visibleEntries
+      .filter((entry) => entryOccursOnDate(entry, dateValue))
+      .forEach((entry) => {
+        const line = formatMentionScheduleEntryLine(entry, dateValue, resolvedContactId);
+        const key = `${entry.id || entry.title}_${dateValue}`;
+        if (entry.ownerType === "user") {
+          if (!seenUser.has(key)) {
+            seenUser.add(key);
+            userLines.push(line);
+          }
+          return;
+        }
+        if (!seenContact.has(key)) {
+          seenContact.add(key);
+          contactLines.push(line);
+        }
+      });
+  });
+
+  return {
+    userLines,
+    contactLines
+  };
+}
+
+function buildMentionedTimeScheduleContext(contact, sourceMessages = [], settings = loadSettings()) {
+  const resolvedContact = contact && typeof contact === "object" ? contact : null;
+  if (!resolvedContact) {
+    return "";
+  }
+  const mentions = (Array.isArray(sourceMessages) ? sourceMessages : [])
+    .filter((message) => message?.role !== "assistant")
+    .flatMap((message) => buildRelativeTimeMentions(String(message?.text || "").trim(), settings));
+  if (!mentions.length) {
+    return "";
+  }
+  const seen = new Set();
+  const normalizedMentions = mentions.filter((item) => {
+    const key = `${item.mentionText}__${item.dateValues.join(",")}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+
+  return normalizedMentions
+    .map((mention) => {
+      const { userLines, contactLines } = collectMentionScheduleEntriesForDateValues(
+        resolvedContact.id,
+        mention.dateValues
+      );
+      const rangeLabel =
+        mention.dateValues.length > 1
+          ? `${formatMentionDateLabel(mention.dateValues[0])} 至 ${formatMentionDateLabel(
+              mention.dateValues[mention.dateValues.length - 1]
+            )}`
+          : formatMentionDateLabel(mention.dateValues[0]);
+      return [
+        `- 用户消息里提到了“${mention.mentionText}”，这里明确对应的时间是：${rangeLabel}。`,
+        userLines.length
+          ? `  - 对应时间内，对你可见的用户已知行程：\n${userLines.map((line) => `    ${line}`).join("\n")}`
+          : "  - 对应时间内，没有任何对你可见的用户行程。",
+        contactLines.length
+          ? `  - 对应时间内你的已知行程：\n${contactLines.map((line) => `    ${line}`).join("\n")}`
+          : "  - 对应时间内你没有已知行程。",
+        "  - 这里只列出你当前可见或已知的安排；没有列出来的用户日程，视为当前对你不可见，不要主动引用。",
+        "  - 如果你要回应这类时间词，请以这层对应关系为准，避免把“今天/明天/下周”理解错。"
+      ].join("\n");
+    })
+    .join("\n\n");
+}
+
 function buildAutoScheduleDateValues(days = DEFAULT_AUTO_SCHEDULE_DAYS, startDateText = getTodayDateValue()) {
   const resolvedDays = normalizeAutoScheduleDays(days, DEFAULT_AUTO_SCHEDULE_DAYS);
   const startDate = parseLocalDateValue(startDateText) || new Date();
@@ -5478,6 +5735,11 @@ function buildConversationSystemPrompt(
   const bubbleFocusContext = buildBubbleFocusContext(promptSettings);
   const scheduleAwarenessContext = buildScheduleAwarenessContext(contact, history, promptSettings);
   const timeAwarenessContext = buildTimeAwarenessContext(promptSettings, settings);
+  const mentionedTimeScheduleContext = buildMentionedTimeScheduleContext(
+    contact,
+    requestOptions.pendingUserMessages,
+    settings
+  );
   const triggeredAwarenessContext = requestOptions.triggeredAwareness?.text
     ? [
         `你刚刚自己忽然想起了一条并非来自用户当前对话、而是你此前独自察觉到的额外信息；这条信息和最近几轮聊天记录具有同等优先级，需要和当前聊天一起理解：${String(
@@ -5497,6 +5759,7 @@ function buildConversationSystemPrompt(
     triggeredAwarenessContext ? `当前触发的察觉信息：\n${triggeredAwarenessContext}` : "",
     presenceContext ? `当前场景与状态：\n${presenceContext}` : "",
     timeAwarenessContext || "",
+    mentionedTimeScheduleContext ? `用户刚提到的时间与对应日程：\n${mentionedTimeScheduleContext}` : "",
     scheduleAwarenessContext ? `当前日程感知：\n${scheduleAwarenessContext}` : "",
     bubbleFocusContext || "",
     forumPostFocusContext || "",
@@ -5936,6 +6199,36 @@ function parseLocationMessagePayload(value) {
     .filter(Boolean);
 }
 
+function parseImageMessagePayload(value) {
+  const parsed =
+    (Array.isArray(value) ? value : null) ||
+    parseJsonLikeContent(value) ||
+    parseJsonLikeContent(resolveMessage(value));
+
+  const items = Array.isArray(parsed) ? parsed : [];
+  return items
+    .map((item) => {
+      const source = item && typeof item === "object" ? item : {};
+      const type = String(source.type || "").trim().toLowerCase();
+      if (!["image", "photo"].includes(type)) {
+        return null;
+      }
+      const imageDescription = String(
+        source.description || source.caption || source.content || source.text || ""
+      )
+        .trim()
+        .slice(0, 600);
+      if (!imageDescription) {
+        return null;
+      }
+      return {
+        messageType: "image",
+        imageDescription
+      };
+    })
+    .filter(Boolean);
+}
+
 function parseMemorySummaryPayload(payload, contactId = "") {
   const parsed =
     (payload && typeof payload === "object" && Array.isArray(payload.memories) ? payload : null) ||
@@ -6161,6 +6454,54 @@ function extractLocationReplyBlocks(text) {
   return { text: workingText, blocks };
 }
 
+function extractImageReplyBlocks(text) {
+  let workingText = String(text || "").replace(/\r/g, "").trim();
+  if (!workingText) {
+    return { text: "", blocks: [] };
+  }
+
+  const blocks = [];
+  const replaceBlock = (candidate, parsedItems) => {
+    if (!candidate || !parsedItems.length) {
+      return;
+    }
+    const token = `__PULSE_IMAGE_BLOCK_${blocks.length}__`;
+    blocks.push({
+      token,
+      items: parsedItems
+    });
+    workingText = workingText.replace(candidate, `\n${token}\n`);
+  };
+
+  workingText = workingText.replace(/```(?:json)?\s*([\s\S]*?)```/gi, (match, inner) => {
+    const parsedItems = parseImageMessagePayload(String(inner || "").trim());
+    if (!parsedItems.length) {
+      return match;
+    }
+    const token = `__PULSE_IMAGE_BLOCK_${blocks.length}__`;
+    blocks.push({ token, items: parsedItems });
+    return `\n${token}\n`;
+  });
+
+  const imagePattern = /\[\s*\{[\s\S]*?"type"\s*:\s*"(?:image|photo)"[\s\S]*?\}\s*\]/i;
+  let guard = 0;
+  while (guard < 8) {
+    const match = imagePattern.exec(workingText);
+    if (!match || typeof match.index !== "number") {
+      break;
+    }
+    const candidate = match[0];
+    const parsedItems = parseImageMessagePayload(candidate);
+    if (!parsedItems.length) {
+      break;
+    }
+    replaceBlock(candidate, parsedItems);
+    guard += 1;
+  }
+
+  return { text: workingText, blocks };
+}
+
 function parseQuoteReplyPayload(payload) {
   function parseLooseQuoteObject(value) {
     const raw = String(value || "")
@@ -6285,11 +6626,16 @@ function limitReplyItems(items = [], limit = DEFAULT_MESSAGE_REPLY_SENTENCE_LIMI
   const limited = normalized.slice(0, resolvedLimit);
   const overflow = normalized.slice(resolvedLimit);
   const lastItem = limited[resolvedLimit - 1];
-  if (lastItem && !["location", "quote"].includes(String(lastItem.messageType || "").trim())) {
+  if (
+    lastItem &&
+    !["location", "quote", "image"].includes(String(lastItem.messageType || "").trim())
+  ) {
     const mergedText = [String(lastItem.text || "").trim()]
       .concat(
         overflow
-          .filter((item) => !["location", "quote"].includes(String(item.messageType || "").trim()))
+          .filter(
+            (item) => !["location", "quote", "image"].includes(String(item.messageType || "").trim())
+          )
           .map((item) => String(item.text || "").trim())
       )
       .filter(Boolean)
@@ -6308,10 +6654,12 @@ function buildReplyItems(replyText, promptSettings = {}, privacySession = null) 
   const { text: textWithoutQuoteBlocks, blocks: quoteBlocks } = extractQuoteReplyBlocks(replyText);
   const { text: textWithoutLocationBlocks, blocks: locationBlocks } =
     extractLocationReplyBlocks(textWithoutQuoteBlocks);
+  const { text: textWithoutImageBlocks, blocks: imageBlocks } =
+    extractImageReplyBlocks(textWithoutLocationBlocks);
   const blockMap = new Map(
-    [...quoteBlocks, ...locationBlocks].map((block) => [block.token, block.items])
+    [...quoteBlocks, ...locationBlocks, ...imageBlocks].map((block) => [block.token, block.items])
   );
-  const rawLines = String(textWithoutLocationBlocks || "")
+  const rawLines = String(textWithoutImageBlocks || "")
     .split("\n")
     .map((item) => String(item || "").trim())
     .filter(Boolean);
@@ -6333,6 +6681,14 @@ function buildReplyItems(replyText, promptSettings = {}, privacySession = null) 
             quotedRole: item.quotedRole === "assistant" ? "assistant" : "user",
             quotedText: String(item.quotedText || "").trim(),
             text: String(item.text || "").trim()
+          });
+          return;
+        }
+        if (String(item?.messageType || "").trim() === "image") {
+          items.push({
+            messageType: "image",
+            imageDescription: String(item.imageDescription || "").trim(),
+            text: buildImageMessageText(String(item.imageDescription || "").trim())
           });
         }
       });
@@ -6356,6 +6712,17 @@ function buildReplyItems(replyText, promptSettings = {}, privacySession = null) 
         items.push({
           ...item,
           text: buildLocationMessageText(item.locationName, item.coordinates)
+        });
+      });
+      return;
+    }
+    const inlineImageItems = parseImageMessagePayload(line);
+    if (inlineImageItems.length) {
+      decodeValueWithPrivacy(inlineImageItems, privacySession).forEach((item) => {
+        items.push({
+          messageType: "image",
+          imageDescription: String(item.imageDescription || "").trim(),
+          text: buildImageMessageText(String(item.imageDescription || "").trim())
         });
       });
       return;
@@ -6558,6 +6925,8 @@ async function appendAssistantReplyBatch(
         quotedRole: item.quotedRole || "",
         locationName: item.locationName || "",
         coordinates: item.coordinates || "",
+        imageDataUrl: item.imageDataUrl || "",
+        imageDescription: item.imageDescription || "",
         time: timeLabel,
         createdAt: now + index
       },
@@ -7013,6 +7382,205 @@ async function requestJournalEntryText(
   }
 }
 
+function selectConversationTurnsBeforeMessage(conversation, messageId = "", turnLimit = 10) {
+  const resolvedConversation = conversation && typeof conversation === "object" ? conversation : null;
+  const resolvedMessageId = String(messageId || "").trim();
+  if (!resolvedConversation || !resolvedMessageId) {
+    return [];
+  }
+  const targetIndex = resolvedConversation.messages.findIndex(
+    (message) => String(message?.id || "").trim() === resolvedMessageId
+  );
+  if (targetIndex < 0) {
+    return [];
+  }
+  const collapsedTurns = collapseConversationMessagesByTurn(
+    resolvedConversation.messages.slice(0, targetIndex + 1)
+  );
+  return collapsedTurns.slice(-Math.max(1, Number(turnLimit) || 10));
+}
+
+function buildInnerThoughtTranscript(messages = []) {
+  return (Array.isArray(messages) ? messages : [])
+    .map((message) => {
+      const roleLabel = message.role === "assistant" ? "角色" : "用户";
+      const timestamp = resolveStoredTimestampLabel(message.createdAt, message.time || "");
+      return `${timestamp || "--:--"} ${roleLabel}：${String(message.text || "").trim()}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildInnerThoughtSystemPrompt(
+  profile,
+  contact,
+  settings,
+  recentTranscript = "",
+  targetMessage = null,
+  conversation = null
+) {
+  const roleLabel = targetMessage?.role === "assistant" ? "角色" : "用户";
+  const sceneMode = conversation?.sceneMode === "offline" ? "线下见面" : "线上私聊";
+  const targetMessageText = getConversationMessagePromptText(targetMessage || {});
+  return buildStructuredPromptSections(
+    "chat_inner_thought",
+    {
+      context_library: {
+        recent_history: recentTranscript
+          ? `目标气泡前最近 10 轮会话（按时间顺序）：\n${recentTranscript}`
+          : "目标气泡前没有足够的会话历史。",
+        target_message: [
+          `当前场景：${sceneMode}`,
+          `需要重点分析的最近一条消息来自${roleLabel}：`,
+          targetMessageText || "（空）"
+        ]
+          .filter(Boolean)
+          .join("\n")
+      }
+    },
+    {
+      settings,
+      variables: {
+        contactName: contact.name || "这个角色",
+        contactPersona: contact.personaPrompt || "自然、友好、会根据关系稳定回应。",
+        userName: profile.username || DEFAULT_PROFILE.username,
+        userPersona: profile.personaPrompt || DEFAULT_PROFILE.personaPrompt
+      }
+    }
+  );
+}
+
+async function requestInnerThoughtText(settings, profile, contact, conversation, targetMessage) {
+  const requestEndpoint = validateApiSettings(settings, "心声分析");
+  const historyTurns = selectConversationTurnsBeforeMessage(conversation, targetMessage?.id, 10);
+  const recentTranscript = buildInnerThoughtTranscript(historyTurns);
+  const systemPrompt = buildInnerThoughtSystemPrompt(
+    profile,
+    contact,
+    settings,
+    recentTranscript,
+    targetMessage,
+    conversation
+  );
+  const userInstruction =
+    "请用自然口语化的描述，直接解释这条消息背后的心声、说这句话的原因和潜在目的，不要编号，不要项目符号，不要固定小标题。";
+  const privacySession = createPrivacySession({
+    settings,
+    profile,
+    contact,
+    conversation,
+    history: historyTurns,
+    promptSettings: state.chatPromptSettings,
+    systemPrompt,
+    userInstruction
+  });
+  const encodedSystemPrompt = preparePromptWithPrivacy(systemPrompt, privacySession);
+  const encodedUserInstruction = encodeTextWithPrivacy(userInstruction, privacySession);
+  const requestBody = buildSingleInstructionRequestBody(
+    settings,
+    encodedSystemPrompt,
+    encodedUserInstruction,
+    "chat_inner_thought"
+  );
+  const logBase = applyPrivacyToLogEntry(
+    buildMessageApiLogBase(
+      "chat_inner_thought",
+      settings,
+      requestEndpoint,
+      encodedSystemPrompt,
+      requestBody,
+      `联系人：${contact.name} · 心声分析 · 目标消息 ${String(targetMessage?.id || "").trim()}`
+    ),
+    privacySession
+  );
+  let logged = false;
+
+  try {
+    const response = await fetch(requestEndpoint, {
+      method: "POST",
+      headers: buildRequestHeaders(settings),
+      body: JSON.stringify(requestBody)
+    });
+    const rawResponse = await response.text();
+    let payload = rawResponse;
+    try {
+      payload = JSON.parse(rawResponse);
+    } catch (_error) {
+      payload = rawResponse;
+    }
+
+    if (response.status === 404 && requestEndpoint.includes("api.deepseek.com")) {
+      appendApiLog({
+        ...logBase,
+        ...buildGeminiLogFields(settings, payload),
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage:
+          "DeepSeek 接口返回 404。请确认地址为 https://api.deepseek.com/chat/completions。"
+      });
+      logged = true;
+      throw new Error(
+        "DeepSeek 接口返回 404。请确认地址为 https://api.deepseek.com/chat/completions。"
+      );
+    }
+
+    if (!response.ok) {
+      appendApiLog({
+        ...logBase,
+        ...buildGeminiLogFields(settings, payload),
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: `接口请求失败：HTTP ${response.status}`
+      });
+      logged = true;
+      throw new Error(`接口请求失败：HTTP ${response.status}`);
+    }
+
+    const message = decodeTextWithPrivacy(resolveMessage(payload).trim(), privacySession);
+    if (!message) {
+      appendApiLog({
+        ...logBase,
+        ...buildGeminiLogFields(settings, payload),
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: "接口请求成功，但响应中没有可解析的心声文本。"
+      });
+      logged = true;
+      throw new Error("接口请求成功，但响应中没有可解析的心声文本。");
+    }
+
+    appendApiLog({
+      ...logBase,
+      ...buildGeminiLogFields(settings, payload),
+      status: "success",
+      statusCode: response.status,
+      responseText: rawResponse,
+      responseBody: payload,
+      summary: encodeTextWithPrivacy(
+        `联系人：${contact.name} · 已生成 ${message.length} 字心声分析`,
+        privacySession
+      )
+    });
+    logged = true;
+    return message;
+  } catch (error) {
+    if (!logged) {
+      appendApiLog({
+        ...logBase,
+        status: "error",
+        errorMessage: error?.message || "请求失败"
+      });
+    }
+    throw error;
+  }
+}
+
 function setMessagesStatus(message = "", tone = "") {
   if (!messagesStatusEl) {
     return;
@@ -7056,7 +7624,9 @@ function updateBodyModalState() {
     state.memorySettingsOpen ||
     state.regenerateModalOpen ||
     state.locationModalOpen ||
+    state.photoModalOpen ||
     state.awarenessModalOpen ||
+    state.innerThoughtModalOpen ||
     state.schedulePreviewOpen ||
     state.journalOpen ||
     state.journalHistoryOpen ||
@@ -7071,6 +7641,10 @@ function closeConversationTransientUi() {
 
 function setLocationStatus(message = "", tone = "") {
   setEditorStatus(messagesLocationStatusEl, message, tone);
+}
+
+function setPhotoStatus(message = "", tone = "") {
+  setEditorStatus(messagesPhotoStatusEl, message, tone);
 }
 
 function updateLocationDraft(name, coordinates = "") {
@@ -7159,6 +7733,31 @@ function setLocationModalOpen(isOpen) {
     state.locationDraftName = "";
     state.locationDraftCoordinates = "";
     setLocationStatus("");
+  }
+  updateBodyModalState();
+}
+
+function renderPhotoModal() {
+  if (messagesPhotoDescriptionInputEl) {
+    messagesPhotoDescriptionInputEl.value = String(state.photoDraftDescription || "").trim();
+  }
+}
+
+function setPhotoModalOpen(isOpen) {
+  state.photoModalOpen = Boolean(isOpen);
+  if (messagesPhotoModalEl) {
+    messagesPhotoModalEl.hidden = !state.photoModalOpen;
+    messagesPhotoModalEl.setAttribute("aria-hidden", String(!state.photoModalOpen));
+  }
+  if (state.photoModalOpen) {
+    renderPhotoModal();
+    setPhotoStatus("");
+    window.setTimeout(() => {
+      messagesPhotoDescriptionInputEl?.focus();
+    }, 0);
+  } else {
+    state.photoDraftDescription = "";
+    setPhotoStatus("");
   }
   updateBodyModalState();
 }
@@ -7368,6 +7967,71 @@ function getActiveConversationContext() {
     conversation,
     contact
   };
+}
+
+function renderInnerThoughtModal() {
+  if (!messagesInnerThoughtBodyEl) {
+    return;
+  }
+  if (state.innerThoughtLoading) {
+    messagesInnerThoughtBodyEl.innerHTML = `
+      <div class="messages-inner-thought-card messages-inner-thought-card--loading">
+        <p class="messages-inner-thought-card__meta">正在分析这条消息背后的心声…</p>
+        <p class="messages-inner-thought-card__content">会结合角色人设、用户画像和目标气泡前的最近 10 轮会话来判断。</p>
+      </div>
+    `;
+    return;
+  }
+  if (state.innerThoughtError) {
+    messagesInnerThoughtBodyEl.innerHTML = `
+      <div class="messages-inner-thought-card messages-inner-thought-card--error">
+        <p class="messages-inner-thought-card__meta">心声生成失败</p>
+        <p class="messages-inner-thought-card__content">${escapeHtml(state.innerThoughtError)}</p>
+      </div>
+    `;
+    return;
+  }
+  if (!state.innerThoughtContent) {
+    messagesInnerThoughtBodyEl.innerHTML = `
+      <div class="messages-inner-thought-card">
+        <p class="messages-inner-thought-card__meta">当前还没有可展示的心声内容。</p>
+      </div>
+    `;
+    return;
+  }
+  const roleLabel = state.innerThoughtTargetRole === "assistant" ? "角色消息" : "用户消息";
+  messagesInnerThoughtBodyEl.innerHTML = `
+    <div class="messages-inner-thought-card">
+      <div class="messages-inner-thought-card__anchor">
+        <span class="messages-inner-thought-card__badge">${escapeHtml(roleLabel)}</span>
+        <p class="messages-inner-thought-card__preview">${escapeHtml(state.innerThoughtTargetPreview || "")}</p>
+      </div>
+      <p class="messages-inner-thought-card__content">${escapeHtml(state.innerThoughtContent).replace(
+        /\n/g,
+        "<br />"
+      )}</p>
+    </div>
+  `;
+}
+
+function setInnerThoughtModalOpen(isOpen) {
+  state.innerThoughtModalOpen = Boolean(isOpen);
+  if (!state.innerThoughtModalOpen) {
+    state.innerThoughtLoading = false;
+    state.innerThoughtError = "";
+    state.innerThoughtContent = "";
+    state.innerThoughtTargetMessageId = "";
+    state.innerThoughtTargetRole = "";
+    state.innerThoughtTargetPreview = "";
+  }
+  if (messagesInnerThoughtModalEl) {
+    messagesInnerThoughtModalEl.hidden = !state.innerThoughtModalOpen;
+    messagesInnerThoughtModalEl.setAttribute("aria-hidden", String(!state.innerThoughtModalOpen));
+  }
+  if (state.innerThoughtModalOpen) {
+    renderInnerThoughtModal();
+  }
+  updateBodyModalState();
 }
 
 function renderJournalContentText(text = "") {
@@ -8068,6 +8732,11 @@ function renderConversationMessageMenu(message, isMenuOpen) {
     !isScheduleInviteConversationMessage(message) &&
     !isLocationConversationMessage(message) &&
     !isImageConversationMessage(message);
+  const canReadInnerThought =
+    message?.role === "assistant" &&
+    !isScheduleInviteConversationMessage(message) &&
+    !isLocationConversationMessage(message) &&
+    !isImageConversationMessage(message);
   const actions =
     isScheduleInviteConversationMessage(message) ||
     isLocationConversationMessage(message) ||
@@ -8114,6 +8783,19 @@ function renderConversationMessageMenu(message, isMenuOpen) {
               data-message-id="${escapeHtml(message.id)}"
             >
               引用
+            </button>
+          `
+          : ""
+      }
+      ${
+        canReadInnerThought
+          ? `
+            <button
+              type="button"
+              data-action="inner-thought-conversation-message"
+              data-message-id="${escapeHtml(message.id)}"
+            >
+              心声
             </button>
           `
           : ""
@@ -8229,16 +8911,61 @@ function renderConversationScheduleInviteCard(message, conversation) {
 
 function renderConversationImageCard(message) {
   const imageDataUrl = String(message?.imageDataUrl || "").trim();
+  const description = String(message?.imageDescription || "").trim();
+  const isExpanded = state.expandedImageMessageId === String(message?.id || "").trim();
   if (!imageDataUrl) {
     return `
-      <article class="messages-bubble">
-        <p>${escapeHtml(buildImageMessageText())}</p>
+      <article class="messages-image-card messages-image-card--placeholder ${isExpanded ? "is-expanded" : ""}">
+        <div class="messages-image-card__placeholder">
+          <div class="messages-image-card__placeholder-icon">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect
+                x="4.5"
+                y="5"
+                width="15"
+                height="14"
+                rx="2.3"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+              />
+              <path
+                d="m7.2 16 3.1-3.4 2.5 2.6 1.9-2 2.1 2.8M9 9.4h.01"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </div>
+          <strong>照片</strong>
+          <span>${description ? (isExpanded ? "点击收起描述" : "点击查看描述") : "暂无描述"}</span>
+        </div>
+        ${
+          description
+            ? `
+              <div class="messages-image-card__description${isExpanded ? " is-visible" : ""}">
+                ${escapeHtml(description)}
+              </div>
+            `
+            : ""
+        }
       </article>
     `;
   }
   return `
-    <article class="messages-image-card">
+    <article class="messages-image-card ${isExpanded && description ? "is-expanded" : ""}">
       <img src="${escapeHtml(imageDataUrl)}" alt="聊天图片" loading="lazy" />
+      ${
+        description
+          ? `
+            <div class="messages-image-card__description${isExpanded ? " is-visible" : ""}">
+              ${escapeHtml(description)}
+            </div>
+          `
+          : ""
+      }
     </article>
   `;
 }
@@ -8264,6 +8991,44 @@ function renderConversationMessage(message, conversation, promptSettings = state
         <p>${escapeHtml(message.text)}</p>
       </article>
     `;
+  const bubbleControlMarkup = isImageMessage
+    ? `
+      <div class="messages-message-row__stack-shell messages-message-row__stack-shell--image">
+        <button
+          type="button"
+          class="messages-bubble-toggle messages-bubble-toggle--image"
+          data-action="toggle-image-description"
+          data-message-id="${escapeHtml(message.id)}"
+        >
+          ${bubbleMarkup}
+        </button>
+        <button
+          type="button"
+          class="messages-message-row__menu-toggle"
+          data-action="toggle-message-menu"
+          data-message-id="${escapeHtml(message.id)}"
+          aria-label="打开消息操作"
+        >
+          <span></span><span></span><span></span>
+        </button>
+      </div>
+    `
+    : `
+      <button
+        type="button"
+        class="messages-bubble-toggle${
+          isScheduleInviteMessage
+            ? " messages-bubble-toggle--schedule-invite"
+            : isLocationMessage
+              ? " messages-bubble-toggle--location"
+              : ""
+        }"
+        data-action="toggle-message-menu"
+        data-message-id="${escapeHtml(message.id)}"
+      >
+        ${bubbleMarkup}
+      </button>
+    `;
   return `
     <article class="messages-message-row messages-message-row--${isUser ? "user" : "assistant"}${
       avatarMarkup ? "" : " is-avatar-hidden"
@@ -8283,20 +9048,7 @@ function renderConversationMessage(message, conversation, promptSettings = state
             : ""
       }">
         <div class="messages-message-row__stack">
-          <button
-            type="button"
-            class="messages-bubble-toggle${
-              isScheduleInviteMessage
-                ? " messages-bubble-toggle--schedule-invite"
-                : isLocationMessage
-                  ? " messages-bubble-toggle--location"
-                  : ""
-            }"
-            data-action="toggle-message-menu"
-            data-message-id="${escapeHtml(message.id)}"
-          >
-            ${bubbleMarkup}
-          </button>
+          ${bubbleControlMarkup}
           ${renderConversationMessageMenu(message, isMenuOpen)}
         </div>
       </div>
@@ -10700,6 +11452,15 @@ function deleteConversationMessage(messageId = "") {
   if (String(state.quotedMessageId || "").trim() === targetMessage.id) {
     state.quotedMessageId = "";
   }
+  if (String(state.expandedImageMessageId || "").trim() === targetMessage.id) {
+    state.expandedImageMessageId = "";
+  }
+  if (
+    state.innerThoughtModalOpen &&
+    String(state.innerThoughtTargetMessageId || "").trim() === targetMessage.id
+  ) {
+    setInnerThoughtModalOpen(false);
+  }
   recalculateConversationUpdatedAt(conversation);
   bumpConversationReplyContextVersion(conversation);
   cancelConversationReplyWork(conversation.id);
@@ -11101,6 +11862,18 @@ function handleConversationToolAction(toolId = "") {
     return;
   }
 
+  if (resolvedToolId === "camera") {
+    const conversation = getConversationById();
+    if (!conversation) {
+      setMessagesStatus("请先进入一个聊天，再发送图片。", "error");
+      renderConversationDetail();
+      return;
+    }
+    renderConversationDetail();
+    setPhotoModalOpen(true);
+    return;
+  }
+
   if (resolvedToolId === "image") {
     const conversation = getConversationById();
     if (!conversation) {
@@ -11151,6 +11924,83 @@ function handleConversationToolAction(toolId = "") {
   setMessagesStatus(`${entry?.label || "该"}功能暂未开放。`);
 }
 
+async function openInnerThoughtForMessage(messageId = "") {
+  const conversation = getConversationById();
+  if (!conversation) {
+    return;
+  }
+  const contact = getResolvedConversationContact(conversation);
+  if (!contact) {
+    setMessagesStatus("未找到对应联系人，请先去通讯录检查人物信息。", "error");
+    return;
+  }
+  const targetMessage =
+    conversation.messages.find((message) => String(message?.id || "").trim() === String(messageId || "").trim()) ||
+    null;
+  if (!targetMessage) {
+    setMessagesStatus("未找到要分析的消息。", "error");
+    return;
+  }
+  if (targetMessage.role !== "assistant") {
+    setMessagesStatus("心声分析目前只支持角色发出的消息。", "error");
+    return;
+  }
+  if (
+    isScheduleInviteConversationMessage(targetMessage) ||
+    isLocationConversationMessage(targetMessage) ||
+    isImageConversationMessage(targetMessage)
+  ) {
+    setMessagesStatus("这类卡片消息暂不支持心声分析。", "error");
+    return;
+  }
+
+  try {
+    const settings = loadSettings();
+    const scrollSnapshot = captureConversationScrollSnapshot();
+    state.messageActionMessageId = "";
+    state.innerThoughtLoading = true;
+    state.innerThoughtError = "";
+    state.innerThoughtContent = "";
+    state.innerThoughtTargetMessageId = String(targetMessage.id || "").trim();
+    state.innerThoughtTargetRole = targetMessage.role === "assistant" ? "assistant" : "user";
+    state.innerThoughtTargetPreview = getConversationMessagePreviewText(targetMessage);
+    renderConversationDetail({
+      scrollBehavior: "preserve",
+      scrollSnapshot
+    });
+    setInnerThoughtModalOpen(true);
+    renderInnerThoughtModal();
+
+    const content = await requestInnerThoughtText(
+      settings,
+      state.profile,
+      contact,
+      conversation,
+      targetMessage
+    );
+    if (
+      !state.innerThoughtModalOpen ||
+      state.innerThoughtTargetMessageId !== String(targetMessage.id || "").trim()
+    ) {
+      return;
+    }
+    state.innerThoughtLoading = false;
+    state.innerThoughtError = "";
+    state.innerThoughtContent = String(content || "").trim();
+    renderInnerThoughtModal();
+    setMessagesStatus("心声已生成。", "success");
+  } catch (error) {
+    state.innerThoughtLoading = false;
+    state.innerThoughtError = error?.message || "心声生成失败。";
+    state.innerThoughtContent = "";
+    if (!state.innerThoughtModalOpen) {
+      setInnerThoughtModalOpen(true);
+    }
+    renderInnerThoughtModal();
+    setMessagesStatus(`心声生成失败：${error?.message || "请求失败"}`, "error");
+  }
+}
+
 async function sendConversationImage(file) {
   if (!file) {
     return;
@@ -11193,6 +12043,45 @@ async function sendConversationImage(file) {
   conversation.updatedAt = userMessage.createdAt;
   bumpConversationReplyContextVersion(conversation);
   persistConversations();
+  queueConversationRenderOptions({
+    scrollBehavior: "bottom"
+  });
+  renderMessagesPage();
+  setMessagesStatus("图片已加入对话，点击右侧圆标向 API 请求回复。", "success");
+}
+
+function sendConversationPhoto(description = "") {
+  const resolvedDescription = String(description || "").trim();
+  if (!resolvedDescription) {
+    setPhotoStatus("请先描述这张照片的内容。", "error");
+    return;
+  }
+  const conversation = getConversationById();
+  if (!conversation) {
+    setMessagesStatus("请先进入一个聊天，再发送图片。", "error");
+    return;
+  }
+
+  closeConversationTransientUi();
+  const userMessage = normalizeConversationMessage(
+    {
+      id: `message_${Date.now()}_${hashText(resolvedDescription)}`,
+      role: "user",
+      messageType: "image",
+      imageDescription: resolvedDescription,
+      text: buildImageMessageText(resolvedDescription),
+      needsReply: true,
+      time: formatLocalTime(),
+      createdAt: Date.now()
+    },
+    conversation.messages.length
+  );
+
+  conversation.messages = [...conversation.messages, userMessage];
+  conversation.updatedAt = userMessage.createdAt;
+  bumpConversationReplyContextVersion(conversation);
+  persistConversations();
+  setPhotoModalOpen(false);
   queueConversationRenderOptions({
     scrollBehavior: "bottom"
   });
@@ -11387,6 +12276,7 @@ async function requestConversationReply(options = {}) {
   let awarenessTriggered = false;
   let awarenessHistoryEntry = null;
   let requestedPendingUserMessageIds = [];
+  let pendingUserMessagesForPrompt = [];
 
   if (isRegenerate) {
     const latestReplyBatch = getLatestAssistantReplyBatch(conversation);
@@ -11412,6 +12302,7 @@ async function requestConversationReply(options = {}) {
       }
       return;
     }
+    pendingUserMessagesForPrompt = pendingUserMessages.map((message) => ({ ...message }));
     requestedPendingUserMessageIds = pendingUserMessages.map((message) =>
       String(message.id || "").trim()
     );
@@ -11495,6 +12386,7 @@ async function requestConversationReply(options = {}) {
         regenerate: isRegenerate,
         regenerateInstruction,
         triggeredAwareness,
+        pendingUserMessages: pendingUserMessagesForPrompt,
         sceneMode: conversation.sceneMode === "offline" ? "offline" : "online",
         conversation
       }
@@ -11993,6 +12885,30 @@ function attachEvents() {
       }
 
       if (
+        actionEl.getAttribute("data-action") === "toggle-image-description" &&
+        actionEl.getAttribute("data-message-id")
+      ) {
+        const messageId = String(actionEl.getAttribute("data-message-id") || "").trim();
+        const conversation = getConversationById();
+        const targetMessage =
+          conversation?.messages?.find((message) => String(message?.id || "").trim() === messageId) || null;
+        const scrollSnapshot = captureConversationScrollSnapshot();
+        state.composerPanelOpen = false;
+        if (!String(targetMessage?.imageDescription || "").trim()) {
+          state.messageActionMessageId = state.messageActionMessageId === messageId ? "" : messageId;
+          state.expandedImageMessageId = "";
+        } else {
+          state.messageActionMessageId = "";
+          state.expandedImageMessageId = state.expandedImageMessageId === messageId ? "" : messageId;
+        }
+        renderConversationDetail({
+          scrollBehavior: "preserve",
+          scrollSnapshot
+        });
+        return;
+      }
+
+      if (
         actionEl.getAttribute("data-action") === "edit-conversation-message" &&
         actionEl.getAttribute("data-message-id")
       ) {
@@ -12005,6 +12921,14 @@ function attachEvents() {
         actionEl.getAttribute("data-message-id")
       ) {
         deleteConversationMessage(String(actionEl.getAttribute("data-message-id") || ""));
+        return;
+      }
+
+      if (
+        actionEl.getAttribute("data-action") === "inner-thought-conversation-message" &&
+        actionEl.getAttribute("data-message-id")
+      ) {
+        void openInnerThoughtForMessage(String(actionEl.getAttribute("data-message-id") || ""));
         return;
       }
 
@@ -12056,6 +12980,7 @@ function attachEvents() {
         cancelConversationListLongPress();
         refreshStateFromStorage();
         closeConversationTransientUi();
+        state.expandedImageMessageId = "";
         state.activeConversationId = nextConversationId;
         resetConversationVisibleMessageCount(state.activeConversationId);
         syncConversationPresenceFromSchedules(state.activeConversationId);
@@ -13037,6 +13962,32 @@ function attachEvents() {
     });
   }
 
+  if (messagesPhotoCloseBtnEl) {
+    messagesPhotoCloseBtnEl.addEventListener("click", () => {
+      setPhotoModalOpen(false);
+    });
+  }
+
+  if (messagesPhotoCancelBtnEl) {
+    messagesPhotoCancelBtnEl.addEventListener("click", () => {
+      setPhotoModalOpen(false);
+    });
+  }
+
+  if (messagesPhotoDescriptionInputEl) {
+    messagesPhotoDescriptionInputEl.addEventListener("input", () => {
+      state.photoDraftDescription = String(messagesPhotoDescriptionInputEl.value || "");
+      setPhotoStatus("");
+    });
+  }
+
+  if (messagesPhotoFormEl) {
+    messagesPhotoFormEl.addEventListener("submit", (event) => {
+      event.preventDefault();
+      sendConversationPhoto(state.photoDraftDescription);
+    });
+  }
+
   [
     messagesAwarenessTitleInputEl,
     messagesAwarenessTextInputEl,
@@ -13256,6 +14207,18 @@ function attachEvents() {
     });
   }
 
+  if (messagesInnerThoughtCloseBtnEl) {
+    messagesInnerThoughtCloseBtnEl.addEventListener("click", () => {
+      setInnerThoughtModalOpen(false);
+    });
+  }
+
+  if (messagesInnerThoughtCancelBtnEl) {
+    messagesInnerThoughtCancelBtnEl.addEventListener("click", () => {
+      setInnerThoughtModalOpen(false);
+    });
+  }
+
   if (messagesWorldbookEditorCloseBtnEl) {
     messagesWorldbookEditorCloseBtnEl.addEventListener("click", () => {
       setWorldbookEditorOpen(false);
@@ -13388,10 +14351,26 @@ function attachEvents() {
     });
   }
 
+  if (messagesPhotoModalEl) {
+    messagesPhotoModalEl.addEventListener("click", (event) => {
+      if (event.target === messagesPhotoModalEl) {
+        setPhotoModalOpen(false);
+      }
+    });
+  }
+
   if (messagesAwarenessModalEl) {
     messagesAwarenessModalEl.addEventListener("click", (event) => {
       if (event.target === messagesAwarenessModalEl) {
         setAwarenessModalOpen(false);
+      }
+    });
+  }
+
+  if (messagesInnerThoughtModalEl) {
+    messagesInnerThoughtModalEl.addEventListener("click", (event) => {
+      if (event.target === messagesInnerThoughtModalEl) {
+        setInnerThoughtModalOpen(false);
       }
     });
   }
@@ -13459,6 +14438,8 @@ function attachEvents() {
       state.placesManagerOpen ||
       state.placeEditorOpen ||
       state.awarenessModalOpen ||
+      state.photoModalOpen ||
+      state.innerThoughtModalOpen ||
       state.conversationPickerOpen ||
       state.chatSettingsOpen ||
       state.memoryViewerOpen ||
@@ -13521,6 +14502,8 @@ function attachEvents() {
       state.profileEditorOpen ||
       state.contactEditorOpen ||
       state.awarenessModalOpen ||
+      state.photoModalOpen ||
+      state.innerThoughtModalOpen ||
       state.placeEditorOpen ||
       state.autoScheduleRequestOpen
     ) {
@@ -13530,6 +14513,9 @@ function attachEvents() {
     renderMessagesPage();
     if (state.locationModalOpen) {
       renderLocationModal();
+    }
+    if (state.photoModalOpen) {
+      renderPhotoModal();
     }
   });
 
@@ -13594,8 +14580,16 @@ function attachEvents() {
       setLocationModalOpen(false);
       return;
     }
+    if (event.key === "Escape" && state.photoModalOpen) {
+      setPhotoModalOpen(false);
+      return;
+    }
     if (event.key === "Escape" && state.awarenessModalOpen) {
       setAwarenessModalOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.innerThoughtModalOpen) {
+      setInnerThoughtModalOpen(false);
       return;
     }
     if (event.key === "Escape" && state.schedulePreviewOpen) {

@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <title>Pulse Generator · Chat</title>
-    <link rel="stylesheet" href="./messages.css?v=20260403-184320" />
+    <link rel="stylesheet" href="./messages.css?v=20260405-213036" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -2111,6 +2111,54 @@
       </div>
     </section>
 
+    <section id="messages-photo-modal" class="messages-dialog-modal" hidden aria-hidden="true">
+      <div class="messages-dialog-modal__panel" role="dialog" aria-modal="true" aria-label="发送图片">
+        <header class="messages-dialog-modal__header">
+          <strong>发送图片</strong>
+          <button
+            id="messages-photo-close-btn"
+            class="messages-dialog-modal__close"
+            type="button"
+            aria-label="关闭发送图片弹窗"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M7 7l10 10M17 7 7 17"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </header>
+
+        <form id="messages-photo-form" class="messages-dialog-modal__form">
+          <label class="messages-dialog-modal__field">
+            <span>照片内容描述</span>
+            <textarea
+              id="messages-photo-description-input"
+              rows="5"
+              maxlength="600"
+              placeholder="例如：窗边一杯还冒着热气的咖啡，旁边摊着一本翻到一半的书"
+            ></textarea>
+            <small>这段内容会作为照片卡片的说明提供给 AI，不会当成普通文字消息发送。</small>
+          </label>
+
+          <p id="messages-photo-status" class="messages-editor-status" aria-live="polite"></p>
+
+          <div class="messages-dialog-modal__actions">
+            <button id="messages-photo-cancel-btn" class="messages-dialog-modal__button" type="button">
+              取消
+            </button>
+            <button class="messages-dialog-modal__button messages-dialog-modal__button--primary" type="submit">
+              发送
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
     <section
       id="messages-awareness-modal"
       class="messages-dialog-modal"
@@ -2223,14 +2271,55 @@
       </div>
     </section>
 
+    <section id="messages-inner-thought-modal" class="messages-dialog-modal" hidden aria-hidden="true">
+      <div
+        class="messages-dialog-modal__panel messages-inner-thought-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="心声"
+      >
+        <header class="messages-dialog-modal__header">
+          <strong>心声</strong>
+          <button
+            id="messages-inner-thought-close-btn"
+            class="messages-dialog-modal__close"
+            type="button"
+            aria-label="关闭心声弹窗"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M7 7l10 10M17 7 7 17"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </header>
+
+        <div id="messages-inner-thought-body" class="messages-inner-thought-body" aria-live="polite"></div>
+
+        <div class="messages-dialog-modal__actions messages-inner-thought-modal__actions">
+          <button
+            id="messages-inner-thought-cancel-btn"
+            class="messages-dialog-modal__button"
+            type="button"
+          >
+            关闭
+          </button>
+        </div>
+      </div>
+    </section>
+
     <input id="messages-image-file-input" type="file" accept="image/*" hidden />
 
-    <script src="./prompt-config.js?v=20260405-202119"></script>
+    <script src="./prompt-config.js?v=20260405-213036"></script>
     <script src="./privacy-allowlist.js?v=20260403-165212"></script>
     <script src="./pulse-privacy-cover.js?v=20260403-170109"></script>
     <script src="./pulse-message-banner.js?v=20260403-165212"></script>
     <script src="./api-log.js?v=20260403-165212"></script>
     <script src="./messages-awareness-config.js?v=20260403-165212"></script>
-    <script src="./messages.js?v=20260405-202119"></script>
+    <script src="./messages.js?v=20260405-213036"></script>
   </body>
 </html>
