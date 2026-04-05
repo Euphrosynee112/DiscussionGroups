@@ -64,14 +64,56 @@
     });
   }
 
-  function normalizeManualTimeSettings(source = {}) {
+  function normalizeManualTimeSettings(source = {}, fallbackNow = new Date()) {
     const resolved = source && typeof source === "object" ? source : {};
+    const now =
+      fallbackNow instanceof Date && Number.isFinite(fallbackNow.getTime())
+        ? new Date(fallbackNow.getTime())
+        : new Date();
+    const nowTimestamp = now.getTime();
     const value = trimText(resolved.value || resolved.timestamp || "");
     const parsed = value ? new Date(value) : null;
-    const hasValidValue = Boolean(parsed && Number.isFinite(parsed.getTime()));
+    const parsedTimestamp =
+      parsed && Number.isFinite(parsed.getTime()) ? parsed.getTime() : Number.NaN;
+    const rawOffsetMs = Number(resolved.offsetMs);
+    const hasValidOffsetMs = Number.isFinite(rawOffsetMs);
+    const offsetMs = hasValidOffsetMs
+      ? Math.round(rawOffsetMs)
+      : Number.isFinite(parsedTimestamp)
+        ? Math.round(parsedTimestamp - nowTimestamp)
+        : 0;
     return {
-      enabled: Boolean(resolved.enabled && hasValidValue),
-      value: hasValidValue ? value : ""
+      enabled: Boolean(resolved.enabled && Number.isFinite(offsetMs)),
+      value: Number.isFinite(parsedTimestamp) ? value : "",
+      offsetMs: Number.isFinite(offsetMs) ? offsetMs : 0,
+      savedAt: Number.isFinite(Number(resolved.savedAt))
+        ? Number(resolved.savedAt)
+        : nowTimestamp
+    };
+  }
+
+  function createManualTimeSettings(targetValue = "", enabled = true, referenceNow = new Date()) {
+    const now =
+      referenceNow instanceof Date && Number.isFinite(referenceNow.getTime())
+        ? new Date(referenceNow.getTime())
+        : new Date();
+    const value = trimText(targetValue);
+    const parsed = value ? new Date(value) : null;
+    const parsedTimestamp =
+      parsed && Number.isFinite(parsed.getTime()) ? parsed.getTime() : Number.NaN;
+    if (!Boolean(enabled) || !Number.isFinite(parsedTimestamp)) {
+      return {
+        enabled: false,
+        value: Number.isFinite(parsedTimestamp) ? formatDateTimeInputValue(parsed) : value,
+        offsetMs: 0,
+        savedAt: now.getTime()
+      };
+    }
+    return {
+      enabled: true,
+      value: formatDateTimeInputValue(parsed),
+      offsetMs: Math.round(parsedTimestamp - now.getTime()),
+      savedAt: now.getTime()
     };
   }
 
@@ -89,9 +131,13 @@
   }
 
   function resolvePromptNow(settings = {}, fallbackNow = new Date()) {
-    const manualTimeSettings = normalizeManualTimeSettings(settings?.manualTimeSettings);
-    if (manualTimeSettings.enabled && manualTimeSettings.value) {
-      const manualNow = new Date(manualTimeSettings.value);
+    const baseNow =
+      fallbackNow instanceof Date && Number.isFinite(fallbackNow.getTime())
+        ? new Date(fallbackNow.getTime())
+        : new Date(fallbackNow || Date.now());
+    const manualTimeSettings = normalizeManualTimeSettings(settings?.manualTimeSettings, baseNow);
+    if (manualTimeSettings.enabled) {
+      const manualNow = new Date(baseNow.getTime() + manualTimeSettings.offsetMs);
       if (Number.isFinite(manualNow.getTime())) {
         return manualNow;
       }
@@ -105,7 +151,7 @@
 
   function formatPromptTimeLabel(settings = {}, locale = "zh-CN") {
     const manualTimeSettings = normalizeManualTimeSettings(settings?.manualTimeSettings);
-    if (!manualTimeSettings.enabled || !manualTimeSettings.value) {
+    if (!manualTimeSettings.enabled) {
       return "跟随本地时间";
     }
     const resolved = resolvePromptNow(settings);
@@ -846,6 +892,7 @@
     SECTION_LABELS,
     SECTION_FALLBACKS,
     normalizeManualTimeSettings,
+    createManualTimeSettings,
     resolvePromptNow,
     formatPromptTimeLabel,
     formatDateTimeInputValue,

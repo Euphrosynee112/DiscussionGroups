@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <title>Pulse Generator · 日程</title>
-    <link rel="stylesheet" href="./schedule.css?v=20260403-165212" />
+    <link rel="stylesheet" href="./schedule.css?v=20260405-202119" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -68,6 +68,23 @@
                   stroke-linecap="round"
                   stroke-linejoin="round"
                 />
+              </svg>
+            </button>
+            <button
+              id="schedule-places-btn"
+              class="schedule-topbar__button"
+              type="button"
+              aria-label="管理常用地点"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 20s6-4.9 6-9.2A6 6 0 0 0 6 10.8C6 15.1 12 20 12 20Z"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linejoin="round"
+                />
+                <circle cx="12" cy="10" r="2.1" fill="none" stroke="currentColor" stroke-width="1.8" />
               </svg>
             </button>
             <button
@@ -204,6 +221,14 @@
               勾选后会向已选同行人发送日程邀请卡片，并调用 API 让角色决定接受或拒绝；最多同时发起 3 个邀请请求。
             </small>
           </section>
+
+          <label class="schedule-field">
+            <span>地点</span>
+            <select id="schedule-place-select"></select>
+            <small class="schedule-field__hint">
+              进入 1v1 聊天时，会按当前时间命中的日程地点刷新用户 / 角色位置；双方地点相同会自动判定为线下。
+            </small>
+          </label>
 
           <label class="schedule-field">
             <span>日期</span>
@@ -349,11 +374,131 @@
       </div>
     </section>
 
-    <script src="./prompt-config.js?v=20260405-193234"></script>
+    <section id="schedule-places-modal" class="schedule-modal" hidden aria-hidden="true">
+      <div class="schedule-modal__backdrop"></div>
+      <div class="schedule-modal__panel" role="dialog" aria-modal="true" aria-label="常用地点">
+        <div class="schedule-modal__head">
+          <strong>常用地点</strong>
+          <div class="schedule-modal__head-actions">
+            <button id="schedule-places-add-btn" class="schedule-filter-chip" type="button">
+              新增
+            </button>
+            <button id="schedule-places-close-btn" class="schedule-modal__close" type="button" aria-label="关闭">
+              ×
+            </button>
+          </div>
+        </div>
+
+        <div class="schedule-editor">
+          <p id="schedule-places-status" class="schedule-editor-status" aria-live="polite"></p>
+          <section id="schedule-places-list" class="schedule-places-list" aria-live="polite"></section>
+        </div>
+      </div>
+    </section>
+
+    <section id="schedule-place-editor-modal" class="schedule-modal" hidden aria-hidden="true">
+      <div class="schedule-modal__backdrop"></div>
+      <div class="schedule-modal__panel" role="dialog" aria-modal="true" aria-label="编辑常用地点">
+        <div class="schedule-modal__head">
+          <strong id="schedule-place-editor-title">新增地点</strong>
+          <button id="schedule-place-editor-close-btn" class="schedule-modal__close" type="button" aria-label="关闭">
+            ×
+          </button>
+        </div>
+
+        <form id="schedule-place-editor-form" class="schedule-editor">
+          <label class="schedule-field">
+            <span>地点名称</span>
+            <input
+              id="schedule-place-name-input"
+              type="text"
+              maxlength="40"
+              placeholder="例如：自己家、公司、健身房"
+              autocomplete="off"
+            />
+          </label>
+
+          <label class="schedule-field">
+            <span>地点类型</span>
+            <select id="schedule-place-type-select">
+              <option value="home">住宅</option>
+              <option value="family">家庭</option>
+              <option value="work">工作</option>
+              <option value="school">学校</option>
+              <option value="leisure">娱乐</option>
+              <option value="other">其他</option>
+            </select>
+          </label>
+
+          <label class="schedule-field">
+            <span>地点别名</span>
+            <textarea
+              id="schedule-place-aliases-input"
+              rows="4"
+              maxlength="400"
+              placeholder="一行一个别名，例如：&#10;回家&#10;工位&#10;排练厅"
+            ></textarea>
+          </label>
+
+          <label class="schedule-field">
+            <span>地点特殊性</span>
+            <textarea
+              id="schedule-place-traits-input"
+              rows="5"
+              maxlength="800"
+              placeholder="补充这个地点对聊天场景的影响，例如：通常很安静，方便长时间聊天。"
+            ></textarea>
+          </label>
+
+          <label class="schedule-field">
+            <span>谁知道这个地点</span>
+            <select id="schedule-place-visibility-select">
+              <option value="self">仅自己知道</option>
+              <option value="all_contacts">全部角色都知道</option>
+              <option value="selected_contacts">仅指定角色知道</option>
+            </select>
+          </label>
+
+          <section
+            id="schedule-place-visible-contacts-field"
+            class="schedule-field schedule-field--group"
+            hidden
+          >
+            <div class="schedule-field__head">
+              <span>可见角色</span>
+            </div>
+            <div id="schedule-place-visible-contacts-list" class="schedule-visibility-list"></div>
+          </section>
+
+          <p id="schedule-place-editor-status" class="schedule-editor-status" aria-live="polite"></p>
+
+          <div class="schedule-modal__actions">
+            <button
+              id="schedule-place-editor-delete-btn"
+              class="schedule-modal__button schedule-modal__button--danger"
+              type="button"
+              hidden
+            >
+              删除
+            </button>
+            <button
+              id="schedule-place-editor-cancel-btn"
+              class="schedule-modal__button schedule-modal__button--ghost"
+              type="button"
+            >
+              取消
+            </button>
+            <button class="schedule-modal__button" type="submit">保存地点</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <script src="./prompt-config.js?v=20260405-202119"></script>
     <script src="./privacy-allowlist.js?v=20260403-165212"></script>
     <script src="./pulse-privacy-cover.js?v=20260403-170109"></script>
     <script src="./pulse-message-banner.js?v=20260403-165212"></script>
     <script src="./api-log.js?v=20260403-165212"></script>
-    <script src="./schedule.js?v=20260405-193234"></script>
+    <script src="./schedule.js?v=20260405-202119"></script>
   </body>
 </html>

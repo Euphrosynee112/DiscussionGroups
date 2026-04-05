@@ -2,8 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260405-193234";
-const APP_BUILD_UPDATED_AT = "2026-04-05 19:32:34";
+const APP_BUILD_VERSION = "20260405-202119";
+const APP_BUILD_UPDATED_AT = "2026-04-05 20:21:19";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -143,7 +143,9 @@ const DEFAULT_SETTINGS = {
   privacyAllowlist: [],
   manualTimeSettings: {
     enabled: false,
-    value: ""
+    value: "",
+    offsetMs: 0,
+    savedAt: 0
   },
   promptRules: {},
   chatGlobalSettings: {
@@ -235,6 +237,16 @@ function updateLocalClock() {
   }
   if (phoneClockEl) {
     phoneClockEl.textContent = timeText;
+  }
+  renderHomeEffectiveTime(homeState.settings);
+  if (homeState.timeModalOpen && homeTimeSummaryEl) {
+    const promptTimeLabel =
+      typeof window.PulsePromptConfig?.formatPromptTimeLabel === "function"
+        ? window.PulsePromptConfig.formatPromptTimeLabel(homeState.settings)
+        : "跟随本地时间";
+    homeTimeSummaryEl.textContent = normalizeHomeManualTimeSettings(homeState.settings).enabled
+      ? `当前发送给 prompt 的时间：${promptTimeLabel}（会继续随真实时间流动）`
+      : "当前发送给 prompt 的时间：跟随本地时间";
   }
 }
 
@@ -464,7 +476,13 @@ function buildNormalizedSettingsSnapshot(source, options = {}) {
       ? window.PulsePromptConfig.normalizeManualTimeSettings(merged.manualTimeSettings)
       : {
           enabled: Boolean(merged.manualTimeSettings?.enabled),
-          value: String(merged.manualTimeSettings?.value || "").trim()
+          value: String(merged.manualTimeSettings?.value || "").trim(),
+          offsetMs: Number.isFinite(Number(merged.manualTimeSettings?.offsetMs))
+            ? Math.round(Number(merged.manualTimeSettings.offsetMs))
+            : 0,
+          savedAt: Number.isFinite(Number(merged.manualTimeSettings?.savedAt))
+            ? Number(merged.manualTimeSettings.savedAt)
+            : Date.now()
         };
   merged.promptRules =
     typeof window.PulsePromptConfig?.normalizePromptRules === "function"
@@ -564,7 +582,13 @@ function normalizeHomeManualTimeSettings(settings = homeState.settings) {
   }
   return {
     enabled: Boolean(settings?.manualTimeSettings?.enabled),
-    value: String(settings?.manualTimeSettings?.value || "").trim()
+    value: String(settings?.manualTimeSettings?.value || "").trim(),
+    offsetMs: Number.isFinite(Number(settings?.manualTimeSettings?.offsetMs))
+      ? Math.round(Number(settings.manualTimeSettings.offsetMs))
+      : 0,
+    savedAt: Number.isFinite(Number(settings?.manualTimeSettings?.savedAt))
+      ? Number(settings.manualTimeSettings.savedAt)
+      : Date.now()
   };
 }
 
@@ -604,6 +628,22 @@ function renderHomeEffectiveTime(settings = homeState.settings) {
         ? String(normalizeHomeManualTimeSettings(settings).value || "").trim() || "跟随本地时间"
         : "跟随本地时间";
   phoneEffectiveTimeEl.textContent = `Prompt 时间：${timeLabel || "跟随本地时间"}`;
+}
+
+function buildHomeManualTimeSettingsFromInput(targetValue = "", enabled = true) {
+  if (typeof window.PulsePromptConfig?.createManualTimeSettings === "function") {
+    return window.PulsePromptConfig.createManualTimeSettings(targetValue, enabled, new Date());
+  }
+  const value = String(targetValue || "").trim();
+  const parsed = value ? new Date(value) : null;
+  const parsedTimestamp = parsed && Number.isFinite(parsed.getTime()) ? parsed.getTime() : Number.NaN;
+  const nowTimestamp = Date.now();
+  return {
+    enabled: Boolean(enabled && Number.isFinite(parsedTimestamp)),
+    value,
+    offsetMs: Number.isFinite(parsedTimestamp) ? Math.round(parsedTimestamp - nowTimestamp) : 0,
+    savedAt: nowTimestamp
+  };
 }
 
 function persistHomeSettingsSnapshot(nextSettings, options = {}) {
@@ -4201,10 +4241,9 @@ function renderHomeTimeModal() {
       ? window.PulsePromptConfig.resolvePromptNow(homeState.settings, new Date())
       : new Date();
   const inputValue =
-    manualTimeSettings.value ||
-    (typeof window.PulsePromptConfig?.formatDateTimeInputValue === "function"
+    typeof window.PulsePromptConfig?.formatDateTimeInputValue === "function"
       ? window.PulsePromptConfig.formatDateTimeInputValue(fallbackPromptNow)
-      : "");
+      : "";
 
   if (homeTimeEnabledEl) {
     homeTimeEnabledEl.checked = manualTimeSettings.enabled;
@@ -4218,7 +4257,7 @@ function renderHomeTimeModal() {
           typeof window.PulsePromptConfig?.formatPromptTimeLabel === "function"
             ? window.PulsePromptConfig.formatPromptTimeLabel(homeState.settings)
             : inputValue || "跟随本地时间"
-        }`
+        }（会继续随真实时间流动）`
       : "当前发送给 prompt 的时间：跟随本地时间";
   }
 }
@@ -4246,12 +4285,9 @@ function commitHomeManualTimeFromControls(options = {}) {
   }
 
   saveHomeManualTimeSettings(
+    buildHomeManualTimeSettingsFromInput(resolvedValue, nextEnabled),
     {
-      enabled: nextEnabled,
-      value: resolvedValue
-    },
-    {
-      statusMessage: options.statusMessage || "Prompt 时间已保存。",
+      statusMessage: options.statusMessage || "Prompt 时间偏移已保存。",
       statusTone: options.statusTone || "success"
     }
   );
@@ -5001,10 +5037,7 @@ function attachHomeSettingsEvents() {
         homeTimeEnabledEl.checked = false;
       }
       saveHomeManualTimeSettings(
-        {
-          enabled: false,
-          value: String(homeTimeInputEl?.value || "").trim()
-        },
+        buildHomeManualTimeSettingsFromInput(String(homeTimeInputEl?.value || "").trim(), false),
         {
           statusMessage: "已恢复跟随本地时间。"
         }

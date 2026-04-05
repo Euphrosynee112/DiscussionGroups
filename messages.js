@@ -48,6 +48,8 @@ const CONVERSATION_SOFT_MESSAGE_LIMIT = 240;
 const CONVERSATION_MIN_MESSAGE_LIMIT = 80;
 const CONVERSATION_STORAGE_TARGET_CHARS = 1400000;
 const CONVERSATION_IMAGE_PAYLOAD_KEEP_COUNT = 20;
+const CONVERSATION_LIST_LONG_PRESS_MS = 560;
+const CONVERSATION_LIST_LONG_PRESS_MOVE_THRESHOLD = 12;
 const DEFAULT_WORLDVIEW =
   "这是一个强调长期主义、产品洞察和公共讨论质量的中文社交世界。用户习惯像在 X 上一样快速表达观点，但会天然追问效率、增长、AI 和平台变迁。整体语气要真实、犀利、能引发跟帖，不要写成官方通稿。";
 
@@ -546,6 +548,10 @@ const initialWindowFocusPrimed =
   typeof document !== "undefined" && typeof document.hasFocus === "function"
     ? document.hasFocus()
     : true;
+let conversationListLongPressTimerId = 0;
+let conversationListLongPressConversationId = "";
+let conversationListLongPressTriggeredId = "";
+let conversationListLongPressStartPoint = null;
 
 const state = {
   profile: { ...DEFAULT_PROFILE },
@@ -2221,6 +2227,17 @@ function normalizePresenceEntry(entry) {
     toPlaceId: String(source.toPlaceId || "").trim(),
     updatedAt: Number(source.updatedAt) || 0
   };
+}
+
+function arePresenceEntriesEquivalent(left = {}, right = {}) {
+  const normalizedLeft = normalizePresenceEntry(left);
+  const normalizedRight = normalizePresenceEntry(right);
+  return (
+    normalizedLeft.presenceType === normalizedRight.presenceType &&
+    normalizedLeft.placeId === normalizedRight.placeId &&
+    normalizedLeft.fromPlaceId === normalizedRight.fromPlaceId &&
+    normalizedLeft.toPlaceId === normalizedRight.toPlaceId
+  );
 }
 
 function normalizeWorldbookSelectionIds(ids = []) {
@@ -4156,6 +4173,7 @@ function normalizeScheduleEntry(entry, index = 0) {
     visibleContactIds: Array.isArray(source.visibleContactIds)
       ? [...new Set(source.visibleContactIds.map((item) => String(item || "").trim()).filter(Boolean))]
       : [],
+    placeId: String(source.placeId || "").trim(),
     date,
     startTime: normalizeTimeValue(
       source.startTime,
@@ -4660,6 +4678,127 @@ function getVisibleScheduleEntriesForContact(contactId = "") {
 
     return [];
   });
+}
+
+function getScheduleActorKey(actorType = "user", actorId = "") {
+  return actorType === "contact" && String(actorId || "").trim()
+    ? `contact:${String(actorId || "").trim()}`
+    : "user:self";
+}
+
+function getCurrentSchedulePlaceEntryForActor(actorKey = "", now = getPromptNow(loadSettings())) {
+  const resolvedActorKey = String(actorKey || "").trim();
+  const resolvedNow = now instanceof Date ? now : new Date();
+  if (!resolvedActorKey) {
+    return null;
+  }
+  const nowTimestamp = resolvedNow.getTime();
+  const candidates = loadScheduleEntries()
+    .filter((entry) => entry.placeId && getCommonPlaceById(entry.placeId))
+    .flatMap((entry) => {
+      if (!getScheduleParticipants(entry).some((participant) => participant.key === resolvedActorKey)) {
+        return [];
+      }
+      return buildScheduleOccurrenceWindows(entry, resolvedNow)
+        .filter((range) => {
+          const startTime = Number(range?.start?.getTime?.() || 0);
+          const endTime = Number(range?.end?.getTime?.() || 0);
+          return startTime <= nowTimestamp && nowTimestamp <= endTime;
+        })
+        .map((range) => ({
+          entry,
+          startAt: Number(range.start.getTime()) || 0,
+          weight: entry.scheduleType === "day" ? 0 : 1
+        }));
+    })
+    .sort((left, right) => {
+      return (
+        right.weight - left.weight ||
+        right.startAt - left.startAt ||
+        (right.entry.updatedAt || 0) - (left.entry.updatedAt || 0)
+      );
+    });
+  return candidates[0]?.entry || null;
+}
+
+function syncConversationPresenceFromSchedules(conversationId = state.activeConversationId) {
+  const resolvedConversationId = String(conversationId || "").trim();
+  const conversation = getConversationById(resolvedConversationId);
+  if (!conversation?.contactId) {
+    return {
+      changed: false,
+      sceneChanged: false
+    };
+  }
+
+  const promptNow = getPromptNow(loadSettings());
+  const nowTimestamp = promptNow.getTime();
+  const contactId = String(conversation.contactId || "").trim();
+  const userEntry = getCurrentSchedulePlaceEntryForActor(getScheduleActorKey("user"), promptNow);
+  const contactEntry = getCurrentSchedulePlaceEntryForActor(
+    getScheduleActorKey("contact", contactId),
+    promptNow
+  );
+  const userPlaceId = userEntry && getCommonPlaceById(userEntry.placeId) ? userEntry.placeId : "";
+  const contactPlaceId = contactEntry && getCommonPlaceById(contactEntry.placeId) ? contactEntry.placeId : "";
+  let changed = false;
+  let sceneChanged = false;
+
+  if (userPlaceId) {
+    const nextUserPresence = normalizePresenceEntry({
+      presenceType: "at_place",
+      placeId: userPlaceId,
+      fromPlaceId: "",
+      toPlaceId: "",
+      updatedAt: nowTimestamp
+    });
+    if (!arePresenceEntriesEquivalent(getUserPresenceForContact(contactId), nextUserPresence)) {
+      setUserPresenceEntry(contactId, nextUserPresence);
+      changed = true;
+    }
+  }
+
+  if (contactPlaceId) {
+    const nextContactPresence = normalizePresenceEntry({
+      presenceType: "at_place",
+      placeId: contactPlaceId,
+      fromPlaceId: "",
+      toPlaceId: "",
+      updatedAt: nowTimestamp
+    });
+    if (!arePresenceEntriesEquivalent(getContactPresence(contactId), nextContactPresence)) {
+      setContactPresenceEntry(contactId, nextContactPresence);
+      changed = true;
+    }
+  }
+
+  if (userPlaceId || contactPlaceId) {
+    const nextSceneMode =
+      userPlaceId && contactPlaceId && userPlaceId === contactPlaceId ? "offline" : "online";
+    if (conversation.sceneMode !== nextSceneMode) {
+      conversation.sceneMode = nextSceneMode;
+      sceneChanged = true;
+      changed = true;
+      if (nextSceneMode === "offline") {
+        state.quotedMessageId = "";
+      }
+      persistConversations();
+    }
+  }
+
+  if ((changed || sceneChanged) && state.sceneModalOpen && state.activeConversationId === resolvedConversationId) {
+    updateSceneModalFields(buildSceneDraft(conversation));
+  }
+  if ((changed || sceneChanged) && state.sceneSyncModalOpen && state.activeConversationId === resolvedConversationId) {
+    renderSceneSyncModal();
+  }
+
+  return {
+    changed,
+    sceneChanged,
+    userPlaceId,
+    contactPlaceId
+  };
 }
 
 function hasRecentAssistantMentionedSchedule(history = [], entry) {
@@ -6395,23 +6534,21 @@ async function appendAssistantReplyBatch(
   const conversationId = String(conversation?.id || "").trim();
   const now = Date.now();
   const timeLabel = formatLocalTime();
-  const createdMessages = [];
+  const activeConversation = conversationId ? getConversationById(conversationId) : conversation;
+  if (!activeConversation) {
+    return [];
+  }
+  if (
+    conversationId &&
+    hasExpectedReplyContextVersion &&
+    getConversationReplyContextVersion(activeConversation) !== parsedExpectedReplyContextVersion
+  ) {
+    return [];
+  }
 
-  for (let index = 0; index < replyItems.length; index += 1) {
-    await sleep(index === 0 ? 1640 : 1460);
-    const item = replyItems[index];
-    const activeConversation = conversationId ? getConversationById(conversationId) : conversation;
-    if (!activeConversation) {
-      break;
-    }
-    if (
-      conversationId &&
-      hasExpectedReplyContextVersion &&
-      getConversationReplyContextVersion(activeConversation) !== parsedExpectedReplyContextVersion
-    ) {
-      break;
-    }
-    const replyMessage = normalizeConversationMessage(
+  const baseLength = Array.isArray(activeConversation.messages) ? activeConversation.messages.length : 0;
+  const createdMessages = replyItems.map((item, index) =>
+    normalizeConversationMessage(
       {
         id: `message_${now}_${index}_${hashText(item.text || item.locationName || "")}`,
         role: "assistant",
@@ -6424,15 +6561,14 @@ async function appendAssistantReplyBatch(
         time: timeLabel,
         createdAt: now + index
       },
-      activeConversation.messages.length + index
-    );
-    activeConversation.messages = [...activeConversation.messages, replyMessage];
-    recalculateConversationUpdatedAt(activeConversation);
-    createdMessages.push(replyMessage);
-    persistConversations();
-    if (state.activeTab === "chat") {
-      renderMessagesPage();
-    }
+      baseLength + index
+    )
+  );
+  activeConversation.messages = [...activeConversation.messages, ...createdMessages];
+  recalculateConversationUpdatedAt(activeConversation);
+  persistConversations();
+  if (state.activeTab === "chat") {
+    renderMessagesPage();
   }
 
   return createdMessages;
@@ -10636,6 +10772,295 @@ function clearCurrentConversationMemories() {
   setMessagesStatus("当前角色记忆已清空。", "success");
 }
 
+function getDeletedContactScheduleSummary(contactId = "") {
+  const resolvedContactId = String(contactId || "").trim();
+  const summary = {
+    ownedEntries: 0,
+    companionEntries: 0,
+    visibleEntries: 0
+  };
+  if (!resolvedContactId) {
+    return summary;
+  }
+  loadScheduleEntries().forEach((entry) => {
+    if (entry.ownerType === "contact" && entry.ownerId === resolvedContactId) {
+      summary.ownedEntries += 1;
+    }
+    if (entry.companionContactIds.includes(resolvedContactId)) {
+      summary.companionEntries += 1;
+    }
+    if (entry.visibleContactIds.includes(resolvedContactId)) {
+      summary.visibleEntries += 1;
+    }
+  });
+  return summary;
+}
+
+function cleanupScheduleEntriesForDeletedContact(contactId = "", options = {}) {
+  const resolvedContactId = String(contactId || "").trim();
+  if (!resolvedContactId) {
+    return {
+      removedOwnedEntries: 0,
+      removedCompanionEntries: 0,
+      detachedCompanionLinks: 0,
+      removedVisibilityRefs: 0
+    };
+  }
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const removeRelatedCompanionEntries = Boolean(requestOptions.removeRelatedCompanionEntries);
+  let removedOwnedEntries = 0;
+  let removedCompanionEntries = 0;
+  let detachedCompanionLinks = 0;
+  let removedVisibilityRefs = 0;
+
+  const nextEntries = loadScheduleEntries().flatMap((entry, index) => {
+    if (entry.ownerType === "contact" && entry.ownerId === resolvedContactId) {
+      removedOwnedEntries += 1;
+      return [];
+    }
+
+    const includesCompanion = entry.companionContactIds.includes(resolvedContactId);
+    if (includesCompanion && removeRelatedCompanionEntries) {
+      removedCompanionEntries += 1;
+      return [];
+    }
+
+    let changed = false;
+    let nextEntry = { ...entry };
+
+    if (includesCompanion) {
+      const nextInviteDecisions = {
+        ...(entry.inviteDecisions || {})
+      };
+      delete nextInviteDecisions[resolvedContactId];
+      nextEntry = {
+        ...nextEntry,
+        companionContactIds: entry.companionContactIds.filter((item) => item !== resolvedContactId),
+        inviteDecisions: nextInviteDecisions
+      };
+      detachedCompanionLinks += 1;
+      changed = true;
+    }
+
+    if (entry.visibleContactIds.includes(resolvedContactId)) {
+      nextEntry = {
+        ...nextEntry,
+        visibleContactIds: entry.visibleContactIds.filter((item) => item !== resolvedContactId)
+      };
+      removedVisibilityRefs += 1;
+      changed = true;
+    }
+
+    return [
+      changed
+        ? normalizeScheduleEntry(
+            {
+              ...nextEntry,
+              updatedAt: Date.now() + index
+            },
+            index
+          )
+        : normalizeScheduleEntry(entry, index)
+    ];
+  });
+
+  safeSetItem(SCHEDULE_ENTRIES_KEY, JSON.stringify(nextEntries));
+  return {
+    removedOwnedEntries,
+    removedCompanionEntries,
+    detachedCompanionLinks,
+    removedVisibilityRefs
+  };
+}
+
+function deleteConversationContactBundle(contactId = "", options = {}) {
+  const resolvedContactId = String(contactId || "").trim();
+  if (!resolvedContactId) {
+    return null;
+  }
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const deletedMemoryCount = state.memories.filter((item) => item.contactId === resolvedContactId).length;
+  const removedJournalCount = state.journalEntries.filter((item) => item.contactId === resolvedContactId).length;
+  const conversationsToDelete = state.conversations.filter(
+    (conversation) => String(conversation.contactId || "").trim() === resolvedContactId
+  );
+  const conversationIds = conversationsToDelete.map((conversation) => String(conversation.id || "").trim()).filter(Boolean);
+  conversationIds.forEach((conversationId) => {
+    cancelConversationReplyWork(conversationId, {
+      includeErrors: true
+    });
+  });
+
+  state.conversations = state.conversations.filter(
+    (conversation) => String(conversation.contactId || "").trim() !== resolvedContactId
+  );
+  state.contacts = state.contacts.filter((contact) => contact.id !== resolvedContactId);
+  state.memories = state.memories.filter((item) => item.contactId !== resolvedContactId);
+  state.journalEntries = state.journalEntries.filter((item) => item.contactId !== resolvedContactId);
+  state.commonPlaces = state.commonPlaces.map((place) => ({
+    ...place,
+    visibleContactIds: normalizeMountedIds(place.visibleContactIds).filter((item) => item !== resolvedContactId)
+  }));
+  state.presenceState = {
+    ...state.presenceState,
+    userByContact: Object.fromEntries(
+      Object.entries(state.presenceState?.userByContact || {}).filter(
+        ([contactIdKey]) => String(contactIdKey || "").trim() !== resolvedContactId
+      )
+    ),
+    contacts: Object.fromEntries(
+      Object.entries(state.presenceState?.contacts || {}).filter(
+        ([contactIdKey]) => String(contactIdKey || "").trim() !== resolvedContactId
+      )
+    )
+  };
+
+  const scheduleCleanup = cleanupScheduleEntriesForDeletedContact(resolvedContactId, requestOptions);
+
+  if (state.activeConversationId && conversationIds.includes(String(state.activeConversationId || "").trim())) {
+    closeConversationTransientUi();
+    state.activeConversationId = "";
+    state.quotedMessageId = "";
+  }
+  if (state.memorySelectedContactId === resolvedContactId) {
+    state.memorySelectedContactId = "";
+  }
+  if (state.contactEditorId === resolvedContactId) {
+    state.contactEditorOpen = false;
+    state.contactEditorId = "";
+  }
+
+  persistMessageMemories();
+  persistJournalEntries();
+  persistCommonPlaces();
+  persistPresenceState();
+  persistConversations();
+  persistContacts();
+
+  return {
+    deletedConversationCount: conversationIds.length,
+    deletedMemoryCount,
+    removedJournalCount,
+    scheduleCleanup
+  };
+}
+
+function handleConversationRowLongPress(conversationId = "") {
+  const resolvedConversationId = String(conversationId || "").trim();
+  const conversation = getConversationById(resolvedConversationId);
+  if (!conversation) {
+    return;
+  }
+  const contactId = String(conversation.contactId || "").trim();
+  const contact = contactId ? getContactById(contactId) : null;
+  const conversationName = contact?.name || getConversationSnapshotName(conversation);
+  const scheduleSummary = getDeletedContactScheduleSummary(contactId);
+  const confirmed = window.confirm(
+    [
+      `确定删除会话「${conversationName}」吗？`,
+      "会同步清空该角色的聊天记录、角色资料、记忆、日记缓存和会话设置。",
+      scheduleSummary.ownedEntries || scheduleSummary.companionEntries
+        ? `当前还关联 ${scheduleSummary.ownedEntries} 条角色日程、${scheduleSummary.companionEntries} 条同行日程。`
+        : ""
+    ]
+      .filter(Boolean)
+      .join("\n")
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  let removeRelatedCompanionEntries = false;
+  if (scheduleSummary.companionEntries > 0) {
+    removeRelatedCompanionEntries = window.confirm(
+      `检测到 ${scheduleSummary.companionEntries} 条把 ${conversationName} 作为同行人的日程。\n是否一并删除这些整条相关日程？\n选择“取消”则只解除同行关系，不删除整条日程。`
+    );
+  }
+
+  const memoryCount = state.memories.filter((item) => item.contactId === contactId).length;
+  const journalCount = state.journalEntries.filter((item) => item.contactId === contactId).length;
+  const result = deleteConversationContactBundle(contactId, {
+    removeRelatedCompanionEntries
+  });
+  if (!result) {
+    return;
+  }
+
+  renderMessagesPage();
+  const summaryParts = [
+    result.deletedConversationCount ? `删除 ${result.deletedConversationCount} 个会话缓存` : "",
+    memoryCount ? `清空 ${memoryCount} 条记忆` : "",
+    journalCount ? `清空 ${journalCount} 条日记缓存` : "",
+    result.scheduleCleanup.removedOwnedEntries
+      ? `删除 ${result.scheduleCleanup.removedOwnedEntries} 条角色日程`
+      : "",
+    result.scheduleCleanup.removedCompanionEntries
+      ? `删除 ${result.scheduleCleanup.removedCompanionEntries} 条同行日程`
+      : "",
+    result.scheduleCleanup.detachedCompanionLinks
+      ? `移除 ${result.scheduleCleanup.detachedCompanionLinks} 个同行关联`
+      : ""
+  ].filter(Boolean);
+  setMessagesStatus(
+    summaryParts.length
+      ? `${conversationName} 已删除：${summaryParts.join("，")}。`
+      : `${conversationName} 已删除。`,
+    "success"
+  );
+}
+
+function cancelConversationListLongPress() {
+  if (conversationListLongPressTimerId) {
+    window.clearTimeout(conversationListLongPressTimerId);
+  }
+  conversationListLongPressTimerId = 0;
+  conversationListLongPressConversationId = "";
+  conversationListLongPressStartPoint = null;
+}
+
+function beginConversationListLongPress(event, conversationId = "") {
+  const resolvedConversationId = String(conversationId || "").trim();
+  if (!resolvedConversationId) {
+    return;
+  }
+  if (Number.isFinite(event?.button) && event.button !== 0) {
+    return;
+  }
+  cancelConversationListLongPress();
+  conversationListLongPressConversationId = resolvedConversationId;
+  conversationListLongPressStartPoint =
+    typeof event?.clientX === "number" && typeof event?.clientY === "number"
+      ? {
+          x: event.clientX,
+          y: event.clientY
+        }
+      : null;
+  conversationListLongPressTimerId = window.setTimeout(() => {
+    conversationListLongPressTriggeredId = resolvedConversationId;
+    cancelConversationListLongPress();
+    try {
+      window.navigator?.vibrate?.(10);
+    } catch (_error) {
+    }
+    handleConversationRowLongPress(resolvedConversationId);
+  }, CONVERSATION_LIST_LONG_PRESS_MS);
+}
+
+function shouldCancelConversationListLongPressForMove(event) {
+  if (!conversationListLongPressStartPoint) {
+    return false;
+  }
+  if (typeof event?.clientX !== "number" || typeof event?.clientY !== "number") {
+    return false;
+  }
+  return (
+    Math.abs(event.clientX - conversationListLongPressStartPoint.x) >
+      CONVERSATION_LIST_LONG_PRESS_MOVE_THRESHOLD ||
+    Math.abs(event.clientY - conversationListLongPressStartPoint.y) >
+      CONVERSATION_LIST_LONG_PRESS_MOVE_THRESHOLD
+  );
+}
+
 function handleConversationToolAction(toolId = "") {
   const resolvedToolId = String(toolId || "").trim();
   closeConversationTransientUi();
@@ -11623,9 +12048,17 @@ function attachEvents() {
         actionEl.getAttribute("data-action") === "open-conversation" &&
         actionEl.getAttribute("data-conversation-id")
       ) {
+        const nextConversationId = String(actionEl.getAttribute("data-conversation-id") || "");
+        if (conversationListLongPressTriggeredId && conversationListLongPressTriggeredId === nextConversationId) {
+          conversationListLongPressTriggeredId = "";
+          return;
+        }
+        cancelConversationListLongPress();
+        refreshStateFromStorage();
         closeConversationTransientUi();
-        state.activeConversationId = String(actionEl.getAttribute("data-conversation-id") || "");
+        state.activeConversationId = nextConversationId;
         resetConversationVisibleMessageCount(state.activeConversationId);
+        syncConversationPresenceFromSchedules(state.activeConversationId);
         setMessagesStatus("");
         renderMessagesPage();
         return;
@@ -11680,6 +12113,36 @@ function attachEvents() {
       const formData = new FormData(target);
       const message = String(formData.get("message") || "");
       sendConversationMessage(message);
+    });
+
+    messagesContentEl.addEventListener("pointerdown", (event) => {
+      if (state.activeConversationId || state.activeTab !== "chat") {
+        return;
+      }
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      const row = target.closest(".messages-row[data-action='open-conversation']");
+      if (!(row instanceof HTMLElement)) {
+        return;
+      }
+      beginConversationListLongPress(event, String(row.dataset.conversationId || ""));
+    });
+
+    ["pointerup", "pointercancel", "pointerleave"].forEach((eventName) => {
+      messagesContentEl.addEventListener(eventName, () => {
+        cancelConversationListLongPress();
+      });
+    });
+
+    messagesContentEl.addEventListener("pointermove", (event) => {
+      if (!conversationListLongPressTimerId) {
+        return;
+      }
+      if (shouldCancelConversationListLongPressForMove(event)) {
+        cancelConversationListLongPress();
+      }
     });
   }
 

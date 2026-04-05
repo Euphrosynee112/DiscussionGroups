@@ -1,6 +1,8 @@
 const PROFILE_KEY = "x_style_generator_profile_v1";
 const MESSAGE_CONTACTS_KEY = "x_style_generator_message_contacts_v1";
 const SCHEDULE_ENTRIES_KEY = "x_style_generator_schedule_entries_v1";
+const MESSAGE_COMMON_PLACES_KEY = "x_style_generator_common_places_v1";
+const MESSAGE_PRESENCE_STATE_KEY = "x_style_generator_presence_state_v1";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const MESSAGE_THREADS_KEY = "x_style_generator_message_threads_v1";
 const DIRECT_MESSAGES_KEY = "x_style_generator_direct_messages_v1";
@@ -11,6 +13,15 @@ const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 const DEFAULT_TEMPERATURE = 0.85;
 const MAX_SCHEDULE_INVITE_CONCURRENCY = 3;
 const DEFAULT_MESSAGE_HISTORY_ROUNDS = 6;
+
+const COMMON_PLACE_TYPE_OPTIONS = [
+  { value: "home", label: "住宅" },
+  { value: "family", label: "家庭" },
+  { value: "work", label: "工作" },
+  { value: "school", label: "学校" },
+  { value: "leisure", label: "娱乐" },
+  { value: "other", label: "其他" }
+];
 
 const DEFAULT_PROFILE = {
   username: "用户",
@@ -33,6 +44,7 @@ const DEFAULT_SETTINGS = {
 const scheduleBackBtnEl = document.querySelector("#schedule-back-btn");
 const scheduleFilterBtnEl = document.querySelector("#schedule-filter-btn");
 const scheduleClearRangeBtnEl = document.querySelector("#schedule-clear-range-btn");
+const schedulePlacesBtnEl = document.querySelector("#schedule-places-btn");
 const scheduleAddBtnEl = document.querySelector("#schedule-add-btn");
 const scheduleStatusEl = document.querySelector("#schedule-status");
 const scheduleViewSwitchEl = document.querySelector("#schedule-view-switch");
@@ -60,6 +72,7 @@ const scheduleCompanionFieldEl = document.querySelector("#schedule-companion-fie
 const scheduleCompanionOptionsEl = document.querySelector("#schedule-companion-options");
 const scheduleNotifyCompanionsFieldEl = document.querySelector("#schedule-notify-companions-field");
 const scheduleNotifyCompanionsInputEl = document.querySelector("#schedule-notify-companions-input");
+const schedulePlaceSelectEl = document.querySelector("#schedule-place-select");
 const scheduleDateInputEl = document.querySelector("#schedule-date-input");
 const scheduleTimeGridEl = document.querySelector("#schedule-time-grid");
 const scheduleStartTimeInputEl = document.querySelector("#schedule-start-time-input");
@@ -88,6 +101,25 @@ const scheduleClearStartTimeInputEl = document.querySelector("#schedule-clear-st
 const scheduleClearEndDateInputEl = document.querySelector("#schedule-clear-end-date-input");
 const scheduleClearEndTimeInputEl = document.querySelector("#schedule-clear-end-time-input");
 const scheduleClearStatusEl = document.querySelector("#schedule-clear-status");
+const schedulePlacesModalEl = document.querySelector("#schedule-places-modal");
+const schedulePlacesCloseBtnEl = document.querySelector("#schedule-places-close-btn");
+const schedulePlacesAddBtnEl = document.querySelector("#schedule-places-add-btn");
+const schedulePlacesStatusEl = document.querySelector("#schedule-places-status");
+const schedulePlacesListEl = document.querySelector("#schedule-places-list");
+const schedulePlaceEditorModalEl = document.querySelector("#schedule-place-editor-modal");
+const schedulePlaceEditorCloseBtnEl = document.querySelector("#schedule-place-editor-close-btn");
+const schedulePlaceEditorTitleEl = document.querySelector("#schedule-place-editor-title");
+const schedulePlaceEditorFormEl = document.querySelector("#schedule-place-editor-form");
+const schedulePlaceNameInputEl = document.querySelector("#schedule-place-name-input");
+const schedulePlaceTypeSelectEl = document.querySelector("#schedule-place-type-select");
+const schedulePlaceAliasesInputEl = document.querySelector("#schedule-place-aliases-input");
+const schedulePlaceTraitsInputEl = document.querySelector("#schedule-place-traits-input");
+const schedulePlaceVisibilitySelectEl = document.querySelector("#schedule-place-visibility-select");
+const schedulePlaceVisibleContactsFieldEl = document.querySelector("#schedule-place-visible-contacts-field");
+const schedulePlaceVisibleContactsListEl = document.querySelector("#schedule-place-visible-contacts-list");
+const schedulePlaceEditorStatusEl = document.querySelector("#schedule-place-editor-status");
+const schedulePlaceEditorDeleteBtnEl = document.querySelector("#schedule-place-editor-delete-btn");
+const schedulePlaceEditorCancelBtnEl = document.querySelector("#schedule-place-editor-cancel-btn");
 
 const memoryStorage = {};
 const USER_ACTOR_KEY = "user:self";
@@ -96,13 +128,17 @@ const state = {
   profile: loadProfile(),
   contacts: loadContacts(),
   entries: loadScheduleEntries(),
+  commonPlaces: loadCommonPlaces(),
   viewMode: "day",
   cursorDate: getTodayValue(),
   editorOpen: false,
   filterOpen: false,
   clearRangeOpen: false,
+  placesManagerOpen: false,
+  placeEditorOpen: false,
   editorMode: "create",
   editingEntryId: "",
+  placeEditorId: "",
   draft: createDefaultDraft(getTodayValue()),
   clearDraft: createDefaultClearDraft(getTodayValue()),
   filterActorKeys: [],
@@ -154,6 +190,153 @@ function readStoredJson(key, fallback = null) {
   } catch (_error) {
     return fallback;
   }
+}
+
+function normalizeMountedIds(value) {
+  if (Array.isArray(value)) {
+    return [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))];
+  }
+  const single = String(value || "").trim();
+  return single ? [single] : [];
+}
+
+function normalizeCommonPlaceType(value = "") {
+  const resolved = String(value || "").trim().toLowerCase();
+  return COMMON_PLACE_TYPE_OPTIONS.some((item) => item.value === resolved) ? resolved : "other";
+}
+
+function getCommonPlaceTypeLabel(type = "") {
+  return (
+    COMMON_PLACE_TYPE_OPTIONS.find((item) => item.value === normalizeCommonPlaceType(type))?.label ||
+    "其他"
+  );
+}
+
+function normalizeCommonPlaceAliases(value) {
+  const lines = Array.isArray(value) ? value : String(value || "").split(/\r?\n/g);
+  return [...new Set(lines.map((item) => String(item || "").trim()).filter(Boolean))].slice(0, 20);
+}
+
+function normalizeCommonPlaceVisibilityMode(value = "") {
+  const resolved = String(value || "").trim();
+  if (resolved === "all_contacts" || resolved === "selected_contacts") {
+    return resolved;
+  }
+  return "self";
+}
+
+function normalizeCommonPlace(place, index = 0) {
+  const source = place && typeof place === "object" ? place : {};
+  const name = String(source.name || "").trim() || `常用地点 ${index + 1}`;
+  return {
+    id: String(source.id || `common_place_${index}_${hashText(name)}`),
+    name: name.slice(0, 40),
+    type: normalizeCommonPlaceType(source.type),
+    aliases: normalizeCommonPlaceAliases(source.aliases),
+    traitsText: String(source.traitsText || source.specialText || source.description || "").trim(),
+    visibilityMode: normalizeCommonPlaceVisibilityMode(source.visibilityMode),
+    visibleContactIds: normalizeMountedIds(source.visibleContactIds || source.contactIds || []),
+    lastUsedAt: Number(source.lastUsedAt) || 0,
+    createdAt: Number(source.createdAt) || Date.now(),
+    updatedAt: Number(source.updatedAt) || Date.now()
+  };
+}
+
+function loadCommonPlaces() {
+  const raw = readStoredJson(MESSAGE_COMMON_PLACES_KEY, []);
+  return Array.isArray(raw)
+    ? raw
+        .map((item, index) => normalizeCommonPlace(item, index))
+        .filter((item) => String(item.name || "").trim())
+        .sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0))
+    : [];
+}
+
+function persistCommonPlaces() {
+  safeSetItem(MESSAGE_COMMON_PLACES_KEY, JSON.stringify(state.commonPlaces));
+}
+
+function getCommonPlaceById(placeId = "") {
+  const resolvedId = String(placeId || "").trim();
+  if (!resolvedId) {
+    return null;
+  }
+  return state.commonPlaces.find((item) => item.id === resolvedId) || null;
+}
+
+function buildCommonPlaceAliasList(place) {
+  return normalizeCommonPlaceAliases(place?.aliases || []).filter(
+    (alias) => alias.toLowerCase() !== String(place?.name || "").trim().toLowerCase()
+  );
+}
+
+function getCommonPlaceVisibilityLabel(place) {
+  const resolvedPlace = place && typeof place === "object" ? place : {};
+  if (resolvedPlace.visibilityMode === "all_contacts") {
+    return "全部角色可见";
+  }
+  if (resolvedPlace.visibilityMode === "selected_contacts") {
+    const names = normalizeMountedIds(resolvedPlace.visibleContactIds)
+      .map((contactId) => getContactById(contactId)?.name || "")
+      .filter(Boolean);
+    return names.length ? `指定角色 · ${names.slice(0, 2).join("、")}${names.length > 2 ? "…" : ""}` : "指定角色";
+  }
+  return "仅自己知道";
+}
+
+function normalizePresenceTransferEntry(source = {}) {
+  const resolved = source && typeof source === "object" ? source : {};
+  return {
+    presenceType: String(resolved.presenceType || "").trim() === "in_transit" ? "in_transit" : "at_place",
+    placeId: String(resolved.placeId || "").trim(),
+    fromPlaceId: String(resolved.fromPlaceId || "").trim(),
+    toPlaceId: String(resolved.toPlaceId || "").trim(),
+    updatedAt: Number(resolved.updatedAt) || 0
+  };
+}
+
+function sanitizePresenceStateForPlaces(value = {}, places = state.commonPlaces) {
+  const validPlaceIds = new Set(
+    (Array.isArray(places) ? places : [])
+      .map((place) => String(place?.id || "").trim())
+      .filter(Boolean)
+  );
+  const sanitizeEntry = (entry = {}) => {
+    const normalized = normalizePresenceTransferEntry(entry);
+    return {
+      ...normalized,
+      placeId: validPlaceIds.has(normalized.placeId) ? normalized.placeId : "",
+      fromPlaceId: validPlaceIds.has(normalized.fromPlaceId) ? normalized.fromPlaceId : "",
+      toPlaceId: validPlaceIds.has(normalized.toPlaceId) ? normalized.toPlaceId : ""
+    };
+  };
+  const resolved = value && typeof value === "object" ? value : {};
+  return {
+    userGlobal: sanitizeEntry(resolved.userGlobal),
+    userByContact: Object.fromEntries(
+      Object.entries(resolved.userByContact || {}).map(([contactId, entry]) => [
+        String(contactId || "").trim(),
+        sanitizeEntry(entry)
+      ])
+    ),
+    contacts: Object.fromEntries(
+      Object.entries(resolved.contacts || {}).map(([contactId, entry]) => [
+        String(contactId || "").trim(),
+        sanitizeEntry(entry)
+      ])
+    )
+  };
+}
+
+function sanitizeStoredPresenceStateForCommonPlaces() {
+  const rawPresenceState =
+    readStoredJson(MESSAGE_PRESENCE_STATE_KEY, {
+      userGlobal: {},
+      userByContact: {},
+      contacts: {}
+    }) || {};
+  const nextPresenceState = sanitizePresenceStateForPlaces(rawPresenceState, state.commonPlaces);
+  safeSetItem(MESSAGE_PRESENCE_STATE_KEY, JSON.stringify(nextPresenceState));
 }
 
 function sleep(ms) {
@@ -718,6 +901,7 @@ function normalizeScheduleEntry(entry, index = 0) {
     visibleContactIds: Array.isArray(source.visibleContactIds)
       ? [...new Set(source.visibleContactIds.map((item) => String(item || "").trim()).filter(Boolean))]
       : [],
+    placeId: String(source.placeId || "").trim(),
     date,
     startTime: normalizeTimeValue(source.startTime, "09:00"),
     endTime: normalizeTimeValue(source.endTime, "10:00"),
@@ -739,6 +923,32 @@ function loadScheduleEntries() {
 
 function persistScheduleEntries() {
   safeSetItem(SCHEDULE_ENTRIES_KEY, JSON.stringify(state.entries));
+}
+
+function sanitizeScheduleEntriesForPlaces(entries = state.entries) {
+  const validPlaceIds = new Set(state.commonPlaces.map((place) => String(place.id || "").trim()).filter(Boolean));
+  let changed = false;
+  const nextEntries = (Array.isArray(entries) ? entries : []).map((entry, index) => {
+    const normalized = normalizeScheduleEntry(entry, index);
+    const nextPlaceId = validPlaceIds.has(String(normalized.placeId || "").trim())
+      ? String(normalized.placeId || "").trim()
+      : "";
+    if (nextPlaceId === normalized.placeId) {
+      return normalized;
+    }
+    changed = true;
+    return normalizeScheduleEntry(
+      {
+        ...normalized,
+        placeId: nextPlaceId
+      },
+      index
+    );
+  });
+  return {
+    nextEntries,
+    changed
+  };
 }
 
 function formatTimeLabel(timestamp = Date.now()) {
@@ -1342,6 +1552,7 @@ function createDefaultDraft(dateText = getTodayValue(), overrides = {}) {
     companionContactIds: [],
     visibilityMode: "all",
     visibleContactIds: [],
+    placeId: "",
     date: dateText,
     startTime: "09:00",
     endTime: "10:00",
@@ -1728,12 +1939,18 @@ function formatParticipantLabel(entry) {
   return `同行：${names.slice(0, 2).join("、")}${names.length > 2 ? ` 等 ${names.length} 位` : ""}`;
 }
 
+function getScheduleEntryPlaceName(entry) {
+  const place = getCommonPlaceById(entry?.placeId || "");
+  return String(place?.name || "").trim();
+}
+
 function renderEntryCard(entry) {
   const ownerType = entry.displayOwnerType || entry.ownerType;
   const ownerLabel =
     entry.displayOwnerName ||
     (ownerType === "contact" ? getContactName(entry.displayOwnerId || entry.ownerId) : getUserDisplayName());
   const participantLabel = formatParticipantLabel(entry);
+  const placeName = getScheduleEntryPlaceName(entry);
   return `
     <button class="schedule-entry" style="${escapeHtml(buildScheduleActorToneStyle(entry))}" type="button" data-action="edit-entry" data-entry-id="${escapeHtml(entry.sourceEntryId || entry.id)}">
       <div class="schedule-entry__top">
@@ -1745,6 +1962,11 @@ function renderEntryCard(entry) {
         ${
           participantLabel
             ? `<span class="schedule-chip schedule-chip--visibility">${escapeHtml(participantLabel)}</span>`
+            : ""
+        }
+        ${
+          placeName
+            ? `<span class="schedule-chip schedule-chip--visibility">${escapeHtml(`地点 · ${placeName}`)}</span>`
             : ""
         }
       </div>
@@ -1816,7 +2038,7 @@ function renderDayView(dateText) {
                                   ((entry.displayOwnerType || entry.ownerType) === "contact"
                                     ? getContactName(entry.displayOwnerId || entry.ownerId)
                                     : getUserDisplayName())
-                                }`
+                                }${getScheduleEntryPlaceName(entry) ? ` · ${getScheduleEntryPlaceName(entry)}` : ""}`
                               )}</span>
                             </button>
                           `
@@ -1873,7 +2095,7 @@ function renderDayView(dateText) {
                                         ((entry.displayOwnerType || entry.ownerType) === "contact"
                                           ? getContactName(entry.displayOwnerId || entry.ownerId)
                                           : getUserDisplayName())
-                                      }`
+                                      }${getScheduleEntryPlaceName(entry) ? ` · ${getScheduleEntryPlaceName(entry)}` : ""}`
                                     )}</span>
                                   </button>
                                 `
@@ -2123,7 +2345,11 @@ function renderSchedulePage() {
 function refreshModalOpenState() {
   document.body.classList.toggle(
     "schedule-modal-open",
-    state.editorOpen || state.filterOpen || state.clearRangeOpen
+    state.editorOpen ||
+      state.filterOpen ||
+      state.clearRangeOpen ||
+      state.placesManagerOpen ||
+      state.placeEditorOpen
   );
 }
 
@@ -2158,6 +2384,7 @@ function setEditorOpen(isOpen, options = {}) {
         companionContactIds: [...entry.companionContactIds],
         visibilityMode: entry.visibilityMode,
         visibleContactIds: [...entry.visibleContactIds],
+        placeId: entry.placeId || "",
         date: entry.date,
         startTime: entry.startTime,
         endTime: entry.endTime,
@@ -2169,6 +2396,7 @@ function setEditorOpen(isOpen, options = {}) {
     state.editingEntryId = "";
     state.draft = createDefaultDraft(options.date || state.cursorDate, {
       scheduleType: options.scheduleType || "day",
+      placeId: options.placeId || "",
       startTime: options.startTime || "09:00",
       endTime: options.endTime || "10:00"
     });
@@ -2322,6 +2550,275 @@ function renderCompanionOptions() {
       `;
     })
     .join("");
+}
+
+function renderSchedulePlaceOptions() {
+  if (!schedulePlaceSelectEl) {
+    return;
+  }
+  const options = [
+    '<option value="">不设置地点</option>',
+    ...state.commonPlaces.map(
+      (place) =>
+        `<option value="${escapeHtml(place.id)}">${escapeHtml(
+          `${place.name} · ${getCommonPlaceTypeLabel(place.type)}`
+        )}</option>`
+    )
+  ];
+  schedulePlaceSelectEl.innerHTML = options.join("");
+  const selectedPlaceId = state.commonPlaces.some((place) => place.id === state.draft.placeId)
+    ? state.draft.placeId
+    : "";
+  schedulePlaceSelectEl.value = selectedPlaceId;
+}
+
+function setPlacesStatus(message = "", tone = "") {
+  if (!schedulePlacesStatusEl) {
+    return;
+  }
+  schedulePlacesStatusEl.textContent = message;
+  schedulePlacesStatusEl.className = `schedule-editor-status${tone ? ` ${tone}` : ""}`;
+}
+
+function setPlaceEditorStatus(message = "", tone = "") {
+  if (!schedulePlaceEditorStatusEl) {
+    return;
+  }
+  schedulePlaceEditorStatusEl.textContent = message;
+  schedulePlaceEditorStatusEl.className = `schedule-editor-status${tone ? ` ${tone}` : ""}`;
+}
+
+function renderPlacesManager() {
+  if (!schedulePlacesListEl) {
+    return;
+  }
+  if (!state.commonPlaces.length) {
+    schedulePlacesListEl.innerHTML =
+      '<div class="schedule-places-empty">还没有常用地点。<br />点击右上角“新增”，先创建一个自己家、公司或常去地点。</div>';
+    return;
+  }
+
+  schedulePlacesListEl.innerHTML = state.commonPlaces
+    .map((place) => {
+      const aliases = buildCommonPlaceAliasList(place);
+      return `
+        <article class="schedule-place-card">
+          <div class="schedule-place-card__head">
+            <div class="schedule-place-card__title">
+              <strong>${escapeHtml(place.name)}</strong>
+              <span class="schedule-place-card__type">${escapeHtml(getCommonPlaceTypeLabel(place.type))}</span>
+            </div>
+            <span class="schedule-place-card__visibility">${escapeHtml(
+              getCommonPlaceVisibilityLabel(place)
+            )}</span>
+          </div>
+          <p class="schedule-place-card__traits">${escapeHtml(
+            place.traitsText || "还没有填写地点特殊性。"
+          )}</p>
+          ${
+            aliases.length
+              ? `
+                <div class="schedule-place-card__aliases">
+                  ${aliases
+                    .map((alias) => `<span class="schedule-place-card__alias">${escapeHtml(alias)}</span>`)
+                    .join("")}
+                </div>
+              `
+              : ""
+          }
+          <div class="schedule-place-card__actions">
+            <button
+              class="schedule-text-button"
+              type="button"
+              data-action="edit-common-place"
+              data-place-id="${escapeHtml(place.id)}"
+            >
+              编辑
+            </button>
+            <button
+              class="schedule-text-button schedule-text-button--danger"
+              type="button"
+              data-action="delete-common-place"
+              data-place-id="${escapeHtml(place.id)}"
+            >
+              删除
+            </button>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function setPlacesManagerOpen(isOpen) {
+  state.placesManagerOpen = Boolean(isOpen);
+  if (!schedulePlacesModalEl) {
+    return;
+  }
+  schedulePlacesModalEl.hidden = !state.placesManagerOpen;
+  schedulePlacesModalEl.setAttribute("aria-hidden", String(!state.placesManagerOpen));
+  refreshModalOpenState();
+
+  if (state.placesManagerOpen) {
+    renderPlacesManager();
+  }
+  setPlacesStatus("");
+}
+
+function renderPlaceVisibleContactsOptions(selectedIds = []) {
+  if (!schedulePlaceVisibleContactsListEl) {
+    return;
+  }
+  if (!state.contacts.length) {
+    schedulePlaceVisibleContactsListEl.innerHTML =
+      '<div class="schedule-visibility-empty">当前还没有角色。先去 Chat 通讯录创建人物，再回来指定可见范围。</div>';
+    return;
+  }
+  const selectedIdSet = new Set(normalizeMountedIds(selectedIds));
+  schedulePlaceVisibleContactsListEl.innerHTML = state.contacts
+    .map(
+      (contact) => `
+        <label class="schedule-visibility-option">
+          <input
+            type="checkbox"
+            value="${escapeHtml(contact.id)}"
+            ${selectedIdSet.has(contact.id) ? "checked" : ""}
+          />
+          <span>${escapeHtml(contact.name)}</span>
+        </label>
+      `
+    )
+    .join("");
+}
+
+function applyPlaceEditorToForm(placeId = "") {
+  const place = getCommonPlaceById(placeId);
+  state.placeEditorId = place?.id || "";
+  if (schedulePlaceEditorTitleEl) {
+    schedulePlaceEditorTitleEl.textContent = place ? "编辑地点" : "新增地点";
+  }
+  if (schedulePlaceNameInputEl) {
+    schedulePlaceNameInputEl.value = place?.name || "";
+  }
+  if (schedulePlaceTypeSelectEl) {
+    schedulePlaceTypeSelectEl.value = normalizeCommonPlaceType(place?.type || "home");
+  }
+  if (schedulePlaceAliasesInputEl) {
+    schedulePlaceAliasesInputEl.value = normalizeCommonPlaceAliases(place?.aliases || []).join("\n");
+  }
+  if (schedulePlaceTraitsInputEl) {
+    schedulePlaceTraitsInputEl.value = String(place?.traitsText || "").trim();
+  }
+  if (schedulePlaceVisibilitySelectEl) {
+    schedulePlaceVisibilitySelectEl.value = normalizeCommonPlaceVisibilityMode(
+      place?.visibilityMode || "self"
+    );
+  }
+  if (schedulePlaceVisibleContactsFieldEl) {
+    schedulePlaceVisibleContactsFieldEl.hidden =
+      normalizeCommonPlaceVisibilityMode(place?.visibilityMode || "self") !== "selected_contacts";
+  }
+  renderPlaceVisibleContactsOptions(place?.visibleContactIds || []);
+  if (schedulePlaceEditorDeleteBtnEl) {
+    schedulePlaceEditorDeleteBtnEl.hidden = !place;
+  }
+  setPlaceEditorStatus("");
+}
+
+function setPlaceEditorOpen(isOpen, placeId = "") {
+  state.placeEditorOpen = Boolean(isOpen);
+  if (!schedulePlaceEditorModalEl) {
+    return;
+  }
+  schedulePlaceEditorModalEl.hidden = !state.placeEditorOpen;
+  schedulePlaceEditorModalEl.setAttribute("aria-hidden", String(!state.placeEditorOpen));
+  refreshModalOpenState();
+  if (state.placeEditorOpen) {
+    applyPlaceEditorToForm(placeId);
+  } else {
+    state.placeEditorId = "";
+    setPlaceEditorStatus("");
+  }
+}
+
+function getCurrentPlaceDraft() {
+  const selectedVisibleContactIds = schedulePlaceVisibleContactsListEl
+    ? [...schedulePlaceVisibleContactsListEl.querySelectorAll("input[type='checkbox']:checked")]
+        .map((input) => (input instanceof HTMLInputElement ? String(input.value || "").trim() : ""))
+        .filter(Boolean)
+    : [];
+  return normalizeCommonPlace({
+    id: state.placeEditorId,
+    name: schedulePlaceNameInputEl?.value || "",
+    type: schedulePlaceTypeSelectEl?.value || "other",
+    aliases: schedulePlaceAliasesInputEl?.value || "",
+    traitsText: schedulePlaceTraitsInputEl?.value || "",
+    visibilityMode: schedulePlaceVisibilitySelectEl?.value || "self",
+    visibleContactIds: selectedVisibleContactIds,
+    createdAt: getCommonPlaceById(state.placeEditorId)?.createdAt || Date.now(),
+    updatedAt: Date.now()
+  });
+}
+
+function saveCommonPlaceDraft(draft = getCurrentPlaceDraft()) {
+  const place = normalizeCommonPlace(draft);
+  if (!String(place.name || "").trim()) {
+    throw new Error("请输入地点名称。");
+  }
+  if (
+    place.visibilityMode === "selected_contacts" &&
+    !normalizeMountedIds(place.visibleContactIds).length
+  ) {
+    throw new Error("请选择至少一个可见角色。");
+  }
+  const existingIndex = state.commonPlaces.findIndex((item) => item.id === place.id);
+  if (existingIndex >= 0) {
+    state.commonPlaces[existingIndex] = {
+      ...state.commonPlaces[existingIndex],
+      ...place,
+      updatedAt: Date.now()
+    };
+  } else {
+    state.commonPlaces = [{ ...place, createdAt: Date.now(), updatedAt: Date.now() }, ...state.commonPlaces];
+  }
+  state.commonPlaces = state.commonPlaces
+    .map((item, index) => normalizeCommonPlace(item, index))
+    .sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0));
+  persistCommonPlaces();
+  sanitizeStoredPresenceStateForCommonPlaces();
+  const { nextEntries, changed } = sanitizeScheduleEntriesForPlaces(state.entries);
+  if (changed) {
+    state.entries = nextEntries;
+    persistScheduleEntries();
+  }
+  return place;
+}
+
+function deleteCommonPlace(placeId = "") {
+  const place = getCommonPlaceById(placeId);
+  if (!place) {
+    return;
+  }
+  if (!window.confirm(`确定删除常用地点“${place.name}”吗？`)) {
+    return;
+  }
+  state.commonPlaces = state.commonPlaces.filter((item) => item.id !== place.id);
+  persistCommonPlaces();
+  const { nextEntries, changed } = sanitizeScheduleEntriesForPlaces(state.entries);
+  if (changed) {
+    state.entries = nextEntries;
+    persistScheduleEntries();
+  }
+  sanitizeStoredPresenceStateForCommonPlaces();
+  renderPlacesManager();
+  renderSchedulePage();
+  if (state.editorOpen) {
+    renderEditor();
+  }
+  if (state.placeEditorOpen && state.placeEditorId === place.id) {
+    setPlaceEditorOpen(false);
+  }
+  setPlacesStatus(`已删除地点“${place.name}”。`, "success");
 }
 
 function renderFilterButtonState() {
@@ -2698,6 +3195,7 @@ function renderEditor() {
   renderOwnerContactOptions();
   renderVisibilityOptions();
   renderCompanionOptions();
+  renderSchedulePlaceOptions();
 
   const showContactField = state.draft.ownerType === "contact";
   scheduleOwnerContactFieldEl?.toggleAttribute("hidden", !showContactField);
@@ -2743,6 +3241,7 @@ function collectEditorDraft() {
     companionContactIds,
     visibilityMode: scheduleVisibleAllInputEl?.checked ? "all" : "selected",
     visibleContactIds,
+    placeId: String(schedulePlaceSelectEl?.value || "").trim(),
     date: String(scheduleDateInputEl?.value || "").trim() || state.cursorDate,
     startTime: String(scheduleStartTimeInputEl?.value || "09:00").trim(),
     endTime: String(scheduleEndTimeInputEl?.value || "10:00").trim(),
@@ -3102,6 +3601,10 @@ function attachEvents() {
     setClearRangeOpen(true, { date: state.cursorDate });
   });
 
+  schedulePlacesBtnEl?.addEventListener("click", () => {
+    setPlacesManagerOpen(true);
+  });
+
   scheduleViewSwitchEl?.addEventListener("click", (event) => {
     const target = event.target;
     if (!(target instanceof Element)) {
@@ -3277,6 +3780,16 @@ function attachEvents() {
     setEditorStatus("");
   });
 
+  schedulePlaceSelectEl?.addEventListener("change", () => {
+    syncDraftFromEditor(
+      {
+        placeId: String(schedulePlaceSelectEl.value || "").trim()
+      },
+      { render: false }
+    );
+    setEditorStatus("");
+  });
+
   [scheduleTitleInputEl, scheduleStartTimeInputEl, scheduleEndTimeInputEl].forEach((input) => {
     input?.addEventListener("input", () => {
       syncDraftFromEditor({}, { render: false });
@@ -3384,7 +3897,100 @@ function attachEvents() {
     }
   });
 
+  schedulePlacesCloseBtnEl?.addEventListener("click", () => {
+    setPlacesManagerOpen(false);
+  });
+
+  schedulePlacesAddBtnEl?.addEventListener("click", () => {
+    setPlaceEditorOpen(true);
+  });
+
+  schedulePlacesListEl?.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    const actionEl = target.closest("[data-action]");
+    if (!(actionEl instanceof HTMLElement)) {
+      return;
+    }
+    const action = String(actionEl.dataset.action || "").trim();
+    const placeId = String(actionEl.dataset.placeId || "").trim();
+    if (action === "edit-common-place" && placeId) {
+      setPlaceEditorOpen(true, placeId);
+      return;
+    }
+    if (action === "delete-common-place" && placeId) {
+      deleteCommonPlace(placeId);
+    }
+  });
+
+  schedulePlacesModalEl?.addEventListener("click", (event) => {
+    if (
+      event.target === schedulePlacesModalEl ||
+      event.target?.classList?.contains("schedule-modal__backdrop")
+    ) {
+      setPlacesManagerOpen(false);
+    }
+  });
+
+  schedulePlaceEditorCloseBtnEl?.addEventListener("click", () => {
+    setPlaceEditorOpen(false);
+  });
+
+  schedulePlaceEditorCancelBtnEl?.addEventListener("click", () => {
+    setPlaceEditorOpen(false);
+  });
+
+  schedulePlaceVisibilitySelectEl?.addEventListener("change", () => {
+    const visibilityMode = normalizeCommonPlaceVisibilityMode(schedulePlaceVisibilitySelectEl.value);
+    if (schedulePlaceVisibleContactsFieldEl) {
+      schedulePlaceVisibleContactsFieldEl.hidden = visibilityMode !== "selected_contacts";
+    }
+    setPlaceEditorStatus("");
+  });
+
+  schedulePlaceEditorFormEl?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    try {
+      const place = saveCommonPlaceDraft();
+      renderPlacesManager();
+      renderSchedulePage();
+      if (state.editorOpen) {
+        renderEditor();
+      }
+      setPlaceEditorOpen(false);
+      setPlacesStatus(`已保存地点“${place.name}”。`, "success");
+    } catch (error) {
+      setPlaceEditorStatus(error?.message || "保存地点失败。", "error");
+    }
+  });
+
+  schedulePlaceEditorDeleteBtnEl?.addEventListener("click", () => {
+    if (!state.placeEditorId) {
+      return;
+    }
+    deleteCommonPlace(state.placeEditorId);
+  });
+
+  schedulePlaceEditorModalEl?.addEventListener("click", (event) => {
+    if (
+      event.target === schedulePlaceEditorModalEl ||
+      event.target?.classList?.contains("schedule-modal__backdrop")
+    ) {
+      setPlaceEditorOpen(false);
+    }
+  });
+
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.placeEditorOpen) {
+      setPlaceEditorOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.placesManagerOpen) {
+      setPlacesManagerOpen(false);
+      return;
+    }
     if (event.key === "Escape" && state.editorOpen) {
       setEditorOpen(false);
       return;
@@ -3405,6 +4011,13 @@ function attachEvents() {
 
 function init() {
   document.body.classList.toggle("embedded", isEmbeddedView());
+  state.commonPlaces = loadCommonPlaces();
+  const { nextEntries, changed } = sanitizeScheduleEntriesForPlaces(state.entries);
+  if (changed) {
+    state.entries = nextEntries;
+    persistScheduleEntries();
+  }
+  sanitizeStoredPresenceStateForCommonPlaces();
   bindScheduleViewportHeight();
   renderSchedulePage();
   attachEvents();
