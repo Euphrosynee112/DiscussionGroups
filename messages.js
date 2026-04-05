@@ -668,6 +668,7 @@ const state = {
   innerThoughtTargetPreview: "",
   sceneModalOpen: false,
   sceneSyncModalOpen: false,
+  pendingAssistantReveal: null,
   pendingConversationRenderOptions: null
 };
 
@@ -7020,6 +7021,102 @@ function recalculateConversationUpdatedAt(conversation) {
   conversation.updatedAt = latestMessage?.createdAt || Date.now();
 }
 
+function setPendingAssistantReveal(
+  conversationId = "",
+  messages = [],
+  options = {}
+) {
+  const resolvedConversationId = String(conversationId || "").trim();
+  if (!resolvedConversationId) {
+    state.pendingAssistantReveal = null;
+    return false;
+  }
+  const pendingMessages = (Array.isArray(messages) ? messages : []).map((message) => ({
+    ...(message && typeof message === "object" ? message : {})
+  }));
+  if (!pendingMessages.length) {
+    if (
+      String(state.pendingAssistantReveal?.conversationId || "").trim() ===
+      resolvedConversationId
+    ) {
+      state.pendingAssistantReveal = null;
+    }
+    return false;
+  }
+  const revealOptions = options && typeof options === "object" ? options : {};
+  const parsedExpectedReplyContextVersion = Number.parseInt(
+    String(revealOptions.expectedReplyContextVersion || ""),
+    10
+  );
+  state.pendingAssistantReveal = {
+    conversationId: resolvedConversationId,
+    expectedReplyContextVersion: Number.isFinite(parsedExpectedReplyContextVersion)
+      ? parsedExpectedReplyContextVersion
+      : null,
+    messages: pendingMessages
+  };
+  return true;
+}
+
+function clearPendingAssistantReveal(conversationId = "") {
+  const resolvedConversationId = String(conversationId || "").trim();
+  if (
+    resolvedConversationId &&
+    String(state.pendingAssistantReveal?.conversationId || "").trim() !== resolvedConversationId
+  ) {
+    return false;
+  }
+  state.pendingAssistantReveal = null;
+  return true;
+}
+
+function flushPendingAssistantReveal(conversationId = "", options = {}) {
+  const resolvedConversationId = String(conversationId || "").trim();
+  const pendingReveal = state.pendingAssistantReveal;
+  const pendingConversationId = String(pendingReveal?.conversationId || "").trim();
+  if (!pendingConversationId) {
+    return [];
+  }
+  if (resolvedConversationId && pendingConversationId !== resolvedConversationId) {
+    return [];
+  }
+  const revealMessages = Array.isArray(pendingReveal?.messages)
+    ? pendingReveal.messages.map((message) => ({
+        ...(message && typeof message === "object" ? message : {})
+      }))
+    : [];
+  clearPendingAssistantReveal(pendingConversationId);
+  if (!revealMessages.length) {
+    return [];
+  }
+  const targetConversation = getConversationById(pendingConversationId);
+  if (!targetConversation) {
+    return [];
+  }
+  if (
+    Number.isFinite(Number(pendingReveal?.expectedReplyContextVersion)) &&
+    getConversationReplyContextVersion(targetConversation) !==
+      Number(pendingReveal.expectedReplyContextVersion)
+  ) {
+    return [];
+  }
+  targetConversation.messages = [...targetConversation.messages, ...revealMessages];
+  recalculateConversationUpdatedAt(targetConversation);
+  persistConversations();
+  const flushOptions = options && typeof options === "object" ? options : {};
+  if (
+    !flushOptions.suppressRender &&
+    state.activeTab === "chat" &&
+    String(state.activeConversationId || "").trim() === pendingConversationId
+  ) {
+    queueConversationRenderOptions({
+      scrollBehavior: "bottom"
+    });
+    renderMessagesPage();
+  }
+  return revealMessages;
+}
+
 async function appendAssistantReplyBatch(
   conversation,
   replyText,
@@ -7078,6 +7175,7 @@ async function appendAssistantReplyBatch(
     String(state.activeConversationId || "").trim() === conversationId &&
     !document.hidden;
   if (!shouldAnimateReplyReveal) {
+    clearPendingAssistantReveal(conversationId);
     activeConversation.messages = [...activeConversation.messages, ...createdMessages];
     recalculateConversationUpdatedAt(activeConversation);
     persistConversations();
@@ -7087,47 +7185,51 @@ async function appendAssistantReplyBatch(
     return createdMessages;
   }
 
+  setPendingAssistantReveal(conversationId, createdMessages, {
+    expectedReplyContextVersion: parsedExpectedReplyContextVersion
+  });
   const appendedMessages = [];
   for (let index = 0; index < createdMessages.length; index += 1) {
     let nextConversation = getConversationById(conversationId);
     if (!nextConversation) {
+      clearPendingAssistantReveal(conversationId);
       break;
     }
     if (
       hasExpectedReplyContextVersion &&
       getConversationReplyContextVersion(nextConversation) !== parsedExpectedReplyContextVersion
     ) {
+      clearPendingAssistantReveal(conversationId);
       break;
     }
     if (index > 0) {
-      const scrollSnapshot = captureConversationScrollSnapshot();
-      const shouldStickToBottom = isConversationHistoryNearBottom();
-      if (
-        document.hidden ||
-        state.activeTab !== "chat" ||
-        String(state.activeConversationId || "").trim() !== conversationId
-      ) {
-        const remainingMessages = createdMessages.slice(index);
-        nextConversation.messages = [...nextConversation.messages, ...remainingMessages];
-        appendedMessages.push(...remainingMessages);
-        recalculateConversationUpdatedAt(nextConversation);
-        persistConversations();
-        if (state.activeTab === "chat") {
-          renderMessagesPage();
-        }
-        break;
-      }
       await sleep(ASSISTANT_REPLY_REVEAL_INTERVAL_MS);
       nextConversation = getConversationById(conversationId);
       if (!nextConversation) {
+        clearPendingAssistantReveal(conversationId);
         break;
       }
       if (
         hasExpectedReplyContextVersion &&
         getConversationReplyContextVersion(nextConversation) !== parsedExpectedReplyContextVersion
       ) {
+        clearPendingAssistantReveal(conversationId);
         break;
       }
+      if (
+        document.hidden ||
+        state.activeTab !== "chat" ||
+        String(state.activeConversationId || "").trim() !== conversationId
+      ) {
+        appendedMessages.push(
+          ...flushPendingAssistantReveal(conversationId, {
+            suppressRender: true
+          })
+        );
+        break;
+      }
+      const scrollSnapshot = captureConversationScrollSnapshot();
+      const shouldStickToBottom = isConversationHistoryNearBottom();
       queueConversationRenderOptions({
         scrollBehavior: shouldStickToBottom ? "bottom" : "preserve",
         scrollSnapshot: shouldStickToBottom ? null : scrollSnapshot
@@ -7137,6 +7239,9 @@ async function appendAssistantReplyBatch(
     appendedMessages.push(createdMessages[index]);
     recalculateConversationUpdatedAt(nextConversation);
     persistConversations();
+    setPendingAssistantReveal(conversationId, createdMessages.slice(index + 1), {
+      expectedReplyContextVersion: parsedExpectedReplyContextVersion
+    });
     if (state.activeTab === "chat") {
       if (index === 0) {
         queueConversationRenderOptions({
@@ -7147,6 +7252,7 @@ async function appendAssistantReplyBatch(
     }
   }
 
+  clearPendingAssistantReveal(conversationId);
   return appendedMessages;
 }
 
@@ -14890,8 +14996,17 @@ function attachEvents() {
     void handleMessagesForegroundRefresh({ primeWindowFocus: true });
   });
 
+  window.addEventListener("pagehide", () => {
+    flushPendingAssistantReveal("", {
+      suppressRender: true
+    });
+  });
+
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
+      flushPendingAssistantReveal("", {
+        suppressRender: true
+      });
       return;
     }
     void handleMessagesForegroundRefresh();
