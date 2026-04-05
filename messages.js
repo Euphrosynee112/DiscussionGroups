@@ -626,6 +626,7 @@ const state = {
   journalStatusMessage: "",
   journalStatusTone: "",
   backgroundReplyTaskBusy: false,
+  replyResumeBusy: false,
   windowFocusPrimed: initialWindowFocusPrimed,
   conversationVisibleCounts: {},
   quotedMessageId: "",
@@ -794,18 +795,33 @@ function persistReplyTasks(tasks = []) {
   return normalizedTasks;
 }
 
-function getReplyTaskForConversation(conversationId = "") {
+function getReplyTaskForConversation(
+  conversationId = "",
+  statuses = ["pending", "processing"]
+) {
   const resolvedConversationId = String(conversationId || "").trim();
   if (!resolvedConversationId) {
     return null;
   }
+  const resolvedStatuses = (Array.isArray(statuses) ? statuses : [statuses])
+    .map((item) => String(item || "").trim())
+    .filter((item) => ["pending", "processing", "error"].includes(item));
+  const allowedStatuses = resolvedStatuses.length ? resolvedStatuses : ["pending", "processing"];
   return (
     loadReplyTasks().find(
       (task) =>
         task.conversationId === resolvedConversationId &&
-        (task.status === "pending" || task.status === "processing")
+        allowedStatuses.includes(task.status)
     ) || null
   );
+}
+
+function getPendingReplyTaskForConversation(conversationId = "") {
+  return getReplyTaskForConversation(conversationId, ["pending"]);
+}
+
+function getProcessingReplyTaskForConversation(conversationId = "") {
+  return getReplyTaskForConversation(conversationId, ["processing"]);
 }
 
 function enqueueReplyTask(conversationId = "", options = {}) {
@@ -10754,21 +10770,44 @@ async function requestConversationReply(options = {}) {
   }
   const suppressUi = Boolean(requestOptions.suppressUi);
   const forceDirect = Boolean(requestOptions.forceDirect);
-  const isRegenerate = Boolean(requestOptions.regenerate);
-  const regenerateInstruction = String(requestOptions.regenerateInstruction || "").trim();
-
-  const existingTask = !forceDirect ? getReplyTaskForConversation(conversation.id) : null;
-  if (existingTask) {
+  const processingTask = !forceDirect
+    ? getProcessingReplyTaskForConversation(conversation.id)
+    : null;
+  if (processingTask) {
     state.sendingConversationId = conversation.id;
     if (!suppressUi) {
       renderMessagesPage();
-      setMessagesStatus(isRegenerate ? "当前正在重新生成回复…" : "当前正在等待对方回复…");
+      setMessagesStatus(
+        processingTask.regenerate ? "当前正在重新生成回复…" : "当前正在等待对方回复…"
+      );
     }
-    return existingTask;
+    return processingTask;
   }
 
   if (state.sendingConversationId === conversation.id && !forceDirect) {
     return;
+  }
+
+  const pendingTask = !forceDirect ? getPendingReplyTaskForConversation(conversation.id) : null;
+  const hasRegenerateOption = Object.prototype.hasOwnProperty.call(requestOptions, "regenerate");
+  const hasRegenerateInstructionOption = Object.prototype.hasOwnProperty.call(
+    requestOptions,
+    "regenerateInstruction"
+  );
+  const isRegenerate = hasRegenerateOption
+    ? Boolean(requestOptions.regenerate)
+    : Boolean(pendingTask?.regenerate);
+  const regenerateInstruction = String(
+    hasRegenerateInstructionOption
+      ? requestOptions.regenerateInstruction
+      : pendingTask?.regenerateInstruction || ""
+  ).trim();
+  const shouldResumePendingTaskDirectly = Boolean(pendingTask && !suppressUi);
+  if (pendingTask && shouldResumePendingTaskDirectly) {
+    removeReplyTask(pendingTask.id);
+    syncSendingConversationStateFromReplyTasks();
+  } else if (pendingTask) {
+    return pendingTask;
   }
 
   const contact = getResolvedConversationContact(conversation);
@@ -10844,12 +10883,11 @@ async function requestConversationReply(options = {}) {
   closeConversationTransientUi();
   const replyContextVersion = getConversationReplyContextVersion(conversation);
 
-  if (canUseBackgroundReplyWorker() && !forceDirect) {
+  if (canUseBackgroundReplyWorker() && !forceDirect && !shouldResumePendingTaskDirectly) {
     const task = enqueueReplyTask(conversation.id, {
       regenerate: isRegenerate,
       regenerateInstruction
     });
-    state.sendingConversationId = conversation.id;
     if (!suppressUi) {
       renderMessagesPage();
       setMessagesStatus(
@@ -11073,18 +11111,60 @@ async function requestConversationReply(options = {}) {
 function syncSendingConversationStateFromReplyTasks() {
   const activeConversationId = String(state.activeConversationId || "").trim();
   if (!activeConversationId) {
-    if (!loadReplyTasks().some((task) => task.status === "pending" || task.status === "processing")) {
+    if (!loadReplyTasks().some((task) => task.status === "processing")) {
       state.sendingConversationId = "";
     }
     return;
   }
-  const activeTask = getReplyTaskForConversation(activeConversationId);
+  const activeTask = getProcessingReplyTaskForConversation(activeConversationId);
   if (activeTask) {
     state.sendingConversationId = activeConversationId;
     return;
   }
   if (state.sendingConversationId === activeConversationId) {
     state.sendingConversationId = "";
+  }
+}
+
+async function resumePendingReplyTaskForConversation(
+  conversationId = state.activeConversationId
+) {
+  const resolvedConversationId = String(conversationId || "").trim();
+  if (
+    !resolvedConversationId ||
+    state.replyResumeBusy ||
+    state.sendingConversationId === resolvedConversationId ||
+    document.hidden
+  ) {
+    return false;
+  }
+  const pendingTask = getPendingReplyTaskForConversation(resolvedConversationId);
+  if (!pendingTask) {
+    return false;
+  }
+  const conversation = getConversationById(resolvedConversationId);
+  const hasPendingUserMessages = conversation?.messages?.some(
+    (message) => message.role === "user" && message.needsReply
+  );
+  if (!conversation || !hasPendingUserMessages) {
+    removeReplyTask(pendingTask.id);
+    syncSendingConversationStateFromReplyTasks();
+    return false;
+  }
+
+  state.replyResumeBusy = true;
+  removeReplyTask(pendingTask.id);
+  syncSendingConversationStateFromReplyTasks();
+  try {
+    await requestConversationReply({
+      conversationId: resolvedConversationId,
+      forceDirect: true,
+      regenerate: pendingTask.regenerate,
+      regenerateInstruction: pendingTask.regenerateInstruction
+    });
+    return true;
+  } finally {
+    state.replyResumeBusy = false;
   }
 }
 
@@ -12765,8 +12845,8 @@ function attachEvents() {
     });
   }
 
-  window.addEventListener("focus", () => {
-    if (!state.windowFocusPrimed) {
+  const handleMessagesForegroundRefresh = async ({ primeWindowFocus = false } = {}) => {
+    if (primeWindowFocus && !state.windowFocusPrimed) {
       state.windowFocusPrimed = true;
       return;
     }
@@ -12798,6 +12878,25 @@ function attachEvents() {
     }
     refreshStateFromStorage();
     renderMessagesPage();
+    if (
+      document.hidden ||
+      state.activeTab !== "chat" ||
+      !state.activeConversationId
+    ) {
+      return;
+    }
+    void resumePendingReplyTaskForConversation();
+  };
+
+  window.addEventListener("focus", () => {
+    void handleMessagesForegroundRefresh({ primeWindowFocus: true });
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      return;
+    }
+    void handleMessagesForegroundRefresh();
   });
 
   window.addEventListener("storage", (event) => {

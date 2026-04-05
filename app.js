@@ -912,7 +912,7 @@ function buildCustomTabWorldbookContext(tab) {
     return "";
   }
   return [
-    "补充背景参考（仅作隐性背景信息，禁止单独提起这些设定来源，也不要直接照抄原文）：",
+    "世界书辅助背景（重要程度低于当前论坛讨论区设定，仅作隐性参考；禁止单独提起这些设定来源，也不要直接照抄原文）：",
     ...entries.map(
       (entry) => `- ${entry.name}（${entry.categoryName || "未分类"}）\n${entry.text}`
     )
@@ -960,12 +960,14 @@ function buildCustomTabInsContext(tab) {
 }
 
 function buildForumPromptContext(settings, feedType = state.activeFeed) {
-  const customTab = findCustomTabInSettings(settings, feedType);
+  const resolvedFeedType = getCurrentContentFeed(feedType);
+  const customTab = findCustomTabInSettings(settings, resolvedFeedType);
   if (!customTab) {
     return {
+      resolvedFeedType,
       customTab: null,
       timeAwarenessText: "",
-      backgroundReferenceText: "",
+      worldbookReferenceText: "",
       supplementalTopicTexts: [],
       repostSource: null
     };
@@ -974,9 +976,10 @@ function buildForumPromptContext(settings, feedType = state.activeFeed) {
   const bubbleContext = buildCustomTabBubbleContext(customTab);
   const insContext = buildCustomTabInsContext(customTab);
   return {
+    resolvedFeedType,
     customTab,
     timeAwarenessText: buildCustomTabTimeAwarenessContext(customTab),
-    backgroundReferenceText: buildCustomTabWorldbookContext(customTab),
+    worldbookReferenceText: buildCustomTabWorldbookContext(customTab),
     supplementalTopicTexts: [bubbleContext.text, insContext.text].filter(Boolean),
     repostSource: insContext.repostSource || null
   };
@@ -1029,7 +1032,8 @@ function buildCustomTabSourceText(tab, options = {}) {
 }
 
 function buildCustomTabTopicSeedText(settings, feedType = state.activeFeed) {
-  const customTab = findCustomTabInSettings(settings, feedType);
+  const resolvedFeedType = getCurrentContentFeed(feedType);
+  const customTab = findCustomTabInSettings(settings, resolvedFeedType);
   if (!customTab) {
     return "";
   }
@@ -2625,10 +2629,13 @@ function buildPrompt(
   const customTab = findCustomTabInSettings(settings, resolvedFeedType);
   const forumPromptContext = buildForumPromptContext(settings, resolvedFeedType);
   const feedSource = buildFeedSourceText(settings, resolvedFeedType).trim();
-  const feedInstruction = `当前论坛讨论区「${feedLabel}」设定：`;
-  const resolvedSource =
-    feedSource ||
-    "暂无讨论区设定，请结合世界观与实时讨论语境自行展开内容。";
+  const forumSettingText = feedSource
+    ? [
+        `当前论坛讨论区：${feedLabel}`,
+        "当前论坛讨论区一手设定（优先级高于世界书辅助背景）：",
+        feedSource
+      ].join("\n")
+    : `当前论坛讨论区：${feedLabel}\n当前论坛讨论区一手设定暂未补充，请结合世界观与实时讨论语境自行展开内容。`;
   const historyAvoidanceText = buildFeedHistoryAvoidanceText(resolvedFeedType, count);
   const dominantHotTopicInstruction = String(customTab?.hotTopic || "").trim()
     ? `这个讨论区当前存在一个主导性热点：${customTab.hotTopic}。本轮生成的绝大部分帖子都应围绕这个热点展开，但仍要拆成不同立场、不同情绪、不同细节与不同争议点。`
@@ -2638,10 +2645,9 @@ function buildPrompt(
     contextLibrary: [
       "所有内容都应遵循以下世界观：",
       settings.worldview || DEFAULT_SETTINGS.worldview,
-      feedInstruction,
-      resolvedSource,
+      forumSettingText,
       forumPromptContext.timeAwarenessText,
-      forumPromptContext.backgroundReferenceText,
+      forumPromptContext.worldbookReferenceText,
       dominantHotTopicInstruction,
       forumPromptContext.supplementalTopicTexts.length
         ? `主导即时讨论语境（与页签热点同级，可共同成为主线）：\n${forumPromptContext.supplementalTopicTexts.join(
@@ -2675,7 +2681,8 @@ function buildPrompt(
 }
 
 function buildFeedSourceText(settings, feedType = state.activeFeed) {
-  const customTab = findCustomTabInSettings(settings, feedType);
+  const resolvedFeedType = getCurrentContentFeed(feedType);
+  const customTab = findCustomTabInSettings(settings, resolvedFeedType);
   if (customTab) {
     return buildCustomTabSourceText(customTab);
   }
@@ -2749,12 +2756,20 @@ function buildReplyPrompt(
   parentReply = null,
   count = settings.replyCount || DEFAULT_REPLY_COUNT
 ) {
-  const feedLabel = getFeedLabel(feedType);
-  const customTab = findCustomTabInSettings(settings, feedType);
-  const forumPromptContext = buildForumPromptContext(settings, feedType);
+  const resolvedFeedType = getCurrentContentFeed(feedType);
+  const feedLabel = getFeedLabel(resolvedFeedType);
+  const customTab = findCustomTabInSettings(settings, resolvedFeedType);
+  const forumPromptContext = buildForumPromptContext(settings, resolvedFeedType);
   const targetText = parentReply ? parentReply.text : rootPost.text;
   const promptTitle = parentReply ? "楼中楼回复" : "主楼回复";
-  const feedSourceText = buildFeedSourceText(settings, feedType);
+  const feedSourceText = buildFeedSourceText(settings, resolvedFeedType).trim();
+  const forumSettingText = feedSourceText
+    ? [
+        `当前论坛讨论区：${feedLabel}`,
+        "当前论坛讨论区一手设定（回复时必须纳入判断，优先级高于世界书辅助背景）：",
+        feedSourceText
+      ].join("\n")
+    : `当前论坛讨论区：${feedLabel}\n当前论坛讨论区一手设定暂未补充，请至少保留这个讨论区标签与语境判断。`;
   const rootHasImage = Boolean(rootPost?.imageDataUrl);
   const resolvedRootText =
     String(rootPost?.text || "").trim() ||
@@ -2767,10 +2782,9 @@ function buildReplyPrompt(
     contextLibrary: [
       "整体世界观：",
       settings.worldview || DEFAULT_SETTINGS.worldview,
-      "当前论坛讨论区设定：",
-      feedSourceText || "尚未提供讨论区设定，请根据帖子语境自行补充。",
+      forumSettingText,
       forumPromptContext.timeAwarenessText,
-      forumPromptContext.backgroundReferenceText,
+      forumPromptContext.worldbookReferenceText,
       String(customTab?.hotTopic || "").trim()
         ? `当前这个讨论区的主导热点：${customTab.hotTopic}`
         : "",
@@ -5889,6 +5903,7 @@ async function requestGeneratedReplies(
   parentReply = null,
   count = settings.replyCount || DEFAULT_REPLY_COUNT
 ) {
+  const resolvedFeedType = getCurrentContentFeed(feedType);
   const requestEndpoint = resolveApiRequestEndpoint(settings);
   settings.endpoint = requestEndpoint;
 
@@ -5899,13 +5914,20 @@ async function requestGeneratedReplies(
     throw new Error("Gemini 模式需要填写 API Key。");
   }
 
-  const prompt = buildReplyPrompt(settings, profile, feedType, rootPost, parentReply, count);
+  const prompt = buildReplyPrompt(
+    settings,
+    profile,
+    resolvedFeedType,
+    rootPost,
+    parentReply,
+    count
+  );
   const privacySession = createPrivacySession({
     settings,
     profile,
     rootPost,
     parentReply,
-    feedType,
+    feedType: resolvedFeedType,
     prompt
   });
   const encodedPrompt = preparePromptWithPrivacy(prompt, privacySession);
@@ -5920,7 +5942,7 @@ async function requestGeneratedReplies(
       requestEndpoint,
       encodedPrompt,
       requestBody,
-      `页签：${getFeedLabel(feedType)} · 主贴：${truncate(rootPost?.text || "图片帖子", 48)}${parentReply ? " · 楼中楼" : ""}`
+      `页签：${getFeedLabel(resolvedFeedType)} · 主贴：${truncate(rootPost?.text || "图片帖子", 48)}${parentReply ? " · 楼中楼" : ""}`
     ),
     privacySession
   );
@@ -5978,7 +6000,7 @@ async function requestGeneratedReplies(
       responseText: rawResponse,
       responseBody: payload,
       summary: encodeTextWithPrivacy(
-        `页签：${getFeedLabel(feedType)} · 已生成 ${count} 条论坛回复${parentReply ? "（楼中楼）" : ""}`,
+        `页签：${getFeedLabel(resolvedFeedType)} · 已生成 ${count} 条论坛回复${parentReply ? "（楼中楼）" : ""}`,
         privacySession
       )
     });
