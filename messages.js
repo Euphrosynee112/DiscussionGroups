@@ -650,6 +650,7 @@ const state = {
   replyResumeBusy: false,
   windowFocusPrimed: initialWindowFocusPrimed,
   conversationVisibleCounts: {},
+  conversationDrafts: {},
   quotedMessageId: "",
   expandedImageMessageId: "",
   innerThoughtModalOpen: false,
@@ -3479,6 +3480,94 @@ function getContactById(contactId) {
 
 function getConversationById(conversationId = state.activeConversationId) {
   return state.conversations.find((item) => item.id === conversationId) || null;
+}
+
+function getConversationDraft(conversationId = state.activeConversationId) {
+  const key = String(conversationId || "").trim();
+  if (!key) {
+    return "";
+  }
+  return String(state.conversationDrafts?.[key] || "");
+}
+
+function setConversationDraft(conversationId = state.activeConversationId, value = "") {
+  const key = String(conversationId || "").trim();
+  if (!key) {
+    return;
+  }
+  if (!state.conversationDrafts || typeof state.conversationDrafts !== "object") {
+    state.conversationDrafts = {};
+  }
+  const normalizedValue = String(value || "").slice(0, 600);
+  if (normalizedValue) {
+    state.conversationDrafts[key] = normalizedValue;
+    return;
+  }
+  delete state.conversationDrafts[key];
+}
+
+function getPendingUserMessageIdSet(conversation = null) {
+  return new Set(
+    (Array.isArray(conversation?.messages) ? conversation.messages : [])
+      .filter((message) => message?.role === "user" && message?.needsReply)
+      .map((message) => String(message?.id || "").trim())
+      .filter(Boolean)
+  );
+}
+
+function shouldPreferLocalConversationState(localConversation = null, loadedConversation = null) {
+  if (!localConversation?.id) {
+    return false;
+  }
+  if (!loadedConversation?.id) {
+    return getPendingUserMessageIdSet(localConversation).size > 0;
+  }
+  const localPendingIds = getPendingUserMessageIdSet(localConversation);
+  const loadedPendingIds = getPendingUserMessageIdSet(loadedConversation);
+  if ([...localPendingIds].some((messageId) => !loadedPendingIds.has(messageId))) {
+    return true;
+  }
+  if (
+    getConversationReplyContextVersion(localConversation) >
+    getConversationReplyContextVersion(loadedConversation)
+  ) {
+    return true;
+  }
+  const localUpdatedAt = Number(localConversation.updatedAt) || 0;
+  const loadedUpdatedAt = Number(loadedConversation.updatedAt) || 0;
+  if (
+    localUpdatedAt > loadedUpdatedAt &&
+    (localConversation.messages?.length || 0) >= (loadedConversation.messages?.length || 0)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function mergePreferredLocalConversations(currentConversations = [], loadedConversations = []) {
+  const merged = Array.isArray(loadedConversations) ? loadedConversations.slice() : [];
+  const loadedIndexById = new Map(
+    merged.map((conversation, index) => [String(conversation?.id || "").trim(), index]).filter((item) => item[0])
+  );
+  (Array.isArray(currentConversations) ? currentConversations : []).forEach((conversation) => {
+    const conversationId = String(conversation?.id || "").trim();
+    if (!conversationId) {
+      return;
+    }
+    const loadedIndex = loadedIndexById.get(conversationId);
+    if (loadedIndex == null) {
+      if (shouldPreferLocalConversationState(conversation, null)) {
+        loadedIndexById.set(conversationId, merged.length);
+        merged.push(conversation);
+      }
+      return;
+    }
+    const loadedConversation = merged[loadedIndex];
+    if (shouldPreferLocalConversationState(conversation, loadedConversation)) {
+      merged[loadedIndex] = conversation;
+    }
+  });
+  return merged;
 }
 
 function getConversationReplyContextVersion(conversation = null) {
@@ -9148,6 +9237,7 @@ function renderConversationDetail(options = {}) {
   );
   const promptSettings = normalizeMessagePromptSettings(state.chatPromptSettings);
   const renderOptions = options && typeof options === "object" ? options : {};
+  const composerDraft = getConversationDraft(conversation.id);
   const renderWindow = buildConversationRenderWindow(conversation);
   const quotedMessage = getConversationSceneMode(conversation) === "online"
     ? getQuotedConversationMessage(conversation)
@@ -9195,6 +9285,7 @@ function renderConversationDetail(options = {}) {
           name="message"
           type="text"
           maxlength="600"
+          value="${escapeHtml(composerDraft)}"
           placeholder="发消息"
           autocomplete="off"
         />
@@ -12170,6 +12261,7 @@ function sendConversationMessage(text) {
   conversation.messages = [...conversation.messages, userMessage];
   conversation.updatedAt = userMessage.createdAt;
   bumpConversationReplyContextVersion(conversation);
+  setConversationDraft(conversation.id, "");
   state.quotedMessageId = "";
   persistConversations();
   queueConversationRenderOptions({
@@ -12680,8 +12772,9 @@ function initBackgroundMessagesWorker() {
 
 function refreshStateFromStorage() {
   const settings = loadSettings();
+  const currentConversations = Array.isArray(state.conversations) ? state.conversations.slice() : [];
   state.profile = loadProfile();
-  state.conversations = loadConversations();
+  state.conversations = mergePreferredLocalConversations(currentConversations, loadConversations());
   state.contacts = loadContacts(state.conversations);
   state.worldbooks = loadWorldbooks();
   state.commonPlaces = loadCommonPlaces();
@@ -12699,6 +12792,7 @@ function refreshStateFromStorage() {
 function attachEvents() {
   if (messagesNavBtnEl) {
     messagesNavBtnEl.addEventListener("click", () => {
+      messagesNavBtnEl.blur();
       if (state.activeConversationId && state.activeTab === "chat") {
         closeConversationTransientUi();
         state.activeConversationId = "";
@@ -12799,6 +12893,17 @@ function attachEvents() {
   }
 
   if (messagesContentEl) {
+    messagesContentEl.addEventListener("input", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement)) {
+        return;
+      }
+      if (!target.classList.contains("messages-conversation__input")) {
+        return;
+      }
+      setConversationDraft(state.activeConversationId, target.value || "");
+    });
+
     messagesContentEl.addEventListener("click", (event) => {
       const target = event.target;
       if (!(target instanceof Element)) {

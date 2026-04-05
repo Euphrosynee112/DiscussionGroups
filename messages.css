@@ -151,8 +151,18 @@ body.embedded .messages-shell {
   height: 22px;
 }
 
-.messages-topbar__icon:hover {
-  background: rgba(17, 17, 17, 0.05);
+.messages-topbar__icon:active {
+  background: rgba(17, 17, 17, 0.08);
+}
+
+.messages-topbar__icon:focus {
+  outline: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .messages-topbar__icon:hover {
+    background: rgba(17, 17, 17, 0.05);
+  }
 }
 
 .messages-topbar__icon--scene {
