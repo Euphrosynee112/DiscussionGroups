@@ -7190,6 +7190,9 @@ async function appendAssistantReplyBatch(
   });
   const appendedMessages = [];
   for (let index = 0; index < createdMessages.length; index += 1) {
+    let revealRenderOptions = {
+      scrollBehavior: "bottom"
+    };
     let nextConversation = getConversationById(conversationId);
     if (!nextConversation) {
       clearPendingAssistantReveal(conversationId);
@@ -7230,10 +7233,10 @@ async function appendAssistantReplyBatch(
       }
       const scrollSnapshot = captureConversationScrollSnapshot();
       const shouldStickToBottom = isConversationHistoryNearBottom();
-      queueConversationRenderOptions({
+      revealRenderOptions = {
         scrollBehavior: shouldStickToBottom ? "bottom" : "preserve",
         scrollSnapshot: shouldStickToBottom ? null : scrollSnapshot
-      });
+      };
     }
     nextConversation.messages = [...nextConversation.messages, createdMessages[index]];
     appendedMessages.push(createdMessages[index]);
@@ -7243,15 +7246,40 @@ async function appendAssistantReplyBatch(
       expectedReplyContextVersion: parsedExpectedReplyContextVersion
     });
     if (state.activeTab === "chat") {
-      if (index === 0) {
-        queueConversationRenderOptions({
-          scrollBehavior: "bottom"
-        });
+      const appendedIncrementally = appendConversationMessageToVisibleHistory(
+        createdMessages[index],
+        nextConversation,
+        promptSettings,
+        revealRenderOptions
+      );
+      if (!appendedIncrementally) {
+        queueConversationRenderOptions(revealRenderOptions);
+        renderMessagesPage();
       }
-      renderMessagesPage();
     }
   }
 
+  const latestConversation = getConversationById(conversationId);
+  if (
+    latestConversation &&
+    (!hasExpectedReplyContextVersion ||
+      getConversationReplyContextVersion(latestConversation) === parsedExpectedReplyContextVersion)
+  ) {
+    const existingMessageIds = new Set(
+      (Array.isArray(latestConversation.messages) ? latestConversation.messages : [])
+        .map((message) => String(message?.id || "").trim())
+        .filter(Boolean)
+    );
+    const missingMessages = createdMessages.filter(
+      (message) => !existingMessageIds.has(String(message?.id || "").trim())
+    );
+    if (missingMessages.length) {
+      latestConversation.messages = [...latestConversation.messages, ...missingMessages];
+      recalculateConversationUpdatedAt(latestConversation);
+      persistConversations();
+      appendedMessages.push(...missingMessages);
+    }
+  }
   clearPendingAssistantReveal(conversationId);
   return appendedMessages;
 }
@@ -9370,6 +9398,48 @@ function renderConversationMessage(message, conversation, promptSettings = state
   `;
 }
 
+function appendConversationMessageToVisibleHistory(
+  message,
+  conversation,
+  promptSettings = state.chatPromptSettings,
+  options = {}
+) {
+  const historyEl = messagesContentEl?.querySelector(".messages-conversation__history");
+  if (!(historyEl instanceof HTMLElement) || !conversation) {
+    return false;
+  }
+  if (
+    state.activeTab !== "chat" ||
+    String(state.activeConversationId || "").trim() !== String(conversation.id || "").trim()
+  ) {
+    return false;
+  }
+  const renderWindow = buildConversationRenderWindow(conversation);
+  if (renderWindow.hiddenCount > 0 || historyEl.querySelector(".messages-conversation__history-window")) {
+    return false;
+  }
+  const renderOptions = options && typeof options === "object" ? options : {};
+  const shouldStickToBottom =
+    renderOptions.scrollBehavior === "bottom" ||
+    (renderOptions.scrollBehavior !== "preserve" && isConversationHistoryNearBottom());
+  const pageScrollSnapshot = capturePageScrollSnapshot();
+  const emptyEl = historyEl.querySelector(".messages-conversation__empty");
+  if (emptyEl) {
+    emptyEl.remove();
+  }
+  historyEl.insertAdjacentHTML(
+    "beforeend",
+    renderConversationMessage(message, conversation, promptSettings)
+  );
+  window.requestAnimationFrame(() => {
+    if (shouldStickToBottom) {
+      historyEl.scrollTop = historyEl.scrollHeight;
+    }
+    restorePageScrollSnapshot(pageScrollSnapshot);
+  });
+  return true;
+}
+
 function renderChatList() {
   if (!messagesContentEl) {
     return;
@@ -9446,6 +9516,7 @@ function renderConversationDetail(options = {}) {
   }
 
   syncProfileStateFromStorage();
+  const pageScrollSnapshot = capturePageScrollSnapshot();
 
   const conversation = getConversationById();
   if (!conversation) {
@@ -9587,6 +9658,7 @@ function renderConversationDetail(options = {}) {
           preventScroll: true
         });
       }
+      restorePageScrollSnapshot(pageScrollSnapshot);
     });
   }
 }
@@ -10844,6 +10916,25 @@ function isConversationHistoryNearBottom(threshold = 36) {
   }
   const remaining = Math.max(0, historyEl.scrollHeight - historyEl.clientHeight - historyEl.scrollTop);
   return remaining <= Math.max(0, Number(threshold) || 0);
+}
+
+function capturePageScrollSnapshot() {
+  return {
+    x: Math.max(0, Number(window.scrollX ?? window.pageXOffset) || 0),
+    y: Math.max(0, Number(window.scrollY ?? window.pageYOffset) || 0)
+  };
+}
+
+function restorePageScrollSnapshot(snapshot = null) {
+  if (!snapshot || typeof snapshot !== "object") {
+    return;
+  }
+  const x = Math.max(0, Number(snapshot.x) || 0);
+  const y = Math.max(0, Number(snapshot.y) || 0);
+  try {
+    window.scrollTo(x, y);
+  } catch (_error) {
+  }
 }
 
 function queueConversationRenderOptions(options = {}) {
@@ -13049,10 +13140,28 @@ function initBackgroundMessagesWorker() {
   persistConversations();
   initAutoScheduleClock();
   window.addEventListener("storage", (event) => {
-    if (String(event?.key || "").trim() !== MESSAGE_REPLY_TASKS_KEY) {
+    const targetKey = String(event?.key || "").trim();
+    if (!targetKey) {
       return;
     }
-    void pumpBackgroundReplyTasks();
+    if (targetKey === MESSAGE_REPLY_TASKS_KEY) {
+      void pumpBackgroundReplyTasks();
+      return;
+    }
+    if (
+      [
+        MESSAGE_THREADS_KEY,
+        MESSAGE_CONTACTS_KEY,
+        SETTINGS_KEY,
+        WORLD_BOOKS_KEY,
+        SCHEDULE_ENTRIES_KEY,
+        MESSAGE_COMMON_PLACES_KEY,
+        MESSAGE_PRESENCE_STATE_KEY
+      ].includes(targetKey)
+    ) {
+      refreshStateFromStorage();
+      sanitizePresenceStateReferences();
+    }
   });
   window.setTimeout(() => {
     void pumpBackgroundReplyTasks();
