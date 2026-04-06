@@ -570,6 +570,7 @@ let conversationListLongPressTimerId = 0;
 let conversationListLongPressConversationId = "";
 let conversationListLongPressTriggeredId = "";
 let conversationListLongPressStartPoint = null;
+let foregroundReplyTaskHeartbeatStop = () => {};
 
 const state = {
   profile: { ...DEFAULT_PROFILE },
@@ -671,6 +672,7 @@ const state = {
   sceneModalOpen: false,
   sceneSyncModalOpen: false,
   pendingAssistantReveal: null,
+  activeForegroundReplyTaskId: "",
   suppressForegroundRefreshUntil: 0,
   pendingConversationRenderOptions: null
 };
@@ -708,6 +710,8 @@ function requestEmbeddedClose() {
   if (!isEmbeddedView()) {
     return;
   }
+
+  handoffForegroundReplyTaskToBackground();
 
   try {
     window.parent?.postMessage({ type: "pulse-generator-close-app" }, "*");
@@ -1078,6 +1082,79 @@ function getReplyTaskForConversation(
         allowedStatuses.includes(task.status)
     ) || null
   );
+}
+
+function stopForegroundReplyTaskHeartbeat() {
+  try {
+    foregroundReplyTaskHeartbeatStop();
+  } catch (_error) {
+  }
+  foregroundReplyTaskHeartbeatStop = () => {};
+}
+
+function beginForegroundReplyTask(conversationId = "", options = {}) {
+  const resolvedConversationId = String(conversationId || "").trim();
+  if (!resolvedConversationId || !canUseBackgroundReplyWorker()) {
+    return null;
+  }
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const task = enqueueReplyTask(resolvedConversationId, requestOptions);
+  if (!task?.id) {
+    return null;
+  }
+  updateReplyTask(task.id, {
+    status: "processing",
+    errorMessage: "",
+    startedAt: Date.now(),
+    heartbeatAt: Date.now()
+  });
+  stopForegroundReplyTaskHeartbeat();
+  foregroundReplyTaskHeartbeatStop = startReplyTaskHeartbeat(task.id);
+  state.activeForegroundReplyTaskId = task.id;
+  return loadReplyTasks().find((item) => item.id === task.id) || task;
+}
+
+function finishForegroundReplyTask(taskId = "", options = {}) {
+  const resolvedTaskId = String(taskId || state.activeForegroundReplyTaskId || "").trim();
+  if (!resolvedTaskId) {
+    return;
+  }
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const keepPending = Boolean(requestOptions.keepPending);
+  const currentTask = loadReplyTasks().find((task) => task.id === resolvedTaskId) || null;
+  stopForegroundReplyTaskHeartbeat();
+  if (state.activeForegroundReplyTaskId === resolvedTaskId) {
+    state.activeForegroundReplyTaskId = "";
+  }
+  if (!currentTask) {
+    return;
+  }
+  if (keepPending) {
+    updateReplyTask(resolvedTaskId, {
+      status: "pending",
+      errorMessage: "",
+      startedAt: 0,
+      heartbeatAt: 0
+    });
+    return;
+  }
+  if (currentTask.status === "processing") {
+    removeReplyTask(resolvedTaskId);
+  }
+}
+
+function handoffForegroundReplyTaskToBackground() {
+  if (!canUseBackgroundReplyWorker()) {
+    return false;
+  }
+  const activeTaskId = String(state.activeForegroundReplyTaskId || "").trim();
+  if (!activeTaskId) {
+    return false;
+  }
+  finishForegroundReplyTask(activeTaskId, {
+    keepPending: true
+  });
+  return true;
 }
 
 function getPendingReplyTaskForConversation(conversationId = "") {
@@ -8094,7 +8171,7 @@ async function requestInnerThoughtText(settings, profile, contact, conversation,
     conversation
   );
   const userInstruction =
-    "请用自然口语化的描述，直接解释这条消息背后的心声、说这句话的原因和潜在目的，不要编号，不要项目符号，不要固定小标题。";
+    "请严格用说出这条消息的那个人的第一人称口吻，只输出一整段自然口语化心声，直接说明当时心里在想什么、为什么这么说、想达到什么效果。不要分段，不要编号，不要项目符号，不要固定小标题。";
   const privacySession = createPrivacySession({
     settings,
     profile,
@@ -9835,10 +9912,22 @@ function renderConversationDetail(options = {}) {
   const renderOptions = options && typeof options === "object" ? options : {};
   const composerDraft = getConversationDraft(conversation.id);
   const renderWindow = buildConversationRenderWindow(conversation);
+  const pendingRevealIds =
+    state.pendingAssistantReveal &&
+    String(state.pendingAssistantReveal.conversationId || "").trim() === String(conversation.id || "").trim()
+      ? new Set(
+          normalizeObjectArray(state.pendingAssistantReveal.messages)
+            .map((message) => String(message?.id || "").trim())
+            .filter(Boolean)
+        )
+      : null;
   const quotedMessage = getConversationSceneMode(conversation) === "online"
     ? getQuotedConversationMessage(conversation)
     : null;
   const renderedMessages = renderWindow.visibleMessages.reduce((markupList, message) => {
+    if (pendingRevealIds?.has(String(message?.id || "").trim())) {
+      return markupList;
+    }
     try {
       markupList.push(renderConversationMessage(message, conversation, promptSettings));
     } catch (error) {
@@ -12969,6 +13058,8 @@ async function requestConversationReply(options = {}) {
     state.activeTab === "chat" &&
     String(state.activeConversationId || "").trim() === conversation.id &&
     !document.hidden;
+  const shouldTrackForegroundReplyTask =
+    preferDirectVisibleReply && !suppressUi && canUseBackgroundReplyWorker();
   const shouldResumePendingTaskDirectly = Boolean(pendingTask && !suppressUi);
   if (pendingTask && shouldResumePendingTaskDirectly) {
     removeReplyTask(pendingTask.id);
@@ -13059,6 +13150,7 @@ async function requestConversationReply(options = {}) {
 
   closeConversationTransientUi();
   let replyContextVersion = getConversationReplyContextVersion(conversation);
+  let foregroundReplyTaskId = "";
 
   if (
     canUseBackgroundReplyWorker() &&
@@ -13111,6 +13203,13 @@ async function requestConversationReply(options = {}) {
   }
 
   try {
+    if (shouldTrackForegroundReplyTask) {
+      const foregroundReplyTask = beginForegroundReplyTask(conversation.id, {
+        regenerate: isRegenerate,
+        regenerateInstruction
+      });
+      foregroundReplyTaskId = String(foregroundReplyTask?.id || "").trim();
+    }
     clearForegroundReplySync(conversation.id);
     if (isRegenerate) {
       replyContextVersion = bumpConversationReplyContextVersion(conversation);
@@ -13304,6 +13403,7 @@ async function requestConversationReply(options = {}) {
       throw error;
     }
   } finally {
+    finishForegroundReplyTask(foregroundReplyTaskId);
     const shouldRestoreConversationScroll =
       !suppressUi &&
       state.activeTab === "chat" &&
@@ -13554,9 +13654,15 @@ function isDirectForegroundReplyFlowActive(conversationId = state.activeConversa
   ) {
     return false;
   }
+  const activeForegroundTaskId = String(state.activeForegroundReplyTaskId || "").trim();
+  const activeForegroundTask =
+    activeForegroundTaskId
+      ? loadReplyTasks().find((task) => task.id === activeForegroundTaskId) || null
+      : null;
   return (
     state.requestingConversationId === resolvedConversationId &&
-    !getForegroundReplySyncTask(resolvedConversationId)
+    (!getForegroundReplySyncTask(resolvedConversationId) ||
+      String(activeForegroundTask?.conversationId || "").trim() === resolvedConversationId)
   );
 }
 
@@ -15441,6 +15547,7 @@ function attachEvents() {
   });
 
   window.addEventListener("pagehide", () => {
+    handoffForegroundReplyTaskToBackground();
     flushPendingAssistantReveal("", {
       suppressRender: true
     });

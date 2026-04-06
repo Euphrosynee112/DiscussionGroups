@@ -529,12 +529,12 @@
           createTemplateItem("contact_persona", "角色人设", "这个角色稳定的人设、表达习惯和关系底色：{{contactPersona}}。"),
           createTemplateItem("user_name", "用户昵称", "和 ta 对话的用户昵称：{{userName}}。"),
           createTemplateItem("user_persona", "用户画像", "用户画像：{{userPersona}}。"),
-          createTemplateItem("analysis_goal", "分析目标", "你的任务不是续写对话，而是解释这个角色此刻真实的内在心理活动、说这句话的动机，以及没直接说出口的目标。")
+          createTemplateItem("analysis_goal", "分析目标", "你的任务不是续写对话，而是站在说出这条消息的人本身的立场，用第一人称说出 ta 此刻真实的内在心理活动、说这句话的动机，以及没直接说出口的目标。")
         ],
         output_standard: [
           createTemplateItem("stay_in_character", "角色视角", "分析必须严格站在这个角色的立场上，只能基于给定人设和这段聊天推断，不要引入对话外的新事实。"),
           createTemplateItem("focus_now", "聚焦当下", "重点围绕最后这条目标消息来分析：ta 当时在想什么、为什么会这样说、想达到什么效果。"),
-          createTemplateItem("plain_text", "输出格式", "请直接输出一段到两段自然描述，像在和人解释“ta 当时其实是怎么想的”。内容里要自然覆盖：此刻心声、为什么这么说、潜在目的。"),
+          createTemplateItem("plain_text", "输出格式", "请直接输出一整段第一人称自然描述，像这个人正在心里默念当时真正的想法。内容里要自然覆盖：此刻心声、为什么这么说、潜在目的。"),
           createTemplateItem("concise", "简洁克制", "整体保持简洁、具体、像真实人物心理，不要写成长篇小说；不要写 1、2、3，不要项目符号，不要固定标签，不要 markdown。")
         ]
       }
