@@ -2090,13 +2090,30 @@ function buildContinuationIdleContext(conversation, settings = loadSettings()) {
     ? Number(manualTimeSettings?.offsetMs) || 0
     : 0;
   const promptLastAssistantTimestamp = lastAssistantCreatedAt + promptOffsetMs;
+  const elapsedDurationMs = promptNow.getTime() - promptLastAssistantTimestamp;
   const elapsedDurationLabel = formatConversationElapsedDuration(
-    promptNow.getTime() - promptLastAssistantTimestamp
+    elapsedDurationMs
   );
+  const totalMinutes = Math.max(0, Math.floor(elapsedDurationMs / 60000));
+  let waitingMoodGuidance =
+    "这说明对话节奏和上一条并不是完全连在一起的，续写时不要写得像同一秒内连发第二句。";
+
+  if (totalMinutes >= 24 * 60) {
+    waitingMoodGuidance =
+      "这已经是明显隔了很久才再次开口。续写时要强烈带上“隔了一大段时间后重新开口”的感觉，语气更适合轻一点、缓一点，像过了很久后又想起什么，或重新试探着补一句，而不是无缝接着上一条继续说。";
+  } else if (totalMinutes >= 120) {
+    waitingMoodGuidance =
+      "这不是普通的连发，而是隔了相当一段时间都没等到用户回复。这个等待感是续写里的重要信息，必须真实影响你的情绪和措辞：语气要更像等了一阵子后才再次开口，可以更克制、更试探，或更像隔了一会儿后补一句，不要写得像刚发完上一条立刻又接一句。";
+  } else if (totalMinutes >= 30) {
+    waitingMoodGuidance =
+      "这已经隔了一会儿才再次开口。续写时要带一点时间间隔后的重新接话感，语气可以稍微缓一点、松一点，不要写成紧贴上一条的连续输出。";
+  }
 
   return [
-    `距离你上一次发出回复，用户已经有 ${elapsedDurationLabel} 没有回你消息了。`,
-    "续写时把这段等待感一起纳入语气判断：如果已经隔了一会儿，再开口要更像是过了一阵子后自然补一句，而不是紧贴上一条连续连发。"
+    `从你上一条消息到现在，已经过去了约 ${elapsedDurationLabel}。`,
+    "这条时间间隔信息在续写里属于重要需求，但它主要用于影响你的内在情绪、等待感和重新开口的方式，不是让你把时长直接说出来。",
+    "除非用户自己主动提起失联、等待或时间间隔，否则不要直接说“你这么久没回”“已经过了几小时”这类话。",
+    waitingMoodGuidance
   ].join("\n");
 }
 
