@@ -2,8 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260406-180743";
-const APP_BUILD_UPDATED_AT = "2026-04-06 18:07:43";
+const APP_BUILD_VERSION = "20260406-204532";
+const APP_BUILD_UPDATED_AT = "2026-04-06 20:45:32";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -1995,7 +1995,7 @@ function renderPrivacyAllowlistItems() {
         <section class="home-transfer-group privacy-app-item${
           item.source === "manual" ? " privacy-app-item--manual" : ""
         }">
-          <div class="privacy-app-item__head">
+          <div class="privacy-app-item__head privacy-app-item__head--single-action">
             <div class="privacy-app-item__meta">
               <span class="home-badge">${escapeHtml(item.source === "manual" ? "手动" : "扫描确认")}</span>
               <span class="home-badge">${escapeHtml(getPrivacyAllowlistCategoryLabel(item.category))}</span>
@@ -2107,7 +2107,7 @@ function renderPrivacyIgnorelistItems() {
     .map(
       (item) => `
         <section class="home-transfer-group privacy-app-item">
-          <div class="privacy-app-item__head">
+          <div class="privacy-app-item__head privacy-app-item__head--single-action">
             <div class="privacy-app-item__meta">
               <span class="home-badge">排除</span>
             </div>

@@ -2159,7 +2159,10 @@ function buildContinuationIdleContext(conversation, settings = loadSettings()) {
     `内部节奏判断：这次续写不是紧贴上一条消息的连发，而是经历了一段等待（约 ${elapsedDurationLabel}）后再次开口。`,
     "这条时间间隔信息在续写里属于高优先级情绪线索。它主要用于影响你的内在情绪、等待感、犹豫感和重新开口的方式，不是让你把时长直接说出来。",
     "除非用户自己主动提起失联、等待或时间间隔，否则不要直接说“你这么久没回”“已经过了几小时”这类话。",
-    waitingMoodGuidance
+    waitingMoodGuidance,
+    "续写请求本身就代表你现在必须继续发出聊天正文；不要因为想显得克制、留白或等对方先开口，就把正文省略成空白。",
+    "这次至少要给出 1 条可以直接发送的自然聊天消息；如果没有特别强的新信息，就轻一点地补一句、追一句、接一下情绪，或换一个更柔和的切口重新开口。",
+    "不要只输出空行、单个标点、省略号，或把想说的话停留在内心活动里。"
   ].join("\n");
 }
 
@@ -7839,8 +7842,16 @@ async function appendAssistantReplyBatch(
       expectedReplyContextVersion: parsedExpectedReplyContextVersion
     });
     if (state.activeTab === "chat" && appendedCurrentMessage) {
-      queueConversationRenderOptions(revealRenderOptions);
-      renderMessagesPage();
+      const appendedToVisibleHistory = appendConversationMessageToVisibleHistory(
+        appendedCurrentMessage,
+        nextConversation,
+        promptSettings,
+        revealRenderOptions
+      );
+      if (!appendedToVisibleHistory) {
+        queueConversationRenderOptions(revealRenderOptions);
+        renderMessagesPage();
+      }
       await waitForNextAnimationFrame();
     }
   }

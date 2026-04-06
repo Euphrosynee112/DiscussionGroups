@@ -1494,9 +1494,29 @@ button {
   .home-transfer-group__top,
   .home-import-review__head,
   .home-privacy-scan-item__head,
-  .privacy-app-item__head,
   .privacy-app__header {
     flex-direction: column;
+  }
+
+  .privacy-app-item__head {
+    flex-direction: column;
+  }
+
+  .privacy-app-item__head--single-action {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .privacy-app-item__head--single-action .privacy-app-item__meta {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .privacy-app-item__head--single-action > .home-chip {
+    margin-left: auto;
+    flex-shrink: 0;
+    white-space: nowrap;
   }
 
   .home-transfer-group__items {
