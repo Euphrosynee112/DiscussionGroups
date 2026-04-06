@@ -745,7 +745,9 @@ function buildScheduleInviteTimeLabel(entry) {
   if (entry.scheduleType === "week") {
     return `每周${formatWeekday(entry.date, "long")} · ${entry.startTime}-${entry.endTime}`;
   }
-  return `${entry.date} · ${entry.startTime}-${entry.endTime}`;
+  return `${entry.date} · ${
+    isOvernightHourEntry(entry) ? `${entry.startTime}-次日${entry.endTime}` : `${entry.startTime}-${entry.endTime}`
+  }`;
 }
 
 function buildScheduleInviteMessageText(entry) {
@@ -1151,10 +1153,12 @@ function doEntriesOverlap(left, right) {
   if (leftAllDay || rightAllDay) {
     return true;
   }
-  const leftStart = parseLocalDateTimeValue(left.date, left.startTime);
-  const leftEnd = parseLocalDateTimeValue(left.date, left.endTime);
-  const rightStart = parseLocalDateTimeValue(right.date, right.startTime);
-  const rightEnd = parseLocalDateTimeValue(right.date, right.endTime);
+  const leftRange = buildEntryOccurrenceRange(left, left.date);
+  const rightRange = buildEntryOccurrenceRange(right, right.date);
+  const leftStart = leftRange?.start || null;
+  const leftEnd = leftRange?.end || null;
+  const rightStart = rightRange?.start || null;
+  const rightEnd = rightRange?.end || null;
   if (!leftStart || !leftEnd || !rightStart || !rightEnd) {
     return false;
   }
@@ -1728,6 +1732,40 @@ function expandScheduleEntryForDisplay(entry) {
   }));
 }
 
+function buildDisplayScheduleEntriesForDate(entry, dateText = "") {
+  const resolvedDateText = String(dateText || "").trim();
+  const resolvedEntry = entry && typeof entry === "object" ? entry : null;
+  if (!resolvedEntry || !resolvedDateText) {
+    return [];
+  }
+
+  const expandedEntries = expandScheduleEntryForDisplay(resolvedEntry);
+  if (!isOvernightHourEntry(resolvedEntry)) {
+    return expandedEntries;
+  }
+
+  if (resolvedDateText === String(resolvedEntry.date || "").trim()) {
+    return expandedEntries.map((item) => ({
+      ...item,
+      displaySegment: "start-day",
+      originalEndTime: item.endTime,
+      endTime: "23:59"
+    }));
+  }
+
+  const nextDate = addDays(String(resolvedEntry.date || "").trim(), 1);
+  if (resolvedDateText === nextDate) {
+    return expandedEntries.map((item) => ({
+      ...item,
+      displaySegment: "next-day",
+      originalEndTime: item.endTime,
+      startTime: "00:00"
+    }));
+  }
+
+  return expandedEntries;
+}
+
 function setStatus(message = "", tone = "") {
   if (!scheduleStatusEl) {
     return;
@@ -1752,7 +1790,13 @@ function entryOccursOnDate(entry, dateText) {
   if (entry.scheduleType === "week") {
     return getDateWeekday(entry.date) === getDateWeekday(dateText);
   }
-  return isSameDateValue(entry.date, dateText);
+  if (isSameDateValue(entry.date, dateText)) {
+    return true;
+  }
+  if (!isOvernightHourEntry(entry)) {
+    return false;
+  }
+  return isSameDateValue(addDays(entry.date, 1), dateText);
 }
 
 function isDisplayEntryVisible(entry) {
@@ -1762,7 +1806,7 @@ function isDisplayEntryVisible(entry) {
 function getEntriesForDate(dateText) {
   return state.entries
     .filter((entry) => entryOccursOnDate(entry, dateText))
-    .flatMap((entry) => expandScheduleEntryForDisplay(entry))
+    .flatMap((entry) => buildDisplayScheduleEntriesForDate(entry, dateText))
     .filter((entry) => isDisplayEntryVisible(entry))
     .sort((left, right) => {
       const leftTime = left.scheduleType === "day" ? "00:00" : left.startTime;
@@ -1781,13 +1825,7 @@ function getEntriesCountInDateList(dateList = []) {
 }
 
 function formatEntryTime(entry) {
-  if (entry.scheduleType === "day") {
-    return "全天";
-  }
-  if (entry.scheduleType === "week") {
-    return `每周 ${formatWeekday(entry.date, "short")} ${entry.startTime}-${entry.endTime}`;
-  }
-  return `${entry.startTime}-${entry.endTime}`;
+  return getScheduleDisplayTimeText(entry);
 }
 
 function padNumber(value) {
@@ -1816,9 +1854,34 @@ function parseTimeToMinutes(timeText = "") {
   return parseTimeHour(timeText) * 60 + parseTimeMinute(timeText);
 }
 
+function isOvernightHourEntry(entry) {
+  return (
+    String(entry?.scheduleType || "").trim() === "hour" &&
+    parseTimeToMinutes(entry?.endTime || "") < parseTimeToMinutes(entry?.startTime || "")
+  );
+}
+
+function getScheduleDisplayTimeText(entry) {
+  if (!entry || entry.scheduleType === "day") {
+    return "全天";
+  }
+  if (entry.scheduleType === "week") {
+    return `每周 ${formatWeekday(entry.date, "short")} ${entry.startTime}-${entry.endTime}`;
+  }
+  if (String(entry.displaySegment || "").trim() === "next-day") {
+    return `次日00:00-${entry.endTime}`;
+  }
+  if (isOvernightHourEntry(entry) || String(entry.displaySegment || "").trim() === "start-day") {
+    return `${entry.startTime}-次日${entry.originalEndTime || entry.endTime}`;
+  }
+  return `${entry.startTime}-${entry.endTime}`;
+}
+
 function getEntryVisibleEndHour(entry) {
   const startMinutes = parseTimeToMinutes(entry.startTime);
-  const endMinutes = Math.max(startMinutes + 1, parseTimeToMinutes(entry.endTime));
+  const endMinutes = isOvernightHourEntry(entry)
+    ? 24 * 60 + parseTimeToMinutes(entry.endTime)
+    : Math.max(startMinutes + 1, parseTimeToMinutes(entry.endTime));
   return Math.max(parseTimeHour(entry.startTime), Math.min(23, Math.floor((endMinutes - 1) / 60)));
 }
 
@@ -1827,7 +1890,9 @@ function entryOccupiesHour(entry, hour) {
     return false;
   }
   const startMinutes = parseTimeToMinutes(entry.startTime);
-  const endMinutes = Math.max(startMinutes + 1, parseTimeToMinutes(entry.endTime));
+  const endMinutes = isOvernightHourEntry(entry)
+    ? 24 * 60 + parseTimeToMinutes(entry.endTime)
+    : Math.max(startMinutes + 1, parseTimeToMinutes(entry.endTime));
   const slotStart = hour * 60;
   const slotEnd = Math.min(24 * 60, (hour + 1) * 60);
   return startMinutes < slotEnd && endMinutes > slotStart;
@@ -3013,7 +3078,9 @@ function buildEntryOccurrenceRange(entry, occurrenceDateText = "") {
   if (!start || !end) {
     return null;
   }
-  if (end <= start) {
+  if (resolvedEntry.scheduleType === "hour" && parseTimeToMinutes(resolvedEntry.endTime) < parseTimeToMinutes(resolvedEntry.startTime)) {
+    end.setDate(end.getDate() + 1);
+  } else if (end <= start) {
     end.setTime(start.getTime() + 60 * 60 * 1000);
   }
   return { start, end };
@@ -3459,7 +3526,14 @@ async function handleEditorSubmit(event) {
       setEditorStatus("请填写完整的开始和结束时间。", "error");
       return;
     }
-    if (end <= start) {
+    const startMinutes = parseTimeToMinutes(draft.startTime);
+    const endMinutes = parseTimeToMinutes(draft.endTime);
+    if (draft.scheduleType === "hour") {
+      if (startMinutes === endMinutes) {
+        setEditorStatus("按小时行程的结束时间不能和开始时间相同。", "error");
+        return;
+      }
+    } else if (end <= start) {
       setEditorStatus("结束时间需要晚于开始时间。", "error");
       return;
     }

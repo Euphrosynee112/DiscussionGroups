@@ -1533,3 +1533,87 @@ button {
     height: 100dvh;
   }
 }
+
+@media (max-width: 680px) {
+  .privacy-app__panel {
+    padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+  }
+
+  .privacy-app__body {
+    gap: 10px;
+    padding-top: 12px;
+  }
+
+  .privacy-app__title {
+    margin-top: 4px;
+    font-size: 23px;
+  }
+
+  .privacy-app__icon-button {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    font-size: 18px;
+  }
+
+  .home-settings-kicker {
+    display: none;
+  }
+
+  .home-import-review,
+  .home-transfer-group {
+    padding: 12px;
+    border-radius: 18px;
+  }
+
+  .home-import-review__title {
+    margin-top: 2px;
+    font-size: 16px;
+  }
+
+  .home-field-hint,
+  .home-transfer-group__desc,
+  .home-transfer-group__count,
+  .privacy-app-item__hint {
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .privacy-app-item {
+    gap: 8px;
+  }
+
+  .privacy-app-item__head,
+  .privacy-app-item__editor {
+    gap: 8px;
+  }
+
+  .privacy-app-item__actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .home-chip {
+    min-height: 36px;
+    padding: 0 12px;
+    font-size: 12px;
+  }
+
+  .privacy-app-item__input,
+  .privacy-app-item__select {
+    min-height: 40px;
+    border-radius: 14px;
+    padding: 9px 12px;
+    font-size: 14px;
+  }
+
+  .privacy-app-item__meta {
+    gap: 6px;
+  }
+
+  .privacy-app-item__field {
+    gap: 4px;
+  }
+}

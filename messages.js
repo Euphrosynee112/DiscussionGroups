@@ -2068,6 +2068,52 @@ function formatConversationElapsedDuration(durationMs = 0) {
   return `${totalDays} 天`;
 }
 
+function isOvernightHourScheduleEntry(entry) {
+  return (
+    String(entry?.scheduleType || "").trim() === "hour" &&
+    parseTimeToMinutes(entry?.endTime || "") < parseTimeToMinutes(entry?.startTime || "")
+  );
+}
+
+function resolveScheduleOccurrenceRange(
+  entry,
+  baseDateText = "",
+  options = {}
+) {
+  const resolvedEntry = entry && typeof entry === "object" ? entry : null;
+  const resolvedDateText = String(baseDateText || resolvedEntry?.date || "").trim();
+  const resolvedOptions = options && typeof options === "object" ? options : {};
+  if (!resolvedEntry || !resolvedDateText) {
+    return null;
+  }
+
+  if (resolvedEntry.scheduleType === "day") {
+    const start = startOfLocalDay(resolvedDateText);
+    const end = endOfLocalDay(resolvedDateText);
+    return start && end ? { start, end } : null;
+  }
+
+  const start = parseLocalDateTimeValue(
+    resolvedDateText,
+    resolvedEntry.startTime || "09:00"
+  );
+  const end = parseLocalDateTimeValue(
+    resolvedDateText,
+    resolvedEntry.endTime || "10:00"
+  );
+  if (!start || !end) {
+    return null;
+  }
+
+  if (resolvedEntry.scheduleType === "hour" && parseTimeToMinutes(resolvedEntry.endTime) < parseTimeToMinutes(resolvedEntry.startTime)) {
+    end.setDate(end.getDate() + 1);
+  } else if (end <= start && resolvedOptions.allowSameTimeFallback !== false) {
+    end.setTime(start.getTime() + 60 * 60 * 1000);
+  }
+
+  return { start, end };
+}
+
 function buildContinuationIdleContext(conversation, settings = loadSettings()) {
   const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];
   const lastAssistantMessage = [...messages]
@@ -2110,8 +2156,8 @@ function buildContinuationIdleContext(conversation, settings = loadSettings()) {
   }
 
   return [
-    `从你上一条消息到现在，已经过去了约 ${elapsedDurationLabel}。`,
-    "这条时间间隔信息在续写里属于重要需求，但它主要用于影响你的内在情绪、等待感和重新开口的方式，不是让你把时长直接说出来。",
+    `内部节奏判断：这次续写不是紧贴上一条消息的连发，而是经历了一段等待（约 ${elapsedDurationLabel}）后再次开口。`,
+    "这条时间间隔信息在续写里属于高优先级情绪线索。它主要用于影响你的内在情绪、等待感、犹豫感和重新开口的方式，不是让你把时长直接说出来。",
     "除非用户自己主动提起失联、等待或时间间隔，否则不要直接说“你这么久没回”“已经过了几小时”这类话。",
     waitingMoodGuidance
   ].join("\n");
@@ -5151,15 +5197,7 @@ async function ensureJournalWeather(dateText = getTodayDateValue()) {
 }
 
 function buildWeeklyOccurrenceRange(entry, baseDateText) {
-  const start = parseLocalDateTimeValue(baseDateText, entry.startTime || "09:00");
-  const end = parseLocalDateTimeValue(baseDateText, entry.endTime || "10:00");
-  if (!start || !end) {
-    return null;
-  }
-  if (end <= start) {
-    end.setTime(start.getTime() + 60 * 60 * 1000);
-  }
-  return { start, end };
+  return resolveScheduleOccurrenceRange(entry, baseDateText);
 }
 
 function buildScheduleOccurrenceWindows(entry, now = new Date()) {
@@ -5174,15 +5212,8 @@ function buildScheduleOccurrenceWindows(entry, now = new Date()) {
   }
 
   if (entry.scheduleType === "hour") {
-    const start = parseLocalDateTimeValue(entry.date, entry.startTime || "09:00");
-    const end = parseLocalDateTimeValue(entry.date, entry.endTime || "10:00");
-    if (!start || !end) {
-      return [];
-    }
-    if (end <= start) {
-      end.setTime(start.getTime() + 60 * 60 * 1000);
-    }
-    return [{ start, end }];
+    const range = resolveScheduleOccurrenceRange(entry, entry.date);
+    return range ? [range] : [];
   }
 
   const templateDate = parseLocalDateValue(entry.date);
@@ -5216,7 +5247,18 @@ function entryOccursOnDate(entry, dateText = getTodayDateValue()) {
     const targetDate = parseLocalDateValue(dateText);
     return Boolean(sourceDate && targetDate && sourceDate.getDay() === targetDate.getDay());
   }
-  return entry.date === dateText;
+  if (entry.date === dateText) {
+    return true;
+  }
+  if (!isOvernightHourScheduleEntry(entry)) {
+    return false;
+  }
+  const entryDate = parseLocalDateValue(entry.date);
+  const targetDate = parseLocalDateValue(dateText);
+  if (!entryDate || !targetDate) {
+    return false;
+  }
+  return formatDateToValue(addDays(entryDate, 1)) === formatDateToValue(targetDate);
 }
 
 function parseTimeToMinutes(timeText = "") {
@@ -5231,7 +5273,9 @@ function formatSchedulePreviewTime(entry) {
   if (entry.scheduleType === "day") {
     return "全天";
   }
-  return `${entry.startTime}-${entry.endTime}`;
+  return isOvernightHourScheduleEntry(entry)
+    ? `${entry.startTime}-次日${entry.endTime}`
+    : `${entry.startTime}-${entry.endTime}`;
 }
 
 function formatSchedulePreviewBadge(entry) {
@@ -5246,7 +5290,9 @@ function formatSchedulePreviewBadge(entry) {
 
 function getSchedulePreviewEntryVisibleEndHour(entry) {
   const startMinutes = parseTimeToMinutes(entry.startTime);
-  const endMinutes = Math.max(startMinutes + 1, parseTimeToMinutes(entry.endTime));
+  const endMinutes = isOvernightHourScheduleEntry(entry)
+    ? 24 * 60 + parseTimeToMinutes(entry.endTime)
+    : Math.max(startMinutes + 1, parseTimeToMinutes(entry.endTime));
   return Math.max(
     Number.parseInt(String(entry.startTime || "00:00").slice(0, 2), 10) || 0,
     Math.min(23, Math.floor((endMinutes - 1) / 60))
@@ -5258,7 +5304,9 @@ function schedulePreviewEntryOccupiesHour(entry, hour) {
     return false;
   }
   const startMinutes = parseTimeToMinutes(entry.startTime);
-  const endMinutes = Math.max(startMinutes + 1, parseTimeToMinutes(entry.endTime));
+  const endMinutes = isOvernightHourScheduleEntry(entry)
+    ? 24 * 60 + parseTimeToMinutes(entry.endTime)
+    : Math.max(startMinutes + 1, parseTimeToMinutes(entry.endTime));
   const slotStart = hour * 60;
   const slotEnd = Math.min(24 * 60, (hour + 1) * 60);
   return startMinutes < slotEnd && endMinutes > slotStart;
@@ -5506,8 +5554,7 @@ function hasRecentAssistantMentionedSchedule(history = [], entry) {
 }
 
 function formatScheduleDistanceMinutes(milliseconds) {
-  const minutes = Math.max(1, Math.round(milliseconds / 60000));
-  return `${minutes} 分钟`;
+  return formatConversationElapsedDuration(milliseconds);
 }
 
 function evaluateScheduleAwareness(
@@ -5523,18 +5570,18 @@ function evaluateScheduleAwareness(
         return null;
       }
       if (now >= range.start && now <= range.end) {
-        return { type: "current", distance: 0, range };
+        return { type: "current", distance: 0, range, now };
       }
       if (now > range.end) {
         const distance = now.getTime() - range.end.getTime();
         if (distance <= windowMs) {
-          return { type: "recent", distance, range };
+          return { type: "recent", distance, range, now };
         }
       }
       if (range.start > now) {
         const distance = range.start.getTime() - now.getTime();
         if (distance <= windowMs) {
-          return { type: "upcoming", distance, range };
+          return { type: "upcoming", distance, range, now };
         }
       }
       return null;
@@ -5559,7 +5606,22 @@ function buildScheduleAwarenessLine(entry, awareness) {
     : "";
   const ownerLabel = entry.awarenessMode === "participant" ? `你${companionText}` : "用户";
   if (awareness.type === "current") {
-    return `${ownerLabel}当前有行程「${entry.title}」正在进行。`;
+    const nowTimestamp = Number(awareness.now?.getTime?.() || 0);
+    const startTimestamp = Number(awareness.range?.start?.getTime?.() || 0);
+    const endTimestamp = Number(awareness.range?.end?.getTime?.() || 0);
+    const elapsedDuration =
+      nowTimestamp > 0 && startTimestamp > 0
+        ? formatConversationElapsedDuration(nowTimestamp - startTimestamp)
+        : "";
+    const remainingDuration =
+      endTimestamp > 0 && nowTimestamp > 0
+        ? formatConversationElapsedDuration(endTimestamp - nowTimestamp)
+        : "";
+    return `${ownerLabel}当前有行程「${entry.title}」正在进行${
+      elapsedDuration || remainingDuration
+        ? `（已进行 ${elapsedDuration || "不到 1 分钟"}，预计还会持续 ${remainingDuration || "不到 1 分钟"}）`
+        : ""
+    }。`;
   }
   if (awareness.type === "recent") {
     return `${ownerLabel}在 ${formatScheduleDistanceMinutes(awareness.distance)} 前刚结束行程「${entry.title}」。`;
@@ -5574,7 +5636,7 @@ function buildScheduleAwarenessContext(contact, history = [], promptSettings = {
     return "当前没有检测到你需要处理的已知行程；除非对话里另有明确说明，否则不要凭空说自己要去忙、赶时间，或拿不存在的安排结束对话。";
   }
 
-  const now = new Date();
+  const now = getPromptNow(loadSettings());
   const activeEntries = entries
     .map((entry) => ({
       entry,
@@ -5724,10 +5786,12 @@ function doScheduleEntriesOverlap(left, right) {
   if (left.scheduleType === "day" || right.scheduleType === "day") {
     return String(left.date || "") === String(right.date || "");
   }
-  const leftStart = parseLocalDateTimeValue(left.date, left.startTime);
-  const leftEnd = parseLocalDateTimeValue(left.date, left.endTime);
-  const rightStart = parseLocalDateTimeValue(right.date, right.startTime);
-  const rightEnd = parseLocalDateTimeValue(right.date, right.endTime);
+  const leftRange = resolveScheduleOccurrenceRange(left, left.date);
+  const rightRange = resolveScheduleOccurrenceRange(right, right.date);
+  const leftStart = leftRange?.start || null;
+  const leftEnd = leftRange?.end || null;
+  const rightStart = rightRange?.start || null;
+  const rightEnd = rightRange?.end || null;
   if (!leftStart || !leftEnd || !rightStart || !rightEnd) {
     return false;
   }
@@ -5739,7 +5803,10 @@ function getAutoScheduleExistingEntries(contactId = "", dateValues = []) {
     (Array.isArray(dateValues) ? dateValues : []).map((item) => String(item || "").trim()).filter(Boolean)
   );
   return getVisibleScheduleEntriesForContact(contactId)
-    .filter((entry) => !dateSet.size || dateSet.has(String(entry.date || "").trim()))
+    .filter(
+      (entry) =>
+        !dateSet.size || [...dateSet].some((dateValue) => entryOccursOnDate(entry, dateValue))
+    )
     .map((entry) => ({ ...entry }));
 }
 
@@ -5771,7 +5838,7 @@ function buildAutoScheduleOccupiedContext(contactId = "", dateValues = []) {
       return [
         `- ${group.date}：`,
         ...group.entries.map((entry) =>
-          `  - ${entry.scheduleType === "day" ? "全天已占用" : `${entry.startTime}-${entry.endTime}`}：${entry.title}`
+          `  - ${entry.scheduleType === "day" ? "全天已占用" : formatSchedulePreviewTime(entry)}：${entry.title}`
         )
       ].join("\n");
     })
@@ -5889,7 +5956,7 @@ function parseAutoScheduleItems(payload, dateValues = []) {
       if (!/^\d{2}:00$/.test(startTime) || !/^\d{2}:00$/.test(endTime)) {
         return null;
       }
-      if (parseTimeToMinutes(endTime) <= parseTimeToMinutes(startTime)) {
+      if (parseTimeToMinutes(endTime) === parseTimeToMinutes(startTime)) {
         return null;
       }
       return normalizeScheduleEntry(
