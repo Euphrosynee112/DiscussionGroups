@@ -3,23 +3,32 @@
     return;
   }
 
-  const SECTION_KEYS = ["context_library", "persona_alignment", "output_standard"];
+  const SECTION_KEYS = [
+    "context_library",
+    "persona_alignment",
+    "current_state_awareness",
+    "output_standard"
+  ];
   const SECTION_KEY_ALIASES = {
     context_library: "context_library",
     contextLibrary: "context_library",
     persona_alignment: "persona_alignment",
     personaAlignment: "persona_alignment",
+    current_state_awareness: "current_state_awareness",
+    currentStateAwareness: "current_state_awareness",
     output_standard: "output_standard",
     outputStandard: "output_standard"
   };
   const SECTION_LABELS = {
     context_library: "context_library",
     persona_alignment: "persona_alignment",
+    current_state_awareness: "current_state_awareness",
     output_standard: "output_standard"
   };
   const SECTION_FALLBACKS = {
     context_library: "暂无额外背景信息。",
     persona_alignment: "按当前已知身份与语境自然输出。",
+    current_state_awareness: "暂无额外状态感知。",
     output_standard: "只输出符合要求的最终结果。"
   };
 
@@ -476,7 +485,11 @@
       sections: {
         context_library: [
           createDynamicItem("worldbook_context", "世界书背景", "读取挂载世界书"),
-          createDynamicItem("important_context", "重要上下文", "读取时间 / 日程 / 场景 / 热点 / 察觉")
+          createDynamicItem("triggered_awareness", "触发察觉", "读取角色此刻突然联想到的额外线索"),
+          createDynamicItem("bubble_focus_context", "Bubble 挂载", "读取最近挂载的 Bubble 语境"),
+          createDynamicItem("forum_post_focus_context", "论坛挂载", "读取最近挂载的论坛语境"),
+          createDynamicItem("hot_topics_context", "论坛热点语境", "读取论坛热点 / 页签语境"),
+          createDynamicItem("scene_memory_context", "情景记忆", "读取达到阈值的情景记忆")
         ],
         persona_alignment: [
           createTemplateItem("contact_name", "角色姓名", "你叫 {{contactName}}。"),
@@ -487,9 +500,13 @@
           createTemplateItem("user_name", "用户昵称", "正在和你聊天的用户昵称：{{userName}}。"),
           createTemplateItem("user_persona", "用户画像", "你对这个用户已知的整体印象：{{userPersona}}。"),
           createDynamicItem("special_user_persona", "特别用户认知", "读取角色对用户的特别认知"),
-          createDynamicItem("important_priority", "优先关注信息", "读取当前比背景更重要的信息"),
-          createDynamicItem("regenerate_hint", "重回要求", "读取重回额外要求"),
-          createDynamicItem("presence_retry_hint", "状态重试提醒", "当上一轮只输出 presence_update 时，强制补正文")
+          createDynamicItem("regenerate_hint", "重回要求", "读取重回额外要求")
+        ],
+        current_state_awareness: [
+          createDynamicItem("presence_context", "地点状态", "读取双方当前地点 / 在路上状态"),
+          createDynamicItem("time_awareness", "时间感知", "读取当前生效时间"),
+          createDynamicItem("mentioned_time_schedule", "提及时段日程", "读取用户刚提到时间对应的双方日程"),
+          createDynamicItem("schedule_awareness", "当前日程", "读取双方当前正在进行的日程")
         ],
         output_standard: [
           createTemplateItem("human_chat", "真人聊天感", "你的回复必须像即时聊天软件中的真人对话，自然、轻松、有情绪，而不是助手或任务执行结果。"),
@@ -512,6 +529,49 @@
           createTemplateItem("image_json_plain", "图片 JSON 输出要求", "图片 JSON 不要放进代码块，不要添加解释、前缀、序号或额外说明；它本身就算一行回复。"),
           createTemplateItem("emotion_punctuation", "情绪标点保留", "不要去掉感叹号、问号、波浪号、省略号等表达情绪的标点。"),
           createDynamicItem("scene_mode_rule", "线上线下写法", "按当前场景决定动作描写约束")
+        ]
+      }
+    },
+    chat_continuation_request: {
+      label: "Chat 续写提示",
+      group: "Chat",
+      description: "主动续写时附加给模型的用户提示",
+      sections: {
+        persona_alignment: [
+          createTemplateItem(
+            "request_intro",
+            "续写请求",
+            "这是一次主动续写，不是新的提问。请沿着刚才的聊天氛围自然补几句新消息，不要重复上一条。"
+          )
+        ],
+        current_state_awareness: [
+          createTemplateItem(
+            "timing_line",
+            "时间说明",
+            "距离你上一次开口大约已经过了 {{elapsedDurationLabel}}。{{waitingMoodGuidance}} 这种等待感只体现在语气变化里，不要直接说出时长；这次必须先给出可发送正文，没有自然的状态变化就不要输出 presence_update。"
+          )
+        ],
+        output_standard: [
+          createTemplateItem(
+            "wait_short_guidance",
+            "短间隔语气",
+            "这不是同一秒里的连发，延续刚才的话题时自然一点就好。"
+          ),
+          createTemplateItem(
+            "wait_medium_guidance",
+            "中间隔语气",
+            "开口要像隔了一会儿后重新接话，别写成紧贴上一条的连发。"
+          ),
+          createTemplateItem(
+            "wait_long_guidance",
+            "长间隔语气",
+            "开口要像等了一阵后又补一句，更克制、更试探一点。"
+          ),
+          createTemplateItem(
+            "wait_very_long_guidance",
+            "超长间隔语气",
+            "开口要像隔了很久后又想起对方，轻一点、缓一点。"
+          )
         ]
       }
     },
@@ -777,6 +837,18 @@
     return merged;
   }
 
+  function resolveCatalogSectionOrder(catalog = null) {
+    const catalogSections =
+      catalog?.sections && typeof catalog.sections === "object" ? catalog.sections : {};
+    const catalogKeys = Object.keys(catalogSections)
+      .map((item) => normalizeSectionKey(item))
+      .filter(Boolean);
+    return mergeOrderedIds(
+      SECTION_KEYS.filter((item) => catalogKeys.includes(item)),
+      catalogKeys
+    );
+  }
+
   function normalizeRuntimeSections(runtimeSections = {}) {
     const result = {};
     Object.entries(runtimeSections && typeof runtimeSections === "object" ? runtimeSections : {}).forEach(
@@ -814,7 +886,7 @@
     const promptConfig = resolvedPromptRules[promptType] || {};
     const resolvedRuntimeSections = normalizeRuntimeSections(runtimeSections);
     const sectionOrder = mergeOrderedIds(
-      SECTION_KEYS,
+      resolveCatalogSectionOrder(catalog),
       (promptConfig.sectionOrder || []).map((item) => normalizeSectionKey(item)).filter(Boolean)
     );
 
@@ -885,7 +957,7 @@
     const promptRules = normalizePromptRules(settings?.promptRules);
     const promptConfig = promptRules[promptType] || {};
     const sectionOrder = mergeOrderedIds(
-      SECTION_KEYS,
+      resolveCatalogSectionOrder(catalog),
       (promptConfig.sectionOrder || []).map((item) => normalizeSectionKey(item)).filter(Boolean)
     );
 

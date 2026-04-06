@@ -2114,55 +2114,82 @@ function resolveScheduleOccurrenceRange(
   return { start, end };
 }
 
-function buildContinuationIdleContext(conversation, settings = loadSettings()) {
+function buildContinuationRequestUserMessage(conversation, settings = loadSettings()) {
   const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];
   const lastAssistantMessage = [...messages]
     .reverse()
     .find((message) => message?.role === "assistant");
   const lastAssistantCreatedAt = Number(lastAssistantMessage?.createdAt) || 0;
-  if (!Number.isFinite(lastAssistantCreatedAt) || lastAssistantCreatedAt <= 0) {
-    return "";
-  }
-
-  const promptNow = getPromptNow(settings);
-  const manualTimeSettings =
-    typeof window.PulsePromptConfig?.normalizeManualTimeSettings === "function"
-      ? window.PulsePromptConfig.normalizeManualTimeSettings(
-          settings?.manualTimeSettings,
-          promptNow
-        )
-      : null;
-  const promptOffsetMs = Boolean(manualTimeSettings?.enabled)
-    ? Number(manualTimeSettings?.offsetMs) || 0
-    : 0;
-  const promptLastAssistantTimestamp = lastAssistantCreatedAt + promptOffsetMs;
-  const elapsedDurationMs = promptNow.getTime() - promptLastAssistantTimestamp;
-  const elapsedDurationLabel = formatConversationElapsedDuration(
-    elapsedDurationMs
-  );
-  const totalMinutes = Math.max(0, Math.floor(elapsedDurationMs / 60000));
+  let elapsedDurationLabel = "刚刚";
   let waitingMoodGuidance =
-    "这说明对话节奏和上一条并不是完全连在一起的，续写时不要写得像同一秒内连发第二句。";
+    getPromptRuleItemText(
+      "chat_continuation_request",
+      "output_standard",
+      "wait_short_guidance",
+      settings
+    ) || "这不是同一秒里的连发，延续刚才的话题时自然一点就好。";
 
-  if (totalMinutes >= 24 * 60) {
-    waitingMoodGuidance =
-      "这已经是明显隔了很久才再次开口。续写时要强烈带上“隔了一大段时间后重新开口”的感觉，语气更适合轻一点、缓一点，像过了很久后又想起什么，或重新试探着补一句，而不是无缝接着上一条继续说。";
-  } else if (totalMinutes >= 120) {
-    waitingMoodGuidance =
-      "这不是普通的连发，而是隔了相当一段时间都没等到用户回复。这个等待感是续写里的重要信息，必须真实影响你的情绪和措辞：语气要更像等了一阵子后才再次开口，可以更克制、更试探，或更像隔了一会儿后补一句，不要写得像刚发完上一条立刻又接一句。";
-  } else if (totalMinutes >= 30) {
-    waitingMoodGuidance =
-      "这已经隔了一会儿才再次开口。续写时要带一点时间间隔后的重新接话感，语气可以稍微缓一点、松一点，不要写成紧贴上一条的连续输出。";
+  if (Number.isFinite(lastAssistantCreatedAt) && lastAssistantCreatedAt > 0) {
+    const promptNow = getPromptNow(settings);
+    const manualTimeSettings =
+      typeof window.PulsePromptConfig?.normalizeManualTimeSettings === "function"
+        ? window.PulsePromptConfig.normalizeManualTimeSettings(
+            settings?.manualTimeSettings,
+            promptNow
+          )
+        : null;
+    const promptOffsetMs = Boolean(manualTimeSettings?.enabled)
+      ? Number(manualTimeSettings?.offsetMs) || 0
+      : 0;
+    const promptLastAssistantTimestamp = lastAssistantCreatedAt + promptOffsetMs;
+    const elapsedDurationMs = promptNow.getTime() - promptLastAssistantTimestamp;
+    elapsedDurationLabel = formatConversationElapsedDuration(elapsedDurationMs);
+    const totalMinutes = Math.max(0, Math.floor(elapsedDurationMs / 60000));
+    if (totalMinutes >= 24 * 60) {
+      waitingMoodGuidance =
+        getPromptRuleItemText(
+          "chat_continuation_request",
+          "output_standard",
+          "wait_very_long_guidance",
+          settings
+        ) || "开口要像隔了很久后又想起对方，轻一点、缓一点。";
+    } else if (totalMinutes >= 120) {
+      waitingMoodGuidance =
+        getPromptRuleItemText(
+          "chat_continuation_request",
+          "output_standard",
+          "wait_long_guidance",
+          settings
+        ) || "开口要像等了一阵后又补一句，更克制、更试探一点。";
+    } else if (totalMinutes >= 30) {
+      waitingMoodGuidance =
+        getPromptRuleItemText(
+          "chat_continuation_request",
+          "output_standard",
+          "wait_medium_guidance",
+          settings
+        ) || "开口要像隔了一会儿后重新接话，别写成紧贴上一条的连发。";
+    }
   }
 
   return [
-    `内部节奏判断：这次续写不是紧贴上一条消息的连发，而是经历了一段等待（约 ${elapsedDurationLabel}）后再次开口。`,
-    "这条时间间隔信息在续写里属于高优先级情绪线索。它主要用于影响你的内在情绪、等待感、犹豫感和重新开口的方式，不是让你把时长直接说出来。",
-    "除非用户自己主动提起失联、等待或时间间隔，否则不要直接说“你这么久没回”“已经过了几小时”这类话。",
-    waitingMoodGuidance,
-    "续写请求本身就代表你现在必须继续发出聊天正文；不要因为想显得克制、留白或等对方先开口，就把正文省略成空白。",
-    "这次至少要给出 1 条可以直接发送的自然聊天消息；如果没有特别强的新信息，就轻一点地补一句、追一句、接一下情绪，或换一个更柔和的切口重新开口。",
-    "不要只输出空行、单个标点、省略号，或把想说的话停留在内心活动里。"
+    getPromptRuleItemText(
+      "chat_continuation_request",
+      "persona_alignment",
+      "request_intro",
+      settings
+    ) || "这是一次主动续写，不是新的提问。请沿着刚才的聊天氛围自然补几句新消息，不要重复上一条。",
+    getPromptRuleItemText(
+      "chat_continuation_request",
+      "current_state_awareness",
+      "timing_line",
+      settings,
+      {
+        elapsedDurationLabel,
+        waitingMoodGuidance
+      }
+    ) ||
+      `距离你上一次开口大约已经过了 ${elapsedDurationLabel}。${waitingMoodGuidance} 这种等待感只体现在语气变化里，不要直接说出时长；这次必须先给出可发送正文，没有自然的状态变化就不要输出 presence_update。`
   ].join("\n");
 }
 
@@ -2327,6 +2354,39 @@ function buildPromptSectionText(value, fallback = "") {
   return text || String(fallback || "").trim();
 }
 
+function interpolatePromptTemplateText(template = "", variables = {}) {
+  return String(template || "").replace(/\{\{([a-zA-Z0-9_]+)\}\}/g, (_match, key) => {
+    return Object.prototype.hasOwnProperty.call(variables || {}, key)
+      ? String(variables[key] ?? "")
+      : "";
+  });
+}
+
+function getPromptRuleItemText(
+  promptType = "",
+  sectionKey = "",
+  itemId = "",
+  settings = loadSettings(),
+  variables = {}
+) {
+  if (typeof window.PulsePromptConfig?.buildEditorModel !== "function") {
+    return "";
+  }
+  const model = window.PulsePromptConfig.buildEditorModel(promptType, settings);
+  const resolvedSectionKey = String(sectionKey || "").trim();
+  const resolvedItemId = String(itemId || "").trim();
+  const section = Array.isArray(model?.sections)
+    ? model.sections.find((item) => String(item?.key || "").trim() === resolvedSectionKey)
+    : null;
+  const targetItem = Array.isArray(section?.items)
+    ? section.items.find((item) => String(item?.id || "").trim() === resolvedItemId)
+    : null;
+  if (!targetItem) {
+    return "";
+  }
+  return interpolatePromptTemplateText(String(targetItem.text || ""), variables).trim();
+}
+
 function buildStructuredPromptSections(promptTypeOrSections = {}, maybeSections = null, maybeOptions = {}) {
   if (typeof promptTypeOrSections === "string" && window.PulsePromptConfig?.buildPrompt) {
     const configuredPrompt = window.PulsePromptConfig.buildPrompt(
@@ -2344,21 +2404,35 @@ function buildStructuredPromptSections(promptTypeOrSections = {}, maybeSections 
       : maybeSections && typeof maybeSections === "object"
         ? maybeSections
         : {};
+  const defaultSectionOrder = Array.isArray(window.PulsePromptConfig?.SECTION_KEYS)
+    ? window.PulsePromptConfig.SECTION_KEYS
+    : ["context_library", "persona_alignment", "current_state_awareness", "output_standard"];
+  const fallbackSections = {
+    context_library:
+      window.PulsePromptConfig?.SECTION_FALLBACKS?.context_library || "暂无额外背景信息。",
+    persona_alignment:
+      window.PulsePromptConfig?.SECTION_FALLBACKS?.persona_alignment || "按当前已知身份、关系与语境自然回应。",
+    current_state_awareness:
+      window.PulsePromptConfig?.SECTION_FALLBACKS?.current_state_awareness || "暂无额外状态感知。",
+    output_standard:
+      window.PulsePromptConfig?.SECTION_FALLBACKS?.output_standard || "只输出符合要求的最终结果。"
+  };
+  const sectionValueMap = {
+    context_library: resolvedSections.context_library || resolvedSections.contextLibrary,
+    persona_alignment: resolvedSections.persona_alignment || resolvedSections.personaAlignment,
+    current_state_awareness:
+      resolvedSections.current_state_awareness || resolvedSections.currentStateAwareness,
+    output_standard: resolvedSections.output_standard || resolvedSections.outputStandard
+  };
   return prependGlobalPromptGuard(
-    [
-      `<context_library>\n${buildPromptSectionText(
-        resolvedSections.contextLibrary,
-        "暂无额外背景信息。"
-      )}\n</context_library>`,
-      `<persona_alignment>\n${buildPromptSectionText(
-        resolvedSections.personaAlignment,
-        "按当前已知身份、关系与语境自然回应。"
-      )}\n</persona_alignment>`,
-      `<output_standard>\n${buildPromptSectionText(
-        resolvedSections.outputStandard,
-        "只输出符合要求的最终结果。"
-      )}\n</output_standard>`
-    ].join("\n\n")
+    defaultSectionOrder
+      .map((sectionKey) => {
+        return `<${sectionKey}>\n${buildPromptSectionText(
+          sectionValueMap[sectionKey],
+          fallbackSections[sectionKey]
+        )}\n</${sectionKey}>`;
+      })
+      .join("\n\n")
   );
 }
 
@@ -6301,33 +6375,57 @@ function buildPresencePromptContext(contact, conversation) {
     "如果你处于“在路上”，不要把自己写成已经到达；可以自然体现赶路、等车、分心或时间压力，但不要每一轮都重复强调。"
   );
 
-  if (getConversationAllowAiPresenceUpdate(resolvedConversation)) {
-    const visiblePlaceHints = getVisibleCommonPlacesForContact(contactId)
-      .map((place) => {
-        const tags = [getCommonPlaceTypeLabel(place.type)];
-        if (String(place.traitsText || "").trim()) {
-          tags.push(truncate(String(place.traitsText || "").trim(), 18));
-        }
-        return `- ${place.name}：${tags.join(" · ")}`;
-      })
-      .slice(0, 12);
+  return lines.join("\n");
+}
 
-    lines.push(
-      [
-        "如果这一轮回复里自然发生了“到达 / 出发 / 正在赶路 / 刚回到某地”，你只能补充你自己的状态更新；不要修改用户状态，也不要修改线上/线下模式。",
-        "presence_update 只是紧跟在聊天正文后的一条附加机器标签，不算聊天正文，绝不能单独输出。",
-        "只有当这轮正文里明确说了“我现在过来 / 我在路上 / 我刚到 / 我已经到了 / 我先回去 / 我出发了”这类状态变化时，才需要同步输出 presence_update；不要只因为看到了地点背景、地点名单或上下文推测，就单独输出状态标签。",
-        "若需要更新，请先输出正常回复正文，再另起一行输出：<presence_update>{...}</presence_update>。如果这轮没有自然正文可说，就不要输出 presence_update。",
-        '可用格式一：<presence_update>{"presenceType":"at_place","placeName":"地点名"}</presence_update>',
-        '可用格式二：<presence_update>{"presenceType":"in_transit","fromPlaceName":"地点名","toPlaceName":"地点名"}</presence_update>',
-        visiblePlaceHints.length
-          ? `你可切换到的已知地点（仅供状态更新时选择，不要当成正文资料复述）：\n${visiblePlaceHints.join("\n")}`
-          : "当前没有可用于状态更新的已知地点。"
-      ].join("\n")
-    );
+function buildPresenceUpdateOutputRule(contact, conversation) {
+  const resolvedConversation = conversation && typeof conversation === "object" ? conversation : null;
+  const resolvedContact = contact && typeof contact === "object" ? contact : null;
+  const contactId = String(resolvedContact?.id || resolvedConversation?.contactId || "").trim();
+  if (!contactId || !getConversationAllowAiPresenceUpdate(resolvedConversation)) {
+    return "";
   }
 
-  return lines.join("\n");
+  const visiblePlaceHints = getVisibleCommonPlacesForContact(contactId)
+    .map((place) => {
+      const tags = [getCommonPlaceTypeLabel(place.type)];
+      if (String(place.traitsText || "").trim()) {
+        tags.push(truncate(String(place.traitsText || "").trim(), 18));
+      }
+      return `- ${place.name}：${tags.join(" · ")}`;
+    })
+    .slice(0, 12);
+
+  return [
+    "如果这一轮正文里自然出现了你自己的状态变化，例如正在过来、已经在路上、刚刚到达、刚回到某地，才可以在正文后追加一行 presence_update；不要修改用户状态，也不要修改线上/线下模式。",
+    "presence_update 只是正文后的附加机器标签，不算聊天正文，绝不能单独输出，也不能替代正文。",
+    "只有当正文里明确出现了“我现在过来 / 我在路上 / 我刚到 / 我已经到了 / 我先回去 / 我出发了”这类状态变化时，才需要输出 presence_update；不要只因为看到了地点背景或地点名单，就单独输出状态标签。",
+    '可用格式一：<presence_update>{"presenceType":"at_place","placeName":"地点名"}</presence_update>',
+    '可用格式二：<presence_update>{"presenceType":"in_transit","fromPlaceName":"地点名","toPlaceName":"地点名"}</presence_update>',
+    visiblePlaceHints.length
+      ? `状态更新可用地点（仅在确实发生状态变化时选择，不要当成正文资料复述）：\n${visiblePlaceHints.join("\n")}`
+      : "当前没有可用于状态更新的已知地点。"
+  ].join("\n");
+}
+
+function buildChatRequestInjectedMessages(requestOptions = {}, settings = loadSettings()) {
+  const resolvedRequestOptions =
+    requestOptions && typeof requestOptions === "object" ? requestOptions : {};
+  const injectedMessages = [];
+  if (resolvedRequestOptions.continueAssistant) {
+    const continuationMessage = buildContinuationRequestUserMessage(
+      resolvedRequestOptions.conversation,
+      settings
+    );
+    if (continuationMessage) {
+      injectedMessages.push({
+        role: "user",
+        text: continuationMessage,
+        imageDataUrls: []
+      });
+    }
+  }
+  return injectedMessages;
 }
 
 function buildConversationSystemPrompt(
@@ -6368,30 +6466,22 @@ function buildConversationSystemPrompt(
         .filter(Boolean)
         .join("\n")
     : "";
-  const importantContextSections = [
-    triggeredAwarenessContext ? `当前触发的察觉信息：\n${triggeredAwarenessContext}` : "",
-    presenceContext ? `当前场景与状态：\n${presenceContext}` : "",
-    timeAwarenessContext || "",
-    mentionedTimeScheduleContext ? `用户刚提到的时间与对应日程：\n${mentionedTimeScheduleContext}` : "",
-    scheduleAwarenessContext ? `当前日程感知：\n${scheduleAwarenessContext}` : "",
-    bubbleFocusContext || "",
-    forumPostFocusContext || "",
-    hotTopicsContext ? `当前也会影响你判断的论坛关注语境：\n${hotTopicsContext}` : "",
-    memoryContexts.scene ? `你在相关话题里会自然想起的情景记忆：\n${memoryContexts.scene}` : ""
-  ].filter(Boolean);
-  const continuationIdleContext = requestOptions.continueAssistant
-    ? buildContinuationIdleContext(requestOptions.conversation, settings)
-    : "";
 
   return buildStructuredPromptSections(
     "chat_conversation",
     {
       context_library: {
         worldbook_context: worldbookContext,
-        important_context: importantContextSections.length
-          ? `以下是你当前需要优先关注的重要信息；它们比 context_library 更重要：\n${importantContextSections.join(
-              "\n\n"
-            )}`
+        triggered_awareness: triggeredAwarenessContext
+          ? `当前触发的察觉信息：\n${triggeredAwarenessContext}`
+          : "",
+        bubble_focus_context: bubbleFocusContext || "",
+        forum_post_focus_context: forumPostFocusContext || "",
+        hot_topics_context: hotTopicsContext
+          ? `当前也会影响你判断的论坛关注语境：\n${hotTopicsContext}`
+          : "",
+        scene_memory_context: memoryContexts.scene
+          ? `你在相关话题里会自然想起的情景记忆：\n${memoryContexts.scene}`
           : ""
       },
       persona_alignment: {
@@ -6403,17 +6493,6 @@ function buildConversationSystemPrompt(
         special_user_persona: String(contact.specialUserPersona || "").trim()
           ? `你对这个用户的特别认知：${String(contact.specialUserPersona || "").trim()}。这部分是你基于相处形成的更私人、更具体的认识，重要程度略高于用户的通用画像。`
           : "",
-        important_priority: requestOptions.continueAssistant
-          ? [
-              "当前用户没有发送新消息；这是一次主动续写请求。",
-              "请把它理解成：对方希望你顺着刚才的聊天氛围、情绪或话题，自然继续再发几句，而不是等待新的提问。",
-              continuationIdleContext,
-              "续写时不要重复上一条刚说过的话，也不要机械总结；像真实聊天里临时又想起一件事、补一句、追一句，或自然延伸当前话题。",
-              "续写必须先给出自然聊天正文；如果你只是想更新状态、但没有自然正文可说，那就不要输出 presence_update。"
-            ]
-              .filter(Boolean)
-              .join("\n")
-          : "",
         regenerate_hint: requestOptions.regenerate
           ? [
               "这是一条针对上一版回复的重回请求，需要重新生成这一轮回复。",
@@ -6424,19 +6503,20 @@ function buildConversationSystemPrompt(
             ]
               .filter(Boolean)
               .join("\n")
+          : ""
+      },
+      current_state_awareness: {
+        presence_context: presenceContext ? `当前地点与状态：\n${presenceContext}` : "",
+        time_awareness: timeAwarenessContext || "",
+        mentioned_time_schedule: mentionedTimeScheduleContext
+          ? `用户刚提到的时间与对应日程：\n${mentionedTimeScheduleContext}`
           : "",
-        presence_retry_hint: requestOptions.presenceOnlyRetry
-          ? [
-              "上一次你的输出只有 presence_update 标签，没有聊天正文。",
-              "这一次必须先输出自然聊天正文；presence_update 只能作为正文后的附加一行，绝不能单独出现。",
-              "如果这轮没有自然正文可说，就直接输出正常聊天正文，不要输出 presence_update。"
-            ].join("\n")
+        schedule_awareness: scheduleAwarenessContext
+          ? `当前日程感知：\n${scheduleAwarenessContext}`
           : ""
       },
       output_standard: {
-        presence_update_rule: getConversationAllowAiPresenceUpdate(requestOptions.conversation)
-          ? "如果这一轮正文里明确出现了你自己的状态变化，例如正在过来、已经在路上、刚刚到达、刚回到某地，就必须同步输出 presence_update；但 presence_update 只能作为正文后的附加一行，不能替代正文，也不能单独输出。"
-          : "",
+        presence_update_rule: buildPresenceUpdateOutputRule(contact, requestOptions.conversation),
         quote_rule:
           sceneMode === "online"
             ? [
@@ -6519,8 +6599,12 @@ function buildGenericConversationPrompt(systemPrompt, history = []) {
     .join("\n\n");
 }
 
-function buildChatRequestBody(settings, systemPrompt, history = []) {
+function buildChatRequestBody(settings, systemPrompt, history = [], options = {}) {
   const mode = normalizeApiMode(settings.mode);
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const requestHistory = []
+    .concat(Array.isArray(history) ? history : [])
+    .concat(Array.isArray(requestOptions.extraMessages) ? requestOptions.extraMessages : []);
   if (mode === "openai") {
     return {
       model: settings.model || DEFAULT_DEEPSEEK_MODEL,
@@ -6530,7 +6614,7 @@ function buildChatRequestBody(settings, systemPrompt, history = []) {
           role: "system",
           content: systemPrompt
         },
-        ...history.map((message) => ({
+        ...requestHistory.map((message) => ({
           role: message.role === "assistant" ? "assistant" : "user",
           content:
             message.role === "assistant"
@@ -6550,7 +6634,7 @@ function buildChatRequestBody(settings, systemPrompt, history = []) {
       systemInstruction: {
         parts: [{ text: systemPrompt }]
       },
-      contents: history.map((message) => ({
+      contents: requestHistory.map((message) => ({
         role: message.role === "assistant" ? "model" : "user",
         parts:
           message.role === "assistant"
@@ -6568,7 +6652,7 @@ function buildChatRequestBody(settings, systemPrompt, history = []) {
   }
 
   return {
-    prompt: buildGenericConversationPrompt(systemPrompt, history),
+    prompt: buildGenericConversationPrompt(systemPrompt, requestHistory),
     intent: "chat"
   };
 }
@@ -7955,7 +8039,21 @@ async function requestChatReplyText(
     });
     const encodedSystemPrompt = preparePromptWithPrivacy(systemPrompt, privacySession);
     const encodedHistory = encodeValueWithPrivacy(history, privacySession);
-    const requestBody = buildChatRequestBody(settings, encodedSystemPrompt, encodedHistory);
+    const injectedRequestMessages = buildChatRequestInjectedMessages(
+      mergedRequestOptions,
+      settings
+    ).map((message) => ({
+      ...message,
+      text: encodeTextWithPrivacy(message.text, privacySession)
+    }));
+    const requestBody = buildChatRequestBody(
+      settings,
+      encodedSystemPrompt,
+      encodedHistory,
+      {
+        extraMessages: injectedRequestMessages
+      }
+    );
     const logBase = applyPrivacyToLogEntry(
       buildMessageApiLogBase(
         mergedRequestOptions.regenerate ? "chat_reply_regenerate" : "chat_reply",
@@ -8099,46 +8197,7 @@ async function requestChatReplyText(
   try {
     return await executeChatRequest(normalizedPromptSettings);
   } catch (error) {
-    if (
-      String(error?.message || "").includes("只有状态更新标签") &&
-      !requestOptions.presenceOnlyRetry
-    ) {
-      return executeChatRequest(
-        normalizedPromptSettings,
-        " · 正文补发重试",
-        {
-          presenceOnlyRetry: true
-        }
-      );
-    }
-    const shouldRetryGeminiDirectly =
-      requestMode === "gemini" &&
-      error?.code === "gemini_empty_response" &&
-      shouldRetryGeminiEmptyResponse(error?.responsePayload);
-
-    if (shouldRetryGeminiDirectly) {
-      try {
-        await sleep(420);
-        return await executeChatRequest(normalizedPromptSettings, " · Gemini 空响应重试");
-      } catch (retryError) {
-        error = retryError;
-      }
-    }
-
-    const shouldRetryWithoutHotTopics =
-      normalizedPromptSettings.hotTopicsEnabled &&
-      /没有可解析的文本|Gemini 返回了空内容|HTTP 400|HTTP 413|finishReason=MAX_TOKENS/i.test(
-        String(error?.message || "")
-      );
-
-    if (!shouldRetryWithoutHotTopics) {
-      throw error;
-    }
-
-    return executeChatRequest(
-      stripHotTopicsPromptSettings(normalizedPromptSettings),
-      " · 热点挂载自动回退"
-    );
+    throw error;
   }
 }
 
