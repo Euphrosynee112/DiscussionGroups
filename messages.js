@@ -32,8 +32,8 @@ const DEFAULT_SCHEDULE_AWARENESS_WINDOW_MINUTES = 30;
 const MAX_SCHEDULE_AWARENESS_WINDOW_MINUTES = 720;
 const DEFAULT_MESSAGE_AWARENESS_INTERVAL_ROUNDS = 15;
 const MAX_MESSAGE_AWARENESS_INTERVAL_ROUNDS = 200;
-const DEFAULT_MEMORY_SUMMARY_INTERVAL_ROUNDS = 4;
-const MAX_MEMORY_SUMMARY_INTERVAL_ROUNDS = 20;
+const DEFAULT_MEMORY_SUMMARY_INTERVAL_ROUNDS = 100;
+const MAX_MEMORY_SUMMARY_INTERVAL_ROUNDS = 100;
 const DEFAULT_CORE_MEMORY_THRESHOLD = 80;
 const DEFAULT_SCENE_MEMORY_THRESHOLD = 65;
 const DEFAULT_CONTEXT_FOCUS_MINUTES = 60;
@@ -223,6 +223,9 @@ const messagesChatReplySentenceLimitInputEl = document.querySelector(
 );
 const messagesChatAwarenessRoundsInputEl = document.querySelector(
   "#messages-chat-awareness-rounds-input"
+);
+const messagesChatMemorySummaryRoundsInputEl = document.querySelector(
+  "#messages-chat-memory-summary-rounds-input"
 );
 const messagesChatTimeAwarenessInputEl = document.querySelector(
   "#messages-chat-time-awareness-input"
@@ -2403,6 +2406,31 @@ function normalizeMessagePromptSettings(source = {}) {
   };
 }
 
+function getDefaultConversationMemorySummaryIntervalRounds(promptSettings = loadSettings().messagePromptSettings) {
+  return clampNumber(
+    normalizePositiveInteger(
+      normalizeMessagePromptSettings(promptSettings).memorySummaryIntervalRounds,
+      DEFAULT_MEMORY_SUMMARY_INTERVAL_ROUNDS
+    ),
+    1,
+    MAX_MEMORY_SUMMARY_INTERVAL_ROUNDS
+  );
+}
+
+function resolveConversationMemorySummaryIntervalRounds(
+  conversation,
+  promptSettings = loadSettings().messagePromptSettings
+) {
+  return clampNumber(
+    normalizePositiveInteger(
+      conversation?.memorySummaryIntervalRounds,
+      getDefaultConversationMemorySummaryIntervalRounds(promptSettings)
+    ),
+    1,
+    MAX_MEMORY_SUMMARY_INTERVAL_ROUNDS
+  );
+}
+
 function normalizeAutoScheduleDays(value, fallback = DEFAULT_AUTO_SCHEDULE_DAYS) {
   return clampNumber(
     normalizePositiveInteger(value, fallback),
@@ -3612,7 +3640,6 @@ function normalizeConversation(conversation, index = 0) {
         .filter((item) => item.text)
     : [];
   const messages = dedupeConversationMessageList(normalizedMessages).messages;
-
   return {
     id: String(source.id || `conversation_${index}_${hashText(source.contactId)}`),
     contactId: String(source.contactId || ""),
@@ -3636,6 +3663,7 @@ function normalizeConversation(conversation, index = 0) {
       0,
       Number.parseInt(String(source.replyContextVersion || 0), 10) || 0
     ),
+    memorySummaryIntervalRounds: resolveConversationMemorySummaryIntervalRounds(source),
     memorySummaryCounter: Math.max(
       0,
       Number.parseInt(String(source.memorySummaryCounter || 0), 10) || 0
@@ -4198,6 +4226,7 @@ function createConversation(contact) {
     messages: [],
     awarenessCounter: 0,
     replyContextVersion: 0,
+    memorySummaryIntervalRounds: getDefaultConversationMemorySummaryIntervalRounds(),
     memorySummaryCounter: 0,
     memorySummaryLastMessageCount: 0,
     updatedAt: Date.now()
@@ -7948,7 +7977,11 @@ async function maybeExtractConversationMemories(conversationId, settings, prompt
     return;
   }
   const resolvedPromptSettings = normalizeMessagePromptSettings(promptSettings);
-  if (conversation.memorySummaryCounter < resolvedPromptSettings.memorySummaryIntervalRounds) {
+  const memorySummaryIntervalRounds = resolveConversationMemorySummaryIntervalRounds(
+    conversation,
+    resolvedPromptSettings
+  );
+  if (conversation.memorySummaryCounter < memorySummaryIntervalRounds) {
     return;
   }
 
@@ -11992,6 +12025,7 @@ function saveManualCoreMemory(draft = {}) {
 
 function applyChatPromptSettingsToForm(promptSettings) {
   const resolved = normalizeMessagePromptSettings(promptSettings);
+  const conversation = getConversationById();
   if (messagesChatHistoryRoundsInputEl) {
     messagesChatHistoryRoundsInputEl.value = String(resolved.historyRounds);
   }
@@ -12000,6 +12034,13 @@ function applyChatPromptSettingsToForm(promptSettings) {
   }
   if (messagesChatAwarenessRoundsInputEl) {
     messagesChatAwarenessRoundsInputEl.value = String(resolved.awarenessIntervalRounds);
+  }
+  if (messagesChatMemorySummaryRoundsInputEl) {
+    const conversationSummaryInterval = conversation
+      ? resolveConversationMemorySummaryIntervalRounds(conversation, resolved)
+      : getDefaultConversationMemorySummaryIntervalRounds(resolved);
+    messagesChatMemorySummaryRoundsInputEl.value = String(conversationSummaryInterval);
+    messagesChatMemorySummaryRoundsInputEl.disabled = !Boolean(conversation);
   }
   if (messagesChatTimeAwarenessInputEl) {
     messagesChatTimeAwarenessInputEl.checked = resolved.timeAwareness;
@@ -12152,6 +12193,24 @@ function getCurrentChatPromptSettingsDraft() {
     showContactAvatar: Boolean(messagesChatShowContactAvatarInputEl?.checked),
     showUserAvatar: Boolean(messagesChatShowUserAvatarInputEl?.checked)
   });
+}
+
+function getCurrentChatMemorySummaryIntervalDraft() {
+  const conversation = getConversationById();
+  const fallbackSummaryInterval = getDefaultConversationMemorySummaryIntervalRounds(
+    state.chatPromptSettings
+  );
+  if (!conversation) {
+    return fallbackSummaryInterval;
+  }
+  return clampNumber(
+    normalizePositiveInteger(
+      messagesChatMemorySummaryRoundsInputEl?.value,
+      conversation.memorySummaryIntervalRounds || fallbackSummaryInterval
+    ),
+    1,
+    MAX_MEMORY_SUMMARY_INTERVAL_ROUNDS
+  );
 }
 
 function createAutoScheduleRequestDraft() {
@@ -14472,6 +14531,7 @@ function attachEvents() {
     messagesChatSettingsFormEl.addEventListener("submit", (event) => {
       event.preventDefault();
       const draft = getCurrentChatPromptSettingsDraft();
+      const conversation = getConversationById();
       if (draft.hotTopicsEnabled && !draft.hotTopicsTabId) {
         setEditorStatus(
           messagesChatSettingsStatusEl,
@@ -14500,6 +14560,10 @@ function attachEvents() {
       nextSettings.messagePromptSettings = draft;
       persistSettings(nextSettings);
       state.chatPromptSettings = draft;
+      if (conversation) {
+        conversation.memorySummaryIntervalRounds = getCurrentChatMemorySummaryIntervalDraft();
+        persistConversations();
+      }
       setConversationAllowAiPresenceUpdate(
         Boolean(messagesChatAllowAiPresenceUpdateInputEl?.checked)
       );

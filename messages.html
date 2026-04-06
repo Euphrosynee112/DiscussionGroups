@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <title>Pulse Generator · Chat</title>
-    <link rel="stylesheet" href="./messages.css?v=20260406-141122" />
+    <link rel="stylesheet" href="./messages.css?v=20260406-152104" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -435,6 +435,22 @@
             />
             <small class="messages-form-field__hint">
               每成功获取 1 次 API 回复都会判断一次；若连续 N 轮都未命中，则后续不再触发。
+            </small>
+          </label>
+
+          <label class="messages-form-field">
+            <span>总结触发轮数</span>
+            <input
+              id="messages-chat-memory-summary-rounds-input"
+              type="number"
+              min="1"
+              max="100"
+              inputmode="numeric"
+              placeholder="默认 100 轮"
+              autocomplete="off"
+            />
+            <small class="messages-form-field__hint">
+              当前角色聊天的记忆总结阈值；每成功获取 1 次非重回回复会计 1 轮，只作用于当前角色。
             </small>
           </label>
 
@@ -1665,9 +1681,9 @@
               id="messages-memory-summary-interval-input"
               type="number"
               min="1"
-              max="20"
+              max="100"
               inputmode="numeric"
-              placeholder="默认 4 回合"
+              placeholder="默认 100 回合"
               autocomplete="off"
             />
           </label>
@@ -2314,12 +2330,12 @@
 
     <input id="messages-image-file-input" type="file" accept="image/*" hidden />
 
-    <script src="./prompt-config.js?v=20260406-141122"></script>
+    <script src="./prompt-config.js?v=20260406-152104"></script>
     <script src="./privacy-allowlist.js?v=20260403-165212"></script>
     <script src="./pulse-privacy-cover.js?v=20260403-170109"></script>
     <script src="./pulse-message-banner.js?v=20260403-165212"></script>
     <script src="./api-log.js?v=20260405-231617"></script>
     <script src="./messages-awareness-config.js?v=20260403-165212"></script>
-    <script src="./messages.js?v=20260406-141122"></script>
+    <script src="./messages.js?v=20260406-152104"></script>
   </body>
 </html>
