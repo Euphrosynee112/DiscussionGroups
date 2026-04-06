@@ -2,8 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260406-152104";
-const APP_BUILD_UPDATED_AT = "2026-04-06 15:21:04";
+const APP_BUILD_VERSION = "20260406-161820";
+const APP_BUILD_UPDATED_AT = "2026-04-06 16:18:20";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -21,6 +21,7 @@ const PRIVACY_PENDING_SCAN_KEY = "x_style_generator_privacy_scan_pending_v1";
 const PRIVACY_ALLOWLIST_TERMS_KEY = "x_style_generator_privacy_allowlist_terms_v1";
 const PRIVACY_IGNORELIST_TERMS_KEY = "x_style_generator_privacy_ignorelist_terms_v1";
 const PRIVACY_RECENT_HITS_SINCE_KEY = "x_style_generator_privacy_recent_hits_since_v1";
+const PRIVACY_RECENT_HITS_DISMISSED_KEY = "x_style_generator_privacy_recent_hits_dismissed_v1";
 const DEFAULT_AUTO_SCHEDULE_DAYS = 3;
 const API_CONFIG_LIMIT = 12;
 const CONFIG_EXPORT_SCHEMA = "pulse-generator-config";
@@ -1584,8 +1585,33 @@ function persistPrivacyRecentHitsSince(value = 0) {
   return timestamp;
 }
 
+function loadDismissedPrivacyRecentHitIds() {
+  return normalizePrivacyAllowlist(readStoredJson(PRIVACY_RECENT_HITS_DISMISSED_KEY, []));
+}
+
+function persistDismissedPrivacyRecentHitIds(ids = []) {
+  const normalizedIds = normalizePrivacyAllowlist(ids);
+  safeSetItem(PRIVACY_RECENT_HITS_DISMISSED_KEY, JSON.stringify(normalizedIds));
+  return normalizedIds;
+}
+
+function dismissPrivacyRecentHitItem(itemId = "") {
+  const resolvedItemId = String(itemId || "").trim();
+  if (!resolvedItemId) {
+    return [];
+  }
+  const dismissedIds = new Set(loadDismissedPrivacyRecentHitIds());
+  dismissedIds.add(resolvedItemId);
+  const nextIds = persistDismissedPrivacyRecentHitIds([...dismissedIds]);
+  homeState.privacyRecentHitItems = homeState.privacyRecentHitItems.filter(
+    (item) => item.id !== resolvedItemId
+  );
+  return nextIds;
+}
+
 function resetPrivacyRecentHitsBaseline(value = Date.now()) {
   const nextValue = persistPrivacyRecentHitsSince(value);
+  persistDismissedPrivacyRecentHitIds([]);
   homeState.privacyRecentHitItems = loadRecentPrivacyHitItems();
   return nextValue;
 }
@@ -1617,7 +1643,7 @@ function persistPrivacyIgnorelistItems(items = []) {
   const normalizedItems = normalizePrivacyIgnorelistItems(items);
   persistStoredPrivacyIgnorelistTerms(normalizedItems.map((item) => item.text));
   homeState.privacyIgnorelistItems = normalizedItems;
-  resetPrivacyRecentHitsBaseline();
+  refreshPrivacyRecentHitItems();
   persistPrivacyPendingCandidates(
     homeState.privacyPendingCandidates,
     homeState.privacyAllowlistItems.map((item) => item.text),
@@ -1649,6 +1675,7 @@ function normalizePrivacyRecentHitItems(items = []) {
 function loadRecentPrivacyHitItems(limit = 80) {
   const logs = window.PulseApiLog?.read ? window.PulseApiLog.read() : [];
   const since = readPrivacyRecentHitsSince();
+  const dismissedIds = new Set(loadDismissedPrivacyRecentHitIds());
   const result = [];
   logs
     .slice()
@@ -1678,7 +1705,19 @@ function loadRecentPrivacyHitItems(limit = 80) {
         });
       });
     });
-  return normalizePrivacyRecentHitItems(result).slice(0, limit);
+  return normalizePrivacyRecentHitItems(result)
+    .filter((item) => !dismissedIds.has(item.id))
+    .slice(0, limit);
+}
+
+function refreshPrivacyRecentHitItems(limit = 80) {
+  const allowlistSet = new Set(homeState.privacyAllowlistItems.map((item) => item.text));
+  const ignorelistSet = new Set(homeState.privacyIgnorelistItems.map((item) => item.text));
+  homeState.privacyRecentHitItems = loadRecentPrivacyHitItems(limit).filter((item) => {
+    const text = String(item.text || "").trim();
+    return text && !allowlistSet.has(text) && !ignorelistSet.has(text);
+  });
+  return homeState.privacyRecentHitItems;
 }
 
 function loadPrivacyAllowlistMetaItems() {
@@ -1796,7 +1835,6 @@ function persistPrivacyAllowlistItems(items = []) {
   nextSettings.privacyAllowlist = normalizedItems.map((item) => item.text);
   persistSettings(nextSettings);
   persistStoredPrivacyAllowlistTerms(nextSettings.privacyAllowlist);
-  resetPrivacyRecentHitsBaseline();
   persistPrivacyAllowlistMetaItems(
     normalizedItems.map((item) => ({
       text: item.text,
@@ -1810,6 +1848,7 @@ function persistPrivacyAllowlistItems(items = []) {
     forceActiveConfig: false
   });
   homeState.privacyAllowlistItems = normalizedItems;
+  refreshPrivacyRecentHitItems();
   persistPrivacyPendingCandidates(
     homeState.privacyPendingCandidates,
     normalizedItems.map((item) => item.text),
@@ -2105,7 +2144,7 @@ function renderPrivacyRecentSummary() {
   }
   const total = homeState.privacyRecentHitItems.length;
   privacyAppRecentSummaryEl.textContent = total
-    ? `最近命中了 ${total} 个真实屏蔽词；这里只显示最近一次白名单/排除词调整之后的新命中。`
+    ? `最近命中了 ${total} 个真实屏蔽词；加入白名单或加入排除后，只会移除对应词，不会整页清空。`
     : "当前还没有最近实际屏蔽词记录；先触发一次 API 请求再回来查看。";
 }
 
@@ -2481,6 +2520,8 @@ function addRecentPrivacyHitToAllowlist(itemId) {
     ],
     "scan"
   );
+  dismissPrivacyRecentHitItem(itemId);
+  renderPrivacyApp();
   setPrivacyAppStatus(`已将“${nextText}”加入白名单。`, "success");
 }
 
@@ -2492,6 +2533,8 @@ function addRecentPrivacyHitToIgnorelist(itemId) {
     return;
   }
   addPrivacyIgnorelistItemsByLines([nextText]);
+  dismissPrivacyRecentHitItem(itemId);
+  renderPrivacyApp();
   setPrivacyAppStatus(`已将“${nextText}”加入自动屏蔽排除词。`, "success");
 }
 
@@ -2708,7 +2751,7 @@ function initPrivacyAppState() {
   homeState.settings = loadSettings({ forceActiveConfig: false });
   homeState.privacyAllowlistItems = loadPrivacyAllowlistItems();
   homeState.privacyIgnorelistItems = loadPrivacyIgnorelistItems();
-  homeState.privacyRecentHitItems = loadRecentPrivacyHitItems();
+  refreshPrivacyRecentHitItems();
   homeState.privacyPendingCandidates = loadPrivacyPendingCandidates(
     homeState.privacyAllowlistItems.map((item) => item.text),
     homeState.privacyIgnorelistItems.map((item) => item.text)

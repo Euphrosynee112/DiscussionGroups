@@ -2214,6 +2214,26 @@ body.embedded {
   color: #b0b0b0;
 }
 
+.messages-memory-card__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.messages-memory-card__action {
+  border: none;
+  background: rgba(15, 23, 42, 0.06);
+  color: #4b5563;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.messages-memory-card__action:hover {
+  background: rgba(15, 23, 42, 0.1);
+}
+
 .messages-journal-modal {
   padding: 18px;
   background: rgba(15, 23, 42, 0.18);

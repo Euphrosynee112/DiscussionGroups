@@ -529,6 +529,7 @@ const messagesMemoryEditorCloseBtnEl = document.querySelector("#messages-memory-
 const messagesMemoryEditorCancelBtnEl = document.querySelector(
   "#messages-memory-editor-cancel-btn"
 );
+const messagesMemoryEditorTitleEl = document.querySelector("#messages-memory-editor-title");
 const messagesMemoryEditorFormEl = document.querySelector("#messages-memory-editor-form");
 const messagesMemoryEditorContactSelectEl = document.querySelector(
   "#messages-memory-editor-contact-select"
@@ -539,6 +540,7 @@ const messagesMemoryEditorContentInputEl = document.querySelector(
 const messagesMemoryEditorImportanceInputEl = document.querySelector(
   "#messages-memory-editor-importance-input"
 );
+const messagesMemoryEditorSaveBtnEl = document.querySelector("#messages-memory-editor-save-btn");
 const messagesMemoryEditorStatusEl = document.querySelector("#messages-memory-editor-status");
 const messagesMemorySettingsModalEl = document.querySelector("#messages-memory-settings-modal");
 const messagesMemorySettingsCloseBtnEl = document.querySelector(
@@ -649,6 +651,7 @@ const state = {
   memoryEditorOpen: false,
   memorySettingsOpen: false,
   memoryStandaloneLaunch: false,
+  memoryEditingId: "",
   memorySelectedContactId: "",
   memoryQuery: "",
   memoryTab: "all",
@@ -3496,6 +3499,14 @@ function getMemoriesForContact(contactId = "") {
         (right.importance || 0) - (left.importance || 0) ||
         (right.updatedAt || 0) - (left.updatedAt || 0)
     );
+}
+
+function getMemoryEntryById(memoryId = "") {
+  const resolvedMemoryId = String(memoryId || "").trim();
+  if (!resolvedMemoryId) {
+    return null;
+  }
+  return state.memories.find((item) => item.id === resolvedMemoryId) || null;
 }
 
 function formatMemoryDate(createdAt) {
@@ -11886,7 +11897,7 @@ function renderMemoryViewer() {
   messagesMemoryListEl.innerHTML = entries
     .map(
       (entry) => `
-        <article class="messages-memory-card">
+        <article class="messages-memory-card" data-memory-id="${escapeHtml(entry.id)}">
           <div class="messages-memory-card__head">
             <span class="messages-memory-card__badge messages-memory-card__badge--${escapeHtml(
               entry.type
@@ -11908,6 +11919,16 @@ function renderMemoryViewer() {
               entry.source === "manual" ? "手动添加" : "AI 提取"
             }</span>
           </div>
+          <div class="messages-memory-card__actions">
+            <button
+              class="messages-memory-card__action"
+              type="button"
+              data-action="edit-memory-item"
+              data-memory-id="${escapeHtml(entry.id)}"
+            >
+              编辑
+            </button>
+          </div>
         </article>
       `
     )
@@ -11915,13 +11936,27 @@ function renderMemoryViewer() {
 }
 
 function applyMemoryEditorToForm(preferredContactId = state.memorySelectedContactId) {
-  const selectedContactId = resolveSelectedMemoryContactId(preferredContactId);
+  const editingEntry = getMemoryEntryById(state.memoryEditingId);
+  const selectedContactId = resolveSelectedMemoryContactId(
+    editingEntry?.contactId || preferredContactId
+  );
   renderMemoryEditorContactOptions(selectedContactId);
+  if (messagesMemoryEditorTitleEl) {
+    messagesMemoryEditorTitleEl.textContent = editingEntry ? "编辑记忆" : "新增核心记忆";
+  }
+  if (messagesMemoryEditorSaveBtnEl) {
+    messagesMemoryEditorSaveBtnEl.textContent = editingEntry ? "保存修改" : "保存";
+  }
+  if (messagesMemoryEditorContactSelectEl) {
+    messagesMemoryEditorContactSelectEl.disabled = Boolean(editingEntry);
+  }
   if (messagesMemoryEditorContentInputEl) {
-    messagesMemoryEditorContentInputEl.value = "";
+    messagesMemoryEditorContentInputEl.value = editingEntry ? String(editingEntry.content || "") : "";
   }
   if (messagesMemoryEditorImportanceInputEl) {
-    messagesMemoryEditorImportanceInputEl.value = String(DEFAULT_CORE_MEMORY_THRESHOLD);
+    messagesMemoryEditorImportanceInputEl.value = String(
+      editingEntry?.importance || DEFAULT_CORE_MEMORY_THRESHOLD
+    );
   }
   setMemoryEditorStatus("");
 }
@@ -11948,8 +11983,13 @@ function setMemoryViewerOpen(isOpen, preferredContactId = "") {
   updateBodyModalState();
 }
 
-function setMemoryEditorOpen(isOpen, preferredContactId = state.memorySelectedContactId) {
+function setMemoryEditorOpen(
+  isOpen,
+  preferredContactId = state.memorySelectedContactId,
+  memoryId = ""
+) {
   state.memoryEditorOpen = Boolean(isOpen);
+  state.memoryEditingId = state.memoryEditorOpen ? String(memoryId || "").trim() : "";
   if (messagesMemoryEditorModalEl) {
     messagesMemoryEditorModalEl.hidden = !state.memoryEditorOpen;
     messagesMemoryEditorModalEl.setAttribute("aria-hidden", String(!state.memoryEditorOpen));
@@ -12021,6 +12061,36 @@ function saveManualCoreMemory(draft = {}) {
   resolveSelectedMemoryContactId(contactId);
   renderMemoryViewer();
   return entry;
+}
+
+function saveMemoryEntryDraft(draft = {}) {
+  const editingEntry = getMemoryEntryById(draft.id);
+  if (!editingEntry) {
+    return saveManualCoreMemory(draft);
+  }
+
+  const contactId = String(editingEntry.contactId || "").trim();
+  const content = String(draft.content || "").trim();
+  if (!contactId || !getContactById(contactId)) {
+    throw new Error("当前记忆关联的角色不存在。");
+  }
+  if (!content) {
+    throw new Error("请输入记忆内容。");
+  }
+
+  const updatedEntry = normalizeMessageMemory({
+    ...editingEntry,
+    contactId,
+    content,
+    importance: draft.importance,
+    updatedAt: Date.now()
+  });
+  const remainingMemories = state.memories.filter((item) => item.id !== editingEntry.id);
+  state.memories = mergeMemories(remainingMemories, [updatedEntry]);
+  persistMessageMemories();
+  resolveSelectedMemoryContactId(contactId);
+  renderMemoryViewer();
+  return updatedEntry;
 }
 
 function applyChatPromptSettingsToForm(promptSettings) {
@@ -15002,6 +15072,24 @@ function attachEvents() {
     });
   }
 
+  if (messagesMemoryListEl) {
+    messagesMemoryListEl.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      const actionEl = target.closest("[data-action='edit-memory-item']");
+      if (!(actionEl instanceof HTMLElement)) {
+        return;
+      }
+      const memoryId = String(actionEl.dataset.memoryId || "").trim();
+      if (!getMemoryEntryById(memoryId)) {
+        return;
+      }
+      setMemoryEditorOpen(true, state.memorySelectedContactId, memoryId);
+    });
+  }
+
   if (messagesMemoryEditorCloseBtnEl) {
     messagesMemoryEditorCloseBtnEl.addEventListener("click", () => {
       setMemoryEditorOpen(false);
@@ -15018,13 +15106,20 @@ function attachEvents() {
     messagesMemoryEditorFormEl.addEventListener("submit", (event) => {
       event.preventDefault();
       try {
-        const entry = saveManualCoreMemory({
+        const isEditing = Boolean(getMemoryEntryById(state.memoryEditingId));
+        const entry = saveMemoryEntryDraft({
+          id: state.memoryEditingId,
           contactId: messagesMemoryEditorContactSelectEl?.value,
           content: messagesMemoryEditorContentInputEl?.value,
           importance: messagesMemoryEditorImportanceInputEl?.value
         });
-        setMemoryEditorStatus(`已为 ${getContactById(entry.contactId)?.name || "该角色"} 保存核心记忆。`, "success");
-        setMemoryStatus("核心记忆已保存。", "success");
+        setMemoryEditorStatus(
+          isEditing
+            ? `已更新 ${getContactById(entry.contactId)?.name || "该角色"} 的记忆。`
+            : `已为 ${getContactById(entry.contactId)?.name || "该角色"} 保存核心记忆。`,
+          "success"
+        );
+        setMemoryStatus(isEditing ? "记忆已更新。" : "核心记忆已保存。", "success");
         window.setTimeout(() => {
           setMemoryEditorOpen(false);
         }, 180);
