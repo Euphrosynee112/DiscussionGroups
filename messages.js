@@ -2041,6 +2041,65 @@ function resolveStoredTimestampLabel(createdAt, fallback = "") {
   return String(fallback || "").trim();
 }
 
+function formatConversationElapsedDuration(durationMs = 0) {
+  const resolvedDurationMs = Math.max(0, Number(durationMs) || 0);
+  const totalMinutes = Math.floor(resolvedDurationMs / 60000);
+  if (totalMinutes <= 0) {
+    return "不到 1 分钟";
+  }
+  if (totalMinutes < 60) {
+    return `${totalMinutes} 分钟`;
+  }
+
+  const totalHours = Math.floor(totalMinutes / 60);
+  const remainingMinutes = totalMinutes % 60;
+  if (totalHours < 24) {
+    if (totalHours < 6 && remainingMinutes > 0) {
+      return `${totalHours} 小时 ${remainingMinutes} 分钟`;
+    }
+    return `${totalHours} 小时`;
+  }
+
+  const totalDays = Math.floor(totalHours / 24);
+  const remainingHours = totalHours % 24;
+  if (totalDays < 7 && remainingHours > 0) {
+    return `${totalDays} 天 ${remainingHours} 小时`;
+  }
+  return `${totalDays} 天`;
+}
+
+function buildContinuationIdleContext(conversation, settings = loadSettings()) {
+  const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];
+  const lastAssistantMessage = [...messages]
+    .reverse()
+    .find((message) => message?.role === "assistant");
+  const lastAssistantCreatedAt = Number(lastAssistantMessage?.createdAt) || 0;
+  if (!Number.isFinite(lastAssistantCreatedAt) || lastAssistantCreatedAt <= 0) {
+    return "";
+  }
+
+  const promptNow = getPromptNow(settings);
+  const manualTimeSettings =
+    typeof window.PulsePromptConfig?.normalizeManualTimeSettings === "function"
+      ? window.PulsePromptConfig.normalizeManualTimeSettings(
+          settings?.manualTimeSettings,
+          promptNow
+        )
+      : null;
+  const promptOffsetMs = Boolean(manualTimeSettings?.enabled)
+    ? Number(manualTimeSettings?.offsetMs) || 0
+    : 0;
+  const promptLastAssistantTimestamp = lastAssistantCreatedAt + promptOffsetMs;
+  const elapsedDurationLabel = formatConversationElapsedDuration(
+    promptNow.getTime() - promptLastAssistantTimestamp
+  );
+
+  return [
+    `距离你上一次发出回复，用户已经有 ${elapsedDurationLabel} 没有回你消息了。`,
+    "续写时把这段等待感一起纳入语气判断：如果已经隔了一会儿，再开口要更像是过了一阵子后自然补一句，而不是紧贴上一条连续连发。"
+  ].join("\n");
+}
+
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -6233,6 +6292,9 @@ function buildConversationSystemPrompt(
     hotTopicsContext ? `当前也会影响你判断的论坛关注语境：\n${hotTopicsContext}` : "",
     memoryContexts.scene ? `你在相关话题里会自然想起的情景记忆：\n${memoryContexts.scene}` : ""
   ].filter(Boolean);
+  const continuationIdleContext = requestOptions.continueAssistant
+    ? buildContinuationIdleContext(requestOptions.conversation, settings)
+    : "";
 
   return buildStructuredPromptSections(
     "chat_conversation",
@@ -6258,9 +6320,12 @@ function buildConversationSystemPrompt(
           ? [
               "当前用户没有发送新消息；这是一次主动续写请求。",
               "请把它理解成：对方希望你顺着刚才的聊天氛围、情绪或话题，自然继续再发几句，而不是等待新的提问。",
+              continuationIdleContext,
               "续写时不要重复上一条刚说过的话，也不要机械总结；像真实聊天里临时又想起一件事、补一句、追一句，或自然延伸当前话题。",
               "续写必须先给出自然聊天正文；如果你只是想更新状态、但没有自然正文可说，那就不要输出 presence_update。"
-            ].join("\n")
+            ]
+              .filter(Boolean)
+              .join("\n")
           : "",
         regenerate_hint: requestOptions.regenerate
           ? [
