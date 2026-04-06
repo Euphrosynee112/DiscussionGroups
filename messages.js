@@ -20,6 +20,7 @@ const MESSAGE_COMMON_PLACES_KEY = "x_style_generator_common_places_v1";
 const MESSAGE_PRESENCE_STATE_KEY = "x_style_generator_presence_state_v1";
 const MESSAGE_REPLY_TASKS_KEY = "x_style_generator_message_reply_tasks_v1";
 const MESSAGE_REPLY_RECOVERY_KEY = "x_style_generator_message_reply_recovery_v1";
+const MESSAGE_ACTIVE_VIEW_KEY = "x_style_generator_message_active_view_v1";
 const DEFAULT_TEMPERATURE = 0.85;
 const DEFAULT_MESSAGE_HISTORY_ROUNDS = 6;
 const MAX_MESSAGE_HISTORY_ROUNDS = 20;
@@ -828,6 +829,58 @@ function loadReplyTasks() {
   } catch (_error) {
     return [];
   }
+}
+
+function loadActiveConversationView() {
+  const raw = safeGetItem(MESSAGE_ACTIVE_VIEW_KEY);
+  if (!raw) {
+    return {
+      conversationId: "",
+      visible: false,
+      updatedAt: 0
+    };
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      conversationId: String(parsed?.conversationId || "").trim(),
+      visible: Boolean(parsed?.visible),
+      updatedAt: Number(parsed?.updatedAt) || 0
+    };
+  } catch (_error) {
+    return {
+      conversationId: "",
+      visible: false,
+      updatedAt: 0
+    };
+  }
+}
+
+function persistActiveConversationView(entry = {}) {
+  const nextEntry = entry && typeof entry === "object" ? entry : {};
+  safeSetItem(
+    MESSAGE_ACTIVE_VIEW_KEY,
+    JSON.stringify({
+      conversationId: String(nextEntry.conversationId || "").trim(),
+      visible: Boolean(nextEntry.visible),
+      updatedAt: Number(nextEntry.updatedAt) || Date.now()
+    })
+  );
+}
+
+function syncActiveConversationViewMarker() {
+  if (isBackgroundMessagesWorker()) {
+    return;
+  }
+  persistActiveConversationView({
+    conversationId:
+      state.activeTab === "chat" && !document.hidden ? String(state.activeConversationId || "").trim() : "",
+    visible:
+      state.activeTab === "chat" &&
+      !document.hidden &&
+      Boolean(String(state.activeConversationId || "").trim()),
+    updatedAt: Date.now()
+  });
 }
 
 function loadReplyRecoveryMap() {
@@ -7597,16 +7650,8 @@ async function appendAssistantReplyBatch(
       expectedReplyContextVersion: parsedExpectedReplyContextVersion
     });
     if (state.activeTab === "chat" && appendedCurrentMessage) {
-      const appendedIncrementally = appendConversationMessageToVisibleHistory(
-        appendedCurrentMessage,
-        nextConversation,
-        promptSettings,
-        revealRenderOptions
-      );
-      if (!appendedIncrementally) {
-        queueConversationRenderOptions(revealRenderOptions);
-        renderMessagesPage();
-      }
+      queueConversationRenderOptions(revealRenderOptions);
+      renderMessagesPage();
       await waitForNextAnimationFrame();
     }
   }
@@ -10017,6 +10062,7 @@ function renderConversationDetail(options = {}) {
       </form>
     </section>
   `;
+  syncActiveConversationViewMarker();
 
   const historyEl = messagesContentEl.querySelector(".messages-conversation__history");
   if (historyEl) {
@@ -10226,6 +10272,7 @@ function renderMessagesPageInner() {
     renderConversationDetail(consumeConversationRenderOptions());
     return;
   }
+  syncActiveConversationViewMarker();
 
   if (state.activeTab === "chat") {
     renderChatList();
@@ -10965,6 +11012,13 @@ function setChatGlobalSettingsOpen(isOpen) {
 
 function shouldShowConversationNotification(conversationId = "", createdMessages = []) {
   if (!Array.isArray(createdMessages) || !createdMessages.length) {
+    return false;
+  }
+  const activeView = loadActiveConversationView();
+  if (
+    activeView.visible &&
+    String(activeView.conversationId || "").trim() === String(conversationId || "").trim()
+  ) {
     return false;
   }
   return !(
@@ -15547,6 +15601,7 @@ function attachEvents() {
   });
 
   window.addEventListener("pagehide", () => {
+    syncActiveConversationViewMarker();
     handoffForegroundReplyTaskToBackground();
     flushPendingAssistantReveal("", {
       suppressRender: true
@@ -15554,6 +15609,7 @@ function attachEvents() {
   });
 
   document.addEventListener("visibilitychange", () => {
+    syncActiveConversationViewMarker();
     if (document.hidden) {
       flushPendingAssistantReveal("", {
         suppressRender: true
