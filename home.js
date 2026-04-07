@@ -2,8 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260406-213101";
-const APP_BUILD_UPDATED_AT = "2026-04-06 21:31:01";
+const APP_BUILD_VERSION = "20260407-104444";
+const APP_BUILD_UPDATED_AT = "2026-04-07 10:44:44";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -71,6 +71,7 @@ const homeTranslationApiConfigSelectEl = document.querySelector(
 );
 const homeSummaryApiEnabledEl = document.querySelector("#home-summary-api-enabled");
 const homeSummaryApiConfigSelectEl = document.querySelector("#home-summary-api-config-select");
+const homeNegativePromptInputEl = document.querySelector("#home-negative-prompt-input");
 const homeConfigExportBtn = document.querySelector("#home-config-export-btn");
 const homeConfigImportBtn = document.querySelector("#home-config-import-btn");
 const homeConfigImportInput = document.querySelector("#home-config-import-input");
@@ -141,6 +142,7 @@ const DEFAULT_SETTINGS = {
   translationApiConfigId: "",
   summaryApiEnabled: false,
   summaryApiConfigId: "",
+  negativePromptConstraints: [],
   privacyAllowlist: [],
   manualTimeSettings: {
     enabled: false,
@@ -326,6 +328,24 @@ function normalizePrivacyAllowlist(value) {
     });
 }
 
+function normalizeNegativePromptConstraints(value) {
+  const lines = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/\r?\n/g)
+      : [];
+  const unique = new Set();
+  return lines
+    .map((item) => String(item || "").trim())
+    .filter((item) => {
+      if (!item || unique.has(item)) {
+        return false;
+      }
+      unique.add(item);
+      return true;
+    });
+}
+
 function normalizeChatGlobalSettings(source = {}) {
   const resolved = source && typeof source === "object" ? source : {};
   return {
@@ -435,6 +455,9 @@ function buildNormalizedSettingsSnapshot(source, options = {}) {
         getDefaultModelByMode(merged.mode);
   merged.apiConfigs = normalizeApiConfigs(
     merged.apiConfigs || source?.apiPresets || source?.apiProfiles || []
+  );
+  merged.negativePromptConstraints = normalizeNegativePromptConstraints(
+    merged.negativePromptConstraints || source?.negativePromptConstraints || []
   );
 
   const activeConfig =
@@ -3920,6 +3943,11 @@ function applySettingsToHomeForm(settings) {
         ? ""
         : settings.model || getDefaultModelByMode(settings.mode);
   }
+  if (homeNegativePromptInputEl) {
+    homeNegativePromptInputEl.value = normalizeNegativePromptConstraints(
+      settings.negativePromptConstraints || []
+    ).join("\n");
+  }
   updateHomeModeUI();
   renderHomeApiConfigList();
   syncHomeActiveConfigSummary();
@@ -3936,6 +3964,7 @@ function readHomeSettingsFromForm() {
       mode === "generic"
         ? ""
         : String(homeApiModelInput?.value || "").trim() || getDefaultModelByMode(mode),
+    negativePromptConstraints: normalizeNegativePromptConstraints(homeNegativePromptInputEl?.value),
     privacyAllowlist: normalizePrivacyAllowlist(homeState.settings.privacyAllowlist || []),
     apiConfigs: normalizeApiConfigs(homeState.settings.apiConfigs)
   };
@@ -5343,6 +5372,12 @@ function attachHomeSettingsEvents() {
         saveCurrentHomeSettings({ silent: true });
       });
     });
+
+  if (homeNegativePromptInputEl) {
+    homeNegativePromptInputEl.addEventListener("change", () => {
+      saveCurrentHomeSettings({ silent: true });
+    });
+  }
 
   if (homeApiConfigSaveBtn) {
     homeApiConfigSaveBtn.addEventListener("click", () => {

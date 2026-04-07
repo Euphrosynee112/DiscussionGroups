@@ -74,6 +74,7 @@ const DEFAULT_SETTINGS = {
   translationApiConfigId: "",
   summaryApiEnabled: false,
   summaryApiConfigId: "",
+  negativePromptConstraints: [],
   privacyAllowlist: [],
   worldview: DEFAULT_WORLDVIEW,
   chatGlobalSettings: {
@@ -2324,6 +2325,119 @@ function readAvatarAsDataUrl(file, options = {}) {
   });
 }
 
+function readImageFromDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("图片读取失败"));
+    image.src = String(dataUrl || "");
+  });
+}
+
+async function recompressAvatarDataUrl(dataUrl, options = {}) {
+  const source = String(dataUrl || "").trim();
+  if (!source) {
+    return "";
+  }
+  if (!/^data:image\//i.test(source)) {
+    return source;
+  }
+
+  const avatarOptions = options && typeof options === "object" ? options : {};
+  const maxSide = Math.max(avatarOptions.maxSide || 240, 96);
+  const quality = Math.min(0.9, Math.max(0.36, Number(avatarOptions.quality) || 0.62));
+  const image = await readImageFromDataUrl(source);
+  const longestSide = Math.max(image.width || 0, image.height || 0) || maxSide;
+  const scale = Math.min(1, maxSide / longestSide);
+  const width = Math.max(1, Math.round((image.width || maxSide) * scale));
+  const height = Math.max(1, Math.round((image.height || maxSide) * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return source;
+  }
+  context.clearRect(0, 0, width, height);
+  context.drawImage(image, 0, 0, width, height);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
+const AVATAR_PERSIST_RETRY_STEPS = [
+  { maxSide: 220, quality: 0.68 },
+  { maxSide: 180, quality: 0.58 },
+  { maxSide: 144, quality: 0.5 },
+  { maxSide: 120, quality: 0.42 }
+];
+
+async function persistProfileWithAvatarFallback(profile) {
+  const nextProfile = profile && typeof profile === "object" ? { ...profile } : { ...DEFAULT_PROFILE };
+  if (persistProfile(nextProfile)) {
+    return { persisted: true, compressed: false, profile: nextProfile };
+  }
+
+  const originalAvatar = String(nextProfile.avatarImage || "").trim();
+  if (!originalAvatar) {
+    return { persisted: false, compressed: false, profile: nextProfile };
+  }
+
+  for (const step of AVATAR_PERSIST_RETRY_STEPS) {
+    const compressedAvatar = await recompressAvatarDataUrl(originalAvatar, step);
+    if (!compressedAvatar || compressedAvatar === nextProfile.avatarImage) {
+      continue;
+    }
+    nextProfile.avatarImage = compressedAvatar;
+    if (persistProfile(nextProfile)) {
+      return { persisted: true, compressed: true, profile: nextProfile };
+    }
+  }
+
+  return {
+    persisted: false,
+    compressed: String(nextProfile.avatarImage || "").trim() !== originalAvatar,
+    profile: nextProfile
+  };
+}
+
+async function persistContactsWithAvatarFallback(contactId = "") {
+  if (persistContacts()) {
+    return { persisted: true, compressed: false };
+  }
+
+  const normalizedContactId = String(contactId || "").trim();
+  const targetIndex = state.contacts.findIndex((item) => item.id === normalizedContactId);
+  if (targetIndex < 0) {
+    return { persisted: false, compressed: false };
+  }
+  const originalAvatar = String(state.contacts[targetIndex]?.avatarImage || "").trim();
+  if (!originalAvatar) {
+    return { persisted: false, compressed: false };
+  }
+
+  for (const step of AVATAR_PERSIST_RETRY_STEPS) {
+    const compressedAvatar = await recompressAvatarDataUrl(originalAvatar, step);
+    if (!compressedAvatar || compressedAvatar === state.contacts[targetIndex].avatarImage) {
+      continue;
+    }
+    state.contacts[targetIndex] = normalizeContact({
+      ...state.contacts[targetIndex],
+      avatarImage: compressedAvatar,
+      updatedAt: Date.now()
+    }, targetIndex);
+    if (state.contactEditorId === normalizedContactId) {
+      state.contactEditorAvatarImage = compressedAvatar;
+    }
+    if (persistContacts()) {
+      return { persisted: true, compressed: true };
+    }
+  }
+
+  return {
+    persisted: false,
+    compressed: String(state.contacts[targetIndex]?.avatarImage || "").trim() !== originalAvatar
+  };
+}
+
 function normalizePositiveInteger(value, fallback) {
   const parsed = Number.parseInt(value, 10);
   if (Number.isFinite(parsed) && parsed > 0) {
@@ -2340,8 +2454,43 @@ function normalizeObjectArray(value) {
   return Array.isArray(value) ? value.filter((item) => item && typeof item === "object") : [];
 }
 
-function prependGlobalPromptGuard(text) {
-  return String(text || "").trim();
+function normalizeNegativePromptConstraints(value) {
+  const lines = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/\r?\n/g)
+      : [];
+  const unique = new Set();
+  return lines
+    .map((item) => String(item || "").trim())
+    .filter((item) => {
+      if (!item || unique.has(item)) {
+        return false;
+      }
+      unique.add(item);
+      return true;
+    });
+}
+
+function buildNegativePromptConstraintBlock(settings = loadSettings()) {
+  const items = normalizeNegativePromptConstraints(settings?.negativePromptConstraints || []);
+  if (!items.length) {
+    return "";
+  }
+  return [
+    "<negative_constraints>",
+    "负向约束词汇和表达：",
+    ...items.map((item, index) => `${index + 1}. ${item}`),
+    "以上内容是需要明确避免的词汇、句式、口头禅、例句或表达方式。即使语义相近，也尽量不要沿用这些写法；若必须表达相似意思，请换一种更自然的新说法。",
+    "</negative_constraints>"
+  ].join("\n");
+}
+
+function prependGlobalPromptGuard(text, settings = loadSettings()) {
+  return [buildNegativePromptConstraintBlock(settings), String(text || "").trim()]
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
 }
 
 function buildPromptSectionText(value, fallback = "") {
@@ -2395,7 +2544,10 @@ function buildStructuredPromptSections(promptTypeOrSections = {}, maybeSections 
       maybeOptions && typeof maybeOptions === "object" ? maybeOptions : {}
     );
     if (configuredPrompt) {
-      return prependGlobalPromptGuard(configuredPrompt);
+      return prependGlobalPromptGuard(
+        configuredPrompt,
+        maybeOptions && typeof maybeOptions === "object" ? maybeOptions.settings : undefined
+      );
     }
   }
   const resolvedSections =
@@ -2432,7 +2584,8 @@ function buildStructuredPromptSections(promptTypeOrSections = {}, maybeSections 
           fallbackSections[sectionKey]
         )}\n</${sectionKey}>`;
       })
-      .join("\n\n")
+      .join("\n\n"),
+    maybeOptions && typeof maybeOptions === "object" ? maybeOptions.settings : undefined
   );
 }
 
@@ -2973,6 +3126,9 @@ function buildNormalizedSettingsSnapshot(source) {
   );
   merged.messagePromptSettings = normalizeMessagePromptSettings(
     merged.messagePromptSettings || source?.messagePromptSettings || {}
+  );
+  merged.negativePromptConstraints = normalizeNegativePromptConstraints(
+    merged.negativePromptConstraints || source?.negativePromptConstraints || []
   );
   merged.privacyAllowlist = normalizePrivacyAllowlist(
     merged.privacyAllowlist || source?.privacyAllowlist || []
@@ -14569,8 +14725,8 @@ function attachEvents() {
       }
       try {
         state.profileEditorAvatarImage = await readAvatarAsDataUrl(file, {
-          maxSide: 280,
-          quality: 0.74
+          maxSide: 260,
+          quality: 0.72
         });
         renderProfileEditorAvatarPreview();
         setEditorStatus(messagesProfileEditorStatusEl, "头像图片已更新。", "success");
@@ -14589,11 +14745,12 @@ function attachEvents() {
   }
 
   if (messagesProfileFormEl) {
-    messagesProfileFormEl.addEventListener("submit", (event) => {
+    messagesProfileFormEl.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const draft = getCurrentProfileDraft();
-      state.profile = draft;
-      const persisted = persistProfile(draft);
+      const saveResult = await persistProfileWithAvatarFallback(getCurrentProfileDraft());
+      state.profile = saveResult.profile;
+      state.profileEditorAvatarImage = String(saveResult.profile?.avatarImage || "").trim();
+      const persisted = saveResult.persisted;
       if (persisted) {
         syncProfileStateFromStorage();
       }
@@ -14607,8 +14764,14 @@ function attachEvents() {
         setMessagesStatus("个人资料已更新到当前页面，但本地缓存写入失败。", "error");
         return;
       }
-      setEditorStatus(messagesProfileEditorStatusEl, "资料已保存。", "success");
-      setMessagesStatus("个人资料已同步更新。", "success");
+      const successMessage = saveResult.compressed
+        ? "资料已保存，头像已自动压缩以适配本地缓存。"
+        : "资料已保存。";
+      setEditorStatus(messagesProfileEditorStatusEl, successMessage, "success");
+      setMessagesStatus(
+        saveResult.compressed ? "个人资料已保存，头像已自动压缩。" : "个人资料已同步更新。",
+        "success"
+      );
       window.setTimeout(() => {
         setProfileEditorOpen(false);
       }, 220);
@@ -14643,8 +14806,8 @@ function attachEvents() {
       }
       try {
         state.contactEditorAvatarImage = await readAvatarAsDataUrl(file, {
-          maxSide: 280,
-          quality: 0.74
+          maxSide: 240,
+          quality: 0.7
         });
         renderContactEditorAvatarPreview();
         setEditorStatus(messagesContactEditorStatusEl, "头像图片已更新。", "success");
@@ -14663,7 +14826,7 @@ function attachEvents() {
   }
 
   if (messagesContactFormEl) {
-    messagesContactFormEl.addEventListener("submit", (event) => {
+    messagesContactFormEl.addEventListener("submit", async (event) => {
       event.preventDefault();
       const draft = getCurrentContactDraft();
       const existingIndex = state.contacts.findIndex((item) => item.id === draft.id);
@@ -14672,10 +14835,11 @@ function attachEvents() {
       } else {
         state.contacts = [draft, ...state.contacts];
       }
-      const persisted = persistContacts();
-      syncConversationSnapshots(draft);
+      const saveResult = await persistContactsWithAvatarFallback(draft.id);
+      const savedContact = getContactById(draft.id) || draft;
+      syncConversationSnapshots(savedContact);
       renderMessagesPage();
-      if (!persisted) {
+      if (!saveResult.persisted) {
         setEditorStatus(
           messagesContactEditorStatusEl,
           "联系人已加入当前页面，但本地缓存写入失败，请清理缓存后再试一次。",
@@ -14684,7 +14848,11 @@ function attachEvents() {
         setMessagesStatus("联系人已加入当前页面，但本地缓存写入失败。", "error");
         return;
       }
-      setEditorStatus(messagesContactEditorStatusEl, "联系人已保存。", "success");
+      setEditorStatus(
+        messagesContactEditorStatusEl,
+        saveResult.compressed ? "联系人已保存，头像已自动压缩以适配本地缓存。" : "联系人已保存。",
+        "success"
+      );
       setMessagesStatus("联系人资料已更新。", "success");
       window.setTimeout(() => {
         setContactEditorOpen(false);

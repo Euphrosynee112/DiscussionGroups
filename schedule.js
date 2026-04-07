@@ -35,6 +35,7 @@ const DEFAULT_SETTINGS = {
   model: DEFAULT_DEEPSEEK_MODEL,
   apiConfigs: [],
   activeApiConfigId: "",
+  negativePromptConstraints: [],
   privacyAllowlist: [],
   messagePromptSettings: {
     historyRounds: DEFAULT_MESSAGE_HISTORY_ROUNDS
@@ -453,6 +454,9 @@ function buildNormalizedSettingsSnapshot(source) {
       : String(merged.model || getDefaultModelByMode(merged.mode)).trim() ||
         getDefaultModelByMode(merged.mode);
   merged.apiConfigs = normalizeApiConfigs(merged.apiConfigs || []);
+  merged.negativePromptConstraints = normalizeNegativePromptConstraints(
+    merged.negativePromptConstraints || source?.negativePromptConstraints || []
+  );
   const activeConfig =
     merged.apiConfigs.find((item) => item.id === merged.activeApiConfigId) || null;
   if (!activeConfig) {
@@ -958,8 +962,11 @@ function formatTimeLabel(timestamp = Date.now()) {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
-function prependGlobalPromptGuard(text) {
-  return String(text || "").trim();
+function prependGlobalPromptGuard(text, settings = loadSettings()) {
+  return [buildNegativePromptConstraintBlock(settings), String(text || "").trim()]
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
 }
 
 function buildPromptSectionText(value, fallback = "") {
@@ -972,6 +979,38 @@ function buildPromptSectionText(value, fallback = "") {
   return text || String(fallback || "").trim();
 }
 
+function normalizeNegativePromptConstraints(value) {
+  const lines = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/\r?\n/g)
+      : [];
+  const unique = new Set();
+  return lines
+    .map((item) => String(item || "").trim())
+    .filter((item) => {
+      if (!item || unique.has(item)) {
+        return false;
+      }
+      unique.add(item);
+      return true;
+    });
+}
+
+function buildNegativePromptConstraintBlock(settings = loadSettings()) {
+  const items = normalizeNegativePromptConstraints(settings?.negativePromptConstraints || []);
+  if (!items.length) {
+    return "";
+  }
+  return [
+    "<negative_constraints>",
+    "负向约束词汇和表达：",
+    ...items.map((item, index) => `${index + 1}. ${item}`),
+    "以上内容是需要明确避免的词汇、句式、口头禅、例句或表达方式。即使语义相近，也尽量不要沿用这些写法；若必须表达相似意思，请换一种更自然的新说法。",
+    "</negative_constraints>"
+  ].join("\n");
+}
+
 function buildStructuredPromptSections(promptTypeOrSections = {}, maybeSections = null, maybeOptions = {}) {
   if (typeof promptTypeOrSections === "string" && window.PulsePromptConfig?.buildPrompt) {
     const configuredPrompt = window.PulsePromptConfig.buildPrompt(
@@ -980,7 +1019,10 @@ function buildStructuredPromptSections(promptTypeOrSections = {}, maybeSections 
       maybeOptions && typeof maybeOptions === "object" ? maybeOptions : {}
     );
     if (configuredPrompt) {
-      return prependGlobalPromptGuard(configuredPrompt);
+      return prependGlobalPromptGuard(
+        configuredPrompt,
+        maybeOptions && typeof maybeOptions === "object" ? maybeOptions.settings : undefined
+      );
     }
   }
   const resolvedSections =
@@ -1003,7 +1045,8 @@ function buildStructuredPromptSections(promptTypeOrSections = {}, maybeSections 
         resolvedSections.outputStandard,
         "只输出符合要求的最终结果。"
       )}\n</output_standard>`
-    ].join("\n\n")
+    ].join("\n\n"),
+    maybeOptions && typeof maybeOptions === "object" ? maybeOptions.settings : undefined
   );
 }
 
