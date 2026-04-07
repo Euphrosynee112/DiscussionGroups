@@ -1106,7 +1106,29 @@ button {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
+}
+
+.home-rules-workspace__actions {
+  margin-left: auto;
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+}
+
+.home-rules-workspace__summary {
+  margin: 0;
+  max-width: 320px;
+  text-align: right;
+}
+
+.home-rules-workspace__head > .home-settings-status {
+  width: 100%;
+}
+
+.home-rules-negative-modal__panel {
+  max-width: min(560px, calc(100vw - 24px));
 }
 
 .home-rules-title {
@@ -1489,6 +1511,17 @@ button {
   .home-rules-type-list {
     max-height: none;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+
+  .home-rules-workspace__actions {
+    width: 100%;
+    margin-left: 0;
+    justify-items: start;
+  }
+
+  .home-rules-workspace__summary {
+    max-width: none;
+    text-align: left;
   }
 
   .home-transfer-group__top,

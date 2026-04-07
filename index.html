@@ -4,15 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Pulse Generator v2.0</title>
-    <link rel="stylesheet" href="./home.css?v=20260406-213101" />
+    <link rel="stylesheet" href="./home.css?v=20260407-131523" />
   </head>
   <body>
     <main class="home-scene">
       <section class="phone-home" aria-label="手机首页">
         <header class="status-bar" aria-label="前端版本信息">
           <div class="status-build">
-            <span id="status-version" class="status-build__version">FE v20260407-104444</span>
-            <span id="status-updated" class="status-build__updated">更新于 2026-04-07 10:44:44</span>
+            <span id="status-version" class="status-build__version">FE v20260407-131523</span>
+            <span id="status-updated" class="status-build__updated">更新于 2026-04-07 13:15:23</span>
           </div>
         </header>
 
@@ -286,18 +286,6 @@
             </label>
           </div>
 
-          <label class="home-field home-field--full">
-            <span>负向约束词汇和表达</span>
-            <textarea
-              id="home-negative-prompt-input"
-              rows="5"
-              placeholder="一行一个段落、例句或表达方式。发送给 AI 时会明确要求避免这些措辞、句式、口头禅或表达风格。"
-            ></textarea>
-            <span class="home-field-hint">
-              这是全局配置，会作用于 Chat、论坛、Bubble、养崽等所有 prompt。换行即视为不同约束项。
-            </span>
-          </label>
-
           <div class="home-config-transfer">
             <div>
               <p class="home-settings-kicker">Config Transfer</p>
@@ -473,10 +461,74 @@
                   <h3 id="home-rules-title" class="home-rules-title">规则配置</h3>
                   <p id="home-rules-description" class="home-field-hint"></p>
                 </div>
+                <div class="home-rules-workspace__actions">
+                  <p id="home-rules-negative-summary" class="home-field-hint home-rules-workspace__summary">
+                    全局负向约束：未设置
+                  </p>
+                  <button id="home-rules-negative-trigger" class="home-chip" type="button">
+                    负向约束
+                  </button>
+                </div>
                 <p id="home-rules-status" class="home-settings-status" aria-live="polite"></p>
               </div>
               <div id="home-rules-sections" class="home-rules-sections"></div>
             </section>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section
+      id="home-rules-negative-modal"
+      class="home-settings-modal"
+      aria-hidden="true"
+      hidden
+      style="display: none"
+    >
+      <div class="home-settings-modal__backdrop" data-close-home-rules-negative></div>
+      <div
+        class="home-settings-modal__panel home-rules-negative-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="负向约束词汇和表达"
+      >
+        <div class="home-settings-modal__head">
+          <div>
+            <p class="home-settings-kicker">Negative Constraints</p>
+            <h2 class="home-settings-title">负向约束</h2>
+          </div>
+          <button
+            id="home-rules-negative-close-btn"
+            class="home-settings-close"
+            type="button"
+            aria-label="关闭负向约束"
+          >
+            ×
+          </button>
+        </div>
+        <div class="home-settings-modal__body">
+          <p class="home-settings-tip">
+            这里填写明确不希望 AI 使用的词汇、句式、口头禅、例句或表达风格。换行即视为不同约束项，保存后会作用于所有 prompt。
+          </p>
+          <label class="home-field home-field--full">
+            <span>约束文本</span>
+            <textarea
+              id="home-rules-negative-input"
+              rows="9"
+              placeholder="一行一个约束项，例如：&#10;不要用‘宝宝’这种称呼&#10;不要写成解释说明口吻&#10;避免使用某一段示例表达"
+            ></textarea>
+            <span class="home-field-hint">
+              这里只做全局约束输入；保存后会直接拼进 Chat、论坛、Bubble、养崽、日程等 prompt。
+            </span>
+          </label>
+          <p id="home-rules-negative-status" class="home-settings-status" aria-live="polite"></p>
+          <div class="home-config-transfer__actions">
+            <button id="home-rules-negative-save-btn" class="home-primary-button" type="button">
+              保存负向约束
+            </button>
+            <button id="home-rules-negative-cancel-btn" class="home-chip" type="button">
+              取消
+            </button>
           </div>
         </div>
       </div>
@@ -612,11 +664,11 @@
       </div>
     </section>
 
-    <script src="./prompt-config.js?v=20260407-104444"></script>
+    <script src="./prompt-config.js?v=20260407-131523"></script>
     <script src="./privacy-allowlist.js?v=20260403-165212"></script>
     <script src="./pulse-privacy-cover.js?v=20260403-182131"></script>
     <script src="./pulse-message-banner.js?v=20260403-165212"></script>
     <script src="./api-log.js?v=20260405-231617"></script>
-    <script src="./home.js?v=20260407-104444"></script>
+    <script src="./home.js?v=20260407-131523"></script>
   </body>
 </html>
