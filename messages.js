@@ -8021,6 +8021,7 @@ async function appendAssistantReplyBatch(
     expectedReplyContextVersion: parsedExpectedReplyContextVersion
   });
   const appendedMessages = [];
+  let shouldPersistConversationAfterReveal = false;
   for (let index = 0; index < createdMessages.length; index += 1) {
     let revealRenderOptions = {
       scrollBehavior: "bottom"
@@ -8061,6 +8062,7 @@ async function appendAssistantReplyBatch(
             suppressRender: true
           })
         );
+        shouldPersistConversationAfterReveal = false;
         break;
       }
       const scrollSnapshot = captureConversationScrollSnapshot();
@@ -8076,7 +8078,7 @@ async function appendAssistantReplyBatch(
     if (appendedCurrentMessage) {
       appendedMessages.push(appendedCurrentMessage);
       recalculateConversationUpdatedAt(nextConversation);
-      persistConversations();
+      shouldPersistConversationAfterReveal = true;
     }
     setPendingAssistantReveal(conversationId, createdMessages.slice(index + 1), {
       expectedReplyContextVersion: parsedExpectedReplyContextVersion
@@ -8092,7 +8094,6 @@ async function appendAssistantReplyBatch(
         queueConversationRenderOptions(revealRenderOptions);
         renderMessagesPage();
       }
-      await waitForNextAnimationFrame();
     }
   }
 
@@ -8105,9 +8106,12 @@ async function appendAssistantReplyBatch(
     const repairedMessages = appendUniqueMessagesToConversation(latestConversation, createdMessages);
     if (repairedMessages.length) {
       recalculateConversationUpdatedAt(latestConversation);
-      persistConversations();
       appendedMessages.push(...repairedMessages);
+      shouldPersistConversationAfterReveal = true;
     }
+  }
+  if (shouldPersistConversationAfterReveal) {
+    persistConversations();
   }
   clearPendingAssistantReveal(conversationId);
   return appendedMessages;
