@@ -1035,6 +1035,29 @@ button {
   gap: 18px;
 }
 
+.home-rules-negative-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(107, 136, 198, 0.24);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(233, 241, 255, 0.78));
+  box-shadow: var(--shadow-sm);
+}
+
+.home-rules-negative-card__title {
+  margin: 4px 0 4px;
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.home-rules-negative-card__summary {
+  margin: 0;
+}
+
 .home-rules-layout {
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
@@ -1106,7 +1129,16 @@ button {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
+}
+
+.home-rules-workspace__head > .home-settings-status {
+  width: 100%;
+}
+
+.home-rules-negative-modal__panel {
+  max-width: min(560px, calc(100vw - 24px));
 }
 
 .home-rules-title {
@@ -1489,6 +1521,20 @@ button {
   .home-rules-type-list {
     max-height: none;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+
+  .home-rules-negative-card {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    border-radius: 18px;
+  }
+
+  .home-rules-negative-card .home-chip {
+    width: 100%;
   }
 
   .home-transfer-group__top,

@@ -2,8 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260407-104444";
-const APP_BUILD_UPDATED_AT = "2026-04-07 10:44:44";
+const APP_BUILD_VERSION = "20260407-191015";
+const APP_BUILD_UPDATED_AT = "2026-04-07 19:10:15";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -54,8 +54,16 @@ const homeRulesCloseBtn = document.querySelector("#home-rules-close-btn");
 const homeRulesTypeListEl = document.querySelector("#home-rules-type-list");
 const homeRulesTitleEl = document.querySelector("#home-rules-title");
 const homeRulesDescriptionEl = document.querySelector("#home-rules-description");
+const homeRulesNegativeTriggerBtn = document.querySelector("#home-rules-negative-trigger");
+const homeRulesNegativeSummaryEl = document.querySelector("#home-rules-negative-summary");
 const homeRulesStatusEl = document.querySelector("#home-rules-status");
 const homeRulesSectionsEl = document.querySelector("#home-rules-sections");
+const homeRulesNegativeModalEl = document.querySelector("#home-rules-negative-modal");
+const homeRulesNegativeCloseBtn = document.querySelector("#home-rules-negative-close-btn");
+const homeRulesNegativeInputEl = document.querySelector("#home-rules-negative-input");
+const homeRulesNegativeStatusEl = document.querySelector("#home-rules-negative-status");
+const homeRulesNegativeSaveBtn = document.querySelector("#home-rules-negative-save-btn");
+const homeRulesNegativeCancelBtn = document.querySelector("#home-rules-negative-cancel-btn");
 const homeActiveConfigSummaryEl = document.querySelector("#home-active-config-summary");
 const homeApiModeSelect = document.querySelector("#home-api-mode");
 const homeApiEndpointInput = document.querySelector("#home-api-endpoint");
@@ -161,6 +169,7 @@ const homeState = {
   modalOpen: false,
   timeModalOpen: false,
   rulesModalOpen: false,
+  rulesNegativeModalOpen: false,
   browserOpen: false,
   activeAppUrl: "",
   activeAppTab: "home",
@@ -587,6 +596,17 @@ function setHomeRulesStatus(message, tone = "") {
   homeRulesStatusEl.className = "home-settings-status";
   if (tone) {
     homeRulesStatusEl.classList.add(tone);
+  }
+}
+
+function setHomeRulesNegativeStatus(message, tone = "") {
+  if (!homeRulesNegativeStatusEl) {
+    return;
+  }
+  homeRulesNegativeStatusEl.textContent = message;
+  homeRulesNegativeStatusEl.className = "home-settings-status";
+  if (tone) {
+    homeRulesNegativeStatusEl.classList.add(tone);
   }
 }
 
@@ -3955,6 +3975,9 @@ function applySettingsToHomeForm(settings) {
 
 function readHomeSettingsFromForm() {
   const mode = normalizeApiMode(homeApiModeSelect?.value);
+  const negativePromptConstraints = homeNegativePromptInputEl
+    ? normalizeNegativePromptConstraints(homeNegativePromptInputEl.value)
+    : normalizeNegativePromptConstraints(homeState.settings.negativePromptConstraints || []);
   return {
     ...homeState.settings,
     mode,
@@ -3964,7 +3987,7 @@ function readHomeSettingsFromForm() {
       mode === "generic"
         ? ""
         : String(homeApiModelInput?.value || "").trim() || getDefaultModelByMode(mode),
-    negativePromptConstraints: normalizeNegativePromptConstraints(homeNegativePromptInputEl?.value),
+    negativePromptConstraints,
     privacyAllowlist: normalizePrivacyAllowlist(homeState.settings.privacyAllowlist || []),
     apiConfigs: normalizeApiConfigs(homeState.settings.apiConfigs)
   };
@@ -4302,6 +4325,9 @@ function setHomeSettingsModalOpen(isOpen) {
     if (homeState.rulesModalOpen) {
       setHomeRulesModalOpen(false);
     }
+    if (homeState.rulesNegativeModalOpen) {
+      setHomeRulesNegativeModalOpen(false);
+    }
     homeState.settings = loadSettings();
     applySettingsToHomeForm(homeState.settings);
     renderHomeEffectiveTime(homeState.settings);
@@ -4396,6 +4422,9 @@ function setHomeTimeModalOpen(isOpen) {
     if (homeState.rulesModalOpen) {
       setHomeRulesModalOpen(false);
     }
+    if (homeState.rulesNegativeModalOpen) {
+      setHomeRulesNegativeModalOpen(false);
+    }
     homeState.settings = loadSettings({ forceActiveConfig: false });
     renderHomeEffectiveTime(homeState.settings);
     setHomeTimeStatus("");
@@ -4420,6 +4449,7 @@ function renderHomeRulesModal() {
   const promptCatalogList = getHomePromptCatalogList();
   const activePromptType = getActiveHomeRulePromptType();
   homeState.rulesActivePromptType = activePromptType;
+  renderHomeNegativePromptSummary(homeState.settings);
 
   if (homeRulesTypeListEl) {
     homeRulesTypeListEl.innerHTML = promptCatalogList.length
@@ -4596,6 +4626,49 @@ function renderHomeRulesModal() {
           })
           .join("")
       : '<p class="home-empty-state">当前 prompt 暂无可编辑内容。</p>';
+}
+
+function renderHomeNegativePromptSummary(settings = homeState.settings) {
+  if (!homeRulesNegativeSummaryEl) {
+    return;
+  }
+  const items = normalizeNegativePromptConstraints(settings?.negativePromptConstraints || []);
+  if (!items.length) {
+    homeRulesNegativeSummaryEl.textContent = "全局负向约束：未设置";
+    return;
+  }
+  const preview = items.slice(0, 2).join(" / ");
+  homeRulesNegativeSummaryEl.textContent =
+    items.length > 2
+      ? `全局负向约束：已配置 ${items.length} 条 · ${preview}…`
+      : `全局负向约束：已配置 ${items.length} 条 · ${preview}`;
+}
+
+function renderHomeRulesNegativeModal() {
+  if (homeRulesNegativeInputEl) {
+    homeRulesNegativeInputEl.value = normalizeNegativePromptConstraints(
+      homeState.settings?.negativePromptConstraints || []
+    ).join("\n");
+  }
+  setHomeRulesNegativeStatus("");
+}
+
+function saveHomeNegativePromptConstraints() {
+  const nextConstraints = normalizeNegativePromptConstraints(homeRulesNegativeInputEl?.value);
+  homeState.settings = buildNormalizedSettingsSnapshot(
+    {
+      ...homeState.settings,
+      negativePromptConstraints: nextConstraints
+    },
+    { forceActiveConfig: false }
+  );
+  persistSettings(homeState.settings);
+  renderHomeNegativePromptSummary(homeState.settings);
+  setHomeRulesNegativeStatus("负向约束已保存。", "success");
+  setHomeRulesStatus("负向约束已保存。", "success");
+  window.setTimeout(() => {
+    setHomeRulesNegativeModalOpen(false);
+  }, 160);
 }
 
 function updateHomeRuleItemText(promptType = "", sectionKey = "", itemId = "", value = "") {
@@ -4793,7 +4866,28 @@ function setHomeRulesModalOpen(isOpen) {
   }
 
   homeState.rulesDragState = null;
+  setHomeRulesNegativeModalOpen(false);
   hideHomeLayer(homeRulesModalEl);
+  refreshBodyModalState();
+}
+
+function setHomeRulesNegativeModalOpen(isOpen) {
+  homeState.rulesNegativeModalOpen = Boolean(isOpen);
+  if (!homeRulesNegativeModalEl) {
+    return;
+  }
+
+  if (homeState.rulesNegativeModalOpen) {
+    renderHomeRulesNegativeModal();
+    showHomeLayer(homeRulesNegativeModalEl, "grid");
+    refreshBodyModalState();
+    window.setTimeout(() => {
+      homeRulesNegativeInputEl?.focus();
+    }, 0);
+    return;
+  }
+
+  hideHomeLayer(homeRulesNegativeModalEl);
   refreshBodyModalState();
 }
 
@@ -4860,6 +4954,7 @@ function refreshBodyModalState() {
     homeState.modalOpen ||
       homeState.timeModalOpen ||
       homeState.rulesModalOpen ||
+      homeState.rulesNegativeModalOpen ||
       homeState.browserOpen ||
       homeState.privacyAddModalOpen
   );
@@ -5079,6 +5174,30 @@ function attachHomeSettingsEvents() {
     });
   }
 
+  if (homeRulesNegativeTriggerBtn) {
+    homeRulesNegativeTriggerBtn.addEventListener("click", () => {
+      setHomeRulesNegativeModalOpen(true);
+    });
+  }
+
+  if (homeRulesNegativeCloseBtn) {
+    homeRulesNegativeCloseBtn.addEventListener("click", () => {
+      setHomeRulesNegativeModalOpen(false);
+    });
+  }
+
+  if (homeRulesNegativeCancelBtn) {
+    homeRulesNegativeCancelBtn.addEventListener("click", () => {
+      setHomeRulesNegativeModalOpen(false);
+    });
+  }
+
+  if (homeRulesNegativeSaveBtn) {
+    homeRulesNegativeSaveBtn.addEventListener("click", () => {
+      saveHomeNegativePromptConstraints();
+    });
+  }
+
   if (homeSettingsModalEl) {
     homeSettingsModalEl.addEventListener("click", (event) => {
       const target = event.target;
@@ -5111,6 +5230,18 @@ function attachHomeSettingsEvents() {
       }
       if (target.hasAttribute("data-close-home-rules")) {
         setHomeRulesModalOpen(false);
+      }
+    });
+  }
+
+  if (homeRulesNegativeModalEl) {
+    homeRulesNegativeModalEl.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      if (target.hasAttribute("data-close-home-rules-negative")) {
+        setHomeRulesNegativeModalOpen(false);
       }
     });
   }
@@ -5372,12 +5503,6 @@ function attachHomeSettingsEvents() {
         saveCurrentHomeSettings({ silent: true });
       });
     });
-
-  if (homeNegativePromptInputEl) {
-    homeNegativePromptInputEl.addEventListener("change", () => {
-      saveCurrentHomeSettings({ silent: true });
-    });
-  }
 
   if (homeApiConfigSaveBtn) {
     homeApiConfigSaveBtn.addEventListener("click", () => {
@@ -5678,6 +5803,10 @@ function attachHomeSettingsEvents() {
       setPrivacyAppAddModalOpen(false);
       return;
     }
+    if (event.key === "Escape" && homeState.rulesNegativeModalOpen) {
+      setHomeRulesNegativeModalOpen(false);
+      return;
+    }
     if (event.key === "Escape" && homeState.timeModalOpen) {
       setHomeTimeModalOpen(false);
       return;
@@ -5700,6 +5829,7 @@ function initHome() {
   hideHomeLayer(homeSettingsModalEl);
   hideHomeLayer(homeTimeModalEl);
   hideHomeLayer(homeRulesModalEl);
+  hideHomeLayer(homeRulesNegativeModalEl);
   hideHomeLayer(homeBrowserModalEl);
   hideHomeLayer(privacyAppAddModalEl);
   setHomeExportReviewOpen(false);

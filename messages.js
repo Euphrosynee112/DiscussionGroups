@@ -8021,6 +8021,7 @@ async function appendAssistantReplyBatch(
     expectedReplyContextVersion: parsedExpectedReplyContextVersion
   });
   const appendedMessages = [];
+  let shouldPersistConversationAfterReveal = false;
   for (let index = 0; index < createdMessages.length; index += 1) {
     let revealRenderOptions = {
       scrollBehavior: "bottom"
@@ -8061,6 +8062,7 @@ async function appendAssistantReplyBatch(
             suppressRender: true
           })
         );
+        shouldPersistConversationAfterReveal = false;
         break;
       }
       const scrollSnapshot = captureConversationScrollSnapshot();
@@ -8076,7 +8078,7 @@ async function appendAssistantReplyBatch(
     if (appendedCurrentMessage) {
       appendedMessages.push(appendedCurrentMessage);
       recalculateConversationUpdatedAt(nextConversation);
-      persistConversations();
+      shouldPersistConversationAfterReveal = true;
     }
     setPendingAssistantReveal(conversationId, createdMessages.slice(index + 1), {
       expectedReplyContextVersion: parsedExpectedReplyContextVersion
@@ -8092,7 +8094,6 @@ async function appendAssistantReplyBatch(
         queueConversationRenderOptions(revealRenderOptions);
         renderMessagesPage();
       }
-      await waitForNextAnimationFrame();
     }
   }
 
@@ -8105,9 +8106,12 @@ async function appendAssistantReplyBatch(
     const repairedMessages = appendUniqueMessagesToConversation(latestConversation, createdMessages);
     if (repairedMessages.length) {
       recalculateConversationUpdatedAt(latestConversation);
-      persistConversations();
       appendedMessages.push(...repairedMessages);
+      shouldPersistConversationAfterReveal = true;
     }
+  }
+  if (shouldPersistConversationAfterReveal) {
+    persistConversations();
   }
   clearPendingAssistantReveal(conversationId);
   return appendedMessages;
@@ -10229,6 +10233,48 @@ function renderConversationMessage(message, conversation, promptSettings = state
   `;
 }
 
+function buildConversationHistoryWindowMarkup(renderWindow) {
+  const hiddenCount = Math.max(0, Number(renderWindow?.hiddenCount) || 0);
+  const visibleCount = Math.max(0, Number(renderWindow?.visibleCount) || 0);
+  if (!hiddenCount) {
+    return "";
+  }
+  return `
+    <div class="messages-conversation__history-window">
+      <button
+        class="messages-conversation__history-more"
+        type="button"
+        data-action="load-more-conversation-messages"
+      >
+        加载更早消息（还有 ${hiddenCount} 条）
+      </button>
+      <p class="messages-conversation__history-note">
+        当前默认仅渲染最近 ${visibleCount} 条气泡，避免长会话卡顿。
+      </p>
+    </div>
+  `;
+}
+
+function syncConversationHistoryWindow(historyEl, renderWindow) {
+  if (!(historyEl instanceof HTMLElement)) {
+    return;
+  }
+  const hiddenCount = Math.max(0, Number(renderWindow?.hiddenCount) || 0);
+  const currentWindow = historyEl.querySelector(".messages-conversation__history-window");
+  if (!hiddenCount) {
+    currentWindow?.remove();
+    return;
+  }
+
+  const nextMarkup = buildConversationHistoryWindowMarkup(renderWindow);
+  if (!currentWindow) {
+    historyEl.insertAdjacentHTML("afterbegin", nextMarkup);
+    return;
+  }
+
+  currentWindow.outerHTML = nextMarkup;
+}
+
 function appendConversationMessageToVisibleHistory(
   message,
   conversation,
@@ -10247,7 +10293,7 @@ function appendConversationMessageToVisibleHistory(
     return false;
   }
   const renderWindow = buildConversationRenderWindow(conversation);
-  if (renderWindow.hiddenCount > 0 || historyEl.querySelector(".messages-conversation__history-window")) {
+  if (!renderWindow.visibleCount) {
     return false;
   }
   if (
@@ -10266,10 +10312,16 @@ function appendConversationMessageToVisibleHistory(
   if (emptyEl) {
     emptyEl.remove();
   }
+  syncConversationHistoryWindow(historyEl, renderWindow);
   historyEl.insertAdjacentHTML(
     "beforeend",
     renderConversationMessage(message, conversation, promptSettings)
   );
+  const visibleRows = [...historyEl.querySelectorAll(".messages-message-row")];
+  const overflowCount = Math.max(0, visibleRows.length - renderWindow.visibleCount);
+  if (overflowCount > 0) {
+    visibleRows.slice(0, overflowCount).forEach((row) => row.remove());
+  }
   window.requestAnimationFrame(() => {
     if (shouldStickToBottom) {
       historyEl.scrollTop = historyEl.scrollHeight;
@@ -10402,24 +10454,7 @@ function renderConversationDetail(options = {}) {
   messagesContentEl.innerHTML = `
     <section class="messages-conversation">
       <div class="messages-conversation__history">
-        ${
-          renderWindow.hiddenCount
-            ? `
-              <div class="messages-conversation__history-window">
-                <button
-                  class="messages-conversation__history-more"
-                  type="button"
-                  data-action="load-more-conversation-messages"
-                >
-                  加载更早消息（还有 ${renderWindow.hiddenCount} 条）
-                </button>
-                <p class="messages-conversation__history-note">
-                  当前默认仅渲染最近 ${renderWindow.visibleCount} 条气泡，避免长会话卡顿。
-                </p>
-              </div>
-            `
-            : ""
-        }
+        ${buildConversationHistoryWindowMarkup(renderWindow)}
         ${
           renderedMessages.length
             ? renderedMessages.join("")
@@ -13020,6 +13055,7 @@ function deleteConversationContactBundle(contactId = "", options = {}) {
     return null;
   }
   const requestOptions = options && typeof options === "object" ? options : {};
+  const preserveContact = Boolean(requestOptions.preserveContact);
   const deletedMemoryCount = state.memories.filter((item) => item.contactId === resolvedContactId).length;
   const removedJournalCount = state.journalEntries.filter((item) => item.contactId === resolvedContactId).length;
   const conversationsToDelete = state.conversations.filter(
@@ -13035,7 +13071,9 @@ function deleteConversationContactBundle(contactId = "", options = {}) {
   state.conversations = state.conversations.filter(
     (conversation) => String(conversation.contactId || "").trim() !== resolvedContactId
   );
-  state.contacts = state.contacts.filter((contact) => contact.id !== resolvedContactId);
+  if (!preserveContact) {
+    state.contacts = state.contacts.filter((contact) => contact.id !== resolvedContactId);
+  }
   state.memories = state.memories.filter((item) => item.contactId !== resolvedContactId);
   state.journalEntries = state.journalEntries.filter((item) => item.contactId !== resolvedContactId);
   state.commonPlaces = state.commonPlaces.map((place) => ({
@@ -13066,7 +13104,7 @@ function deleteConversationContactBundle(contactId = "", options = {}) {
   if (state.memorySelectedContactId === resolvedContactId) {
     state.memorySelectedContactId = "";
   }
-  if (state.contactEditorId === resolvedContactId) {
+  if (!preserveContact && state.contactEditorId === resolvedContactId) {
     state.contactEditorOpen = false;
     state.contactEditorId = "";
   }
@@ -13099,7 +13137,7 @@ function handleConversationRowLongPress(conversationId = "") {
   const confirmed = window.confirm(
     [
       `确定删除会话「${conversationName}」吗？`,
-      "会同步清空该角色的聊天记录、角色资料、记忆、日记缓存和会话设置。",
+      "会同步清空该角色的聊天记录、记忆、日记缓存、行程和会话设置，但不会删除通讯录里的联系人资料。",
       scheduleSummary.ownedEntries || scheduleSummary.companionEntries
         ? `当前还关联 ${scheduleSummary.ownedEntries} 条角色日程、${scheduleSummary.companionEntries} 条同行日程。`
         : ""
@@ -13121,6 +13159,7 @@ function handleConversationRowLongPress(conversationId = "") {
   const memoryCount = state.memories.filter((item) => item.contactId === contactId).length;
   const journalCount = state.journalEntries.filter((item) => item.contactId === contactId).length;
   const result = deleteConversationContactBundle(contactId, {
+    preserveContact: true,
     removeRelatedCompanionEntries
   });
   if (!result) {
@@ -13144,8 +13183,8 @@ function handleConversationRowLongPress(conversationId = "") {
   ].filter(Boolean);
   setMessagesStatus(
     summaryParts.length
-      ? `${conversationName} 已删除：${summaryParts.join("，")}。`
-      : `${conversationName} 已删除。`,
+      ? `${conversationName} 的会话已删除：${summaryParts.join("，")}；联系人资料已保留。`
+      : `${conversationName} 的会话已删除，联系人资料已保留。`,
     "success"
   );
 }
