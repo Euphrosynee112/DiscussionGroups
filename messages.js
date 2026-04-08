@@ -4676,6 +4676,48 @@ function clearConversationPendingReplyFlags(conversation = null, messageIds = []
   return changed;
 }
 
+function repairStalePendingUserMessages(conversation = null, options = {}) {
+  if (!conversation || typeof conversation !== "object" || !Array.isArray(conversation.messages)) {
+    return false;
+  }
+  const repairOptions = options && typeof options === "object" ? options : {};
+  const resolvedConversationId = String(conversation.id || "").trim();
+  const hasPendingReveal =
+    resolvedConversationId &&
+    String(state.pendingAssistantReveal?.conversationId || "").trim() === resolvedConversationId;
+  if (repairOptions.skipWhenBusy && (isConversationReplyBusy(resolvedConversationId) || hasPendingReveal)) {
+    return false;
+  }
+  let sawAssistantAfter = false;
+  let changed = false;
+  const nextMessages = conversation.messages.slice();
+  for (let index = nextMessages.length - 1; index >= 0; index -= 1) {
+    const message = nextMessages[index];
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    if (message.role === "assistant") {
+      sawAssistantAfter = true;
+      continue;
+    }
+    if (message.role === "user" && message.needsReply && sawAssistantAfter) {
+      nextMessages[index] = {
+        ...message,
+        needsReply: false
+      };
+      changed = true;
+    }
+  }
+  if (!changed) {
+    return false;
+  }
+  conversation.messages = nextMessages;
+  if (repairOptions.persist) {
+    persistConversations();
+  }
+  return true;
+}
+
 function shouldPreferLocalConversationState(localConversation = null, loadedConversation = null) {
   if (!localConversation?.id) {
     return false;
@@ -8673,6 +8715,11 @@ function getLatestAssistantReplyBatch(conversation) {
     return null;
   }
 
+  repairStalePendingUserMessages(conversation, {
+    persist: true,
+    skipWhenBusy: true
+  });
+
   const messages = conversation.messages;
   const pendingUserMessages = messages.filter((message) => message.role === "user" && message.needsReply);
   if (pendingUserMessages.length) {
@@ -11260,6 +11307,10 @@ function renderConversationDetail(options = {}) {
 
   const isSending = state.sendingConversationId === conversation.id;
   const isReplyBusy = isConversationReplyBusy(conversation.id);
+  repairStalePendingUserMessages(conversation, {
+    persist: true,
+    skipWhenBusy: true
+  });
   const hasPendingUserMessages = conversation.messages.some(
     (message) => message.role === "user" && message.needsReply
   );
@@ -14566,6 +14617,10 @@ async function requestConversationReply(options = {}) {
       return;
     }
   } else {
+    repairStalePendingUserMessages(conversation, {
+      persist: true,
+      skipWhenBusy: true
+    });
     const pendingUserMessages = conversation.messages.filter(
       (message) => message.role === "user" && message.needsReply
     );
