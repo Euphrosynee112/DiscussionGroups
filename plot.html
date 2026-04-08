@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <title>Pulse Generator · 剧情</title>
+    <link rel="stylesheet" href="./plot.css?v=20260408-130816" />
+  </head>
+  <body>
+    <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
+
+    <main class="plot-app">
+      <section class="plot-shell" aria-label="剧情">
+        <header class="plot-topbar">
+          <button
+            id="plot-back-btn"
+            class="plot-topbar__button"
+            type="button"
+            aria-label="返回"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M15 6l-6 6 6 6"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+
+          <div class="plot-topbar__body">
+            <p id="plot-topbar-kicker" class="plot-topbar__kicker">Story</p>
+            <h1 id="plot-topbar-title" class="plot-topbar__title">剧情</h1>
+          </div>
+
+          <button
+            id="plot-create-btn"
+            class="plot-topbar__button plot-topbar__button--accent"
+            type="button"
+            aria-label="新增剧情"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M12 5v14M5 12h14"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </header>
+
+        <p id="plot-status" class="plot-status" aria-live="polite"></p>
+
+        <section
+          id="plot-list-view"
+          class="plot-view plot-view--list"
+          aria-label="历史剧情"
+        >
+          <div class="plot-hero">
+            <p class="plot-hero__eyebrow">Story Threads</p>
+            <h2 class="plot-hero__title">历史剧情概要</h2>
+            <p class="plot-hero__desc">
+              这里会保留每条剧情线的简要回顾。点击卡片继续写，或点击右上角新增一条剧情。
+            </p>
+          </div>
+
+          <div id="plot-thread-list" class="plot-thread-list" aria-live="polite"></div>
+        </section>
+
+        <section
+          id="plot-detail-view"
+          class="plot-view plot-view--detail"
+          hidden
+          aria-hidden="true"
+          aria-label="剧情详情"
+        >
+          <div id="plot-message-stream" class="plot-message-stream" aria-live="polite"></div>
+          <div
+            id="plot-detail-participants"
+            class="plot-detail-participants"
+            hidden
+            aria-live="polite"
+          ></div>
+
+          <form id="plot-composer-form" class="plot-composer">
+            <label class="plot-composer__field">
+              <span class="plot-composer__label">继续推进剧情</span>
+              <textarea
+                id="plot-composer-input"
+                class="plot-composer__input"
+                rows="3"
+                placeholder="输入你希望下一段剧情如何发展。回车仅换行，不会直接发送。"
+              ></textarea>
+            </label>
+            <div class="plot-composer__footer">
+              <p class="plot-composer__hint">回车只换行，点击发送才会继续剧情。</p>
+              <div class="plot-composer__actions">
+                <button
+                  id="plot-composer-continue-btn"
+                  class="plot-composer__send plot-composer__send--secondary"
+                  type="button"
+                >
+                  续写
+                </button>
+                <button
+                  id="plot-composer-send-btn"
+                  class="plot-composer__send"
+                  type="submit"
+                >
+                  发送
+                </button>
+              </div>
+            </div>
+          </form>
+        </section>
+      </section>
+    </main>
+
+    <section
+      id="plot-create-modal"
+      class="plot-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div class="plot-modal__backdrop" data-close-plot-modal></div>
+      <div
+        class="plot-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="新增剧情"
+      >
+        <div class="plot-modal__head">
+          <div>
+            <p class="plot-modal__eyebrow">New Story</p>
+            <h2 class="plot-modal__title">新增剧情</h2>
+          </div>
+          <button
+            id="plot-create-close-btn"
+            class="plot-modal__close"
+            type="button"
+            aria-label="关闭新增剧情"
+          >
+            ×
+          </button>
+        </div>
+
+        <form id="plot-create-form" class="plot-create-form">
+          <section class="plot-section">
+            <div class="plot-section__head">
+              <div>
+                <h3>在场人物</h3>
+                <p>用户和角色放在同一个列表里，可不选择用户在场。</p>
+              </div>
+            </div>
+            <div id="plot-participant-options" class="plot-participant-list"></div>
+          </section>
+
+          <section class="plot-section">
+            <div class="plot-section__head">
+              <div>
+                <h3>非角色人物</h3>
+                <p>可补充未在通讯录里的剧情人物。</p>
+              </div>
+              <button
+                id="plot-extra-add-btn"
+                class="plot-inline-btn"
+                type="button"
+              >
+                + 添加人物
+              </button>
+            </div>
+            <div id="plot-extra-list" class="plot-extra-list"></div>
+          </section>
+
+          <section class="plot-section">
+            <div class="plot-section__head">
+              <div>
+                <h3>开场剧情描述</h3>
+                <p>这会作为第一条剧情推进提示，创建后立即开始生成。</p>
+              </div>
+            </div>
+            <label class="plot-create-form__field">
+              <textarea
+                id="plot-opening-input"
+                rows="5"
+                placeholder="例如：雨夜里，Jessie 在空荡的练习室里加练到很晚，手机忽然震了一下……"
+              ></textarea>
+            </label>
+          </section>
+
+          <p id="plot-create-status" class="plot-modal__status" aria-live="polite"></p>
+
+          <div class="plot-modal__actions">
+            <button
+              id="plot-create-cancel-btn"
+              class="plot-modal__button plot-modal__button--ghost"
+              type="button"
+            >
+              取消
+            </button>
+            <button
+              id="plot-create-confirm-btn"
+              class="plot-modal__button"
+              type="submit"
+            >
+              创建剧情
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <script src="./privacy-allowlist.js?v=20260408-170500"></script>
+    <script src="./pulse-privacy-cover.js?v=20260408-170500"></script>
+    <script src="./api-log.js?v=20260408-170500"></script>
+    <script src="./plot.js?v=20260408-170500"></script>
+  </body>
+</html>

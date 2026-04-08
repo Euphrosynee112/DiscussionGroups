@@ -436,22 +436,6 @@
             </small>
           </label>
 
-          <label class="messages-form-field">
-            <span>总结触发轮数</span>
-            <input
-              id="messages-chat-memory-summary-rounds-input"
-              type="number"
-              min="1"
-              max="100"
-              inputmode="numeric"
-              placeholder="默认 100 轮"
-              autocomplete="off"
-            />
-            <small class="messages-form-field__hint">
-              当前角色聊天的记忆总结阈值；每成功获取 1 次非重回回复会计 1 轮，只作用于当前角色。
-            </small>
-          </label>
-
           <label class="messages-toggle-field">
             <div class="messages-toggle-field__body">
               <strong>时间感知</strong>
@@ -1681,7 +1665,7 @@
               min="1"
               max="100"
               inputmode="numeric"
-              placeholder="默认 100 回合"
+              placeholder="默认 10 回合"
               autocomplete="off"
             />
           </label>
@@ -2388,12 +2372,12 @@
 
     <input id="messages-image-file-input" type="file" accept="image/*" hidden />
 
-    <script src="./prompt-config.js?v=20260408-103859"></script>
+    <script src="./prompt-config.js?v=20260408-170500"></script>
     <script src="./privacy-allowlist.js?v=20260403-165212"></script>
     <script src="./pulse-privacy-cover.js?v=20260403-170109"></script>
     <script src="./pulse-message-banner.js?v=20260403-165212"></script>
     <script src="./api-log.js?v=20260405-231617"></script>
     <script src="./messages-awareness-config.js?v=20260403-165212"></script>
-    <script src="./messages.js?v=20260408-103859"></script>
+    <script src="./messages.js?v=20260408-170500"></script>
   </body>
 </html>

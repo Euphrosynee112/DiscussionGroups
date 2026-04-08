@@ -249,6 +249,14 @@ button {
   letter-spacing: 0.02em;
 }
 
+.app-shortcut__icon--plot {
+  background:
+    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.42), transparent 34%),
+    linear-gradient(180deg, #d9c8f8 0%, #b093e7 56%, #8b6ccc 100%);
+  font-size: 18px;
+  letter-spacing: 0.03em;
+}
+
 .app-shortcut__icon--schedule {
   background:
     radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.4), transparent 34%),
@@ -286,6 +294,7 @@ button {
 .desk-item-memory,
 .desk-item-x,
 .desk-item-raising,
+.desk-item-plot,
 .desk-item-schedule,
 .desk-item-time {
   grid-column: auto;

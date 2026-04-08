@@ -2,14 +2,15 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260408-103859";
-const APP_BUILD_UPDATED_AT = "2026-04-08 10:38:59";
+const APP_BUILD_VERSION = "20260408-170500";
+const APP_BUILD_UPDATED_AT = "2026-04-08 17:05:00";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
 const PROFILE_KEY = "x_style_generator_profile_v1";
 const PROFILE_POSTS_KEY = "x_style_generator_profile_posts_v1";
 const DISCUSSIONS_KEY = "x_style_generator_discussions_v1";
+const PLOT_THREADS_KEY = "x_style_generator_plot_threads_v1";
 const WORLD_BOOKS_KEY = "x_style_generator_message_worldbooks_v1";
 const MESSAGE_CONTACTS_KEY = "x_style_generator_message_contacts_v1";
 const MESSAGE_THREADS_KEY = "x_style_generator_message_threads_v1";
@@ -29,6 +30,8 @@ const TRANSFER_FORUM_BASE_ITEM_ID = "__forum_base__";
 const TRANSFER_CONTACT_CHAT_HISTORY_PREFIX = "__contact_chat_history__:";
 const TRANSFER_SCHEDULE_USER_ITEM_ID = "__schedule_owner__user";
 const TRANSFER_SCHEDULE_CONTACT_ITEM_PREFIX = "__schedule_owner__contact:";
+const TRANSFER_FORUM_FEED_POSTS_PREFIX = "__forum_feed_posts__:";
+const TRANSFER_FORUM_PROFILE_POSTS_ITEM_ID = "__forum_profile_posts__";
 
 const homeSceneEl = document.querySelector(".home-scene");
 const phoneDateEl = document.querySelector("#phone-date");
@@ -1323,6 +1326,207 @@ function sanitizePresenceTransferStateForPlaces(value = {}, commonPlaces = []) {
   };
 }
 
+function sanitizeForumRepostSourceTransferValue(source = {}) {
+  if (!source || typeof source !== "object") {
+    return null;
+  }
+  const text = String(source.text || "").trim();
+  const imageDataUrl = String(source.imageDataUrl || source.imageUrl || "").trim();
+  const tags = normalizeObjectArray(source.tags)
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .slice(0, 5);
+  if (!text && !imageDataUrl) {
+    return null;
+  }
+  return {
+    id: String(source.id || "").trim(),
+    displayName: String(source.displayName || source.username || "论坛用户").trim() || "论坛用户",
+    handle: String(source.handle || source.userId || "@forum_user").trim() || "@forum_user",
+    text,
+    imageDataUrl,
+    tags,
+    time: String(source.time || "").trim(),
+    createdAt: Number(source.createdAt) || 0
+  };
+}
+
+function sanitizeForumPostTransferValue(post = {}, fallbackFeedType = "entertainment") {
+  if (!post || typeof post !== "object") {
+    return null;
+  }
+  const resolvedFeedType =
+    String(post.feedType || fallbackFeedType || "entertainment").trim() || "entertainment";
+  const text = typeof post.text === "string" ? post.text.trim() : String(post.text || "").trim();
+  const imageDataUrl = String(post.imageDataUrl || post.imageUrl || "").trim();
+  const repostSource = sanitizeForumRepostSourceTransferValue(post.repostSource);
+  if (!text && !imageDataUrl && !repostSource) {
+    return null;
+  }
+  return {
+    id: String(post.id || "").trim(),
+    displayName: String(post.displayName || "论坛用户").trim() || "论坛用户",
+    handle: String(post.handle || "@forum_user").trim() || "@forum_user",
+    text,
+    imageDataUrl,
+    tags: normalizeObjectArray(post.tags)
+      .map((item) => String(item || "").trim())
+      .filter(Boolean)
+      .slice(0, 5),
+    replies: String(post.replies || "").trim(),
+    reposts: String(post.reposts || "").trim(),
+    likes: String(post.likes || "").trim(),
+    views: String(post.views || "").trim(),
+    time: String(post.time || "").trim(),
+    createdAt: Number(post.createdAt) || 0,
+    edited: Boolean(post.edited),
+    authorOwned: Boolean(post.authorOwned),
+    feedType: resolvedFeedType,
+    repostSource
+  };
+}
+
+function sanitizeForumFeedPostsTransferValue(feeds = {}) {
+  const normalized = {};
+  Object.entries(feeds || {}).forEach(([feedType, posts]) => {
+    const items = normalizeObjectArray(posts)
+      .map((post) => sanitizeForumPostTransferValue(post, feedType))
+      .filter(Boolean);
+    if (items.length) {
+      normalized[String(feedType || "").trim() || "entertainment"] = items;
+    }
+  });
+  return normalized;
+}
+
+function sanitizePlotThreadTransferValue(thread = {}) {
+  if (!thread || typeof thread !== "object") {
+    return null;
+  }
+  const participants = normalizeObjectArray(thread.participants)
+    .map((item) => ({
+      id: String(item.id || "").trim(),
+      type: String(item.type || "").trim() === "user" ? "user" : "contact",
+      name: String(item.name || "").trim(),
+      avatarImage: String(item.avatarImage || "").trim(),
+      avatarText: String(item.avatarText || "").trim(),
+      personaPrompt: String(item.personaPrompt || "").trim(),
+      specialUserPersona: String(item.specialUserPersona || "").trim()
+    }))
+    .filter((item) => item.name);
+  const customCharacters = normalizeObjectArray(thread.customCharacters)
+    .map((item) => ({
+      id: String(item.id || "").trim(),
+      name: String(item.name || "").trim(),
+      role: String(item.role || "").trim(),
+      persona: String(item.persona || "").trim()
+    }))
+    .filter((item) => item.name || item.role || item.persona);
+  const messages = normalizeObjectArray(thread.messages)
+    .map((item) => ({
+      id: String(item.id || "").trim(),
+      role: String(item.role || "").trim() === "assistant" ? "assistant" : "user",
+      text: String(item.text || "").trim(),
+      createdAt: Number(item.createdAt) || 0
+    }))
+    .filter((item) => item.text);
+  const openingPlot = String(thread.openingPlot || "").trim();
+  const title = String(thread.title || "").trim();
+  if (!title && !openingPlot && !messages.length) {
+    return null;
+  }
+  return {
+    id: String(thread.id || "").trim(),
+    title,
+    summary: String(thread.summary || "").trim(),
+    openingPlot,
+    participants,
+    customCharacters,
+    messages,
+    createdAt: Number(thread.createdAt) || 0,
+    updatedAt: Number(thread.updatedAt) || 0
+  };
+}
+
+function getForumPostTransferFeedLabel(feedType = "", forumPayload = null) {
+  const resolvedFeedType = String(feedType || "").trim();
+  if (!resolvedFeedType || resolvedFeedType === "entertainment") {
+    return "首页 / 页签主贴";
+  }
+  const customTabs = normalizeObjectArray(forumPayload?.customTabs || loadSettings().customTabs || []);
+  const matchedTab = customTabs.find((tab) => String(tab.id || "").trim() === resolvedFeedType);
+  return matchedTab?.name ? `${matchedTab.name} 主贴` : `${resolvedFeedType} 主贴`;
+}
+
+function mergeForumPostList(existing = [], incoming = []) {
+  const merged = new Map();
+  normalizeObjectArray(existing)
+    .map((item) => sanitizeForumPostTransferValue(item, item?.feedType))
+    .filter(Boolean)
+    .forEach((item, index) => {
+      const itemId = String(item.id || `forum_post_existing_${index}`).trim();
+      merged.set(itemId, item);
+    });
+  normalizeObjectArray(incoming)
+    .map((item) => sanitizeForumPostTransferValue(item, item?.feedType))
+    .filter(Boolean)
+    .forEach((item, index) => {
+      const itemId = String(item.id || `forum_post_incoming_${index}`).trim();
+      const current = merged.get(itemId);
+      merged.set(itemId, current ? { ...current, ...item } : item);
+    });
+  return [...merged.values()].sort(
+    (left, right) =>
+      (Number(right.createdAt) || 0) - (Number(left.createdAt) || 0) ||
+      String(left.id || "").localeCompare(String(right.id || ""))
+  );
+}
+
+function mergeForumFeedPostBuckets(existing = {}, incoming = {}) {
+  const normalized = sanitizeForumFeedPostsTransferValue(existing);
+  Object.entries(sanitizeForumFeedPostsTransferValue(incoming)).forEach(([feedType, posts]) => {
+    normalized[feedType] = mergeForumPostList(normalized[feedType] || [], posts);
+  });
+  return normalized;
+}
+
+function mergePlotThreadTransferItems(existing = [], incoming = []) {
+  const merged = new Map();
+  normalizeObjectArray(existing)
+    .map((item) => sanitizePlotThreadTransferValue(item))
+    .filter(Boolean)
+    .forEach((item, index) => {
+      const itemId = String(item.id || `plot_thread_existing_${index}`).trim();
+      merged.set(itemId, item);
+    });
+  normalizeObjectArray(incoming)
+    .map((item) => sanitizePlotThreadTransferValue(item))
+    .filter(Boolean)
+    .forEach((item, index) => {
+      const itemId = String(item.id || `plot_thread_incoming_${index}`).trim();
+      const current = merged.get(itemId);
+      if (!current) {
+        merged.set(itemId, item);
+        return;
+      }
+      merged.set(itemId, {
+        ...current,
+        ...item,
+        participants: item.participants?.length ? item.participants : current.participants,
+        customCharacters: item.customCharacters?.length
+          ? item.customCharacters
+          : current.customCharacters,
+        messages: item.messages?.length ? item.messages : current.messages,
+        updatedAt: Math.max(Number(current.updatedAt) || 0, Number(item.updatedAt) || 0)
+      });
+    });
+  return [...merged.values()].sort(
+    (left, right) =>
+      (Number(right.updatedAt) || 0) - (Number(left.updatedAt) || 0) ||
+      String(left.id || "").localeCompare(String(right.id || ""))
+  );
+}
+
 function buildTransferPayloadFromCurrentState() {
   const settings = loadSettings();
   const profile = readStoredJson(PROFILE_KEY, {}) || {};
@@ -1330,6 +1534,9 @@ function buildTransferPayloadFromCurrentState() {
   const worldbooks = readStoredJson(WORLD_BOOKS_KEY, { categories: [], entries: [] }) || {};
   const contacts = readStoredJson(MESSAGE_CONTACTS_KEY, []) || [];
   const messageThreads = readStoredJson(MESSAGE_THREADS_KEY, []) || [];
+  const forumFeedPosts = readStoredJson(POSTS_KEY, {}) || {};
+  const forumProfilePosts = readStoredJson(PROFILE_POSTS_KEY, []) || [];
+  const plotThreads = readStoredJson(PLOT_THREADS_KEY, []) || [];
   const scheduleEntries = readStoredJson(SCHEDULE_ENTRIES_KEY, []) || [];
   const commonPlaces = readStoredJson(MESSAGE_COMMON_PLACES_KEY, []) || [];
   const presenceState =
@@ -1376,6 +1583,12 @@ function buildTransferPayloadFromCurrentState() {
       customTabs: normalizeObjectArray(settings.customTabs)
     },
     forumProfile: pickForumProfilePayload(profile),
+    forumPosts: {
+      feeds: sanitizeForumFeedPostsTransferValue(forumFeedPosts),
+      profilePosts: normalizeObjectArray(forumProfilePosts)
+        .map((item) => sanitizeForumPostTransferValue(item, item?.feedType || "profile"))
+        .filter(Boolean)
+    },
     chatPersona: chatProfile,
     worldbooks: {
       categories: normalizeObjectArray(worldbooks.categories),
@@ -1392,6 +1605,9 @@ function buildTransferPayloadFromCurrentState() {
         (item) => String(item.title || "").trim() && String(item.date || "").trim()
       )
     },
+    plotThreads: normalizeObjectArray(plotThreads)
+      .map((item) => sanitizePlotThreadTransferValue(item))
+      .filter(Boolean),
     commonPlaces: {
       entries: normalizeObjectArray(commonPlaces).filter((item) => String(item.name || "").trim())
     },
@@ -2872,12 +3088,15 @@ function normalizeTransferPayload(parsed) {
       forum: source.forum && typeof source.forum === "object" ? source.forum : null,
       forumProfile:
         source.forumProfile && typeof source.forumProfile === "object" ? source.forumProfile : null,
+      forumPosts:
+        source.forumPosts && typeof source.forumPosts === "object" ? source.forumPosts : null,
       chatPersona:
         source.chatPersona && typeof source.chatPersona === "object" ? source.chatPersona : null,
       worldbooks:
         source.worldbooks && typeof source.worldbooks === "object" ? source.worldbooks : null,
       contacts: source.contacts && typeof source.contacts === "object" ? source.contacts : null,
       schedules: source.schedules && typeof source.schedules === "object" ? source.schedules : null,
+      plotThreads: Array.isArray(source.plotThreads) ? source.plotThreads : null,
       commonPlaces:
         source.commonPlaces && typeof source.commonPlaces === "object" ? source.commonPlaces : null,
       presenceState:
@@ -2943,12 +3162,14 @@ function normalizeTransferPayload(parsed) {
     forumProfile: hasAnyTextValue(pickForumProfilePayload(profile))
       ? pickForumProfilePayload(profile)
       : null,
+    forumPosts: null,
     chatPersona: hasAnyTextValue(pickChatProfilePayload(profile))
       ? pickChatProfilePayload(profile)
       : null,
     worldbooks: parsed.worldbooks && typeof parsed.worldbooks === "object" ? parsed.worldbooks : null,
     contacts: parsed.contacts && typeof parsed.contacts === "object" ? parsed.contacts : null,
     schedules: parsed.schedules && typeof parsed.schedules === "object" ? parsed.schedules : null,
+    plotThreads: Array.isArray(parsed.plotThreads) ? parsed.plotThreads : null,
     commonPlaces:
       parsed.commonPlaces && typeof parsed.commonPlaces === "object" ? parsed.commonPlaces : null,
     presenceState:
@@ -2972,6 +3193,10 @@ function buildTransferSections(payload, options = {}) {
   const worldbookEntries = normalizeObjectArray(payload?.worldbooks?.entries).filter(
     (item) => String(item.name || "").trim()
   );
+  const forumFeedPostBuckets = sanitizeForumFeedPostsTransferValue(payload?.forumPosts?.feeds || {});
+  const forumProfilePosts = normalizeObjectArray(payload?.forumPosts?.profilePosts || [])
+    .map((item) => sanitizeForumPostTransferValue(item, item?.feedType || "profile"))
+    .filter(Boolean);
   const contacts = normalizeObjectArray(payload?.contacts?.contacts).filter((item) =>
     String(item.name || "").trim()
   );
@@ -2982,6 +3207,9 @@ function buildTransferSections(payload, options = {}) {
   const scheduleEntries = normalizeObjectArray(payload?.schedules?.entries).filter(
     (item) => String(item.title || "").trim() && String(item.date || "").trim()
   );
+  const plotThreads = normalizeObjectArray(payload?.plotThreads || [])
+    .map((item) => sanitizePlotThreadTransferValue(item))
+    .filter(Boolean);
   const scheduleActorItems = buildScheduleActorTransferItems(scheduleEntries, contacts);
   const commonPlaceEntries = normalizeObjectArray(payload?.commonPlaces?.entries).filter((item) =>
     String(item.name || "").trim()
@@ -3055,6 +3283,31 @@ function buildTransferSections(payload, options = {}) {
       items: []
     },
     {
+      id: "forumPosts",
+      label: "论坛主贴缓存",
+      description: "论坛页已加载的主贴信息；不含回复树与翻译内容。",
+      checked: Object.keys(forumFeedPostBuckets).length > 0 || forumProfilePosts.length > 0,
+      disabled: Object.keys(forumFeedPostBuckets).length === 0 && forumProfilePosts.length === 0,
+      items: [
+        ...Object.entries(forumFeedPostBuckets).map(([feedType, posts]) => ({
+          id: `${TRANSFER_FORUM_FEED_POSTS_PREFIX}${feedType}`,
+          label: getForumPostTransferFeedLabel(feedType, payload?.forum),
+          description: `${posts.length} 条主贴`,
+          checked: true
+        })),
+        ...(forumProfilePosts.length
+          ? [
+              {
+                id: TRANSFER_FORUM_PROFILE_POSTS_ITEM_ID,
+                label: "个人主页主贴",
+                description: `${forumProfilePosts.length} 条主贴`,
+                checked: true
+              }
+            ]
+          : [])
+      ]
+    },
+    {
       id: "chatPersona",
       label: "Chat 用户资料",
       description: "Chat / Bubble 共用的昵称、头像、微信号与人设 prompt。",
@@ -3120,6 +3373,22 @@ function buildTransferSections(payload, options = {}) {
       checked: scheduleActorItems.length > 0,
       disabled: scheduleActorItems.length === 0,
       items: scheduleActorItems
+    },
+    {
+      id: "plotThreads",
+      label: "历史剧情",
+      description: "剧情页的历史剧情线与已生成正文。",
+      checked: plotThreads.length > 0,
+      disabled: plotThreads.length === 0,
+      items: plotThreads.map((thread) => ({
+        id: String(thread.id || "").trim(),
+        label: String(thread.title || "剧情").trim() || "剧情",
+        description: truncateText(
+          String(thread.summary || thread.openingPlot || "尚未生成正文").trim() || "尚未生成正文",
+          80
+        ),
+        checked: true
+      }))
     },
     {
       id: "commonPlaces",
@@ -3499,6 +3768,29 @@ function buildSelectedTransferPayload(payload, selection) {
     selected.forumProfile = payload.forumProfile;
   }
 
+  const forumPostsSection = sectionMap.get("forumPosts");
+  if (forumPostsSection?.checked && payload.forumPosts) {
+    const selectedIds = new Set(
+      forumPostsSection.items.filter((item) => item.checked).map((item) => item.id)
+    );
+    const feeds = Object.fromEntries(
+      Object.entries(sanitizeForumFeedPostsTransferValue(payload.forumPosts.feeds || {})).filter(
+        ([feedType]) => selectedIds.has(`${TRANSFER_FORUM_FEED_POSTS_PREFIX}${feedType}`)
+      )
+    );
+    const profilePosts = selectedIds.has(TRANSFER_FORUM_PROFILE_POSTS_ITEM_ID)
+      ? normalizeObjectArray(payload.forumPosts.profilePosts)
+          .map((item) => sanitizeForumPostTransferValue(item, item?.feedType || "profile"))
+          .filter(Boolean)
+      : [];
+    if (Object.keys(feeds).length || profilePosts.length) {
+      selected.forumPosts = {
+        feeds,
+        profilePosts
+      };
+    }
+  }
+
   const chatPersonaSection = sectionMap.get("chatPersona");
   if (chatPersonaSection?.checked && payload.chatPersona) {
     selected.chatPersona = payload.chatPersona;
@@ -3563,6 +3855,16 @@ function buildSelectedTransferPayload(payload, selection) {
     };
   }
 
+  const plotThreadsSection = sectionMap.get("plotThreads");
+  if (plotThreadsSection?.checked && Array.isArray(payload.plotThreads)) {
+    const selectedIds = new Set(
+      plotThreadsSection.items.filter((item) => item.checked).map((item) => item.id)
+    );
+    selected.plotThreads = normalizeObjectArray(payload.plotThreads)
+      .map((item) => sanitizePlotThreadTransferValue(item))
+      .filter((item) => item && selectedIds.has(String(item.id || "").trim()));
+  }
+
   const commonPlacesSection = sectionMap.get("commonPlaces");
   if (commonPlacesSection?.checked && payload.commonPlaces) {
     const selectedIds = new Set(
@@ -3609,7 +3911,7 @@ function buildHomeConfigExportPayload(selection = homeState.exportTransferSelect
   const fullPayload = buildTransferPayloadFromCurrentState();
   return {
     schema: CONFIG_EXPORT_SCHEMA,
-    version: 10,
+    version: 11,
     exportedAt: new Date().toISOString(),
     data: buildSelectedTransferPayload(fullPayload, selection)
   };
@@ -3680,6 +3982,10 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
   let nextProfile = {
     ...(readStoredJson(PROFILE_KEY, {}) || {})
   };
+  let nextForumFeeds = sanitizeForumFeedPostsTransferValue(readStoredJson(POSTS_KEY, {}) || {});
+  let nextForumProfilePosts = normalizeObjectArray(readStoredJson(PROFILE_POSTS_KEY, []))
+    .map((item) => sanitizeForumPostTransferValue(item, item?.feedType || "profile"))
+    .filter(Boolean);
   let nextWorldbooks =
     readStoredJson(WORLD_BOOKS_KEY, {
       categories: [],
@@ -3687,6 +3993,9 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
     }) || { categories: [], entries: [] };
   let nextContacts = normalizeObjectArray(readStoredJson(MESSAGE_CONTACTS_KEY, []));
   let nextSchedules = normalizeObjectArray(readStoredJson(SCHEDULE_ENTRIES_KEY, []));
+  let nextPlotThreads = normalizeObjectArray(readStoredJson(PLOT_THREADS_KEY, []))
+    .map((item) => sanitizePlotThreadTransferValue(item))
+    .filter(Boolean);
   let nextCommonPlaces = normalizeObjectArray(readStoredJson(MESSAGE_COMMON_PLACES_KEY, []));
   let nextPresenceState = normalizePresenceTransferState(
     readStoredJson(MESSAGE_PRESENCE_STATE_KEY, {
@@ -3770,6 +4079,14 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
     };
   }
 
+  if (imported.forumPosts && typeof imported.forumPosts === "object") {
+    nextForumFeeds = mergeForumFeedPostBuckets(nextForumFeeds, imported.forumPosts.feeds || {});
+    nextForumProfilePosts = mergeForumPostList(
+      nextForumProfilePosts,
+      imported.forumPosts.profilePosts || []
+    );
+  }
+
   if (imported.chatPersona) {
     const shouldInitializeChatProfile =
       nextProfile.chatProfileInitialized ||
@@ -3808,6 +4125,10 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
 
   if (imported.schedules) {
     nextSchedules = mergeById(nextSchedules, imported.schedules.entries);
+  }
+
+  if (Array.isArray(imported.plotThreads)) {
+    nextPlotThreads = mergePlotThreadTransferItems(nextPlotThreads, imported.plotThreads);
   }
 
   if (imported.commonPlaces) {
@@ -3877,9 +4198,12 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
 
   safeSetItem(SETTINGS_KEY, JSON.stringify(nextSettings));
   safeSetItem(PROFILE_KEY, JSON.stringify(nextProfile));
+  safeSetItem(POSTS_KEY, JSON.stringify(nextForumFeeds));
+  safeSetItem(PROFILE_POSTS_KEY, JSON.stringify(nextForumProfilePosts));
   safeSetItem(WORLD_BOOKS_KEY, JSON.stringify(nextWorldbooks));
   safeSetItem(MESSAGE_CONTACTS_KEY, JSON.stringify(nextContacts));
   safeSetItem(SCHEDULE_ENTRIES_KEY, JSON.stringify(nextSchedules));
+  safeSetItem(PLOT_THREADS_KEY, JSON.stringify(nextPlotThreads));
   safeSetItem(MESSAGE_COMMON_PLACES_KEY, JSON.stringify(nextCommonPlaces));
   safeSetItem(MESSAGE_PRESENCE_STATE_KEY, JSON.stringify(nextPresenceState));
   safeSetItem(MESSAGE_THREADS_KEY, JSON.stringify(nextMessageThreads));
@@ -4920,6 +5244,13 @@ function getHomeAppMeta(tabName = "home") {
       title: "养崽"
     };
   }
+  if (tabName === "plot") {
+    return {
+      tab: "plot",
+      kicker: "Story",
+      title: "剧情"
+    };
+  }
   if (tabName === "schedule") {
     return {
       tab: "schedule",
@@ -5075,6 +5406,15 @@ function openHomeApp(tabName) {
       true,
       `./raising.html?embed=1&v=${APP_BUILD_VERSION}`,
       getHomeAppMeta("raising")
+    );
+    return;
+  }
+
+  if (tabName === "plot") {
+    setHomeBrowserModalOpen(
+      true,
+      `./plot.html?embed=1&v=${APP_BUILD_VERSION}`,
+      getHomeAppMeta("plot")
     );
     return;
   }

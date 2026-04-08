@@ -33,7 +33,7 @@ const DEFAULT_SCHEDULE_AWARENESS_WINDOW_MINUTES = 30;
 const MAX_SCHEDULE_AWARENESS_WINDOW_MINUTES = 720;
 const DEFAULT_MESSAGE_AWARENESS_INTERVAL_ROUNDS = 15;
 const MAX_MESSAGE_AWARENESS_INTERVAL_ROUNDS = 200;
-const DEFAULT_MEMORY_SUMMARY_INTERVAL_ROUNDS = 100;
+const DEFAULT_MEMORY_SUMMARY_INTERVAL_ROUNDS = 10;
 const MAX_MEMORY_SUMMARY_INTERVAL_ROUNDS = 100;
 const DEFAULT_CORE_MEMORY_THRESHOLD = 80;
 const DEFAULT_SCENE_MEMORY_THRESHOLD = 65;
@@ -225,9 +225,6 @@ const messagesChatReplySentenceLimitInputEl = document.querySelector(
 );
 const messagesChatAwarenessRoundsInputEl = document.querySelector(
   "#messages-chat-awareness-rounds-input"
-);
-const messagesChatMemorySummaryRoundsInputEl = document.querySelector(
-  "#messages-chat-memory-summary-rounds-input"
 );
 const messagesChatTimeAwarenessInputEl = document.querySelector(
   "#messages-chat-time-awareness-input"
@@ -931,7 +928,8 @@ function persistReplyRecoveryMap(map = {}) {
 function setConversationReplyRecovery(
   conversationId = "",
   messages = [],
-  expectedReplyContextVersion = null
+  expectedReplyContextVersion = null,
+  options = {}
 ) {
   const resolvedConversationId = String(conversationId || "").trim();
   if (!resolvedConversationId) {
@@ -947,12 +945,17 @@ function setConversationReplyRecovery(
     String(expectedReplyContextVersion ?? ""),
     10
   );
+  const recoveryOptions = options && typeof options === "object" ? options : {};
+  const pendingUserMessageIds = normalizeObjectArray(recoveryOptions.pendingUserMessageIds)
+    .map((messageId) => String(messageId || "").trim())
+    .filter(Boolean);
   const recoveryMap = loadReplyRecoveryMap();
   recoveryMap[resolvedConversationId] = {
     replyContextVersion: Number.isFinite(parsedExpectedReplyContextVersion)
       ? parsedExpectedReplyContextVersion
       : null,
     savedAt: Date.now(),
+    pendingUserMessageIds,
     messages: normalizedMessages.map((message) => ({ ...message }))
   };
   persistReplyRecoveryMap(recoveryMap);
@@ -1028,6 +1031,9 @@ function applyConversationReplyRecovery(conversations = []) {
     const recoveryMessages = normalizeObjectArray(entry?.messages)
       .map((message, index) => normalizeConversationMessage(message, index))
       .filter((message) => message && String(message.id || "").trim() && String(message.text || "").trim());
+    const recoveryPendingUserMessageIds = normalizeObjectArray(entry?.pendingUserMessageIds)
+      .map((messageId) => String(messageId || "").trim())
+      .filter(Boolean);
     if (!recoveryMessages.length) {
       delete recoveryMap[conversationId];
       recoveryMapChanged = true;
@@ -1042,14 +1048,32 @@ function applyConversationReplyRecovery(conversations = []) {
       (message) => !existingMessageIds.has(String(message.id || "").trim())
     );
     if (!missingMessages.length) {
+      const clearedPendingFlags = clearConversationPendingReplyFlags(
+        conversation,
+        recoveryPendingUserMessageIds
+      );
+      if (clearedPendingFlags) {
+        changed = true;
+      }
+      delete recoveryMap[conversationId];
+      recoveryMapChanged = true;
       return;
     }
     const appendedMessages = appendUniqueMessagesToConversation(conversation, missingMessages);
     if (!appendedMessages.length) {
       return;
     }
+    const clearedPendingFlags = clearConversationPendingReplyFlags(
+      conversation,
+      recoveryPendingUserMessageIds
+    );
     recalculateConversationUpdatedAt(conversation);
     changed = true;
+    if (clearedPendingFlags) {
+      changed = true;
+    }
+    delete recoveryMap[conversationId];
+    recoveryMapChanged = true;
   });
 
   if (recoveryMapChanged) {
@@ -3011,7 +3035,7 @@ function resolveConversationMemorySummaryIntervalRounds(
 ) {
   return clampNumber(
     normalizePositiveInteger(
-      conversation?.memorySummaryIntervalRounds,
+      normalizeMessagePromptSettings(promptSettings).memorySummaryIntervalRounds,
       getDefaultConversationMemorySummaryIntervalRounds(promptSettings)
     ),
     1,
@@ -4290,7 +4314,6 @@ function normalizeConversation(conversation, index = 0) {
       0,
       Number.parseInt(String(source.replyContextVersion || 0), 10) || 0
     ),
-    memorySummaryIntervalRounds: resolveConversationMemorySummaryIntervalRounds(source),
     memorySummaryCounter: Math.max(
       0,
       Number.parseInt(String(source.memorySummaryCounter || 0), 10) || 0
@@ -4619,6 +4642,38 @@ function getPendingUserMessageIdSet(conversation = null) {
       .map((message) => String(message?.id || "").trim())
       .filter(Boolean)
   );
+}
+
+function clearConversationPendingReplyFlags(conversation = null, messageIds = []) {
+  if (!conversation || typeof conversation !== "object") {
+    return false;
+  }
+  const targetIdSet = new Set(
+    normalizeObjectArray(messageIds)
+      .map((messageId) => String(messageId || "").trim())
+      .filter(Boolean)
+  );
+  if (!targetIdSet.size || !Array.isArray(conversation.messages) || !conversation.messages.length) {
+    return false;
+  }
+  let changed = false;
+  conversation.messages = conversation.messages.map((message) => {
+    const messageId = String(message?.id || "").trim();
+    if (
+      message?.role === "user" &&
+      message?.needsReply &&
+      messageId &&
+      targetIdSet.has(messageId)
+    ) {
+      changed = true;
+      return {
+        ...message,
+        needsReply: false
+      };
+    }
+    return message;
+  });
+  return changed;
 }
 
 function shouldPreferLocalConversationState(localConversation = null, loadedConversation = null) {
@@ -4983,7 +5038,6 @@ function createConversation(contact) {
     messages: [],
     awarenessCounter: 0,
     replyContextVersion: 0,
-    memorySummaryIntervalRounds: getDefaultConversationMemorySummaryIntervalRounds(),
     memorySummaryCounter: 0,
     memorySummaryLastMessageCount: 0,
     updatedAt: Date.now()
@@ -8479,7 +8533,10 @@ async function appendAssistantReplyBatch(
   setConversationReplyRecovery(
     conversationId,
     createdMessages,
-    hasExpectedReplyContextVersion ? parsedExpectedReplyContextVersion : null
+    hasExpectedReplyContextVersion ? parsedExpectedReplyContextVersion : null,
+    {
+      pendingUserMessageIds: requestOptions.pendingUserMessageIds
+    }
   );
   const shouldAnimateReplyReveal =
     !Boolean(requestOptions.suppressUi) &&
@@ -8494,6 +8551,7 @@ async function appendAssistantReplyBatch(
     }
     recalculateConversationUpdatedAt(activeConversation);
     persistConversations();
+    clearConversationReplyRecovery(conversationId);
     if (state.activeTab === "chat") {
       renderMessagesPage();
     }
@@ -8595,6 +8653,16 @@ async function appendAssistantReplyBatch(
   }
   if (shouldPersistConversationAfterReveal) {
     persistConversations();
+  }
+  if (
+    latestConversation &&
+    createdMessages.every((message) =>
+      normalizeObjectArray(latestConversation.messages).some(
+        (currentMessage) => String(currentMessage?.id || "").trim() === String(message?.id || "").trim()
+      )
+    )
+  ) {
+    clearConversationReplyRecovery(conversationId);
   }
   clearPendingAssistantReveal(conversationId);
   return appendedMessages;
@@ -13295,13 +13363,6 @@ function applyChatPromptSettingsToForm(promptSettings) {
   if (messagesChatAwarenessRoundsInputEl) {
     messagesChatAwarenessRoundsInputEl.value = String(resolved.awarenessIntervalRounds);
   }
-  if (messagesChatMemorySummaryRoundsInputEl) {
-    const conversationSummaryInterval = conversation
-      ? resolveConversationMemorySummaryIntervalRounds(conversation, resolved)
-      : getDefaultConversationMemorySummaryIntervalRounds(resolved);
-    messagesChatMemorySummaryRoundsInputEl.value = String(conversationSummaryInterval);
-    messagesChatMemorySummaryRoundsInputEl.disabled = !Boolean(conversation);
-  }
   if (messagesChatTimeAwarenessInputEl) {
     messagesChatTimeAwarenessInputEl.checked = resolved.timeAwareness;
   }
@@ -13453,24 +13514,6 @@ function getCurrentChatPromptSettingsDraft() {
     showContactAvatar: Boolean(messagesChatShowContactAvatarInputEl?.checked),
     showUserAvatar: Boolean(messagesChatShowUserAvatarInputEl?.checked)
   });
-}
-
-function getCurrentChatMemorySummaryIntervalDraft() {
-  const conversation = getConversationById();
-  const fallbackSummaryInterval = getDefaultConversationMemorySummaryIntervalRounds(
-    state.chatPromptSettings
-  );
-  if (!conversation) {
-    return fallbackSummaryInterval;
-  }
-  return clampNumber(
-    normalizePositiveInteger(
-      messagesChatMemorySummaryRoundsInputEl?.value,
-      conversation.memorySummaryIntervalRounds || fallbackSummaryInterval
-    ),
-    1,
-    MAX_MEMORY_SUMMARY_INTERVAL_ROUNDS
-  );
 }
 
 function createAutoScheduleRequestDraft() {
@@ -14670,22 +14713,6 @@ async function requestConversationReply(options = {}) {
       if (!hasRequestedMessages) {
         return;
       }
-      if (requestedPendingUserMessageIdSet.size) {
-        updatedConversation.messages = updatedConversation.messages.map((message) => {
-          const messageId = String(message?.id || "").trim();
-          if (
-            message.role === "user" &&
-            message.needsReply &&
-            requestedPendingUserMessageIdSet.has(messageId)
-          ) {
-            return {
-              ...message,
-              needsReply: false
-            };
-          }
-          return message;
-        });
-      }
     }
 
     const createdMessages = await appendAssistantReplyBatch(
@@ -14694,14 +14721,27 @@ async function requestConversationReply(options = {}) {
       promptSettings,
       replyResult.privacySession,
       {
-        expectedReplyContextVersion: replyContextVersion
+        expectedReplyContextVersion: replyContextVersion,
+        pendingUserMessageIds: isRegenerate ? [] : requestedPendingUserMessageIds
       }
     );
-    if (!createdMessages.length || !isConversationReplyContextCurrent(conversation.id, replyContextVersion)) {
+    if (!createdMessages.length) {
       return;
     }
     const latestConversation = getConversationById(conversation.id);
     if (!latestConversation) {
+      return;
+    }
+    if (!isRegenerate) {
+      const clearedPendingFlags = clearConversationPendingReplyFlags(
+        latestConversation,
+        requestedPendingUserMessageIds
+      );
+      if (clearedPendingFlags) {
+        persistConversations();
+      }
+    }
+    if (!isConversationReplyContextCurrent(conversation.id, replyContextVersion)) {
       return;
     }
     if (replyResult.assistantPresenceUpdate && latestConversation.contactId) {
@@ -15893,10 +15933,6 @@ function attachEvents() {
       nextSettings.messagePromptSettings = draft;
       persistSettings(nextSettings);
       state.chatPromptSettings = draft;
-      if (conversation) {
-        conversation.memorySummaryIntervalRounds = getCurrentChatMemorySummaryIntervalDraft();
-        persistConversations();
-      }
       setConversationAllowAiPresenceUpdate(
         Boolean(messagesChatAllowAiPresenceUpdateInputEl?.checked)
       );
