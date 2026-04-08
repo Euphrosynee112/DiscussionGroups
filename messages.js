@@ -4042,6 +4042,114 @@ function normalizeMessageMemory(memory, index = 0) {
   };
 }
 
+function getMemoryRetentionConfig() {
+  const fallback = {
+    dayBoundaryMode: "exclude_target_day",
+    scene: {
+      meetsThresholdRetentionDays: 7,
+      belowThresholdRetentionDays: 3
+    },
+    core: {
+      meetsThresholdRetentionDays: 365000,
+      belowThresholdRetentionDays: 30
+    }
+  };
+  const source =
+    window.PulseMemoryRetentionConfig && typeof window.PulseMemoryRetentionConfig === "object"
+      ? window.PulseMemoryRetentionConfig
+      : fallback;
+  const normalizeDays = (value, fallbackValue) =>
+    Math.max(1, Number.parseInt(String(value ?? fallbackValue), 10) || fallbackValue);
+  return {
+    dayBoundaryMode:
+      String(source.dayBoundaryMode || fallback.dayBoundaryMode).trim() ||
+      fallback.dayBoundaryMode,
+    scene: {
+      meetsThresholdRetentionDays: normalizeDays(
+        source?.scene?.meetsThresholdRetentionDays,
+        fallback.scene.meetsThresholdRetentionDays
+      ),
+      belowThresholdRetentionDays: normalizeDays(
+        source?.scene?.belowThresholdRetentionDays,
+        fallback.scene.belowThresholdRetentionDays
+      )
+    },
+    core: {
+      meetsThresholdRetentionDays: normalizeDays(
+        source?.core?.meetsThresholdRetentionDays,
+        fallback.core.meetsThresholdRetentionDays
+      ),
+      belowThresholdRetentionDays: normalizeDays(
+        source?.core?.belowThresholdRetentionDays,
+        fallback.core.belowThresholdRetentionDays
+      )
+    }
+  };
+}
+
+function getMemoryRetentionDays(memory, promptSettings = loadSettings().messagePromptSettings) {
+  const entry = normalizeMessageMemory(memory);
+  const retentionConfig = getMemoryRetentionConfig();
+  const resolvedPromptSettings = normalizeMessagePromptSettings(promptSettings);
+  const threshold =
+    entry.type === "core"
+      ? resolvedPromptSettings.coreMemoryThreshold
+      : resolvedPromptSettings.sceneMemoryThreshold;
+  const meetsThreshold = Number(entry.importance || 0) >= Number(threshold || 0);
+  const configGroup = entry.type === "core" ? retentionConfig.core : retentionConfig.scene;
+  return meetsThreshold
+    ? Number(configGroup.meetsThresholdRetentionDays) || 1
+    : Number(configGroup.belowThresholdRetentionDays) || 1;
+}
+
+function getMemoryRetentionTimestamp(memory) {
+  const entry = memory && typeof memory === "object" ? memory : {};
+  return Number(entry.updatedAt) || Number(entry.createdAt) || 0;
+}
+
+function isMessageMemoryExpired(
+  memory,
+  promptSettings = loadSettings().messagePromptSettings,
+  now = Date.now()
+) {
+  const retentionDays = getMemoryRetentionDays(memory, promptSettings);
+  const timestamp = getMemoryRetentionTimestamp(memory);
+  if (!timestamp || !retentionDays) {
+    return false;
+  }
+  const dayMs = 24 * 60 * 60 * 1000;
+  const ageMs = Math.max(0, Number(now) - timestamp);
+  return ageMs >= retentionDays * dayMs;
+}
+
+function pruneExpiredMessageMemories(
+  memories = [],
+  promptSettings = loadSettings().messagePromptSettings,
+  now = Date.now()
+) {
+  return normalizeObjectArray(memories)
+    .map((item, index) => normalizeMessageMemory(item, index))
+    .filter((item) => item.contactId && item.content)
+    .filter((item) => !isMessageMemoryExpired(item, promptSettings, now));
+}
+
+function syncPrunedMemoriesInState(
+  promptSettings = loadSettings().messagePromptSettings,
+  options = {}
+) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const nextMemories = pruneExpiredMessageMemories(state.memories || [], promptSettings, Date.now());
+  const currentPayload = JSON.stringify(Array.isArray(state.memories) ? state.memories : []);
+  const nextPayload = JSON.stringify(nextMemories);
+  if (currentPayload !== nextPayload) {
+    state.memories = nextMemories;
+    if (requestOptions.persist !== false) {
+      safeSetItem(MESSAGE_MEMORIES_KEY, nextPayload);
+    }
+  }
+  return state.memories;
+}
+
 function loadMessageMemories() {
   const raw = safeGetItem(MESSAGE_MEMORIES_KEY);
   if (!raw) {
@@ -4050,18 +4158,27 @@ function loadMessageMemories() {
 
   try {
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? parsed
-          .map((item, index) => normalizeMessageMemory(item, index))
-          .filter((item) => item.contactId && item.content)
+    const nextMemories = Array.isArray(parsed)
+      ? pruneExpiredMessageMemories(parsed, loadSettings().messagePromptSettings, Date.now())
       : [];
+    const nextPayload = JSON.stringify(nextMemories);
+    if (nextPayload !== raw) {
+      safeSetItem(MESSAGE_MEMORIES_KEY, nextPayload);
+    }
+    return nextMemories;
   } catch (_error) {
     return [];
   }
 }
 
 function persistMessageMemories() {
-  safeSetItem(MESSAGE_MEMORIES_KEY, JSON.stringify(state.memories));
+  const nextMemories = pruneExpiredMessageMemories(
+    state.memories || [],
+    loadSettings().messagePromptSettings,
+    Date.now()
+  );
+  state.memories = nextMemories;
+  safeSetItem(MESSAGE_MEMORIES_KEY, JSON.stringify(nextMemories));
 }
 
 function canonicalizeMemoryContent(value = "") {
@@ -4123,6 +4240,7 @@ function mergeMemories(existing = [], incoming = []) {
 }
 
 function getMemoriesForContact(contactId = "") {
+  syncPrunedMemoriesInState(loadSettings().messagePromptSettings);
   const resolvedContactId = String(contactId || "").trim();
   if (!resolvedContactId) {
     return [];
@@ -4138,6 +4256,7 @@ function getMemoriesForContact(contactId = "") {
 }
 
 function getMemoryEntryById(memoryId = "") {
+  syncPrunedMemoriesInState(loadSettings().messagePromptSettings);
   const resolvedMemoryId = String(memoryId || "").trim();
   if (!resolvedMemoryId) {
     return null;
