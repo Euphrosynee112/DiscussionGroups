@@ -2,8 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260408-174519";
-const APP_BUILD_UPDATED_AT = "2026-04-08 17:45:19";
+const APP_BUILD_VERSION = "20260408-175628";
+const APP_BUILD_UPDATED_AT = "2026-04-08 17:56:28";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -14,6 +14,7 @@ const PLOT_THREADS_KEY = "x_style_generator_plot_threads_v1";
 const WORLD_BOOKS_KEY = "x_style_generator_message_worldbooks_v1";
 const MESSAGE_CONTACTS_KEY = "x_style_generator_message_contacts_v1";
 const MESSAGE_THREADS_KEY = "x_style_generator_message_threads_v1";
+const MESSAGE_MEMORIES_KEY = "x_style_generator_message_memories_v1";
 const SCHEDULE_ENTRIES_KEY = "x_style_generator_schedule_entries_v1";
 const MESSAGE_COMMON_PLACES_KEY = "x_style_generator_common_places_v1";
 const MESSAGE_PRESENCE_STATE_KEY = "x_style_generator_presence_state_v1";
@@ -24,6 +25,7 @@ const PRIVACY_IGNORELIST_TERMS_KEY = "x_style_generator_privacy_ignorelist_terms
 const PRIVACY_RECENT_HITS_SINCE_KEY = "x_style_generator_privacy_recent_hits_since_v1";
 const PRIVACY_RECENT_HITS_DISMISSED_KEY = "x_style_generator_privacy_recent_hits_dismissed_v1";
 const DEFAULT_AUTO_SCHEDULE_DAYS = 3;
+const DEFAULT_TRANSFER_MEMORY_IMPORTANCE = 65;
 const API_CONFIG_LIMIT = 12;
 const CONFIG_EXPORT_SCHEMA = "pulse-generator-config";
 const TRANSFER_FORUM_BASE_ITEM_ID = "__forum_base__";
@@ -1273,6 +1275,148 @@ function buildScheduleActorTransferItems(entries = [], contacts = []) {
     });
 }
 
+function normalizeTransferMemoryType(type) {
+  const resolved = String(type || "").trim().toLowerCase();
+  if (resolved === "core" || resolved === "核心记忆") {
+    return "core";
+  }
+  return "scene";
+}
+
+function normalizeTransferMemoryImportance(value, fallback = DEFAULT_TRANSFER_MEMORY_IMPORTANCE) {
+  const resolved = Math.round(Number(value));
+  if (!Number.isFinite(resolved)) {
+    return fallback;
+  }
+  return Math.min(100, Math.max(1, resolved));
+}
+
+function normalizeMessageMemoryTransferItem(memory, index = 0) {
+  const source = memory && typeof memory === "object" ? memory : {};
+  const content = String(source.content || source.text || "").trim();
+  return {
+    id: String(source.id || `message_memory_${Date.now()}_${index}`),
+    contactId: String(source.contactId || "").trim(),
+    type: normalizeTransferMemoryType(source.type),
+    content,
+    importance: normalizeTransferMemoryImportance(
+      source.importance,
+      DEFAULT_TRANSFER_MEMORY_IMPORTANCE
+    ),
+    source: String(source.source || "summary").trim() === "manual" ? "manual" : "summary",
+    createdAt: Number(source.createdAt) || Date.now(),
+    updatedAt: Number(source.updatedAt) || Number(source.createdAt) || Date.now()
+  };
+}
+
+function canonicalizeTransferMemoryContent(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[，。！？、,.!?；;:“”"'（）()【】\[\]《》<>—\-]/g, "");
+}
+
+function transferMemoryLooksSimilar(left = "", right = "") {
+  const leftText = canonicalizeTransferMemoryContent(left);
+  const rightText = canonicalizeTransferMemoryContent(right);
+  if (!leftText || !rightText) {
+    return false;
+  }
+  if (leftText === rightText) {
+    return true;
+  }
+  const shorter = leftText.length <= rightText.length ? leftText : rightText;
+  const longer = shorter === leftText ? rightText : leftText;
+  return shorter.length >= 8 && longer.includes(shorter);
+}
+
+function mergeMessageMemories(existing = [], incoming = []) {
+  const next = normalizeObjectArray(existing)
+    .map((item, index) => normalizeMessageMemoryTransferItem(item, index))
+    .filter((item) => item.contactId && item.content);
+
+  normalizeObjectArray(incoming).forEach((candidate, index) => {
+    const entry = normalizeMessageMemoryTransferItem(candidate, index);
+    if (!entry.contactId || !entry.content) {
+      return;
+    }
+    const foundIndex = next.findIndex(
+      (item) =>
+        item.contactId === entry.contactId &&
+        transferMemoryLooksSimilar(item.content, entry.content)
+    );
+    if (foundIndex < 0) {
+      next.unshift(entry);
+      return;
+    }
+    const current = next[foundIndex];
+    next[foundIndex] = {
+      ...current,
+      type: current.type === "core" || entry.type === "core" ? "core" : "scene",
+      importance: Math.max(Number(current.importance) || 0, Number(entry.importance) || 0),
+      source: current.source === "manual" ? "manual" : entry.source,
+      updatedAt:
+        Math.max(Number(current.updatedAt) || 0, Number(entry.updatedAt) || 0) || Date.now(),
+      content:
+        String(current.content || "").trim().length >= String(entry.content || "").trim().length
+          ? current.content
+          : entry.content
+    };
+  });
+
+  return next
+    .filter((item) => item.contactId && item.content)
+    .sort(
+      (left, right) =>
+        (Number(right.importance) || 0) - (Number(left.importance) || 0) ||
+        (Number(right.updatedAt) || 0) - (Number(left.updatedAt) || 0)
+    );
+}
+
+function buildMemoryTransferItems(entries = [], contacts = []) {
+  const contactMap = new Map(
+    normalizeObjectArray(contacts).map((contact) => [String(contact.id || "").trim(), contact])
+  );
+  const grouped = new Map();
+
+  mergeMessageMemories([], entries).forEach((entry) => {
+    const contactId = String(entry.contactId || "").trim();
+    if (!contactId) {
+      return;
+    }
+    if (!grouped.has(contactId)) {
+      const contact = contactMap.get(contactId);
+      grouped.set(contactId, {
+        id: contactId,
+        label: String(contact?.name || "未匹配联系人").trim() || "未匹配联系人",
+        coreCount: 0,
+        sceneCount: 0
+      });
+    }
+    const item = grouped.get(contactId);
+    if (entry.type === "core") {
+      item.coreCount += 1;
+    } else {
+      item.sceneCount += 1;
+    }
+  });
+
+  return [...grouped.values()]
+    .map((item) => ({
+      id: item.id,
+      label: item.label,
+      description: [
+        `核心 ${item.coreCount} 条`,
+        `情景 ${item.sceneCount} 条`,
+        item.label === "未匹配联系人" ? `ID ${item.id}` : ""
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      checked: true
+    }))
+    .sort((left, right) => String(left.label || "").localeCompare(String(right.label || ""), "zh-CN"));
+}
+
 function getTransferLeafStats(section = {}) {
   const items = Array.isArray(section.items) ? section.items : [];
   let total = 0;
@@ -1539,6 +1683,7 @@ function buildTransferPayloadFromCurrentState() {
   const worldbooks = readStoredJson(WORLD_BOOKS_KEY, { categories: [], entries: [] }) || {};
   const contacts = readStoredJson(MESSAGE_CONTACTS_KEY, []) || [];
   const messageThreads = readStoredJson(MESSAGE_THREADS_KEY, []) || [];
+  const messageMemories = readStoredJson(MESSAGE_MEMORIES_KEY, []) || [];
   const forumFeedPosts = readStoredJson(POSTS_KEY, {}) || {};
   const forumProfilePosts = readStoredJson(PROFILE_POSTS_KEY, []) || [];
   const plotThreads = readStoredJson(PLOT_THREADS_KEY, []) || [];
@@ -1604,6 +1749,9 @@ function buildTransferPayloadFromCurrentState() {
     contacts: {
       contacts: normalizeObjectArray(contacts).filter((item) => String(item.name || "").trim()),
       chatThreads: normalizeConversationThreadPayloadItems(messageThreads)
+    },
+    memories: {
+      entries: mergeMessageMemories([], messageMemories)
     },
     schedules: {
       entries: normalizeObjectArray(scheduleEntries).filter(
@@ -3100,6 +3248,11 @@ function normalizeTransferPayload(parsed) {
       worldbooks:
         source.worldbooks && typeof source.worldbooks === "object" ? source.worldbooks : null,
       contacts: source.contacts && typeof source.contacts === "object" ? source.contacts : null,
+      memories: Array.isArray(source.memories)
+        ? { entries: source.memories }
+        : source.memories && typeof source.memories === "object"
+          ? source.memories
+          : null,
       schedules: source.schedules && typeof source.schedules === "object" ? source.schedules : null,
       plotThreads: Array.isArray(source.plotThreads) ? source.plotThreads : null,
       commonPlaces:
@@ -3173,6 +3326,11 @@ function normalizeTransferPayload(parsed) {
       : null,
     worldbooks: parsed.worldbooks && typeof parsed.worldbooks === "object" ? parsed.worldbooks : null,
     contacts: parsed.contacts && typeof parsed.contacts === "object" ? parsed.contacts : null,
+    memories: Array.isArray(parsed.memories)
+      ? { entries: parsed.memories }
+      : parsed.memories && typeof parsed.memories === "object"
+        ? parsed.memories
+        : null,
     schedules: parsed.schedules && typeof parsed.schedules === "object" ? parsed.schedules : null,
     plotThreads: Array.isArray(parsed.plotThreads) ? parsed.plotThreads : null,
     commonPlaces:
@@ -3209,6 +3367,8 @@ function buildTransferSections(payload, options = {}) {
   const chatThreadMap = new Map(
     chatThreads.map((thread) => [String(thread.contactId || "").trim(), thread])
   );
+  const memoryEntries = mergeMessageMemories([], payload?.memories?.entries || []);
+  const memoryItems = buildMemoryTransferItems(memoryEntries, contacts);
   const scheduleEntries = normalizeObjectArray(payload?.schedules?.entries).filter(
     (item) => String(item.title || "").trim() && String(item.date || "").trim()
   );
@@ -3370,6 +3530,14 @@ function buildTransferSections(payload, options = {}) {
               : []
         };
       })
+    },
+    {
+      id: "memories",
+      label: "记忆",
+      description: "按角色聚合导入导出核心记忆与情景记忆。",
+      checked: memoryItems.length > 0,
+      disabled: memoryItems.length === 0,
+      items: memoryItems
     },
     {
       id: "schedules",
@@ -3842,6 +4010,22 @@ function buildSelectedTransferPayload(payload, selection) {
     };
   }
 
+  const memoriesSection = sectionMap.get("memories");
+  if (memoriesSection?.checked && payload.memories) {
+    const selectedIds = new Set(
+      memoriesSection.items.filter((item) => item.checked).map((item) => item.id)
+    );
+    const entries = mergeMessageMemories(
+      [],
+      normalizeObjectArray(payload.memories.entries).filter((entry) =>
+        selectedIds.has(String(entry.contactId || "").trim())
+      )
+    );
+    if (entries.length) {
+      selected.memories = { entries };
+    }
+  }
+
   const schedulesSection = sectionMap.get("schedules");
   if (schedulesSection?.checked && payload.schedules) {
     const selectedScheduleIds = new Set(
@@ -3916,7 +4100,7 @@ function buildHomeConfigExportPayload(selection = homeState.exportTransferSelect
   const fullPayload = buildTransferPayloadFromCurrentState();
   return {
     schema: CONFIG_EXPORT_SCHEMA,
-    version: 11,
+    version: 12,
     exportedAt: new Date().toISOString(),
     data: buildSelectedTransferPayload(fullPayload, selection)
   };
@@ -3997,6 +4181,7 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
       entries: []
     }) || { categories: [], entries: [] };
   let nextContacts = normalizeObjectArray(readStoredJson(MESSAGE_CONTACTS_KEY, []));
+  let nextMemories = mergeMessageMemories([], readStoredJson(MESSAGE_MEMORIES_KEY, []) || []);
   let nextSchedules = normalizeObjectArray(readStoredJson(SCHEDULE_ENTRIES_KEY, []));
   let nextPlotThreads = normalizeObjectArray(readStoredJson(PLOT_THREADS_KEY, []))
     .map((item) => sanitizePlotThreadTransferValue(item))
@@ -4128,6 +4313,10 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
     }
   }
 
+  if (imported.memories) {
+    nextMemories = mergeMessageMemories(nextMemories, imported.memories.entries);
+  }
+
   if (imported.schedules) {
     nextSchedules = mergeById(nextSchedules, imported.schedules.entries);
   }
@@ -4207,6 +4396,7 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
   safeSetItem(PROFILE_POSTS_KEY, JSON.stringify(nextForumProfilePosts));
   safeSetItem(WORLD_BOOKS_KEY, JSON.stringify(nextWorldbooks));
   safeSetItem(MESSAGE_CONTACTS_KEY, JSON.stringify(nextContacts));
+  safeSetItem(MESSAGE_MEMORIES_KEY, JSON.stringify(nextMemories));
   safeSetItem(SCHEDULE_ENTRIES_KEY, JSON.stringify(nextSchedules));
   safeSetItem(PLOT_THREADS_KEY, JSON.stringify(nextPlotThreads));
   safeSetItem(MESSAGE_COMMON_PLACES_KEY, JSON.stringify(nextCommonPlaces));
