@@ -2,8 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260408-183257";
-const APP_BUILD_UPDATED_AT = "2026-04-08 18:32:57";
+const APP_BUILD_VERSION = "20260408-185224";
+const APP_BUILD_UPDATED_AT = "2026-04-08 18:52:24";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -1740,6 +1740,9 @@ function buildTransferPayloadFromCurrentState() {
         .filter(Boolean)
     },
     chatPersona: chatProfile,
+    negativePromptConstraints: normalizeNegativePromptConstraints(
+      settings.negativePromptConstraints || []
+    ),
     worldbooks: {
       categories: normalizeObjectArray(worldbooks.categories),
       entries: normalizeObjectArray(worldbooks.entries).filter(
@@ -3245,6 +3248,9 @@ function normalizeTransferPayload(parsed) {
         source.forumPosts && typeof source.forumPosts === "object" ? source.forumPosts : null,
       chatPersona:
         source.chatPersona && typeof source.chatPersona === "object" ? source.chatPersona : null,
+      negativePromptConstraints: normalizeNegativePromptConstraints(
+        source.negativePromptConstraints || []
+      ),
       worldbooks:
         source.worldbooks && typeof source.worldbooks === "object" ? source.worldbooks : null,
       contacts: source.contacts && typeof source.contacts === "object" ? source.contacts : null,
@@ -3324,6 +3330,9 @@ function normalizeTransferPayload(parsed) {
     chatPersona: hasAnyTextValue(pickChatProfilePayload(profile))
       ? pickChatProfilePayload(profile)
       : null,
+    negativePromptConstraints: normalizeNegativePromptConstraints(
+      settings?.negativePromptConstraints || parsed.negativePromptConstraints || []
+    ),
     worldbooks: parsed.worldbooks && typeof parsed.worldbooks === "object" ? parsed.worldbooks : null,
     contacts: parsed.contacts && typeof parsed.contacts === "object" ? parsed.contacts : null,
     memories: Array.isArray(parsed.memories)
@@ -3381,6 +3390,9 @@ function buildTransferSections(payload, options = {}) {
   );
   const privacyAllowlist = normalizePrivacyAllowlist(payload?.privacyAllowlist || []);
   const privacyAllowlistMeta = normalizePrivacyAllowlistMetaItems(payload?.privacyAllowlistMeta || []);
+  const negativePromptConstraints = normalizeNegativePromptConstraints(
+    payload?.negativePromptConstraints || []
+  );
   const hasPresenceState = hasPresenceTransferStateData(payload?.presenceState || {});
   const hasApiSecrets = Boolean(
     payload?.apiSecrets &&
@@ -3478,6 +3490,19 @@ function buildTransferSections(payload, options = {}) {
       description: "Chat / Bubble 共用的昵称、头像、微信号与人设 prompt。",
       checked: Boolean(payload?.chatPersona && hasAnyTextValue(payload.chatPersona)),
       disabled: !(payload?.chatPersona && hasAnyTextValue(payload.chatPersona)),
+      items: []
+    },
+    {
+      id: "negativePromptConstraints",
+      label: "全局负向约束",
+      description: negativePromptConstraints.length
+        ? truncateText(
+            `首页规则里的全局负向约束，共 ${negativePromptConstraints.length} 条：${negativePromptConstraints.join("；")}`,
+            80
+          )
+        : "首页规则里的全局负向约束词汇和表达。",
+      checked: negativePromptConstraints.length > 0,
+      disabled: negativePromptConstraints.length === 0,
       items: []
     },
     {
@@ -3969,6 +3994,13 @@ function buildSelectedTransferPayload(payload, selection) {
     selected.chatPersona = payload.chatPersona;
   }
 
+  const negativePromptConstraintsSection = sectionMap.get("negativePromptConstraints");
+  if (negativePromptConstraintsSection?.checked) {
+    selected.negativePromptConstraints = normalizeNegativePromptConstraints(
+      payload?.negativePromptConstraints || []
+    );
+  }
+
   const worldbooksSection = sectionMap.get("worldbooks");
   if (worldbooksSection?.checked && payload.worldbooks) {
     const selectedIds = new Set(
@@ -4100,7 +4132,7 @@ function buildHomeConfigExportPayload(selection = homeState.exportTransferSelect
   const fullPayload = buildTransferPayloadFromCurrentState();
   return {
     schema: CONFIG_EXPORT_SCHEMA,
-    version: 12,
+    version: 13,
     exportedAt: new Date().toISOString(),
     data: buildSelectedTransferPayload(fullPayload, selection)
   };
@@ -4296,6 +4328,12 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
     if (Object.prototype.hasOwnProperty.call(imported.chatPersona, "personaPrompt")) {
       nextProfile.chatPersonaPrompt = String(imported.chatPersona.personaPrompt || "").trim();
     }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(imported, "negativePromptConstraints")) {
+    nextSettings.negativePromptConstraints = normalizeNegativePromptConstraints(
+      imported.negativePromptConstraints || []
+    );
   }
 
   if (imported.worldbooks) {

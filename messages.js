@@ -4158,27 +4158,18 @@ function loadMessageMemories() {
 
   try {
     const parsed = JSON.parse(raw);
-    const nextMemories = Array.isArray(parsed)
-      ? pruneExpiredMessageMemories(parsed, loadSettings().messagePromptSettings, Date.now())
+    return Array.isArray(parsed)
+      ? parsed
+          .map((item, index) => normalizeMessageMemory(item, index))
+          .filter((item) => item.contactId && item.content)
       : [];
-    const nextPayload = JSON.stringify(nextMemories);
-    if (nextPayload !== raw) {
-      safeSetItem(MESSAGE_MEMORIES_KEY, nextPayload);
-    }
-    return nextMemories;
   } catch (_error) {
     return [];
   }
 }
 
 function persistMessageMemories() {
-  const nextMemories = pruneExpiredMessageMemories(
-    state.memories || [],
-    loadSettings().messagePromptSettings,
-    Date.now()
-  );
-  state.memories = nextMemories;
-  safeSetItem(MESSAGE_MEMORIES_KEY, JSON.stringify(nextMemories));
+  safeSetItem(MESSAGE_MEMORIES_KEY, JSON.stringify(state.memories));
 }
 
 function canonicalizeMemoryContent(value = "") {
@@ -4240,7 +4231,6 @@ function mergeMemories(existing = [], incoming = []) {
 }
 
 function getMemoriesForContact(contactId = "") {
-  syncPrunedMemoriesInState(loadSettings().messagePromptSettings);
   const resolvedContactId = String(contactId || "").trim();
   if (!resolvedContactId) {
     return [];
@@ -4256,7 +4246,6 @@ function getMemoriesForContact(contactId = "") {
 }
 
 function getMemoryEntryById(memoryId = "") {
-  syncPrunedMemoriesInState(loadSettings().messagePromptSettings);
   const resolvedMemoryId = String(memoryId || "").trim();
   if (!resolvedMemoryId) {
     return null;
@@ -9226,6 +9215,7 @@ async function maybeExtractConversationMemories(conversationId, settings, prompt
     return;
   }
   const resolvedPromptSettings = normalizeMessagePromptSettings(promptSettings);
+  syncPrunedMemoriesInState(resolvedPromptSettings);
   const memorySummaryIntervalRounds = resolveConversationMemorySummaryIntervalRounds(
     conversation,
     resolvedPromptSettings
@@ -13539,6 +13529,7 @@ function setMemoryViewerOpen(isOpen, preferredContactId = "") {
     messagesMemoryModalEl.setAttribute("aria-hidden", String(!state.memoryViewerOpen));
   }
   if (state.memoryViewerOpen) {
+    syncPrunedMemoriesInState(loadSettings().messagePromptSettings);
     state.memoryTab = "all";
     state.memoryQuery = "";
     if (messagesMemorySearchInputEl) {
