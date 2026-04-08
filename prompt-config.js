@@ -360,6 +360,7 @@
             "所属讨论区",
             "当前所属论坛讨论区是“{{feedLabel}}”。"
           ),
+          createDynamicItem("forum_audience_text", "页签用户定位", "读取当前页签用户定位"),
           createTemplateItem("priority_intro", "优先级前缀", "回复生成优先级："),
           createTemplateItem(
             "priority_1",
@@ -485,7 +486,6 @@
       sections: {
         context_library: [
           createDynamicItem("worldbook_context", "世界书背景", "读取挂载世界书"),
-          createDynamicItem("triggered_awareness", "触发察觉", "读取角色此刻突然联想到的额外线索"),
           createDynamicItem("bubble_focus_context", "Bubble 挂载", "读取最近挂载的 Bubble 语境"),
           createDynamicItem("forum_post_focus_context", "论坛挂载", "读取最近挂载的论坛语境"),
           createDynamicItem("hot_topics_context", "论坛热点语境", "读取论坛热点 / 页签语境"),
@@ -503,6 +503,7 @@
           createDynamicItem("regenerate_hint", "重回要求", "读取重回额外要求")
         ],
         current_state_awareness: [
+          createDynamicItem("triggered_awareness", "触发察觉", "读取角色此刻突然联想到的额外线索"),
           createDynamicItem("presence_context", "地点状态", "读取双方当前地点 / 在路上状态"),
           createDynamicItem("time_awareness", "时间感知", "读取当前生效时间"),
           createDynamicItem("mentioned_time_schedule", "提及时段日程", "读取用户刚提到时间对应的双方日程"),
@@ -511,6 +512,8 @@
         output_standard: [
           createTemplateItem("human_chat", "真人聊天感", "你的回复必须像即时聊天软件中的真人对话，自然、轻松、有情绪，而不是助手或任务执行结果。"),
           createTemplateItem("receive_emotion", "先接情绪", "回复时优先接住当前对话中的情绪、语气和潜台词，再决定是否回应具体内容，不要只做信息回答。"),
+          createTemplateItem("emotion_first", "情绪先行", "不要先把用户刚说的事实重复一遍再开始回复。更自然的写法通常是直接进入情绪、态度、反应或一句贴身的接话。"),
+          createTemplateItem("natural_ellipsis", "自然省略", "允许适当省略主语、宾语或连接词，只要像真人即时聊天一样自然、清楚、顺口。"),
           createTemplateItem("colloquial", "口语化", "表达需要口语化，可以有停顿、转折和即时反应，可以使用“……” “！”以及自然语气词，允许有一点碎碎念或临场感。"),
           createTemplateItem("line_limit", "行数限制", "每一行代表一条单独发送的消息，总行数不超过{{replySentenceLimit}}行。这是上限，不是目标；能短就短，能少发就少发，只在自然需要时再继续展开。"),
           createTemplateItem("line_break_rule", "分行规则", "尽量不要输出长句；一句话在括号外遇到逗号或句号时，请直接分行输出。括号里的动作、表情或行为描述不受这条限制，括号内的逗号、句号不要为了分行硬拆开。分行后，原本只用于收尾的逗号、句号要省略，不得省略感叹号、问号、省略号、波浪号等表达情绪的标点。"),
@@ -595,6 +598,8 @@
         output_standard: [
           createTemplateItem("stay_in_character", "角色视角", "分析必须严格站在这个角色的立场上，只能基于给定人设和这段聊天推断，不要引入对话外的新事实。"),
           createTemplateItem("focus_now", "聚焦当下", "重点围绕最后这条目标消息来分析：ta 当时在想什么、为什么会这样说、想达到什么效果。"),
+          createTemplateItem("voice_match", "语气贴合角色", "整段心声要像这个角色脑内正在即时嘀咕，保留 ta 自己的口头习惯、别扭劲、试探感或情绪起伏，不要写成第三方旁白。"),
+          createTemplateItem("emotion_over_fact", "少讲事实多讲心绪", "少做客观事实复述，多写当时真正翻上来的情绪、在意、嘴硬、心虚、期待、犹豫或没说出口的小算盘。"),
           createTemplateItem("plain_text", "输出格式", "请直接输出一整段第一人称自然描述，像这个人正在心里默念当时真正的想法。内容里要自然覆盖：此刻心声、为什么这么说、潜在目的。"),
           createTemplateItem("concise", "简洁克制", "整体保持简洁、具体、像真实人物心理，不要写成长篇小说；不要写 1、2、3，不要项目符号，不要固定标签，不要 markdown。")
         ]
@@ -622,8 +627,9 @@
           createTemplateItem("date_weather", "日期天气", "2. 正文里要自然写出今天是几月几日、星期几；天气只能从今天的聊天记录里提取，若聊天里没有提到天气，就自然写成没特别留意到天气，不要硬编温度、天气现象或城市。"),
           createTemplateItem("priority", "优先级", "3. 今日聊天记录是核心，挂载的世界书和论坛背景只做辅助参考。"),
           createTemplateItem("length", "字数限制", "4. 控制在 {{journalLength}} 字以内。"),
-          createTemplateItem("tone", "语气", "5. 语气要像当天稍晚写下来的私人记录，细节真实，不要写成总结报告。"),
-          createTemplateItem("inner_thought", "心理活动", "6. 适当增加一些心理活动、犹豫、回味和没说出口的小念头。")
+          createTemplateItem("tone", "语气", "5. 整篇要像这个角色当天稍晚自己写下来的私人记录，要带 ta 本人的说话习惯、在意点和情绪偏向，不要写成客观总结报告或流水账。"),
+          createTemplateItem("emotion_focus", "情绪重心", "6. 多写今天真正挂在心上的情绪变化、回味、别扭、松动、犹豫和没说出口的小念头，少做冷静客观的事实陈列。"),
+          createTemplateItem("inner_thought", "心理活动", "7. 适当增加一些心理活动、犹豫、回味和没说出口的小念头。")
         ]
       }
     },

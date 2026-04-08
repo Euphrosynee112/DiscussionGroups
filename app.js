@@ -2829,7 +2829,11 @@ function buildReplyPrompt(
   const forumPromptContext = buildForumPromptContext(settings, resolvedFeedType);
   const targetText = parentReply ? parentReply.text : rootPost.text;
   const promptTitle = parentReply ? "楼中楼回复" : "主楼回复";
-  const feedSourceText = buildFeedSourceText(settings, resolvedFeedType).trim();
+  const feedSourceText = customTab
+    ? buildCustomTabSourceText(customTab, {
+        includeAudience: false
+      }).trim()
+    : buildFeedSourceText(settings, resolvedFeedType).trim();
   const forumSettingText = feedSourceText
     ? [
         `当前论坛讨论区：${feedLabel}`,
@@ -2874,6 +2878,11 @@ function buildReplyPrompt(
         reply_target_text: resolvedTargetText
       },
       persona_alignment: {
+        forum_audience_text: String(customTab?.audience || "").trim()
+          ? `当前这个讨论区里最常见、最典型的活跃回复人群画像：${String(
+              customTab.audience || ""
+            ).trim()}。生成回复时要自然体现这种人群的视角、措辞、关注点和情绪密度。`
+          : "",
         author_persona_text: profile?.personaPrompt || DEFAULT_PROFILE.personaPrompt
       }
     },

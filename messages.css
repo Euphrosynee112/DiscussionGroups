@@ -1794,6 +1794,10 @@ body.embedded {
   gap: 12px;
 }
 
+.messages-dialog-modal__actions--awareness {
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+
 .messages-dialog-modal__actions--stacked {
   grid-template-columns: 1fr;
 }
@@ -1810,6 +1814,24 @@ body.embedded {
 .messages-dialog-modal__button--primary {
   background: rgba(7, 193, 96, 0.12);
   color: #08944d;
+}
+
+.messages-dialog-modal__button--accent {
+  background: rgba(29, 155, 240, 0.12);
+  color: #1d7fd8;
+}
+
+.messages-dialog-modal__button--icon {
+  width: 44px;
+  min-width: 44px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+
+.messages-dialog-modal__button--icon svg {
+  width: 18px;
+  height: 18px;
 }
 
 .messages-dialog-modal__description {

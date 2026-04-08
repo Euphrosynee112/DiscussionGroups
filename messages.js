@@ -490,6 +490,7 @@ const messagesAwarenessEmotionInputEl = document.querySelector(
 const messagesAwarenessSensitivityInputEl = document.querySelector(
   "#messages-awareness-sensitivity-input"
 );
+const messagesAwarenessTriggerBtnEl = document.querySelector("#messages-awareness-trigger-btn");
 const messagesAwarenessHistoryEl = document.querySelector("#messages-awareness-history");
 const messagesAwarenessStatusEl = document.querySelector("#messages-awareness-status");
 const messagesJournalModalEl = document.querySelector("#messages-journal-modal");
@@ -3076,6 +3077,24 @@ function buildAwarenessHistoryItem(triggered = false, roundCount = 0, note = "",
   };
 }
 
+function normalizeManualAwarenessTrigger(value = null) {
+  const source = value && typeof value === "object" ? value : null;
+  if (!source) {
+    return null;
+  }
+  const text = String(source.text || source.awarenessText || "").trim();
+  if (!text) {
+    return null;
+  }
+  return {
+    title: resolveAwarenessTitle(source.title || source.awarenessTitle, text),
+    text,
+    emotionShift: String(source.emotionShift || source.awarenessEmotionShift || "").trim(),
+    sensitivity: normalizeAwarenessSensitivity(source.sensitivity || source.awarenessSensitivity),
+    createdAt: Number(source.createdAt) || Date.now()
+  };
+}
+
 function appendAwarenessHistory(contact = {}, entry = {}) {
   const history = normalizeAwarenessHistory(contact?.awarenessHistory || []);
   return normalizeAwarenessHistory([entry, ...history]);
@@ -3781,6 +3800,9 @@ function normalizeContact(contact, index = 0) {
     awarenessLastCheckedAt: Number(source.awarenessLastCheckedAt) || 0,
     awarenessLastTriggeredAt: Number(source.awarenessLastTriggeredAt) || 0,
     awarenessHistory: normalizeAwarenessHistory(source.awarenessHistory || []),
+    awarenessManualTriggerPending: normalizeManualAwarenessTrigger(
+      source.awarenessManualTriggerPending || source.awarenessManualTrigger || null
+    ),
     createdAt: Number(source.createdAt) || Date.now(),
     updatedAt: Number(source.updatedAt) || Date.now()
   };
@@ -6231,6 +6253,72 @@ function buildScheduleAwarenessLine(entry, awareness) {
   return `${ownerLabel}在 ${formatScheduleDistanceMinutes(awareness.distance)} 后有行程「${entry.title}」。`;
 }
 
+function buildUpcomingScheduleCompanionText(entry = {}) {
+  const companionNames = Array.isArray(entry.awarenessCompanionNames)
+    ? entry.awarenessCompanionNames.filter(Boolean)
+    : [];
+  if (!companionNames.length) {
+    return "";
+  }
+  return ` · 和${companionNames.slice(0, 2).join("、")}${
+    companionNames.length > 2 ? `等${companionNames.length}位同行人` : ""
+  }一起`;
+}
+
+function collectTodayUpcomingContactScheduleLines(
+  entries = [],
+  now = getPromptNow(loadSettings()),
+  excludedEntryIds = new Set()
+) {
+  const resolvedNow = now instanceof Date ? now : new Date();
+  const nowTimestamp = resolvedNow.getTime();
+  const todayValue = formatDateToValue(resolvedNow);
+  const seen = new Set();
+  const excludedIds =
+    excludedEntryIds instanceof Set
+      ? excludedEntryIds
+      : new Set(
+          (Array.isArray(excludedEntryIds) ? excludedEntryIds : [])
+            .map((item) => String(item || "").trim())
+            .filter(Boolean)
+        );
+
+  return normalizeObjectArray(entries)
+    .filter(
+      (entry) =>
+        entry.awarenessMode === "participant" &&
+        !excludedIds.has(String(entry.id || "").trim())
+    )
+    .flatMap((entry) => {
+      return buildScheduleOccurrenceWindows(entry, resolvedNow)
+        .filter((range) => {
+          const startAt = Number(range?.start?.getTime?.() || 0);
+          return (
+            startAt > nowTimestamp &&
+            formatDateToValue(range.start) === todayValue
+          );
+        })
+        .map((range) => ({
+          entry,
+          startAt: Number(range.start.getTime()) || 0,
+          line: `- ${formatSchedulePreviewTime(entry)} · ${String(
+            entry.title || "未命名行程"
+          ).trim()}${buildUpcomingScheduleCompanionText(entry)}`
+        }));
+    })
+    .sort((left, right) => left.startAt - right.startAt || (right.entry.updatedAt || 0) - (left.entry.updatedAt || 0))
+    .filter((item) => {
+      const key = `${String(item.entry?.id || item.line)}__${item.startAt}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 4)
+    .map((item) => item.line);
+}
+
 function buildScheduleAwarenessContext(contact, history = [], promptSettings = {}) {
   const windowMinutes = normalizeMessagePromptSettings(promptSettings).scheduleAwarenessWindowMinutes;
   const entries = getVisibleScheduleEntriesForContact(contact?.id || "");
@@ -6255,16 +6343,42 @@ function buildScheduleAwarenessContext(contact, history = [], promptSettings = {
       );
     })
     .slice(0, 4);
+  const userRelevantEntries = activeEntries.filter((item) => item.entry.awarenessMode !== "participant");
+  const contactRelevantEntries = activeEntries.filter((item) => item.entry.awarenessMode === "participant");
+  const todayUpcomingContactLines = collectTodayUpcomingContactScheduleLines(
+    entries,
+    now,
+    new Set(contactRelevantEntries.map((item) => String(item.entry?.id || "").trim()).filter(Boolean))
+  );
 
-  if (!activeEntries.length) {
+  if (!activeEntries.length && !todayUpcomingContactLines.length) {
     return "当前没有检测到你在最近窗口内的行程压力；除非聊天里另有明确说明，否则不要把自己写成正忙着别的事。";
   }
 
-  return [
-    `日程感知窗口：最近 ${windowMinutes} 分钟。`,
-    ...activeEntries.map((item) => `- ${buildScheduleAwarenessLine(item.entry, item.awareness)}`),
-    "如果这些行程和当前聊天自然相关，你可以顺带表达一句关心、提醒或配合；不要为了提行程而生硬转移话题，也不要重复提起刚刚已经主动说过的同一条行程。"
-  ].join("\n");
+  const lines = [`日程感知窗口：最近 ${windowMinutes} 分钟。`];
+  if (userRelevantEntries.length) {
+    lines.push("用户相关行程感知：");
+    lines.push(...userRelevantEntries.map((item) => `- ${buildScheduleAwarenessLine(item.entry, item.awareness)}`));
+  }
+  if (contactRelevantEntries.length) {
+    lines.push("你的相关行程感知：");
+    lines.push(
+      ...contactRelevantEntries.map((item) => `- ${buildScheduleAwarenessLine(item.entry, item.awareness)}`)
+    );
+  } else {
+    lines.push(
+      "你的相关行程感知：",
+      "- 你当前没有已知行程在进行，也没有最近窗口内必须立刻处理的安排；除非聊天里另有明确说明，否则不要拿不存在的忙碌感结束对话。"
+    );
+  }
+  if (todayUpcomingContactLines.length) {
+    lines.push("你今天后续的已知行程：");
+    lines.push(...todayUpcomingContactLines);
+  }
+  lines.push(
+    "如果这些行程和当前聊天自然相关，你可以顺带表达一句关心、提醒或配合；不要生硬复述时间表，更不要为了提行程而强行转移话题。"
+  );
+  return lines.join("\n");
 }
 
 function formatMentionScheduleEntryLine(entry, dateText = "", contactId = "") {
@@ -6997,9 +7111,6 @@ function buildConversationSystemPrompt(
     {
       context_library: {
         worldbook_context: worldbookContext,
-        triggered_awareness: triggeredAwarenessContext
-          ? `当前触发的察觉信息：\n${triggeredAwarenessContext}`
-          : "",
         bubble_focus_context: bubbleFocusContext || "",
         forum_post_focus_context: forumPostFocusContext || "",
         hot_topics_context: hotTopicsContext
@@ -7031,6 +7142,9 @@ function buildConversationSystemPrompt(
           : ""
       },
       current_state_awareness: {
+        triggered_awareness: triggeredAwarenessContext
+          ? `当前触发的察觉信息：\n${triggeredAwarenessContext}`
+          : "",
         presence_context: presenceContext ? `当前地点与状态：\n${presenceContext}` : "",
         time_awareness: timeAwarenessContext || "",
         mentioned_time_schedule: mentionedTimeScheduleContext
@@ -8813,7 +8927,8 @@ async function requestJournalEntryText(
     conversation,
     journalOptions
   );
-  const userInstruction = "请根据这些信息，直接写出今天的日记正文。";
+  const userInstruction =
+    "请根据这些信息，直接写出今天的日记正文。重点写成这个角色当天稍晚自己记下来的私人记录，语气和情绪都要像 ta 本人，不要写成客观总结。";
   const privacySession = createPrivacySession({
     settings,
     profile,
@@ -9008,7 +9123,7 @@ async function requestInnerThoughtText(settings, profile, contact, conversation,
     conversation
   );
   const userInstruction =
-    "请严格用说出这条消息的那个人的第一人称口吻，只输出一整段自然口语化心声，直接说明当时心里在想什么、为什么这么说、想达到什么效果。不要分段，不要编号，不要项目符号，不要固定小标题。";
+    "请严格用说出这条消息的那个人的第一人称口吻，只输出一整段自然口语化心声。要像 ta 当时脑子里正在即时嘀咕，重点写情绪、别扭、在意、试探和没说出口的小算盘，不要写成客观分析。不要分段，不要编号，不要项目符号，不要固定小标题。";
   const privacySession = createPrivacySession({
     settings,
     profile,
@@ -9339,6 +9454,9 @@ function renderAwarenessHistory(contact = null, conversation = null) {
     resolvedContact.awarenessResolvedState,
     resolvedContact.awarenessConsumed
   );
+  const pendingManualTrigger = normalizeManualAwarenessTrigger(
+    resolvedContact.awarenessManualTriggerPending
+  );
   if (resolvedContact.awarenessHistoryHidden) {
     messagesAwarenessHistoryEl.innerHTML =
       '<div class="messages-awareness-history__empty">这条察觉已超过 20 轮，已从历史监控中移除。重新保存后会重新开始。</div>';
@@ -9351,6 +9469,9 @@ function renderAwarenessHistory(contact = null, conversation = null) {
     `已监控 ${Math.min(currentRounds, MAX_AWARENESS_MONITOR_ROUNDS)}/${MAX_AWARENESS_MONITOR_ROUNDS} 轮`,
     `可命中判断 ${Math.min(currentRounds, threshold)}/${threshold} 次`
   ];
+  if (pendingManualTrigger?.text) {
+    summaryParts.push("已准备 1 次手动触发");
+  }
   if (resolvedState === "triggered") {
     summaryParts.push("当前察觉已触发并锁定");
   } else if (resolvedState === "expired") {
@@ -9432,15 +9553,22 @@ function applyAwarenessToForm(contact = null) {
     resolvedContact?.awarenessResolvedState,
     resolvedContact?.awarenessConsumed
   );
+  const pendingManualTrigger = normalizeManualAwarenessTrigger(
+    resolvedContact?.awarenessManualTriggerPending
+  );
   setAwarenessStatus(
-    resolvedContact?.awarenessHistoryHidden
+    pendingManualTrigger?.text
+      ? "这条察觉已准备好手动触发；下一次获取回复时会直接带入，但不计入后台概率判断。"
+      : resolvedContact?.awarenessHistoryHidden
       ? "这条察觉已结束监控；重新保存后会重新开始。"
       : resolvedState === "triggered"
         ? "这条察觉已经触发过；重新保存后会重新参与后续概率判断。"
         : resolvedState === "expired"
           ? "这条察觉已满设定轮数仍未命中；重新保存后会重新参与后续概率判断。"
           : "",
-    resolvedContact?.awarenessHistoryHidden || resolvedState ? "success" : ""
+    pendingManualTrigger?.text || resolvedContact?.awarenessHistoryHidden || resolvedState
+      ? "success"
+      : ""
   );
   renderAwarenessHistory(resolvedContact, conversation);
 }
@@ -9456,6 +9584,74 @@ function getCurrentAwarenessDraft() {
     awarenessSensitivity: normalizeAwarenessSensitivity(
       messagesAwarenessSensitivityInputEl?.value
     )
+  };
+}
+
+function persistAwarenessDraft(contact = null, conversation = null, draft = {}, options = {}) {
+  const resolvedContact = contact && typeof contact === "object" ? contact : null;
+  const resolvedConversation = conversation && typeof conversation === "object" ? conversation : null;
+  const resolvedDraft = draft && typeof draft === "object" ? draft : {};
+  const manualTrigger = Boolean(options.manualTrigger);
+  if (!resolvedContact) {
+    return { ok: false, message: "未找到当前聊天对象。" };
+  }
+  const contactIndex = state.contacts.findIndex((item) => item.id === resolvedContact.id);
+  if (contactIndex < 0) {
+    return { ok: false, message: "未找到当前聊天对象。" };
+  }
+  const previous = state.contacts[contactIndex];
+  const changed =
+    resolvedDraft.awarenessText !== String(previous.awarenessText || "").trim() ||
+    resolvedDraft.awarenessTitle !==
+      resolveAwarenessTitle(previous.awarenessTitle, previous.awarenessText) ||
+    resolvedDraft.awarenessEmotionShift !== String(previous.awarenessEmotionShift || "").trim() ||
+    resolvedDraft.awarenessSensitivity !== normalizeAwarenessSensitivity(previous.awarenessSensitivity);
+  const nextHistory = changed
+    ? []
+    : normalizeAwarenessHistory(previous.awarenessHistory || []);
+  const manualTriggerEntry = manualTrigger
+    ? normalizeManualAwarenessTrigger({
+        ...resolvedDraft,
+        createdAt: Date.now()
+      })
+    : null;
+
+  state.contacts[contactIndex] = {
+    ...previous,
+    awarenessTitle: resolvedDraft.awarenessTitle,
+    awarenessText: resolvedDraft.awarenessText,
+    awarenessEmotionShift: resolvedDraft.awarenessEmotionShift,
+    awarenessSensitivity: resolvedDraft.awarenessSensitivity,
+    awarenessConsumed: changed ? false : Boolean(previous.awarenessConsumed),
+    awarenessResolvedState: changed
+      ? ""
+      : normalizeAwarenessResolvedState(previous.awarenessResolvedState, previous.awarenessConsumed),
+    awarenessHistoryHidden: changed ? false : Boolean(previous.awarenessHistoryHidden),
+    awarenessCheckCount: changed
+      ? 0
+      : Math.max(0, Number.parseInt(String(previous.awarenessCheckCount || 0), 10) || 0),
+    awarenessTriggerCount: changed
+      ? 0
+      : Math.max(0, Number.parseInt(String(previous.awarenessTriggerCount || 0), 10) || 0),
+    awarenessLastCheckedAt: changed ? 0 : Number(previous.awarenessLastCheckedAt) || 0,
+    awarenessLastTriggeredAt: changed ? 0 : Number(previous.awarenessLastTriggeredAt) || 0,
+    awarenessHistory: nextHistory,
+    awarenessManualTriggerPending: manualTriggerEntry,
+    updatedAt: Date.now()
+  };
+  persistContacts();
+  if (changed && resolvedConversation) {
+    const activeConversation = getConversationById(resolvedConversation.id);
+    if (activeConversation) {
+      activeConversation.awarenessCounter = 0;
+      persistConversations();
+    }
+  }
+  return {
+    ok: true,
+    changed,
+    contact: state.contacts[contactIndex],
+    manualTrigger
   };
 }
 
@@ -14281,6 +14477,10 @@ async function requestConversationReply(options = {}) {
     0,
     Number.parseInt(String(conversation.awarenessCounter || 0), 10) || 0
   );
+  const manualAwarenessTrigger = !isRegenerate
+    ? normalizeManualAwarenessTrigger(contact.awarenessManualTriggerPending)
+    : null;
+  const hasManualAwarenessTrigger = Boolean(manualAwarenessTrigger?.text);
   const awarenessResolvedState = normalizeAwarenessResolvedState(
     contact.awarenessResolvedState,
     contact.awarenessConsumed
@@ -14291,10 +14491,17 @@ async function requestConversationReply(options = {}) {
     !Boolean(contact.awarenessHistoryHidden);
   const shouldEvaluateAwareness =
     hasAwarenessMonitor &&
+    !hasManualAwarenessTrigger &&
     currentAwarenessCounter < promptSettings.awarenessIntervalRounds &&
     awarenessResolvedState !== "triggered" &&
     awarenessResolvedState !== "expired";
-  let triggeredAwareness = null;
+  let triggeredAwareness = hasManualAwarenessTrigger
+    ? {
+        text: String(manualAwarenessTrigger.text || "").trim(),
+        emotionShift: String(manualAwarenessTrigger.emotionShift || "").trim(),
+        sensitivity: normalizeAwarenessSensitivity(manualAwarenessTrigger.sensitivity)
+      }
+    : null;
   let awarenessTriggered = false;
   let awarenessHistoryEntry = null;
   let requestedPendingUserMessageIds = [];
@@ -14509,12 +14716,28 @@ async function requestConversationReply(options = {}) {
     pushConversationReplyNotification(contact, latestConversation, createdMessages);
     repairPersistedChatWorldbookMounts(promptSettings);
     if (!isRegenerate) {
-      const nextAwarenessCounter = hasAwarenessMonitor ? currentAwarenessCounter + 1 : currentAwarenessCounter;
+      const nextAwarenessCounter =
+        hasAwarenessMonitor && !hasManualAwarenessTrigger
+          ? currentAwarenessCounter + 1
+          : currentAwarenessCounter;
       latestConversation.awarenessCounter = nextAwarenessCounter;
-      if (awarenessTriggered || shouldEvaluateAwareness || (hasAwarenessMonitor && nextAwarenessCounter > MAX_AWARENESS_MONITOR_ROUNDS)) {
+      if (
+        hasManualAwarenessTrigger ||
+        awarenessTriggered ||
+        shouldEvaluateAwareness ||
+        (hasAwarenessMonitor && nextAwarenessCounter > MAX_AWARENESS_MONITOR_ROUNDS)
+      ) {
         const contactIndex = state.contacts.findIndex((item) => item.id === contact.id);
         if (contactIndex >= 0) {
           const previousContact = state.contacts[contactIndex];
+          const manualHistoryEntry = hasManualAwarenessTrigger
+            ? buildAwarenessHistoryItem(
+                true,
+                currentAwarenessCounter,
+                "用户手动触发，本次不计入后台概率判断。",
+                manualAwarenessTrigger?.title || manualAwarenessTrigger?.text || ""
+              )
+            : null;
           const nextResolvedState = awarenessTriggered
             ? "triggered"
             : shouldEvaluateAwareness && nextAwarenessCounter >= promptSettings.awarenessIntervalRounds
@@ -14531,6 +14754,9 @@ async function requestConversationReply(options = {}) {
             awarenessConsumed: nextResolvedState === "triggered",
             awarenessResolvedState: nextResolvedState,
             awarenessHistoryHidden: shouldHideAwarenessMonitor,
+            awarenessManualTriggerPending: hasManualAwarenessTrigger
+              ? null
+              : normalizeManualAwarenessTrigger(previousContact.awarenessManualTriggerPending),
             awarenessCheckCount:
               Math.max(
                 0,
@@ -14556,9 +14782,11 @@ async function requestConversationReply(options = {}) {
                 ? awarenessHistoryEntry?.checkedAt || Date.now()
                 : Number(previousContact.awarenessLastTriggeredAt) || 0,
             awarenessHistory:
-              shouldEvaluateAwareness && awarenessHistoryEntry
-                ? appendAwarenessHistory(previousContact, awarenessHistoryEntry)
-                : normalizeAwarenessHistory(previousContact.awarenessHistory || []),
+              manualHistoryEntry
+                ? appendAwarenessHistory(previousContact, manualHistoryEntry)
+                : shouldEvaluateAwareness && awarenessHistoryEntry
+                  ? appendAwarenessHistory(previousContact, awarenessHistoryEntry)
+                  : normalizeAwarenessHistory(previousContact.awarenessHistory || []),
             updatedAt: Date.now()
           };
           persistContacts();
@@ -16346,51 +16574,55 @@ function attachEvents() {
         setAwarenessStatus("请输入察觉文本。", "error");
         return;
       }
-      const contactIndex = state.contacts.findIndex((item) => item.id === contact.id);
-      if (contactIndex < 0) {
-        setAwarenessStatus("未找到当前聊天对象。", "error");
+      const result = persistAwarenessDraft(contact, conversation, draft, {
+        manualTrigger: false
+      });
+      if (!result.ok) {
+        setAwarenessStatus(result.message || "保存失败。", "error");
         return;
-      }
-      const previous = state.contacts[contactIndex];
-      const changed =
-        draft.awarenessText !== String(previous.awarenessText || "").trim() ||
-        draft.awarenessTitle !==
-          resolveAwarenessTitle(previous.awarenessTitle, previous.awarenessText) ||
-        draft.awarenessEmotionShift !== String(previous.awarenessEmotionShift || "").trim() ||
-        draft.awarenessSensitivity !== normalizeAwarenessSensitivity(previous.awarenessSensitivity);
-      state.contacts[contactIndex] = {
-        ...previous,
-        awarenessTitle: draft.awarenessTitle,
-        awarenessText: draft.awarenessText,
-        awarenessEmotionShift: draft.awarenessEmotionShift,
-        awarenessSensitivity: draft.awarenessSensitivity,
-        awarenessConsumed: changed ? false : Boolean(previous.awarenessConsumed),
-        awarenessResolvedState: changed
-          ? ""
-          : normalizeAwarenessResolvedState(previous.awarenessResolvedState, previous.awarenessConsumed),
-        awarenessHistoryHidden: changed ? false : Boolean(previous.awarenessHistoryHidden),
-        awarenessCheckCount: changed
-          ? 0
-          : Math.max(0, Number.parseInt(String(previous.awarenessCheckCount || 0), 10) || 0),
-        awarenessTriggerCount: changed
-          ? 0
-          : Math.max(0, Number.parseInt(String(previous.awarenessTriggerCount || 0), 10) || 0),
-        awarenessLastCheckedAt: changed ? 0 : Number(previous.awarenessLastCheckedAt) || 0,
-        awarenessLastTriggeredAt: changed ? 0 : Number(previous.awarenessLastTriggeredAt) || 0,
-        awarenessHistory: normalizeAwarenessHistory(previous.awarenessHistory || []),
-        updatedAt: Date.now()
-      };
-      persistContacts();
-      if (changed) {
-        const activeConversation = getConversationById(conversation.id);
-        if (activeConversation) {
-          activeConversation.awarenessCounter = 0;
-          persistConversations();
-        }
       }
       renderMessagesPage();
       setAwarenessStatus("察觉已保存。", "success");
       setMessagesStatus("角色察觉已更新。", "success");
+      state.awarenessFormResetRequested = true;
+      if (messagesAwarenessTitleInputEl) {
+        messagesAwarenessTitleInputEl.value = "";
+      }
+      if (messagesAwarenessTextInputEl) {
+        messagesAwarenessTextInputEl.value = "";
+      }
+      if (messagesAwarenessEmotionInputEl) {
+        messagesAwarenessEmotionInputEl.value = "";
+      }
+      window.setTimeout(() => {
+        setAwarenessModalOpen(false);
+      }, 220);
+    });
+  }
+
+  if (messagesAwarenessTriggerBtnEl) {
+    messagesAwarenessTriggerBtnEl.addEventListener("click", () => {
+      const conversation = getConversationById();
+      const contact = conversation ? getResolvedConversationContact(conversation) : null;
+      if (!contact) {
+        setAwarenessStatus("未找到当前聊天对象。", "error");
+        return;
+      }
+      const draft = getCurrentAwarenessDraft();
+      if (!draft.awarenessText) {
+        setAwarenessStatus("请输入察觉文本。", "error");
+        return;
+      }
+      const result = persistAwarenessDraft(contact, conversation, draft, {
+        manualTrigger: true
+      });
+      if (!result.ok) {
+        setAwarenessStatus(result.message || "触发失败。", "error");
+        return;
+      }
+      renderMessagesPage();
+      setAwarenessStatus("已准备手动触发；下一次获取回复时会直接带入。", "success");
+      setMessagesStatus("这条察觉已准备手动触发。", "success");
       state.awarenessFormResetRequested = true;
       if (messagesAwarenessTitleInputEl) {
         messagesAwarenessTitleInputEl.value = "";

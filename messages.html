@@ -2312,7 +2312,7 @@
             aria-live="polite"
           ></p>
 
-          <div class="messages-dialog-modal__actions">
+          <div class="messages-dialog-modal__actions messages-dialog-modal__actions--awareness">
             <button
               id="messages-awareness-cancel-btn"
               class="messages-dialog-modal__button"
@@ -2325,6 +2325,20 @@
               type="submit"
             >
               保存
+            </button>
+            <button
+              id="messages-awareness-trigger-btn"
+              class="messages-dialog-modal__button messages-dialog-modal__button--accent messages-dialog-modal__button--icon"
+              type="button"
+              aria-label="主动触发察觉"
+              title="主动触发察觉"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M13 3 6 13h4l-1 8 9-12h-4l1-6Z"
+                  fill="currentColor"
+                />
+              </svg>
             </button>
           </div>
         </form>
