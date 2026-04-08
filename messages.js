@@ -556,6 +556,9 @@ const messagesMemoryEditorContentInputEl = document.querySelector(
 const messagesMemoryEditorImportanceInputEl = document.querySelector(
   "#messages-memory-editor-importance-input"
 );
+const messagesMemoryEditorAutoSummaryBtnEl = document.querySelector(
+  "#messages-memory-editor-auto-summary-btn"
+);
 const messagesMemoryEditorSaveBtnEl = document.querySelector("#messages-memory-editor-save-btn");
 const messagesMemoryEditorStatusEl = document.querySelector("#messages-memory-editor-status");
 const messagesMemorySettingsModalEl = document.querySelector("#messages-memory-settings-modal");
@@ -4611,6 +4614,18 @@ function getConversationById(conversationId = state.activeConversationId) {
   return state.conversations.find((item) => item.id === conversationId) || null;
 }
 
+function getConversationByContactId(contactId = "") {
+  const resolvedContactId = String(contactId || "").trim();
+  if (!resolvedContactId) {
+    return null;
+  }
+  return (
+    state.conversations.find(
+      (item) => String(item?.contactId || "").trim() === resolvedContactId
+    ) || null
+  );
+}
+
 function getConversationDraft(conversationId = state.activeConversationId) {
   const key = String(conversationId || "").trim();
   if (!key) {
@@ -7823,8 +7838,43 @@ async function requestMemorySummaryItems(
   }
 }
 
+function applyExtractedMemoryItems(contact, memoryItems = [], options = {}) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const nextMemoryItems = Array.isArray(memoryItems) ? memoryItems.filter(Boolean) : [];
+  if (nextMemoryItems.length) {
+    state.memories = mergeMemories(state.memories, nextMemoryItems);
+    persistMessageMemories();
+  }
+  if (state.memoryViewerOpen) {
+    renderMemoryViewer();
+    if (state.memorySelectedContactId === String(contact?.id || "").trim()) {
+      const successMessage =
+        requestOptions.successMessage ||
+        `已为 ${contact?.name || "该角色"} 提取 ${nextMemoryItems.length} 条记忆。`;
+      setMemoryStatus(successMessage, "success");
+    }
+  }
+  return nextMemoryItems.length;
+}
+
 function selectConversationHistory(messages = [], historyRounds = DEFAULT_MESSAGE_HISTORY_ROUNDS) {
-  const limit = normalizeMessagePromptSettings({ historyRounds }).historyRounds;
+  return selectConversationTurnsByUserRounds(
+    messages,
+    historyRounds,
+    MAX_MESSAGE_HISTORY_ROUNDS
+  );
+}
+
+function selectConversationTurnsByUserRounds(
+  messages = [],
+  roundCount = DEFAULT_MESSAGE_HISTORY_ROUNDS,
+  maxRounds = MAX_MESSAGE_HISTORY_ROUNDS
+) {
+  const limit = clampNumber(
+    normalizePositiveInteger(roundCount, DEFAULT_MESSAGE_HISTORY_ROUNDS),
+    1,
+    maxRounds
+  );
   const turnMessages = collapseConversationMessagesByTurn(messages);
   const selected = [];
   let userTurnCount = 0;
@@ -7844,6 +7894,60 @@ function selectConversationHistory(messages = [], historyRounds = DEFAULT_MESSAG
   }
 
   return selected;
+}
+
+async function runManualConversationMemorySummary(roundCountInput = "", preferredContactId = "") {
+  const selectedContactId = resolveSelectedMemoryContactId(preferredContactId);
+  const contact = getContactById(selectedContactId);
+  if (!contact) {
+    throw new Error("请先选择要总结的角色。");
+  }
+  const activeConversation = getConversationById();
+  const conversation =
+    getConversationByContactId(selectedContactId) ||
+    (String(activeConversation?.contactId || "").trim() === selectedContactId
+      ? activeConversation
+      : null);
+  if (!conversation) {
+    throw new Error("当前角色还没有聊天记录，暂时无法总结。");
+  }
+  const rounds = clampNumber(
+    normalizePositiveInteger(
+      roundCountInput,
+      getDefaultConversationMemorySummaryIntervalRounds(loadSettings().messagePromptSettings)
+    ),
+    1,
+    MAX_MEMORY_SUMMARY_INTERVAL_ROUNDS
+  );
+  const messagesToSummarize = selectConversationTurnsByUserRounds(
+    conversation.messages,
+    rounds,
+    MAX_MEMORY_SUMMARY_INTERVAL_ROUNDS
+  );
+  if (!messagesToSummarize.length) {
+    throw new Error("当前角色还没有可总结的会话。");
+  }
+
+  const settings = loadSettings();
+  const promptSettings = normalizeMessagePromptSettings(settings.messagePromptSettings);
+  const memoryItems = await requestMemorySummaryItems(
+    settings,
+    state.profile,
+    contact,
+    messagesToSummarize,
+    promptSettings
+  );
+  const extractedCount = applyExtractedMemoryItems(contact, memoryItems, {
+    successMessage:
+      memoryItems.length > 0
+        ? `已为 ${contact.name} 总结最近 ${rounds} 轮，并提取 ${memoryItems.length} 条记忆。`
+        : `已为 ${contact.name} 总结最近 ${rounds} 轮，但没有提取出新的记忆。`
+  });
+  return {
+    contact,
+    rounds,
+    extractedCount
+  };
 }
 
 function splitReplyIntoMessageLines(text) {
@@ -8999,16 +9103,9 @@ async function maybeExtractConversationMemories(conversationId, settings, prompt
       messagesToSummarize,
       resolvedPromptSettings
     );
-    if (memoryItems.length) {
-      state.memories = mergeMemories(state.memories, memoryItems);
-      persistMessageMemories();
-      if (state.memoryViewerOpen) {
-        renderMemoryViewer();
-        if (state.memorySelectedContactId === contact.id) {
-          setMemoryStatus(`已为 ${contact.name} 提取 ${memoryItems.length} 条记忆。`, "success");
-        }
-      }
-    }
+    applyExtractedMemoryItems(contact, memoryItems, {
+      successMessage: `已为 ${contact.name} 提取 ${memoryItems.length} 条记忆。`
+    });
     const latestConversation = getConversationById(conversationId);
     if (!latestConversation) {
       return;
@@ -16453,6 +16550,39 @@ function attachEvents() {
   if (messagesMemoryEditorCancelBtnEl) {
     messagesMemoryEditorCancelBtnEl.addEventListener("click", () => {
       setMemoryEditorOpen(false);
+    });
+  }
+
+  if (messagesMemoryEditorAutoSummaryBtnEl) {
+    messagesMemoryEditorAutoSummaryBtnEl.addEventListener("click", async () => {
+      const defaultRounds = getDefaultConversationMemorySummaryIntervalRounds(
+        loadSettings().messagePromptSettings
+      );
+      const input = window.prompt("请输入这次要总结的近几轮会话", String(defaultRounds));
+      if (input == null) {
+        return;
+      }
+      const rounds = clampNumber(
+        normalizePositiveInteger(input, defaultRounds),
+        1,
+        MAX_MEMORY_SUMMARY_INTERVAL_ROUNDS
+      );
+      const preferredContactId = String(messagesMemoryEditorContactSelectEl?.value || "").trim();
+      messagesMemoryEditorAutoSummaryBtnEl.disabled = true;
+      setMemoryEditorStatus(`正在总结最近 ${rounds} 轮会话…`);
+      try {
+        const result = await runManualConversationMemorySummary(rounds, preferredContactId);
+        setMemoryEditorStatus(
+          result.extractedCount > 0
+            ? `已为 ${result.contact.name} 总结最近 ${result.rounds} 轮，并提取 ${result.extractedCount} 条记忆。`
+            : `已为 ${result.contact.name} 总结最近 ${result.rounds} 轮，但没有提取出新的记忆。`,
+          "success"
+        );
+      } catch (error) {
+        setMemoryEditorStatus(error?.message || "自动总结失败。", "error");
+      } finally {
+        messagesMemoryEditorAutoSummaryBtnEl.disabled = false;
+      }
     });
   }
 
