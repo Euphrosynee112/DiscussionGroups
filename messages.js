@@ -9,6 +9,7 @@ const PROFILE_POSTS_KEY = "x_style_generator_profile_posts_v1";
 const DIRECT_MESSAGES_KEY = "x_style_generator_direct_messages_v1";
 const MESSAGE_CONTACTS_KEY = "x_style_generator_message_contacts_v1";
 const MESSAGE_THREADS_KEY = "x_style_generator_message_threads_v1";
+const MESSAGE_SHARE_INBOX_KEY = "x_style_generator_message_share_inbox_v1";
 const WORLD_BOOKS_KEY = "x_style_generator_message_worldbooks_v1";
 const BUBBLE_THREADS_KEY = "x_style_generator_bubble_threads_v1";
 const SCHEDULE_ENTRIES_KEY = "x_style_generator_schedule_entries_v1";
@@ -516,6 +517,22 @@ const messagesJournalSettingsStatusEl = document.querySelector(
 const messagesScheduleModalEl = document.querySelector("#messages-schedule-modal");
 const messagesScheduleCloseBtnEl = document.querySelector("#messages-schedule-close-btn");
 const messagesScheduleBodyEl = document.querySelector("#messages-schedule-body");
+const messagesDiscussionShareModalEl = document.querySelector("#messages-discussion-share-modal");
+const messagesDiscussionShareModalCloseBtnEl = document.querySelector(
+  "#messages-discussion-share-close-btn"
+);
+const messagesDiscussionShareModalMetaEl = document.querySelector(
+  "#messages-discussion-share-meta"
+);
+const messagesDiscussionShareModalRootEl = document.querySelector(
+  "#messages-discussion-share-root"
+);
+const messagesDiscussionShareModalRepliesEl = document.querySelector(
+  "#messages-discussion-share-replies"
+);
+const messagesDiscussionShareModalHintEl = document.querySelector(
+  "#messages-discussion-share-hint"
+);
 const messagesMemoryModalEl = document.querySelector("#messages-memory-modal");
 const messagesMemoryCloseBtnEl = document.querySelector("#messages-memory-close-btn");
 const messagesMemoryAddBtnEl = document.querySelector("#messages-memory-add-btn");
@@ -648,6 +665,8 @@ const state = {
   journalHistoryOpen: false,
   journalSettingsOpen: false,
   schedulePreviewOpen: false,
+  discussionShareModalOpen: false,
+  discussionShareModalMessageId: "",
   memoryViewerOpen: false,
   memoryEditorOpen: false,
   memorySettingsOpen: false,
@@ -1860,7 +1879,217 @@ function isQuoteConversationMessage(message) {
   );
 }
 
+function normalizeDiscussionShareRepostSource(source) {
+  if (!source || typeof source !== "object") {
+    return null;
+  }
+  const text = String(source.text || "").trim();
+  const imageHint = String(source.imageHint || source.mediaSummary || "").trim();
+  const tags = Array.isArray(source.tags)
+    ? source.tags.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 5)
+    : [];
+  if (!text && !imageHint && !tags.length) {
+    return null;
+  }
+  return {
+    id: String(source.id || `discussion_share_repost_${hashText(`${text}_${imageHint}`)}`),
+    displayName: String(source.displayName || source.username || "论坛用户").trim() || "论坛用户",
+    handle: String(source.handle || source.userId || "@forum_user").trim() || "@forum_user",
+    time: String(source.time || "").trim(),
+    text: text.slice(0, 1400),
+    imageHint: imageHint.slice(0, 120),
+    tags
+  };
+}
+
+function normalizeDiscussionShareReply(reply, index = 0) {
+  const source = reply && typeof reply === "object" ? reply : {};
+  const text = String(source.text || "").trim();
+  const imageHint = String(source.imageHint || source.mediaSummary || "").trim();
+  const children = normalizeObjectArray(source.children)
+    .map((item, childIndex) => normalizeDiscussionShareReply(item, childIndex))
+    .filter(Boolean);
+  if (!text && !children.length && !imageHint) {
+    return null;
+  }
+  return {
+    id: String(source.id || `discussion_share_reply_${index}_${hashText(`${text}_${imageHint}`)}`),
+    displayName: String(source.displayName || source.username || "论坛用户").trim() || "论坛用户",
+    handle: String(source.handle || source.userId || "@forum_user").trim() || "@forum_user",
+    time: String(source.time || "").trim(),
+    text: text.slice(0, 1400),
+    imageHint: imageHint.slice(0, 120),
+    depth: Math.max(1, Number.parseInt(String(source.depth || 1), 10) || 1),
+    children
+  };
+}
+
+function countDiscussionShareReplies(replies = []) {
+  return normalizeObjectArray(replies).reduce((total, reply) => {
+    return total + 1 + countDiscussionShareReplies(reply.children || []);
+  }, 0);
+}
+
+function flattenDiscussionShareReplies(replies = [], depth = 1, list = []) {
+  normalizeObjectArray(replies).forEach((reply) => {
+    const normalizedReply = normalizeDiscussionShareReply(
+      {
+        ...reply,
+        depth: Math.max(depth, Number.parseInt(String(reply?.depth || depth), 10) || depth)
+      },
+      list.length
+    );
+    if (!normalizedReply) {
+      return;
+    }
+    list.push(normalizedReply);
+    if (normalizedReply.children?.length) {
+      flattenDiscussionShareReplies(normalizedReply.children, normalizedReply.depth + 1, list);
+    }
+  });
+  return list;
+}
+
+function normalizeDiscussionSharePayload(payload) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const rootSource = source.rootPost && typeof source.rootPost === "object" ? source.rootPost : source;
+  const rootText = String(rootSource.text || "").trim();
+  const rootImageHint = String(rootSource.imageHint || rootSource.mediaSummary || "").trim();
+  const rootTags = Array.isArray(rootSource.tags)
+    ? rootSource.tags.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 6)
+    : [];
+  const replies = normalizeObjectArray(source.replies)
+    .map((reply, index) => normalizeDiscussionShareReply(reply, index))
+    .filter(Boolean);
+  const replyCount =
+    Math.max(0, Number.parseInt(String(source.replyCount || source.loadedReplyCount || 0), 10) || 0) ||
+    countDiscussionShareReplies(replies);
+  const truncatedReplyCount = Math.max(
+    0,
+    Number.parseInt(String(source.truncatedReplyCount || 0), 10) || 0
+  );
+  if (!rootText && !rootImageHint && !rootTags.length && !replies.length) {
+    return null;
+  }
+  return {
+    id: String(source.id || rootSource.id || `discussion_share_${hashText(`${rootText}_${replyCount}`)}`),
+    sourceType: "forum_discussion",
+    sharedAt: Number(source.sharedAt) || Date.now(),
+    bucketName: String(source.bucketName || source.feedType || "").trim(),
+    feedLabel: String(source.feedLabel || source.bucketLabel || "").trim(),
+    postId: String(source.postId || rootSource.id || "").trim(),
+    rootPost: {
+      id: String(rootSource.id || source.postId || "").trim(),
+      displayName:
+        String(rootSource.displayName || rootSource.username || "论坛用户").trim() || "论坛用户",
+      handle: String(rootSource.handle || rootSource.userId || "@forum_user").trim() || "@forum_user",
+      time: String(rootSource.time || "").trim(),
+      text: rootText.slice(0, 2200),
+      imageHint: rootImageHint.slice(0, 120),
+      tags: rootTags,
+      repostSource: normalizeDiscussionShareRepostSource(rootSource.repostSource || source.repostSource)
+    },
+    replies,
+    replyCount,
+    truncatedReplyCount
+  };
+}
+
+function isDiscussionShareConversationMessage(message) {
+  const explicitType = String(message?.messageType || "").trim() === "discussion_share";
+  return explicitType || Boolean(normalizeDiscussionSharePayload(message?.discussionSharePayload));
+}
+
+function getDiscussionSharePayloadFromMessage(message) {
+  return normalizeDiscussionSharePayload(message?.discussionSharePayload || null);
+}
+
+function buildDiscussionSharePreviewText(payload) {
+  const resolvedPayload = normalizeDiscussionSharePayload(payload);
+  if (!resolvedPayload) {
+    return "【社媒讨论帖】";
+  }
+  const rootPost = resolvedPayload.rootPost || {};
+  const summary = truncate(
+    String(rootPost.text || rootPost.imageHint || rootPost.repostSource?.text || "").trim() ||
+      "点开查看这条社媒讨论帖",
+    28
+  );
+  return `【社媒讨论帖】${String(rootPost.displayName || "论坛用户").trim()}：${summary}`;
+}
+
+function buildDiscussionShareFallbackText(payload) {
+  const resolvedPayload = normalizeDiscussionSharePayload(payload);
+  if (!resolvedPayload) {
+    return "【社媒讨论帖】";
+  }
+  const rootPost = resolvedPayload.rootPost || {};
+  const lines = [
+    "【社媒讨论帖】",
+    `主贴作者：${String(rootPost.displayName || "论坛用户").trim()} ${String(
+      rootPost.handle || "@forum_user"
+    ).trim()}`.trim(),
+    rootPost.time ? `发布时间：${rootPost.time}` : "",
+    rootPost.text
+      ? `主贴内容：${rootPost.text}`
+      : rootPost.imageHint
+        ? `主贴内容：${rootPost.imageHint}`
+        : "主贴内容：点击查看详情",
+    resolvedPayload.replyCount ? `已加载回复：${resolvedPayload.replyCount} 条` : "已加载回复：0 条"
+  ].filter(Boolean);
+  return lines.join("\n");
+}
+
+function buildDiscussionSharePromptText(payload) {
+  const resolvedPayload = normalizeDiscussionSharePayload(payload);
+  if (!resolvedPayload) {
+    return "【社媒讨论帖】\n用户发来了一条外部社媒讨论内容。";
+  }
+  const rootPost = resolvedPayload.rootPost || {};
+  const flattenedReplies = flattenDiscussionShareReplies(resolvedPayload.replies || []).slice(0, 16);
+  const lines = [
+    "【社媒讨论帖】",
+    "下面是一条从社媒/论坛转发进当前私聊的外部讨论帖。",
+    "它不是用户此刻直接对你说的话，也不是你们之间已经发生的聊天内容；请把它当作用户发来给你一起看的讨论素材。",
+    `主贴作者：${String(rootPost.displayName || "论坛用户").trim()} ${String(
+      rootPost.handle || "@forum_user"
+    ).trim()}`.trim(),
+    rootPost.time ? `主贴时间：${rootPost.time}` : "",
+    rootPost.text
+      ? `主贴内容：${rootPost.text}`
+      : rootPost.imageHint
+        ? `主贴内容：${rootPost.imageHint}`
+        : "主贴内容：无正文",
+    rootPost.tags?.length ? `主贴标签：${rootPost.tags.join(" ")}` : "",
+    rootPost.repostSource
+      ? `主贴引用：${String(rootPost.repostSource.displayName || "论坛用户").trim()} ${
+          String(rootPost.repostSource.handle || "@forum_user").trim()
+        }\n引用内容：${
+          rootPost.repostSource.text ||
+          rootPost.repostSource.imageHint ||
+          "无正文"
+        }`
+      : "",
+    flattenedReplies.length
+      ? `已加载回复（只做参考，不需要逐条复述）：\n${flattenedReplies
+          .map((reply, index) => {
+            const depthPrefix = reply.depth > 1 ? `${"  ".repeat(reply.depth - 1)}↳ ` : "";
+            const replyText = String(reply.text || reply.imageHint || "无正文").trim();
+            return `${index + 1}. ${depthPrefix}${reply.displayName} ${reply.handle}：${replyText}`;
+          })
+          .join("\n")}`
+      : "当前还没有加载到回复。"
+  ].filter(Boolean);
+  if (resolvedPayload.truncatedReplyCount > 0) {
+    lines.push(`还有 ${resolvedPayload.truncatedReplyCount} 条较深或较长的回复未展开。`);
+  }
+  return lines.join("\n");
+}
+
 function getConversationMessagePromptText(message = {}) {
+  if (isDiscussionShareConversationMessage(message)) {
+    return buildDiscussionSharePromptText(getDiscussionSharePayloadFromMessage(message));
+  }
   if (isScheduleInviteConversationMessage(message)) {
     return buildScheduleInviteMessageText(
       String(message.scheduleInviteTitle || "").trim() || "未命名日程",
@@ -1887,6 +2116,9 @@ function getConversationMessagePromptText(message = {}) {
 }
 
 function getConversationMessagePreviewText(message) {
+  if (isDiscussionShareConversationMessage(message)) {
+    return buildDiscussionSharePreviewText(getDiscussionSharePayloadFromMessage(message));
+  }
   if (isScheduleInviteConversationMessage(message)) {
     return `🗓️ 日程邀请：${String(message.scheduleInviteTitle || "").trim() || "新的安排"}`;
   }
@@ -3920,6 +4152,7 @@ function normalizeConversationMessage(message, index = 0) {
   const scheduleInviteType = ["day", "hour", "week"].includes(message?.scheduleInviteType)
     ? message.scheduleInviteType
     : "day";
+  const discussionSharePayload = normalizeDiscussionSharePayload(message?.discussionSharePayload);
   const legacyQuotePayload =
     parseQuoteMessageText(message?.text) || parseInlineQuoteReplyMessage(message?.text);
   const legacyImagePayload = parseImageMessageText(message?.text);
@@ -3928,7 +4161,9 @@ function normalizeConversationMessage(message, index = 0) {
     String(message?.quotedRole || legacyQuotePayload?.quotedRole || "").trim() === "assistant"
       ? "assistant"
       : "user";
-  const messageType = isScheduleInviteConversationMessage(message)
+  const messageType = isDiscussionShareConversationMessage(message)
+    ? "discussion_share"
+    : isScheduleInviteConversationMessage(message)
     ? "schedule_invite"
     : isLocationConversationMessage(message)
     ? "location"
@@ -3945,7 +4180,9 @@ function normalizeConversationMessage(message, index = 0) {
   ).trim();
   const replyText = String(message?.text || "").trim();
   const text =
-    messageType === "schedule_invite"
+    messageType === "discussion_share"
+      ? buildDiscussionShareFallbackText(discussionSharePayload)
+    : messageType === "schedule_invite"
       ? buildScheduleInviteMessageText(
           scheduleInviteTitle || "未命名日程",
           scheduleInviteDate || "",
@@ -3967,6 +4204,8 @@ function normalizeConversationMessage(message, index = 0) {
     id: String(message?.id || `conversation_message_${Date.now()}_${index}`),
     role,
     messageType,
+    discussionSharePayload:
+      messageType === "discussion_share" ? discussionSharePayload : null,
     scheduleInviteTitle:
       messageType === "schedule_invite" ? scheduleInviteTitle || "未命名日程" : "",
     scheduleInviteDate: messageType === "schedule_invite" ? scheduleInviteDate || "" : "",
@@ -4187,6 +4426,136 @@ function persistConversations() {
   state.conversations = nextConversations
     .map((conversation, index) => normalizeConversation(conversation, index))
     .filter(Boolean);
+}
+
+function normalizeMessageShareInboxEntry(entry, index = 0) {
+  const source = entry && typeof entry === "object" ? entry : {};
+  const payload = normalizeDiscussionSharePayload(
+    source.payload || source.discussionSharePayload || source.discussionShare
+  );
+  const targetConversationId = String(
+    source.targetConversationId || source.conversationId || ""
+  ).trim();
+  const targetContactId = String(source.targetContactId || source.contactId || "").trim();
+  if (!payload || (!targetConversationId && !targetContactId)) {
+    return null;
+  }
+  const createdAt = Number(source.createdAt) || Date.now() + index;
+  return {
+    id:
+      String(source.id || "").trim() ||
+      `message_share_${createdAt}_${hashText(`${targetConversationId}_${targetContactId}_${payload.id}`)}`,
+    targetConversationId,
+    targetContactId,
+    targetNameSnapshot: String(source.targetNameSnapshot || source.contactNameSnapshot || "").trim(),
+    targetAvatarImageSnapshot: String(
+      source.targetAvatarImageSnapshot || source.contactAvatarImageSnapshot || ""
+    ).trim(),
+    targetAvatarTextSnapshot: String(
+      source.targetAvatarTextSnapshot || source.contactAvatarTextSnapshot || ""
+    ).trim(),
+    createdAt,
+    payload
+  };
+}
+
+function loadMessageShareInbox() {
+  const raw = readStoredJson(MESSAGE_SHARE_INBOX_KEY, []);
+  return Array.isArray(raw)
+    ? raw
+        .map((entry, index) => normalizeMessageShareInboxEntry(entry, index))
+        .filter(Boolean)
+    : [];
+}
+
+function persistMessageShareInbox(entries = []) {
+  safeSetItem(MESSAGE_SHARE_INBOX_KEY, JSON.stringify(Array.isArray(entries) ? entries : []));
+}
+
+function ensureConversationForDiscussionShare(entry = null) {
+  const normalizedEntry =
+    entry && typeof entry === "object" ? entry : normalizeMessageShareInboxEntry(entry);
+  if (!normalizedEntry) {
+    return null;
+  }
+  const targetConversationId = String(normalizedEntry.targetConversationId || "").trim();
+  const targetContactId = String(normalizedEntry.targetContactId || "").trim();
+  const existingConversation =
+    (targetConversationId ? getConversationById(targetConversationId) : null) ||
+    (targetContactId
+      ? state.conversations.find(
+          (conversation) => String(conversation?.contactId || "").trim() === targetContactId
+        ) || null
+      : null);
+  if (existingConversation) {
+    return existingConversation;
+  }
+  if (!targetContactId) {
+    return null;
+  }
+  const contact = getContactById(targetContactId);
+  if (!contact) {
+    return null;
+  }
+  return createConversation(contact);
+}
+
+function consumePendingMessageShareInbox() {
+  const inbox = loadMessageShareInbox();
+  if (!inbox.length) {
+    return 0;
+  }
+
+  let consumedCount = 0;
+  const remainingEntries = [];
+
+  inbox.forEach((entry, index) => {
+    const conversation = ensureConversationForDiscussionShare(entry);
+    if (!conversation) {
+      remainingEntries.push(entry);
+      return;
+    }
+
+    const messageId = `discussion_share_${String(entry.id || index).trim()}`;
+    const alreadyExists = Array.isArray(conversation.messages)
+      ? conversation.messages.some(
+          (message) => String(message?.id || "").trim() === messageId
+        )
+      : false;
+    if (alreadyExists) {
+      consumedCount += 1;
+      return;
+    }
+
+    const createdAt = Number(entry.createdAt) || Date.now();
+    const insertedMessage = normalizeConversationMessage(
+      {
+        id: messageId,
+        role: "user",
+        messageType: "discussion_share",
+        discussionSharePayload: entry.payload,
+        needsReply: true,
+        time: formatLocalTime(new Date(createdAt)),
+        createdAt
+      },
+      Array.isArray(conversation.messages) ? conversation.messages.length : 0
+    );
+    conversation.messages = [
+      ...(Array.isArray(conversation.messages) ? conversation.messages : []),
+      insertedMessage
+    ];
+    conversation.updatedAt = insertedMessage.createdAt;
+    bumpConversationReplyContextVersion(conversation);
+    consumedCount += 1;
+  });
+
+  if (remainingEntries.length !== inbox.length) {
+    persistMessageShareInbox(remainingEntries);
+  }
+  if (consumedCount) {
+    persistConversations();
+  }
+  return consumedCount;
 }
 
 function getContactById(contactId) {
@@ -8804,6 +9173,7 @@ function updateBodyModalState() {
     state.awarenessModalOpen ||
     state.innerThoughtModalOpen ||
     state.schedulePreviewOpen ||
+    state.discussionShareModalOpen ||
     state.journalOpen ||
     state.journalHistoryOpen ||
     state.journalSettingsOpen;
@@ -9206,6 +9576,140 @@ function setInnerThoughtModalOpen(isOpen) {
   }
   if (state.innerThoughtModalOpen) {
     renderInnerThoughtModal();
+  }
+  updateBodyModalState();
+}
+
+function renderDiscussionShareModalRepostMarkup(repostSource = null) {
+  const source = normalizeDiscussionShareRepostSource(repostSource);
+  if (!source) {
+    return "";
+  }
+  const summaryText = String(source.text || source.imageHint || "").trim() || "无正文";
+  return `
+    <div class="messages-discussion-share-modal__repost">
+      <div class="messages-discussion-share-modal__repost-head">
+        <strong>${escapeHtml(source.displayName)}</strong>
+        <span>${escapeHtml(source.handle)}</span>
+        ${source.time ? `<span>· ${escapeHtml(source.time)}</span>` : ""}
+      </div>
+      <p>${escapeHtml(summaryText)}</p>
+      ${
+        source.tags?.length
+          ? `<div class="messages-discussion-share-modal__tags">${source.tags
+              .map((tag) => `<span>${escapeHtml(tag)}</span>`)
+              .join("")}</div>`
+          : ""
+      }
+    </div>
+  `;
+}
+
+function renderDiscussionShareModalReplyNodes(replies = [], depth = 1) {
+  return normalizeObjectArray(replies)
+    .map((reply) => {
+      const summaryText = String(reply.text || reply.imageHint || "").trim() || "无正文";
+      const childMarkup = reply.children?.length
+        ? `<div class="messages-discussion-share-modal__reply-children">${renderDiscussionShareModalReplyNodes(
+            reply.children,
+            depth + 1
+          )}</div>`
+        : "";
+      return `
+        <article class="messages-discussion-share-modal__reply" data-depth="${escapeHtml(String(depth))}">
+          <div class="messages-discussion-share-modal__reply-head">
+            <strong>${escapeHtml(reply.displayName)}</strong>
+            <span>${escapeHtml(reply.handle)}</span>
+            ${reply.time ? `<span>· ${escapeHtml(reply.time)}</span>` : ""}
+          </div>
+          <p>${escapeHtml(summaryText)}</p>
+          ${childMarkup}
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function renderDiscussionShareModal() {
+  if (
+    !messagesDiscussionShareModalMetaEl ||
+    !messagesDiscussionShareModalRootEl ||
+    !messagesDiscussionShareModalRepliesEl ||
+    !messagesDiscussionShareModalHintEl
+  ) {
+    return;
+  }
+
+  const conversation = getConversationById();
+  const targetMessage =
+    conversation?.messages?.find(
+      (message) =>
+        String(message?.id || "").trim() === String(state.discussionShareModalMessageId || "").trim()
+    ) || null;
+  const payload = targetMessage ? getDiscussionSharePayloadFromMessage(targetMessage) : null;
+  if (!payload) {
+    messagesDiscussionShareModalMetaEl.textContent = "讨论帖暂不可用";
+    messagesDiscussionShareModalRootEl.innerHTML =
+      '<div class="messages-discussion-share-modal__empty">这条讨论帖可能已被删除，或当前会话已切换。</div>';
+    messagesDiscussionShareModalRepliesEl.innerHTML = "";
+    messagesDiscussionShareModalHintEl.textContent = "";
+    return;
+  }
+
+  const rootPost = payload.rootPost || {};
+  messagesDiscussionShareModalMetaEl.textContent =
+    payload.feedLabel || payload.bucketName
+      ? `来源：${payload.feedLabel || payload.bucketName}`
+      : "来源：社媒讨论";
+  messagesDiscussionShareModalRootEl.innerHTML = `
+    <article class="messages-discussion-share-modal__root-card">
+      <div class="messages-discussion-share-modal__root-head">
+        <strong>${escapeHtml(String(rootPost.displayName || "论坛用户").trim())}</strong>
+        <span>${escapeHtml(String(rootPost.handle || "@forum_user").trim())}</span>
+        ${rootPost.time ? `<span>· ${escapeHtml(rootPost.time)}</span>` : ""}
+      </div>
+      ${
+        rootPost.text
+          ? `<p class="messages-discussion-share-modal__root-text">${escapeHtml(rootPost.text)}</p>`
+          : rootPost.imageHint
+            ? `<p class="messages-discussion-share-modal__root-text">${escapeHtml(
+                rootPost.imageHint
+              )}</p>`
+            : '<p class="messages-discussion-share-modal__root-text">这是一条无正文主贴。</p>'
+      }
+      ${
+        rootPost.tags?.length
+          ? `<div class="messages-discussion-share-modal__tags">${rootPost.tags
+              .map((tag) => `<span>${escapeHtml(tag)}</span>`)
+              .join("")}</div>`
+          : ""
+      }
+      ${renderDiscussionShareModalRepostMarkup(rootPost.repostSource)}
+    </article>
+  `;
+  messagesDiscussionShareModalRepliesEl.innerHTML = payload.replies?.length
+    ? renderDiscussionShareModalReplyNodes(payload.replies)
+    : '<div class="messages-discussion-share-modal__empty">当前还没有加载到回复。</div>';
+  messagesDiscussionShareModalHintEl.textContent =
+    payload.truncatedReplyCount > 0
+      ? `当前只展示已加载内容，另有 ${payload.truncatedReplyCount} 条回复未随卡片带入。`
+      : "当前展示的是用户转发进来的主贴和已加载回复。";
+}
+
+function setDiscussionShareModalOpen(isOpen, messageId = "") {
+  state.discussionShareModalOpen = Boolean(isOpen);
+  state.discussionShareModalMessageId = state.discussionShareModalOpen
+    ? String(messageId || state.discussionShareModalMessageId || "").trim()
+    : "";
+  if (messagesDiscussionShareModalEl) {
+    messagesDiscussionShareModalEl.hidden = !state.discussionShareModalOpen;
+    messagesDiscussionShareModalEl.setAttribute(
+      "aria-hidden",
+      String(!state.discussionShareModalOpen)
+    );
+  }
+  if (state.discussionShareModalOpen) {
+    renderDiscussionShareModal();
   }
   updateBodyModalState();
 }
@@ -9903,17 +10407,21 @@ function renderConversationMessageMenu(message, isMenuOpen) {
     return "";
   }
   const sceneMode = getConversationSceneMode();
+  const isDiscussionShareMessage = isDiscussionShareConversationMessage(message);
   const canQuote =
     sceneMode === "online" &&
+    !isDiscussionShareMessage &&
     !isScheduleInviteConversationMessage(message) &&
     !isLocationConversationMessage(message) &&
     !isImageConversationMessage(message);
   const canReadInnerThought =
     message?.role === "assistant" &&
+    !isDiscussionShareMessage &&
     !isScheduleInviteConversationMessage(message) &&
     !isLocationConversationMessage(message) &&
     !isImageConversationMessage(message);
   const actions =
+    isDiscussionShareMessage ||
     isScheduleInviteConversationMessage(message) ||
     isLocationConversationMessage(message) ||
     isImageConversationMessage(message)
@@ -10146,15 +10654,59 @@ function renderConversationImageCard(message) {
   `;
 }
 
+function renderConversationDiscussionShareCard(message) {
+  const payload = getDiscussionSharePayloadFromMessage(message);
+  if (!payload) {
+    return `
+      <article class="messages-discussion-share-card">
+        <div class="messages-discussion-share-card__badge">社媒讨论帖</div>
+        <p class="messages-discussion-share-card__summary">这条转发内容暂时无法读取。</p>
+      </article>
+    `;
+  }
+  const rootPost = payload.rootPost || {};
+  const summaryText = String(
+    rootPost.text || rootPost.imageHint || rootPost.repostSource?.text || "点击查看详情"
+  ).trim();
+  return `
+    <article class="messages-discussion-share-card">
+      <div class="messages-discussion-share-card__head">
+        <span class="messages-discussion-share-card__badge">社媒讨论帖</span>
+        <span class="messages-discussion-share-card__meta">${escapeHtml(
+          rootPost.time || "外部转发"
+        )}</span>
+      </div>
+      <strong class="messages-discussion-share-card__title">${escapeHtml(
+        String(rootPost.displayName || "论坛用户").trim()
+      )}</strong>
+      <p class="messages-discussion-share-card__summary">${escapeHtml(
+        truncate(summaryText || "点击查看详情", 86)
+      )}</p>
+      <div class="messages-discussion-share-card__footer">
+        <span>${escapeHtml(`${payload.replyCount || 0} 条回复`)}</span>
+        ${
+          rootPost.tags?.length
+            ? `<span>${escapeHtml(rootPost.tags.slice(0, 2).join(" "))}</span>`
+            : ""
+        }
+        <span>点击查看详情</span>
+      </div>
+    </article>
+  `;
+}
+
 function renderConversationMessage(message, conversation, promptSettings = state.chatPromptSettings) {
   const isUser = message.role === "user";
   const avatarMarkup = buildConversationDetailAvatarMarkup(message.role, conversation, promptSettings);
   const isMenuOpen = state.messageActionMessageId === message.id;
+  const isDiscussionShareMessage = isDiscussionShareConversationMessage(message);
   const isScheduleInviteMessage = isScheduleInviteConversationMessage(message);
   const isLocationMessage = isLocationConversationMessage(message);
   const isImageMessage = isImageConversationMessage(message);
   const isQuoteMessage = isQuoteConversationMessage(message);
-  const bubbleMarkup = isScheduleInviteMessage
+  const bubbleMarkup = isDiscussionShareMessage
+    ? renderConversationDiscussionShareCard(message)
+    : isScheduleInviteMessage
     ? renderConversationScheduleInviteCard(message, conversation)
     : isLocationMessage
     ? renderConversationLocationCard(message)
@@ -10189,6 +10741,28 @@ function renderConversationMessage(message, conversation, promptSettings = state
         </button>
       </div>
     `
+    : isDiscussionShareMessage
+      ? `
+        <div class="messages-message-row__stack-shell messages-message-row__stack-shell--discussion-share">
+          <button
+            type="button"
+            class="messages-bubble-toggle messages-bubble-toggle--discussion-share"
+            data-action="open-discussion-share-message"
+            data-message-id="${escapeHtml(message.id)}"
+          >
+            ${bubbleMarkup}
+          </button>
+          <button
+            type="button"
+            class="messages-message-row__menu-toggle"
+            data-action="toggle-message-menu"
+            data-message-id="${escapeHtml(message.id)}"
+            aria-label="打开消息操作"
+          >
+            <span></span><span></span><span></span>
+          </button>
+        </div>
+      `
     : `
       <button
         type="button"
@@ -10208,7 +10782,9 @@ function renderConversationMessage(message, conversation, promptSettings = state
   return `
     <article class="messages-message-row messages-message-row--${isUser ? "user" : "assistant"}${
       avatarMarkup ? "" : " is-avatar-hidden"
-    }${isScheduleInviteMessage ? " messages-message-row--schedule-invite" : ""}${
+    }${isDiscussionShareMessage ? " messages-message-row--discussion-share" : ""}${
+      isScheduleInviteMessage ? " messages-message-row--schedule-invite" : ""
+    }${
       isLocationMessage ? " messages-message-row--location" : ""
     }${
       isImageMessage ? " messages-message-row--image" : ""
@@ -10217,7 +10793,9 @@ function renderConversationMessage(message, conversation, promptSettings = state
     }">
       ${!isUser && avatarMarkup ? avatarMarkup : ""}
       <div class="messages-message-row__bubble-wrap${
-        isScheduleInviteMessage
+        isDiscussionShareMessage
+          ? " messages-message-row__bubble-wrap--discussion-share"
+          : isScheduleInviteMessage
           ? " messages-message-row__bubble-wrap--schedule-invite"
           : isLocationMessage
             ? " messages-message-row__bubble-wrap--location"
@@ -10715,6 +11293,9 @@ function renderMessagesPageInner() {
     syncProfileStateFromStorage();
   }
   const inConversation = Boolean(state.activeConversationId && state.activeTab === "chat");
+  if (!inConversation && state.discussionShareModalOpen) {
+    setDiscussionShareModalOpen(false);
+  }
   if (messagesContentEl) {
     messagesContentEl.classList.toggle("is-conversation-view", inConversation);
   }
@@ -10724,6 +11305,9 @@ function renderMessagesPageInner() {
 
   if (state.activeConversationId && state.activeTab === "chat") {
     renderConversationDetail(consumeConversationRenderOptions());
+    if (state.discussionShareModalOpen) {
+      renderDiscussionShareModal();
+    }
     return;
   }
   syncActiveConversationViewMarker();
@@ -12871,6 +13455,12 @@ function deleteConversationMessage(messageId = "") {
     state.expandedImageMessageId = "";
   }
   if (
+    state.discussionShareModalOpen &&
+    String(state.discussionShareModalMessageId || "").trim() === targetMessage.id
+  ) {
+    setDiscussionShareModalOpen(false);
+  }
+  if (
     state.innerThoughtModalOpen &&
     String(state.innerThoughtTargetMessageId || "").trim() === targetMessage.id
   ) {
@@ -12910,6 +13500,9 @@ function clearCurrentConversationHistory() {
   state.messageActionMessageId = "";
   state.quotedMessageId = "";
   state.composerPanelOpen = false;
+  if (state.discussionShareModalOpen) {
+    setDiscussionShareModalOpen(false);
+  }
   persistConversations();
   queueConversationRenderOptions({
     scrollBehavior: "bottom"
@@ -14166,6 +14759,7 @@ function initBackgroundMessagesWorker() {
     if (
       [
         MESSAGE_THREADS_KEY,
+        MESSAGE_SHARE_INBOX_KEY,
         MESSAGE_CONTACTS_KEY,
         SETTINGS_KEY,
         WORLD_BOOKS_KEY,
@@ -14193,6 +14787,10 @@ function refreshStateFromStorage() {
     persistConversations();
   }
   state.contacts = loadContacts(state.conversations);
+  const consumedSharedMessages = consumePendingMessageShareInbox();
+  if (consumedSharedMessages) {
+    state.contacts = loadContacts(state.conversations);
+  }
   state.worldbooks = loadWorldbooks();
   state.commonPlaces = loadCommonPlaces();
   state.presenceState = loadPresenceState();
@@ -14570,6 +15168,17 @@ function attachEvents() {
           scrollBehavior: "preserve",
           scrollSnapshot
         });
+        return;
+      }
+
+      if (
+        actionEl.getAttribute("data-action") === "open-discussion-share-message" &&
+        actionEl.getAttribute("data-message-id")
+      ) {
+        const messageId = String(actionEl.getAttribute("data-message-id") || "").trim();
+        state.composerPanelOpen = false;
+        state.messageActionMessageId = "";
+        setDiscussionShareModalOpen(true, messageId);
         return;
       }
 
@@ -15873,6 +16482,12 @@ function attachEvents() {
     });
   }
 
+  if (messagesDiscussionShareModalCloseBtnEl) {
+    messagesDiscussionShareModalCloseBtnEl.addEventListener("click", () => {
+      setDiscussionShareModalOpen(false);
+    });
+  }
+
   if (messagesWorldbookAddCategoryBtnEl) {
     messagesWorldbookAddCategoryBtnEl.addEventListener("click", () => {
       setWorldbookEditorOpen(true, "category");
@@ -16098,6 +16713,14 @@ function attachEvents() {
     });
   }
 
+  if (messagesDiscussionShareModalEl) {
+    messagesDiscussionShareModalEl.addEventListener("click", (event) => {
+      if (event.target === messagesDiscussionShareModalEl) {
+        setDiscussionShareModalOpen(false);
+      }
+    });
+  }
+
   if (messagesJournalHistoryModalEl) {
     messagesJournalHistoryModalEl.addEventListener("click", (event) => {
       if (event.target === messagesJournalHistoryModalEl) {
@@ -16216,6 +16839,7 @@ function attachEvents() {
         MESSAGE_RECENT_LOCATIONS_KEY,
         MESSAGE_REPLY_TASKS_KEY,
         MESSAGE_THREADS_KEY,
+        MESSAGE_SHARE_INBOX_KEY,
         SCHEDULE_ENTRIES_KEY,
         MESSAGE_COMMON_PLACES_KEY,
         MESSAGE_PRESENCE_STATE_KEY
@@ -16329,6 +16953,10 @@ function attachEvents() {
     }
     if (event.key === "Escape" && state.schedulePreviewOpen) {
       setSchedulePreviewOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.discussionShareModalOpen) {
+      setDiscussionShareModalOpen(false);
       return;
     }
     if (event.key === "Escape" && state.journalSettingsOpen) {

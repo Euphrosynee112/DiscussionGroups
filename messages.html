@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <title>Pulse Generator · Chat</title>
-    <link rel="stylesheet" href="./messages.css?v=20260406-213101" />
+    <link rel="stylesheet" href="./messages.css?v=20260408-103859" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -1864,6 +1864,52 @@
     </section>
 
     <section
+      id="messages-discussion-share-modal"
+      class="messages-dialog-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div
+        class="messages-dialog-modal__panel messages-discussion-share-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="社媒讨论帖"
+      >
+        <header class="messages-dialog-modal__header">
+          <div class="messages-discussion-share-modal__header-copy">
+            <strong>社媒讨论帖</strong>
+            <span id="messages-discussion-share-meta" class="messages-discussion-share-modal__meta"></span>
+          </div>
+          <button
+            id="messages-discussion-share-close-btn"
+            class="messages-dialog-modal__close"
+            type="button"
+            aria-label="关闭讨论帖详情"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M7 7l10 10M17 7 7 17"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </header>
+
+        <div class="messages-discussion-share-modal__body">
+          <div id="messages-discussion-share-root" class="messages-discussion-share-modal__root"></div>
+          <div id="messages-discussion-share-replies" class="messages-discussion-share-modal__replies"></div>
+        </div>
+
+        <div class="messages-discussion-share-modal__footer">
+          <p id="messages-discussion-share-hint" class="messages-discussion-share-modal__hint"></p>
+        </div>
+      </div>
+    </section>
+
+    <section
       id="messages-journal-history-modal"
       class="messages-sheet-modal"
       hidden
@@ -2328,12 +2374,12 @@
 
     <input id="messages-image-file-input" type="file" accept="image/*" hidden />
 
-    <script src="./prompt-config.js?v=20260407-191015"></script>
+    <script src="./prompt-config.js?v=20260408-103859"></script>
     <script src="./privacy-allowlist.js?v=20260403-165212"></script>
     <script src="./pulse-privacy-cover.js?v=20260403-170109"></script>
     <script src="./pulse-message-banner.js?v=20260403-165212"></script>
     <script src="./api-log.js?v=20260405-231617"></script>
     <script src="./messages-awareness-config.js?v=20260403-165212"></script>
-    <script src="./messages.js?v=20260407-191015"></script>
+    <script src="./messages.js?v=20260408-103859"></script>
   </body>
 </html>

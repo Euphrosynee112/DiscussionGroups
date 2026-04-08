@@ -8,6 +8,10 @@ const PROFILE_POSTS_KEY = "x_style_generator_profile_posts_v1";
 const WORLD_BOOKS_KEY = "x_style_generator_message_worldbooks_v1";
 const BUBBLE_THREADS_KEY = "x_style_generator_bubble_threads_v1";
 const DISCUSSIONS_KEY = "x_style_generator_discussions_v1";
+const DIRECT_MESSAGES_KEY = "x_style_generator_direct_messages_v1";
+const MESSAGE_CONTACTS_KEY = "x_style_generator_message_contacts_v1";
+const MESSAGE_THREADS_KEY = "x_style_generator_message_threads_v1";
+const MESSAGE_SHARE_INBOX_KEY = "x_style_generator_message_share_inbox_v1";
 const DEFAULT_POST_COUNT = 10;
 const DEFAULT_REPLY_COUNT = 4;
 const MAX_FEED_ITEMS = 50;
@@ -27,6 +31,7 @@ const HOME_FEED_LABELS = {
   tags: "热门标签"
 };
 const NESTED_REPLY_COUNT = 3;
+const DISCUSSION_SHARE_REPLY_NODE_LIMIT = 24;
 const THREAD_MODAL_LOAD_COOLDOWN_MS = 420;
 let lastKnownContentFeed = DEFAULT_CONTENT_FEED;
 const memoryStorage = {};
@@ -240,10 +245,15 @@ const pullLabelEl = document.querySelector("#pull-label");
 const pullMetaEl = document.querySelector("#pull-meta");
 const threadModalEl = document.querySelector("#thread-modal");
 const threadModalCloseBtn = document.querySelector("#thread-modal-close-btn");
+const threadModalShareBtn = document.querySelector("#thread-modal-share-btn");
 const threadModalBodyEl = document.querySelector("#thread-modal-body");
 const threadModalRootEl = document.querySelector("#thread-modal-root");
 const threadModalRepliesEl = document.querySelector("#thread-modal-replies");
 const threadModalLoadHintEl = document.querySelector("#thread-modal-load-hint");
+const threadShareModalEl = document.querySelector("#thread-share-modal");
+const threadShareCloseBtn = document.querySelector("#thread-share-close-btn");
+const threadShareListEl = document.querySelector("#thread-share-list");
+const threadShareStatusEl = document.querySelector("#thread-share-status");
 const embeddedCloseBtn = document.querySelector("#embedded-close-btn");
 const profileBannerEl = document.querySelector("#profile-banner");
 const profileAvatarEl = document.querySelector("#profile-avatar");
@@ -321,6 +331,8 @@ const state = {
   threadModalTouchStartY: 0,
   threadModalLoadingMore: false,
   threadModalLastLoadAt: 0,
+  threadShareModalOpen: false,
+  threadShareSubmitting: false,
   threadReplyTargetType: "",
   threadReplyTargetId: "",
   threadReplyDraft: "",
@@ -3704,6 +3716,301 @@ function getPostThreadState(postId, bucketName = state.activeFeed) {
   return null;
 }
 
+function syncDiscussionModalBodyLock() {
+  document.body.style.overflow = state.threadModalOpen || state.threadShareModalOpen ? "hidden" : "";
+}
+
+function extractStoredContactEntries() {
+  const parsed = readStoredJson(MESSAGE_CONTACTS_KEY, []);
+  if (Array.isArray(parsed)) {
+    return parsed.filter((item) => item && typeof item === "object");
+  }
+  if (Array.isArray(parsed?.contacts)) {
+    return parsed.contacts.filter((item) => item && typeof item === "object");
+  }
+  return [];
+}
+
+function extractStoredConversationEntries() {
+  const parsed =
+    readStoredJson(MESSAGE_THREADS_KEY, null) ?? readStoredJson(DIRECT_MESSAGES_KEY, []);
+  return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item === "object") : [];
+}
+
+function getChatShareAvatarFallback(source = {}) {
+  const name = String(source.name || source.contactNameSnapshot || "聊天").trim();
+  return name.slice(0, 2) || "聊";
+}
+
+function normalizeChatShareTarget(source, index = 0, kind = "contact") {
+  const item = source && typeof source === "object" ? source : {};
+  const contactId =
+    kind === "conversation"
+      ? String(item.contactId || "").trim()
+      : String(item.id || item.contactId || "").trim();
+  const conversationId = kind === "conversation" ? String(item.id || "").trim() : "";
+  const name =
+    String(
+      kind === "conversation"
+        ? item.contactNameSnapshot || item.name || item.contactName
+        : item.name || item.contactNameSnapshot
+    ).trim() || `聊天对象 ${index + 1}`;
+  if (!contactId && !conversationId) {
+    return null;
+  }
+  return {
+    id:
+      conversationId ||
+      contactId ||
+      `thread_share_target_${index}_${hashText(`${name}_${kind}`)}`,
+    contactId,
+    conversationId,
+    name,
+    avatarImage: String(
+      kind === "conversation"
+        ? item.contactAvatarImageSnapshot || item.avatarImage || ""
+        : item.avatarImage || ""
+    ).trim(),
+    avatarText: String(
+      kind === "conversation"
+        ? item.contactAvatarTextSnapshot || item.avatarText || getChatShareAvatarFallback({ name })
+        : item.avatarText || getChatShareAvatarFallback({ name })
+    ).trim() || getChatShareAvatarFallback({ name }),
+    updatedAt: Number(item.updatedAt) || Date.now(),
+    hasConversation: Boolean(conversationId)
+  };
+}
+
+function loadChatShareTargets() {
+  const contactTargets = extractStoredContactEntries()
+    .map((item, index) => normalizeChatShareTarget(item, index, "contact"))
+    .filter(Boolean);
+  const conversationTargets = extractStoredConversationEntries()
+    .map((item, index) => normalizeChatShareTarget(item, index, "conversation"))
+    .filter(Boolean);
+  const merged = new Map();
+
+  conversationTargets.forEach((target) => {
+    const key = target.contactId || `conversation:${target.conversationId}`;
+    merged.set(key, { ...target });
+  });
+
+  contactTargets.forEach((target) => {
+    const key = target.contactId || `contact:${target.id}`;
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, { ...target });
+      return;
+    }
+    merged.set(key, {
+      ...existing,
+      contactId: existing.contactId || target.contactId,
+      name: target.name || existing.name,
+      avatarImage: target.avatarImage || existing.avatarImage,
+      avatarText: target.avatarText || existing.avatarText,
+      updatedAt: Math.max(existing.updatedAt || 0, target.updatedAt || 0)
+    });
+  });
+
+  return [...merged.values()].sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0));
+}
+
+function sanitizeDiscussionShareRepostSource(repostSource) {
+  const source = normalizeRepostSource(repostSource);
+  if (!source) {
+    return null;
+  }
+  return {
+    id: String(source.id || "").trim(),
+    displayName: String(source.displayName || "论坛用户").trim() || "论坛用户",
+    handle: String(source.handle || "@forum_user").trim() || "@forum_user",
+    time: String(source.time || "").trim(),
+    text: String(source.text || "").trim().slice(0, MAX_POST_TEXT_LENGTH),
+    imageHint: source.imageDataUrl ? "这条被引用的帖子附带图片。" : "",
+    tags: Array.isArray(source.tags) ? source.tags.slice(0, 5) : []
+  };
+}
+
+function countDiscussionShareReplies(replies = []) {
+  return (Array.isArray(replies) ? replies : []).reduce((total, reply) => {
+    return total + 1 + countDiscussionShareReplies(reply?.children || []);
+  }, 0);
+}
+
+function sanitizeDiscussionShareReply(reply, budget, depth = 1) {
+  if (!reply || typeof reply !== "object" || !budget || budget.remaining <= 0) {
+    return null;
+  }
+  const text = String(reply.text || "").trim();
+  const imageHint = reply.imageDataUrl ? "这条回复附带图片。" : "";
+  if (!text && !imageHint) {
+    return null;
+  }
+  budget.remaining -= 1;
+  const children = [];
+  (Array.isArray(reply.children) ? reply.children : []).forEach((childReply) => {
+    const nextChild = sanitizeDiscussionShareReply(childReply, budget, depth + 1);
+    if (nextChild) {
+      children.push(nextChild);
+    }
+  });
+  return {
+    id: String(reply.id || `discussion_share_reply_${budget.remaining}_${hashText(text)}`),
+    displayName: String(reply.displayName || "论坛用户").trim() || "论坛用户",
+    handle: String(reply.handle || "@forum_user").trim() || "@forum_user",
+    time: String(reply.time || "").trim(),
+    text: text.slice(0, MAX_REPLY_TEXT_LENGTH),
+    imageHint,
+    depth,
+    children
+  };
+}
+
+function buildDiscussionSharePayload(post, bucketName = state.threadModalBucket || state.activeFeed) {
+  const resolvedBucket = resolveThreadBucketName(bucketName, post);
+  const threadState = getPostThreadState(post.id, resolvedBucket);
+  const budget = { remaining: DISCUSSION_SHARE_REPLY_NODE_LIMIT };
+  const replies = (Array.isArray(threadState?.replies) ? threadState.replies : [])
+    .map((reply) => sanitizeDiscussionShareReply(reply, budget, 1))
+    .filter(Boolean);
+  const totalLoadedReplyCount = countDiscussionShareReplies(threadState?.replies || []);
+  const includedReplyCount = countDiscussionShareReplies(replies);
+  return {
+    id: `discussion_share_${Date.now()}_${hashText(`${resolvedBucket}_${post.id}`)}`,
+    sourceType: "forum_discussion",
+    sharedAt: Date.now(),
+    bucketName: resolvedBucket,
+    feedLabel: getFeedLabel(resolvedBucket),
+    postId: String(post.id || "").trim(),
+    rootPost: {
+      id: String(post.id || "").trim(),
+      displayName: String(post.displayName || "论坛用户").trim() || "论坛用户",
+      handle: String(post.handle || "@forum_user").trim() || "@forum_user",
+      time: String(post.time || "").trim(),
+      text: String(post.text || "").trim().slice(0, MAX_POST_TEXT_LENGTH),
+      imageHint: post.imageDataUrl ? "这条主贴附带图片。" : "",
+      tags: getRenderableTags(post, post.feedType || resolvedBucket).slice(0, 5),
+      repostSource: sanitizeDiscussionShareRepostSource(post.repostSource)
+    },
+    replies,
+    replyCount: includedReplyCount,
+    truncatedReplyCount: Math.max(0, totalLoadedReplyCount - includedReplyCount)
+  };
+}
+
+function loadMessageShareInbox() {
+  const parsed = readStoredJson(MESSAGE_SHARE_INBOX_KEY, []);
+  return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item === "object") : [];
+}
+
+function persistMessageShareInbox(entries = []) {
+  safeSetItem(MESSAGE_SHARE_INBOX_KEY, JSON.stringify(Array.isArray(entries) ? entries : []));
+}
+
+function setThreadShareStatus(message = "", tone = "") {
+  if (!threadShareStatusEl) {
+    return;
+  }
+  threadShareStatusEl.textContent = String(message || "");
+  threadShareStatusEl.className = "thread-share-status";
+  if (tone) {
+    threadShareStatusEl.classList.add(tone);
+  }
+}
+
+function renderThreadShareModal() {
+  if (!threadShareListEl) {
+    return;
+  }
+  const targets = loadChatShareTargets();
+  if (!targets.length) {
+    threadShareListEl.innerHTML =
+      '<div class="thread-share-empty">当前还没有可转发的聊天对象。<br />请先到 Chat 中创建联系人或发起会话。</div>';
+    return;
+  }
+
+  threadShareListEl.innerHTML = targets
+    .map(
+      (target) => `
+        <button
+          class="thread-share-row"
+          type="button"
+          data-action="share-thread-to-chat"
+          data-target-contact-id="${escapeHtml(target.contactId || "")}"
+          data-target-conversation-id="${escapeHtml(target.conversationId || "")}"
+          ${state.threadShareSubmitting ? "disabled" : ""}
+        >
+          ${renderAvatarMarkup(target.avatarText, "thread-share-row__avatar", target.avatarImage)}
+          <div class="thread-share-row__body">
+            <strong>${escapeHtml(target.name)}</strong>
+            <span>${escapeHtml(target.hasConversation ? "已有聊天记录" : "转发后会新建聊天")}</span>
+          </div>
+          <span class="thread-share-row__arrow">发送</span>
+        </button>
+      `
+    )
+    .join("");
+}
+
+function setThreadShareModalOpen(isOpen) {
+  state.threadShareModalOpen = Boolean(isOpen);
+  if (threadShareModalEl) {
+    threadShareModalEl.classList.toggle("hidden", !state.threadShareModalOpen);
+    threadShareModalEl.setAttribute("aria-hidden", String(!state.threadShareModalOpen));
+  }
+  if (state.threadShareModalOpen) {
+    renderThreadShareModal();
+    setThreadShareStatus("将当前主贴和已加载回复转发到聊天。");
+  } else {
+    state.threadShareSubmitting = false;
+    setThreadShareStatus("");
+  }
+  syncDiscussionModalBodyLock();
+}
+
+function shareCurrentThreadToChat(targetConversationId = "", targetContactId = "") {
+  const post = findPostById(state.threadModalPostId, state.threadModalBucket);
+  if (!post) {
+    setThreadShareStatus("未找到要转发的帖子。", "error");
+    return;
+  }
+  const payload = buildDiscussionSharePayload(post, state.threadModalBucket);
+  const target = loadChatShareTargets().find((item) => {
+    return (
+      String(item.conversationId || "").trim() === String(targetConversationId || "").trim() &&
+      String(targetConversationId || "").trim()
+    ) || (
+      String(item.contactId || "").trim() === String(targetContactId || "").trim() &&
+      !String(targetConversationId || "").trim()
+    );
+  });
+  if (!target) {
+    setThreadShareStatus("未找到目标聊天对象，请刷新后重试。", "error");
+    return;
+  }
+
+  state.threadShareSubmitting = true;
+  renderThreadShareModal();
+  const inbox = loadMessageShareInbox();
+  inbox.push({
+    id: `discussion_share_inbox_${Date.now()}_${hashText(`${target.id}_${payload.id}`)}`,
+    createdAt: Date.now(),
+    targetConversationId: String(target.conversationId || "").trim(),
+    targetContactId: String(target.contactId || "").trim(),
+    targetNameSnapshot: target.name,
+    targetAvatarImageSnapshot: target.avatarImage || "",
+    targetAvatarTextSnapshot: target.avatarText || "",
+    payload
+  });
+  persistMessageShareInbox(inbox.slice(-60));
+  state.threadShareSubmitting = false;
+  renderThreadShareModal();
+  setThreadShareStatus(`已转发到 ${target.name} 的聊天。`, "success");
+  window.setTimeout(() => {
+    setThreadShareModalOpen(false);
+  }, 220);
+}
+
 function renderPostDiscussion(post, bucketName = state.activeFeed) {
   const threadState = getPostThreadState(post.id, bucketName);
   if (!threadState?.expanded) {
@@ -4154,7 +4461,7 @@ function renderThreadModal() {
   if (!state.threadModalOpen) {
     threadModalEl.classList.add("hidden");
     threadModalEl.setAttribute("aria-hidden", "true");
-    document.body.style.overflow = "";
+    syncDiscussionModalBodyLock();
     return;
   }
 
@@ -4188,7 +4495,7 @@ function renderThreadModal() {
 
   threadModalEl.classList.remove("hidden");
   threadModalEl.setAttribute("aria-hidden", "false");
-  document.body.style.overflow = "hidden";
+  syncDiscussionModalBodyLock();
 }
 
 function setThreadModalOpen(isOpen) {
@@ -4199,9 +4506,17 @@ function setThreadModalOpen(isOpen) {
     state.threadModalTouchTracking = false;
     state.threadModalLoadingMore = false;
     state.threadModalLastLoadAt = 0;
+    state.threadShareModalOpen = false;
+    state.threadShareSubmitting = false;
     resetThreadReplyComposer();
   }
   renderThreadModal();
+  if (!state.threadModalOpen && threadShareModalEl) {
+    threadShareModalEl.classList.add("hidden");
+    threadShareModalEl.setAttribute("aria-hidden", "true");
+    setThreadShareStatus("");
+  }
+  syncDiscussionModalBodyLock();
 }
 
 function mergeRepliesWithUniqueIds(existingReplies, incomingReplies) {
@@ -6947,6 +7262,11 @@ function attachEvents() {
         return;
       }
 
+      if (action === "open-thread-share-modal") {
+        setThreadShareModalOpen(true);
+        return;
+      }
+
       if (action === "toggle-thread-reply-composer") {
         toggleThreadReplyComposer(
           actionEl.dataset.targetType || "post",
@@ -7033,6 +7353,45 @@ function attachEvents() {
     });
   }
 
+  if (threadModalShareBtn) {
+    threadModalShareBtn.addEventListener("click", () => {
+      setThreadShareModalOpen(true);
+    });
+  }
+
+  if (threadShareCloseBtn) {
+    threadShareCloseBtn.addEventListener("click", () => {
+      setThreadShareModalOpen(false);
+    });
+  }
+
+  if (threadShareModalEl) {
+    threadShareModalEl.addEventListener("click", (event) => {
+      const target = getEventHTMLElement(event);
+      if (!target) {
+        return;
+      }
+      const actionEl = target.closest("[data-action]");
+      if (actionEl instanceof HTMLElement) {
+        const action = String(actionEl.dataset.action || "").trim();
+        if (action === "close-thread-share-modal") {
+          setThreadShareModalOpen(false);
+          return;
+        }
+        if (action === "share-thread-to-chat") {
+          shareCurrentThreadToChat(
+            actionEl.dataset.targetConversationId || "",
+            actionEl.dataset.targetContactId || ""
+          );
+          return;
+        }
+      }
+      if (event.target === threadShareModalEl) {
+        setThreadShareModalOpen(false);
+      }
+    });
+  }
+
   if (threadModalBodyEl) {
     threadModalBodyEl.addEventListener("wheel", handleThreadModalWheel, { passive: false });
     threadModalBodyEl.addEventListener("touchstart", handleThreadModalTouchStart, {
@@ -7047,6 +7406,10 @@ function attachEvents() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.customTabEditorOpen) {
       setCustomTabsPanelOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.threadShareModalOpen) {
+      setThreadShareModalOpen(false);
       return;
     }
     if (event.key === "Escape" && state.threadModalOpen) {
@@ -7127,6 +7490,16 @@ function attachEvents() {
     renderProfilePage();
     renderThreadModal();
     updateReplyPromptPreview();
+  });
+
+  window.addEventListener("storage", (event) => {
+    const key = String(event?.key || "").trim();
+    if (![MESSAGE_CONTACTS_KEY, MESSAGE_THREADS_KEY, DIRECT_MESSAGES_KEY].includes(key)) {
+      return;
+    }
+    if (state.threadShareModalOpen) {
+      renderThreadShareModal();
+    }
   });
 
   const homeScrollTarget = getHomeScrollTarget();

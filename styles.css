@@ -1071,6 +1071,14 @@ body.embedded .embedded-close-btn {
   gap: 12px;
 }
 
+.thread-modal__head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .thread-modal__head h2 {
   margin: 8px 0 0;
   font-size: 20px;
@@ -1106,6 +1114,113 @@ body.embedded .embedded-close-btn {
   color: var(--muted);
   font-size: 13px;
   text-align: center;
+}
+
+.thread-share-modal__panel {
+  width: min(460px, calc(100vw - 24px));
+  max-height: min(78vh, 760px);
+  gap: 14px;
+}
+
+.thread-share-modal__body {
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  gap: 12px;
+}
+
+.thread-share-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.thread-share-status.success {
+  color: var(--success);
+}
+
+.thread-share-status.error {
+  color: var(--danger);
+}
+
+.thread-share-list {
+  display: grid;
+  gap: 10px;
+}
+
+.thread-share-empty {
+  padding: 28px 18px;
+  border-radius: 18px;
+  border: 1px dashed rgba(15, 23, 42, 0.16);
+  background: rgba(248, 250, 252, 0.86);
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.7;
+  text-align: center;
+}
+
+.thread-share-row {
+  width: 100%;
+  padding: 14px 14px 14px 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.thread-share-row:disabled {
+  opacity: 0.62;
+  cursor: wait;
+}
+
+.thread-share-row__avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 16px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: rgba(29, 155, 240, 0.12);
+  color: #165c92;
+  font-weight: 800;
+}
+
+.thread-share-row__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.thread-share-row__body {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.thread-share-row__body strong {
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.thread-share-row__body span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.thread-share-row__arrow {
+  color: #1d9bf0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .thread-loading,
@@ -1928,12 +2043,22 @@ textarea {
     font-size: 18px;
   }
 
+  .thread-modal__head-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
   .thread-modal__root {
     padding: 14px 14px 12px;
   }
 
   .thread-modal__replies {
     padding: 0 14px 10px;
+  }
+
+  .thread-share-modal__panel {
+    width: calc(100vw - 16px);
+    max-height: 88vh;
   }
 
   .custom-tabs-modal__body {

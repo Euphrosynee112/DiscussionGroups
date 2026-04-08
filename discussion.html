@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pulse Generator · 讨论页</title>
-    <link rel="stylesheet" href="./styles.css?v=20260402b" />
+    <link rel="stylesheet" href="./styles.css?v=20260408-103859" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -355,13 +355,45 @@
             <p class="section-card__eyebrow">Discussion</p>
             <h2>帖子讨论详情</h2>
           </div>
-          <button id="thread-modal-close-btn" class="ghost-chip" type="button">关闭</button>
+          <div class="thread-modal__head-actions">
+            <button
+              id="thread-modal-share-btn"
+              class="ghost-chip"
+              type="button"
+              data-action="open-thread-share-modal"
+            >
+              转发到聊天
+            </button>
+            <button id="thread-modal-close-btn" class="ghost-chip" type="button">关闭</button>
+          </div>
         </div>
         <div id="thread-modal-body" class="thread-modal__body">
           <div id="thread-modal-root" class="thread-modal__root"></div>
           <div id="thread-modal-replies" class="thread-modal__replies"></div>
         </div>
         <p id="thread-modal-load-hint" class="thread-modal__load-hint">滚动到底后继续上滑可加载更多回复</p>
+      </div>
+    </section>
+
+    <section id="thread-share-modal" class="thread-modal hidden" aria-hidden="true">
+      <div class="thread-modal__backdrop" data-action="close-thread-share-modal"></div>
+      <div
+        class="thread-modal__panel thread-share-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="转发到聊天"
+      >
+        <div class="thread-modal__head">
+          <div>
+            <p class="section-card__eyebrow">Share</p>
+            <h2>转发到聊天</h2>
+          </div>
+          <button id="thread-share-close-btn" class="ghost-chip" type="button">关闭</button>
+        </div>
+        <div class="thread-share-modal__body">
+          <p id="thread-share-status" class="thread-share-status" aria-live="polite"></p>
+          <div id="thread-share-list" class="thread-share-list"></div>
+        </div>
       </div>
     </section>
 
@@ -519,11 +551,11 @@
       </div>
     </section>
 
-    <script src="./prompt-config.js?v=20260407-104444"></script>
+    <script src="./prompt-config.js?v=20260408-103859"></script>
     <script src="./privacy-allowlist.js?v=20260403-165212"></script>
     <script src="./pulse-privacy-cover.js?v=20260403-170109"></script>
     <script src="./pulse-message-banner.js?v=20260403-165212"></script>
     <script src="./api-log.js?v=20260405-231617"></script>
-    <script src="./app.js?v=20260407-104444"></script>
+    <script src="./app.js?v=20260408-103859"></script>
   </body>
 </html>
