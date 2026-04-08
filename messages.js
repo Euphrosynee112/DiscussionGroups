@@ -4282,6 +4282,39 @@ function normalizeConversationMessage(message, index = 0) {
   };
 }
 
+function normalizeConversationMemorySummaryCursor(value = 0, messageCount = 0) {
+  const normalizedMessageCount = Math.max(
+    0,
+    Number.parseInt(String(messageCount || 0), 10) || 0
+  );
+  const rawCursor = Math.max(0, Number.parseInt(String(value || 0), 10) || 0);
+  if (rawCursor <= normalizedMessageCount) {
+    return rawCursor;
+  }
+  return 0;
+}
+
+function adjustConversationMemorySummaryCursorAfterTrim(conversation = null, removedCount = 0) {
+  if (!conversation || !Array.isArray(conversation.messages)) {
+    return;
+  }
+  const normalizedRemovedCount = Math.max(
+    0,
+    Number.parseInt(String(removedCount || 0), 10) || 0
+  );
+  const currentCursor = Math.max(
+    0,
+    Number.parseInt(String(conversation.memorySummaryLastMessageCount || 0), 10) || 0
+  );
+  const shiftedCursor = normalizedRemovedCount
+    ? Math.max(0, currentCursor - normalizedRemovedCount)
+    : currentCursor;
+  conversation.memorySummaryLastMessageCount = normalizeConversationMemorySummaryCursor(
+    shiftedCursor,
+    conversation.messages.length
+  );
+}
+
 function normalizeConversation(conversation, index = 0) {
   const source = conversation && typeof conversation === "object" ? conversation : {};
   if (!source.contactId) {
@@ -4321,9 +4354,9 @@ function normalizeConversation(conversation, index = 0) {
       0,
       Number.parseInt(String(source.memorySummaryCounter || 0), 10) || 0
     ),
-    memorySummaryLastMessageCount: Math.max(
-      0,
-      Number.parseInt(String(source.memorySummaryLastMessageCount || 0), 10) || 0
+    memorySummaryLastMessageCount: normalizeConversationMemorySummaryCursor(
+      source.memorySummaryLastMessageCount,
+      messages.length
     ),
     updatedAt: Number(source.updatedAt) || messages[messages.length - 1]?.createdAt || Date.now()
   };
@@ -4357,9 +4390,13 @@ function cloneConversationsForStorage(conversations = []) {
 function trimConversationMessagesForStorage(conversations = []) {
   return cloneConversationsForStorage(conversations).map((conversation) => {
     if (conversation.messages.length > CONVERSATION_SOFT_MESSAGE_LIMIT) {
+      const removedCount = conversation.messages.length - CONVERSATION_SOFT_MESSAGE_LIMIT;
       conversation.messages = conversation.messages.slice(-CONVERSATION_SOFT_MESSAGE_LIMIT);
+      adjustConversationMemorySummaryCursorAfterTrim(conversation, removedCount);
       recalculateConversationUpdatedAt(conversation);
+      return conversation;
     }
+    adjustConversationMemorySummaryCursorAfterTrim(conversation, 0);
     return conversation;
   });
 }
@@ -4422,6 +4459,7 @@ function pruneOldestConversationBatch(conversations = []) {
     )
   );
   target.messages = target.messages.slice(removableCount);
+  adjustConversationMemorySummaryCursorAfterTrim(target, removableCount);
   recalculateConversationUpdatedAt(target);
   return true;
 }
@@ -9082,8 +9120,16 @@ async function maybeExtractConversationMemories(conversationId, settings, prompt
     return;
   }
 
+  const normalizedLastMessageCount = normalizeConversationMemorySummaryCursor(
+    conversation.memorySummaryLastMessageCount,
+    conversation.messages.length
+  );
+  if (normalizedLastMessageCount !== Number(conversation.memorySummaryLastMessageCount || 0)) {
+    conversation.memorySummaryLastMessageCount = normalizedLastMessageCount;
+    persistConversations();
+  }
   const startIndex = clampNumber(
-    Number.parseInt(String(conversation.memorySummaryLastMessageCount || 0), 10) || 0,
+    normalizedLastMessageCount,
     0,
     conversation.messages.length
   );
