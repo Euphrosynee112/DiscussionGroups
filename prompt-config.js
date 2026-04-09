@@ -645,14 +645,16 @@
           createTemplateItem("contact_persona", "联系人性格", "这个联系人的稳定性格与表达底色：{{contactPersona}}。"),
           createTemplateItem("user_name", "聊天对象昵称", "聊天对象昵称：{{userName}}。"),
           createTemplateItem("user_persona", "用户画像", "用户整体画像：{{userPersona}}。"),
-          createTemplateItem("goal", "提取目标", "你的目标不是写摘要，而是从新对话中提取未来聊天真正值得记住的内容。"),
-          createTemplateItem("core_standard", "核心记忆标准", "核心记忆的标准非常严格：只有会改变联系人对用户的态度、距离感、信任、期待、介意点，或改变联系人看待某个话题/事物的心境与立场，才算核心记忆。"),
+          createTemplateItem("goal", "提取目标", "你的目标不是写摘要，而是从新对话中提取未来聊天真正值得留存、方便自然回想的内容。"),
+          createTemplateItem("core_standard", "核心记忆标准", "核心记忆的标准需要谨慎把握：只有会持续影响联系人对用户的态度、距离感、信任、期待、在意点，或影响联系人看待某个话题/事物的心境与判断，才算核心记忆。"),
           createTemplateItem("scene_standard", "情景记忆标准", "除此之外，其他能在相关话题里帮助回想上下文的内容，都归为情景记忆。"),
           createTemplateItem("avoid_noise", "避免普通闲聊", "不要把普通闲聊、礼貌回应、表层信息重复写成核心记忆。")
         ],
         output_standard: [
           createTemplateItem("json_format", "JSON 格式", "输出必须是 JSON，对象格式固定为：{\"memories\":[{\"type\":\"core|scene\",\"content\":\"...\",\"importance\":1-100}]}"),
           createTemplateItem("importance_rule", "重要度", "importance 使用整数。1 越低越不重要，100 越重要。"),
+          createTemplateItem("content_tone", "表述语气", "memory content 请尽量使用客观、克制、委婉的描述，只写能从对话稳定归纳出的信息，不夸大，不下过重判断。"),
+          createTemplateItem("avoid_ambiguous_words", "避免歧义词", "避免使用容易引起歧义、刺激感过强、带明显定性或压迫感的表达；如需表达相关含义，请改写成更中性、温和的说法。"),
           createTemplateItem("max_count", "数量限制", "最多输出 6 条；如果没有值得保留的内容，就输出 {\"memories\":[]}。"),
           createTemplateItem("plain_json", "纯 JSON", "不要输出 markdown，不要代码块，不要解释，不要额外字段。")
         ]

@@ -5660,7 +5660,7 @@ function buildMemoryPromptContexts(contact, promptSettings) {
   return {
     core: coreMemories.length
       ? [
-          "这些核心记忆会稳定影响你当下的心情、判断和对用户的态度，请像真的记得它们一样自然体现：",
+          "这些核心记忆会持续影响你当下的情绪走向、判断和对用户的态度，请像真的记得它们一样自然体现：",
           ...coreMemories.map(
             (item) => `- 重要度 ${item.importance}/100：${String(item.content || "").trim()}`
           )
@@ -5668,7 +5668,7 @@ function buildMemoryPromptContexts(contact, promptSettings) {
       : "",
     scene: sceneMemories.length
       ? [
-          "这些情景记忆只在聊天内容自然触发时再想起来，不需要主动硬提：",
+          "这些情景记忆只在聊天内容自然相关时再想起来，不必刻意提前提起：",
           ...sceneMemories.map(
             (item) => `- 重要度 ${item.importance}/100：${String(item.content || "").trim()}`
           )
@@ -13612,6 +13612,14 @@ function renderMemoryViewer() {
             >
               编辑
             </button>
+            <button
+              class="messages-memory-card__action"
+              type="button"
+              data-action="delete-memory-item"
+              data-memory-id="${escapeHtml(entry.id)}"
+            >
+              删除
+            </button>
           </div>
         </article>
       `
@@ -13776,6 +13784,24 @@ function saveMemoryEntryDraft(draft = {}) {
   resolveSelectedMemoryContactId(contactId);
   renderMemoryViewer();
   return updatedEntry;
+}
+
+function deleteMemoryEntry(memoryId = "") {
+  const entry = getMemoryEntryById(memoryId);
+  if (!entry) {
+    return null;
+  }
+  state.memories = state.memories.filter((item) => item.id !== entry.id);
+  persistMessageMemories();
+  if (state.memoryEditingId === entry.id) {
+    state.memoryEditingId = "";
+    if (state.memoryEditorOpen) {
+      setMemoryEditorOpen(false);
+    }
+  }
+  resolveSelectedMemoryContactId(entry.contactId);
+  renderMemoryViewer();
+  return entry;
 }
 
 function applyChatPromptSettingsToForm(promptSettings) {
@@ -16831,6 +16857,24 @@ function attachEvents() {
     messagesMemoryListEl.addEventListener("click", (event) => {
       const target = event.target;
       if (!(target instanceof Element)) {
+        return;
+      }
+      const deleteActionEl = target.closest("[data-action='delete-memory-item']");
+      if (deleteActionEl instanceof HTMLElement) {
+        const memoryId = String(deleteActionEl.dataset.memoryId || "").trim();
+        const entry = getMemoryEntryById(memoryId);
+        if (!entry) {
+          return;
+        }
+        const confirmed = window.confirm("确定删除这条记忆吗？");
+        if (!confirmed) {
+          return;
+        }
+        const deletedEntry = deleteMemoryEntry(memoryId);
+        if (deletedEntry) {
+          const contactName = getContactById(deletedEntry.contactId)?.name || "该角色";
+          setMemoryStatus(`已删除 ${contactName} 的一条记忆。`, "success");
+        }
         return;
       }
       const actionEl = target.closest("[data-action='edit-memory-item']");

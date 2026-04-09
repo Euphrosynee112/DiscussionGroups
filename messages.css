@@ -2459,6 +2459,7 @@ body.embedded {
 .messages-memory-card__actions {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
 }
 
 .messages-memory-card__action {
