@@ -2,8 +2,8 @@ const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260408-185224";
-const APP_BUILD_UPDATED_AT = "2026-04-08 18:52:24";
+const APP_BUILD_VERSION = "20260408-191102";
+const APP_BUILD_UPDATED_AT = "2026-04-08 19:11:02";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -648,6 +648,13 @@ function normalizeHomePromptRules(settings = homeState.settings) {
   return settings?.promptRules && typeof settings.promptRules === "object"
     ? cloneHomePlain(settings.promptRules)
     : {};
+}
+
+function normalizeTransferPromptRules(promptRules) {
+  if (typeof window.PulsePromptConfig?.normalizePromptRules === "function") {
+    return window.PulsePromptConfig.normalizePromptRules(promptRules || {});
+  }
+  return promptRules && typeof promptRules === "object" ? cloneHomePlain(promptRules) : {};
 }
 
 function getHomePromptCatalogList() {
@@ -1743,6 +1750,7 @@ function buildTransferPayloadFromCurrentState() {
     negativePromptConstraints: normalizeNegativePromptConstraints(
       settings.negativePromptConstraints || []
     ),
+    promptRules: normalizeHomePromptRules(settings),
     worldbooks: {
       categories: normalizeObjectArray(worldbooks.categories),
       entries: normalizeObjectArray(worldbooks.entries).filter(
@@ -3251,6 +3259,7 @@ function normalizeTransferPayload(parsed) {
       negativePromptConstraints: normalizeNegativePromptConstraints(
         source.negativePromptConstraints || []
       ),
+      promptRules: normalizeTransferPromptRules(source.promptRules || {}),
       worldbooks:
         source.worldbooks && typeof source.worldbooks === "object" ? source.worldbooks : null,
       contacts: source.contacts && typeof source.contacts === "object" ? source.contacts : null,
@@ -3333,6 +3342,7 @@ function normalizeTransferPayload(parsed) {
     negativePromptConstraints: normalizeNegativePromptConstraints(
       settings?.negativePromptConstraints || parsed.negativePromptConstraints || []
     ),
+    promptRules: normalizeTransferPromptRules(settings?.promptRules || parsed.promptRules || {}),
     worldbooks: parsed.worldbooks && typeof parsed.worldbooks === "object" ? parsed.worldbooks : null,
     contacts: parsed.contacts && typeof parsed.contacts === "object" ? parsed.contacts : null,
     memories: Array.isArray(parsed.memories)
@@ -3393,6 +3403,8 @@ function buildTransferSections(payload, options = {}) {
   const negativePromptConstraints = normalizeNegativePromptConstraints(
     payload?.negativePromptConstraints || []
   );
+  const promptRules = normalizeTransferPromptRules(payload?.promptRules || {});
+  const promptRuleTypeCount = Object.keys(promptRules).length;
   const hasPresenceState = hasPresenceTransferStateData(payload?.presenceState || {});
   const hasApiSecrets = Boolean(
     payload?.apiSecrets &&
@@ -3503,6 +3515,19 @@ function buildTransferSections(payload, options = {}) {
         : "首页规则里的全局负向约束词汇和表达。",
       checked: negativePromptConstraints.length > 0,
       disabled: negativePromptConstraints.length === 0,
+      items: []
+    },
+    {
+      id: "promptRules",
+      label: "Prompt 规则",
+      description: promptRuleTypeCount
+        ? truncateText(
+            `首页规则编辑器里的 Prompt 节点配置，共覆盖 ${promptRuleTypeCount} 类 prompt。`,
+            80
+          )
+        : "首页规则编辑器里的 Prompt 节点排序、覆写和自定义文字。",
+      checked: promptRuleTypeCount > 0,
+      disabled: promptRuleTypeCount === 0,
       items: []
     },
     {
@@ -4001,6 +4026,11 @@ function buildSelectedTransferPayload(payload, selection) {
     );
   }
 
+  const promptRulesSection = sectionMap.get("promptRules");
+  if (promptRulesSection?.checked) {
+    selected.promptRules = normalizeTransferPromptRules(payload?.promptRules || {});
+  }
+
   const worldbooksSection = sectionMap.get("worldbooks");
   if (worldbooksSection?.checked && payload.worldbooks) {
     const selectedIds = new Set(
@@ -4132,7 +4162,7 @@ function buildHomeConfigExportPayload(selection = homeState.exportTransferSelect
   const fullPayload = buildTransferPayloadFromCurrentState();
   return {
     schema: CONFIG_EXPORT_SCHEMA,
-    version: 13,
+    version: 14,
     exportedAt: new Date().toISOString(),
     data: buildSelectedTransferPayload(fullPayload, selection)
   };
@@ -4334,6 +4364,10 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
     nextSettings.negativePromptConstraints = normalizeNegativePromptConstraints(
       imported.negativePromptConstraints || []
     );
+  }
+
+  if (Object.prototype.hasOwnProperty.call(imported, "promptRules")) {
+    nextSettings.promptRules = normalizeTransferPromptRules(imported.promptRules || {});
   }
 
   if (imported.worldbooks) {

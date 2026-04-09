@@ -304,6 +304,7 @@ let autoScheduleTimerId = 0;
 let foregroundReplySyncTimerId = 0;
 let foregroundReplySyncConversationId = "";
 let foregroundReplySyncUntil = 0;
+let conversationStorageMaintenanceTimerId = 0;
 const messagesChatClearHistoryBtnEl = document.querySelector("#messages-chat-clear-history-btn");
 const messagesChatClearMemoryBtnEl = document.querySelector("#messages-chat-clear-memory-btn");
 const messagesChatSettingsStatusEl = document.querySelector("#messages-chat-settings-status");
@@ -4572,7 +4573,26 @@ function pruneOldestConversationBatch(conversations = []) {
   return true;
 }
 
-function persistConversations() {
+function persistConversations(options = {}) {
+  const persistOptions = options && typeof options === "object" ? options : {};
+  const shouldDeferMaintenance = Boolean(persistOptions.deferMaintenance);
+  const shouldFallbackToMaintenanceOnFailure =
+    Object.prototype.hasOwnProperty.call(persistOptions, "fallbackToMaintenanceOnFailure")
+      ? Boolean(persistOptions.fallbackToMaintenanceOnFailure)
+      : true;
+
+  if (shouldDeferMaintenance) {
+    const nextConversations = cloneConversationsForStorage(state.conversations);
+    const payload = JSON.stringify(nextConversations);
+    const persisted = safeSetItem(MESSAGE_THREADS_KEY, payload);
+    if (persisted || !shouldFallbackToMaintenanceOnFailure) {
+      state.conversations = nextConversations
+        .map((conversation, index) => normalizeConversation(conversation, index))
+        .filter(Boolean);
+      return persisted;
+    }
+  }
+
   let nextConversations = trimConversationMessagesForStorage(state.conversations);
   let payload = JSON.stringify(nextConversations);
   let attemptedAggressiveImageStrip = false;
@@ -4620,6 +4640,21 @@ function persistConversations() {
   state.conversations = nextConversations
     .map((conversation, index) => normalizeConversation(conversation, index))
     .filter(Boolean);
+  return persisted;
+}
+
+function scheduleConversationStorageMaintenance(delayMs = 120) {
+  if (conversationStorageMaintenanceTimerId) {
+    window.clearTimeout(conversationStorageMaintenanceTimerId);
+  }
+  conversationStorageMaintenanceTimerId = window.setTimeout(() => {
+    conversationStorageMaintenanceTimerId = 0;
+    if (state.requestingConversationId || state.sendingConversationId) {
+      scheduleConversationStorageMaintenance(delayMs);
+      return;
+    }
+    persistConversations();
+  }, Math.max(0, Number(delayMs) || 0));
 }
 
 function normalizeMessageShareInboxEntry(entry, index = 0) {
@@ -4663,7 +4698,84 @@ function loadMessageShareInbox() {
 }
 
 function persistMessageShareInbox(entries = []) {
-  safeSetItem(MESSAGE_SHARE_INBOX_KEY, JSON.stringify(Array.isArray(entries) ? entries : []));
+  return safeSetItem(
+    MESSAGE_SHARE_INBOX_KEY,
+    JSON.stringify(Array.isArray(entries) ? entries : [])
+  );
+}
+
+function bindConversationHistoryPendingImages(historyEl = null) {
+  const resolvedHistoryEl =
+    historyEl instanceof HTMLElement
+      ? historyEl
+      : messagesContentEl?.querySelector(".messages-conversation__history");
+  if (!(resolvedHistoryEl instanceof HTMLElement)) {
+    return;
+  }
+
+  const anchorThreshold = 36;
+  [...resolvedHistoryEl.querySelectorAll(".messages-image-card img")].forEach((imageEl) => {
+    if (!(imageEl instanceof HTMLImageElement) || imageEl.complete) {
+      return;
+    }
+
+    const remaining = Math.max(
+      0,
+      resolvedHistoryEl.scrollHeight - resolvedHistoryEl.clientHeight - resolvedHistoryEl.scrollTop
+    );
+    const currentTop = Math.max(0, Number(resolvedHistoryEl.scrollTop) || 0);
+    const previousAnchorRemaining = Number.parseFloat(
+      String(imageEl.dataset.messagesAnchorRemaining || "")
+    );
+    if (!Number.isFinite(previousAnchorRemaining) || remaining <= anchorThreshold) {
+      imageEl.dataset.messagesAnchorTop = String(currentTop);
+      imageEl.dataset.messagesAnchorRemaining = String(remaining);
+    }
+
+    if (imageEl.dataset.messagesLoadScrollBound === "1") {
+      return;
+    }
+    imageEl.dataset.messagesLoadScrollBound = "1";
+
+    const settleImage = () => {
+      delete imageEl.dataset.messagesLoadScrollBound;
+      const activeHistoryEl = messagesContentEl?.querySelector(".messages-conversation__history");
+      if (!(activeHistoryEl instanceof HTMLElement) || activeHistoryEl !== resolvedHistoryEl) {
+        delete imageEl.dataset.messagesAnchorTop;
+        delete imageEl.dataset.messagesAnchorRemaining;
+        return;
+      }
+
+      const anchorTop = Math.max(
+        0,
+        Number.parseFloat(String(imageEl.dataset.messagesAnchorTop || "")) || 0
+      );
+      const rawAnchorRemaining = Number.parseFloat(
+        String(imageEl.dataset.messagesAnchorRemaining || "")
+      );
+      const anchorRemaining = Number.isFinite(rawAnchorRemaining) ? rawAnchorRemaining : Infinity;
+      delete imageEl.dataset.messagesAnchorTop;
+      delete imageEl.dataset.messagesAnchorRemaining;
+
+      const userStayedNearBottom =
+        anchorRemaining <= anchorThreshold &&
+        activeHistoryEl.scrollTop >= Math.max(0, anchorTop - 24);
+      if (!userStayedNearBottom && !isConversationHistoryNearBottom(96)) {
+        return;
+      }
+
+      window.requestAnimationFrame(() => {
+        const currentHistoryEl = messagesContentEl?.querySelector(".messages-conversation__history");
+        if (!(currentHistoryEl instanceof HTMLElement) || currentHistoryEl !== activeHistoryEl) {
+          return;
+        }
+        currentHistoryEl.scrollTop = currentHistoryEl.scrollHeight;
+      });
+    };
+
+    imageEl.addEventListener("load", settleImage, { once: true });
+    imageEl.addEventListener("error", settleImage, { once: true });
+  });
 }
 
 function ensureConversationForDiscussionShare(entry = null) {
@@ -4701,12 +4813,13 @@ function consumePendingMessageShareInbox() {
   }
 
   let consumedCount = 0;
-  const remainingEntries = [];
+  const unresolvedEntries = [];
+  const insertedEntries = [];
 
   inbox.forEach((entry, index) => {
     const conversation = ensureConversationForDiscussionShare(entry);
     if (!conversation) {
-      remainingEntries.push(entry);
+      unresolvedEntries.push(entry);
       return;
     }
 
@@ -4740,14 +4853,20 @@ function consumePendingMessageShareInbox() {
     ];
     conversation.updatedAt = insertedMessage.createdAt;
     bumpConversationReplyContextVersion(conversation);
+    insertedEntries.push(entry);
     consumedCount += 1;
   });
 
-  if (remainingEntries.length !== inbox.length) {
-    persistMessageShareInbox(remainingEntries);
+  let nextInbox = unresolvedEntries;
+  if (insertedEntries.length) {
+    const persisted = persistConversations();
+    if (!persisted) {
+      nextInbox = [...unresolvedEntries, ...insertedEntries];
+      console.warn("[Pulse Messages] Discussion share delivery is kept in inbox for retry.");
+    }
   }
-  if (consumedCount) {
-    persistConversations();
+  if (nextInbox.length !== inbox.length) {
+    persistMessageShareInbox(nextInbox);
   }
   return consumedCount;
 }
@@ -8842,7 +8961,10 @@ async function appendAssistantReplyBatch(
       return [];
     }
     recalculateConversationUpdatedAt(activeConversation);
-    persistConversations();
+    persistConversations({
+      deferMaintenance: true,
+      fallbackToMaintenanceOnFailure: false
+    });
     clearConversationReplyRecovery(conversationId);
     if (state.activeTab === "chat") {
       renderMessagesPage();
@@ -8944,7 +9066,10 @@ async function appendAssistantReplyBatch(
     }
   }
   if (shouldPersistConversationAfterReveal) {
-    persistConversations();
+    persistConversations({
+      deferMaintenance: true,
+      fallbackToMaintenanceOnFailure: false
+    });
   }
   if (
     latestConversation &&
@@ -11203,7 +11328,7 @@ function renderConversationImageCard(message) {
   }
   return `
     <article class="messages-image-card ${isExpanded && description ? "is-expanded" : ""}">
-      <img src="${escapeHtml(imageDataUrl)}" alt="聊天图片" loading="lazy" />
+      <img src="${escapeHtml(imageDataUrl)}" alt="聊天图片" decoding="async" />
       ${
         description
           ? `
@@ -11448,7 +11573,6 @@ function appendConversationMessageToVisibleHistory(
   const shouldStickToBottom =
     renderOptions.scrollBehavior === "bottom" ||
     (renderOptions.scrollBehavior !== "preserve" && isConversationHistoryNearBottom());
-  const pageScrollSnapshot = capturePageScrollSnapshot();
   const emptyEl = historyEl.querySelector(".messages-conversation__empty");
   if (emptyEl) {
     emptyEl.remove();
@@ -11467,7 +11591,7 @@ function appendConversationMessageToVisibleHistory(
     if (shouldStickToBottom) {
       historyEl.scrollTop = historyEl.scrollHeight;
     }
-    restorePageScrollSnapshot(pageScrollSnapshot);
+    bindConversationHistoryPendingImages(historyEl);
   });
   return true;
 }
@@ -11548,7 +11672,6 @@ function renderConversationDetail(options = {}) {
   }
 
   syncProfileStateFromStorage();
-  const pageScrollSnapshot = capturePageScrollSnapshot();
 
   const conversation = getConversationById();
   if (!conversation) {
@@ -11690,7 +11813,7 @@ function renderConversationDetail(options = {}) {
           preventScroll: true
         });
       }
-      restorePageScrollSnapshot(pageScrollSnapshot);
+      bindConversationHistoryPendingImages(historyEl);
     });
   }
 }
@@ -14597,7 +14720,10 @@ async function sendConversationImage(file) {
   conversation.messages = [...conversation.messages, userMessage];
   conversation.updatedAt = userMessage.createdAt;
   bumpConversationReplyContextVersion(conversation);
-  persistConversations();
+  persistConversations({
+    deferMaintenance: true,
+    fallbackToMaintenanceOnFailure: true
+  });
   queueConversationRenderOptions({
     scrollBehavior: "bottom"
   });
@@ -14635,7 +14761,10 @@ function sendConversationPhoto(description = "") {
   conversation.messages = [...conversation.messages, userMessage];
   conversation.updatedAt = userMessage.createdAt;
   bumpConversationReplyContextVersion(conversation);
-  persistConversations();
+  persistConversations({
+    deferMaintenance: true,
+    fallbackToMaintenanceOnFailure: true
+  });
   setPhotoModalOpen(false);
   queueConversationRenderOptions({
     scrollBehavior: "bottom"
@@ -14677,7 +14806,10 @@ function sendConversationLocation(locationName, coordinates) {
   conversation.updatedAt = userMessage.createdAt;
   bumpConversationReplyContextVersion(conversation);
   saveRecentLocation(resolvedName, resolvedCoordinates);
-  persistConversations();
+  persistConversations({
+    deferMaintenance: true,
+    fallbackToMaintenanceOnFailure: true
+  });
   setLocationModalOpen(false);
   queueConversationRenderOptions({
     scrollBehavior: "bottom"
@@ -14727,7 +14859,10 @@ function sendConversationMessage(text) {
   bumpConversationReplyContextVersion(conversation);
   setConversationDraft(conversation.id, "");
   state.quotedMessageId = "";
-  persistConversations();
+  persistConversations({
+    deferMaintenance: true,
+    fallbackToMaintenanceOnFailure: true
+  });
   queueConversationRenderOptions({
     scrollBehavior: "bottom",
     focusInput: true
@@ -14965,7 +15100,10 @@ async function requestConversationReply(options = {}) {
       removedReplyBatch = latestReplyBatch.messages.map((message) => ({ ...message }));
       conversation.messages = conversation.messages.slice(0, latestReplyBatch.startIndex);
       recalculateConversationUpdatedAt(conversation);
-      persistConversations();
+      persistConversations({
+        deferMaintenance: true,
+        fallbackToMaintenanceOnFailure: false
+      });
       history = selectConversationHistory(conversation.messages, promptSettings.historyRounds);
     } else {
       state.requestingConversationId = conversation.id;
@@ -15046,7 +15184,10 @@ async function requestConversationReply(options = {}) {
         requestedPendingUserMessageIds
       );
       if (clearedPendingFlags) {
-        persistConversations();
+        persistConversations({
+          deferMaintenance: true,
+          fallbackToMaintenanceOnFailure: false
+        });
       }
     }
     if (!isConversationReplyContextCurrent(conversation.id, replyContextVersion)) {
@@ -15142,7 +15283,10 @@ async function requestConversationReply(options = {}) {
       }
       latestConversation.memorySummaryCounter =
         (Number(latestConversation.memorySummaryCounter) || 0) + 1;
-      persistConversations();
+      persistConversations({
+        deferMaintenance: true,
+        fallbackToMaintenanceOnFailure: false
+      });
       void maybeExtractConversationMemories(latestConversation.id, settings, promptSettings);
     }
     if (!suppressUi) {
@@ -15158,7 +15302,10 @@ async function requestConversationReply(options = {}) {
         );
         if (restoredMessages.length) {
           recalculateConversationUpdatedAt(rollbackConversation);
-          persistConversations();
+          persistConversations({
+            deferMaintenance: true,
+            fallbackToMaintenanceOnFailure: false
+          });
         }
       }
     }
@@ -15192,6 +15339,7 @@ async function requestConversationReply(options = {}) {
       renderMessagesPage();
       focusConversationInput();
     }
+    scheduleConversationStorageMaintenance();
   }
 }
 

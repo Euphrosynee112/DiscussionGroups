@@ -361,7 +361,9 @@ function safeSetItem(key, value) {
   memoryStorage[key] = value;
   try {
     window.localStorage.setItem(key, value);
+    return true;
   } catch (_error) {
+    return false;
   }
 }
 
@@ -3913,7 +3915,10 @@ function loadMessageShareInbox() {
 }
 
 function persistMessageShareInbox(entries = []) {
-  safeSetItem(MESSAGE_SHARE_INBOX_KEY, JSON.stringify(Array.isArray(entries) ? entries : []));
+  return safeSetItem(
+    MESSAGE_SHARE_INBOX_KEY,
+    JSON.stringify(Array.isArray(entries) ? entries : [])
+  );
 }
 
 function setThreadShareStatus(message = "", tone = "") {
@@ -4011,9 +4016,13 @@ function shareCurrentThreadToChat(targetConversationId = "", targetContactId = "
     targetAvatarTextSnapshot: target.avatarText || "",
     payload
   });
-  persistMessageShareInbox(inbox.slice(-60));
+  const persisted = persistMessageShareInbox(inbox.slice(-60));
   state.threadShareSubmitting = false;
   renderThreadShareModal();
+  if (!persisted) {
+    setThreadShareStatus("转发失败：聊天存储空间不足，请先清理部分聊天或图片后重试。", "error");
+    return;
+  }
   setThreadShareStatus(`已转发到 ${target.name} 的聊天。`, "success");
   window.setTimeout(() => {
     setThreadShareModalOpen(false);
