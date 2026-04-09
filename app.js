@@ -31,6 +31,7 @@ const CHAT_SHARE_STORAGE_TARGET_CHARS = 1400000;
 const CHAT_SHARE_STORAGE_SOFT_MESSAGE_LIMIT = 240;
 const CHAT_SHARE_STORAGE_MIN_MESSAGE_LIMIT = 80;
 const CHAT_SHARE_STORAGE_IMAGE_KEEP_COUNT = 20;
+const THREAD_SHARE_STORAGE_RESERVE_CHARS = 48000;
 const HOME_FEED_LABELS = {
   entertainment: "系统内容",
   tags: "热门标签"
@@ -3851,23 +3852,35 @@ function pruneOldestStoredConversationBatch(entries = []) {
   return true;
 }
 
-function relieveChatStorageForThreadShare() {
+function relieveChatStorageForThreadShare(inboxEntries = [], options = {}) {
+  const relieveOptions = options && typeof options === "object" ? options : {};
   const storageKey = resolveStoredConversationStorageKey();
+  const currentPayload = String(safeGetItem(storageKey) || "[]");
   const storedConversations = extractStoredConversationEntries();
   if (!storedConversations.length) {
-    return false;
+    return true;
+  }
+
+  const inboxPayloadLength = JSON.stringify(Array.isArray(inboxEntries) ? inboxEntries : []).length;
+  const targetChars = Math.max(
+    CHAT_SHARE_STORAGE_MIN_MESSAGE_LIMIT * 100,
+    CHAT_SHARE_STORAGE_TARGET_CHARS -
+      Math.max(THREAD_SHARE_STORAGE_RESERVE_CHARS, inboxPayloadLength * 2)
+  );
+  if (!relieveOptions.force && currentPayload.length <= targetChars) {
+    return true;
   }
 
   let nextConversations = trimStoredConversationMessagesForShare(storedConversations);
   let payload = JSON.stringify(nextConversations);
   let attemptedAggressiveImageStrip = false;
 
-  if (payload.length > CHAT_SHARE_STORAGE_TARGET_CHARS) {
+  if (payload.length > targetChars) {
     nextConversations = stripStoredConversationImagePayloads(nextConversations);
     payload = JSON.stringify(nextConversations);
   }
 
-  while (payload.length > CHAT_SHARE_STORAGE_TARGET_CHARS) {
+  while (payload.length > targetChars) {
     const changed = pruneOldestStoredConversationBatch(nextConversations);
     if (!changed) {
       break;
@@ -4171,9 +4184,10 @@ function shareCurrentThreadToChat(targetConversationId = "", targetContactId = "
     payload
   });
   const trimmedInbox = inbox.slice(-THREAD_SHARE_INBOX_LIMIT);
+  relieveChatStorageForThreadShare(trimmedInbox);
   let persisted = persistMessageShareInbox(trimmedInbox);
   if (!persisted) {
-    const relieved = relieveChatStorageForThreadShare();
+    const relieved = relieveChatStorageForThreadShare(trimmedInbox, { force: true });
     if (relieved) {
       persisted = persistMessageShareInbox(trimmedInbox);
     }
