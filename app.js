@@ -26,6 +26,11 @@ const CUSTOM_TAB_LIMIT = 4;
 const API_CONFIG_LIMIT = 12;
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
+const THREAD_SHARE_INBOX_LIMIT = 24;
+const CHAT_SHARE_STORAGE_TARGET_CHARS = 1400000;
+const CHAT_SHARE_STORAGE_SOFT_MESSAGE_LIMIT = 240;
+const CHAT_SHARE_STORAGE_MIN_MESSAGE_LIMIT = 80;
+const CHAT_SHARE_STORAGE_IMAGE_KEEP_COUNT = 20;
 const HOME_FEED_LABELS = {
   entertainment: "系统内容",
   tags: "热门标签"
@@ -3748,6 +3753,155 @@ function extractStoredConversationEntries() {
   return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item === "object") : [];
 }
 
+function resolveStoredConversationStorageKey() {
+  if (safeGetItem(MESSAGE_THREADS_KEY)) {
+    return MESSAGE_THREADS_KEY;
+  }
+  if (safeGetItem(DIRECT_MESSAGES_KEY)) {
+    return DIRECT_MESSAGES_KEY;
+  }
+  return MESSAGE_THREADS_KEY;
+}
+
+function cloneStoredConversationEntries(entries = []) {
+  return (Array.isArray(entries) ? entries : []).map((conversation) => ({
+    ...(conversation && typeof conversation === "object" ? conversation : {}),
+    messages: Array.isArray(conversation?.messages)
+      ? conversation.messages.map((message) => ({
+          ...(message && typeof message === "object" ? message : {})
+        }))
+      : []
+  }));
+}
+
+function buildStoredConversationImageFallbackText(description = "") {
+  const resolvedDescription = String(description || "").trim();
+  return ["[图片消息]", resolvedDescription ? `图片说明：${resolvedDescription}` : ""]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function trimStoredConversationMessagesForShare(entries = []) {
+  return cloneStoredConversationEntries(entries).map((conversation) => {
+    if (conversation.messages.length > CHAT_SHARE_STORAGE_SOFT_MESSAGE_LIMIT) {
+      conversation.messages = conversation.messages.slice(-CHAT_SHARE_STORAGE_SOFT_MESSAGE_LIMIT);
+    }
+    return conversation;
+  });
+}
+
+function stripStoredConversationImagePayloads(
+  entries = [],
+  keepCount = CHAT_SHARE_STORAGE_IMAGE_KEEP_COUNT
+) {
+  const normalizedKeepCount = Math.max(0, Number.parseInt(String(keepCount || 0), 10) || 0);
+  return cloneStoredConversationEntries(entries).map((conversation) => {
+    const imageIndexes = conversation.messages.reduce((indexes, message, index) => {
+      if (String(message?.imageDataUrl || "").trim()) {
+        indexes.push(index);
+      }
+      return indexes;
+    }, []);
+    if (imageIndexes.length <= normalizedKeepCount) {
+      return conversation;
+    }
+    const keepIndexes = new Set(imageIndexes.slice(-normalizedKeepCount));
+    conversation.messages = conversation.messages.map((message, index) => {
+      if (!String(message?.imageDataUrl || "").trim() || keepIndexes.has(index)) {
+        return message;
+      }
+      return {
+        ...message,
+        imageDataUrl: "",
+        text:
+          String(message?.text || "").trim() ||
+          buildStoredConversationImageFallbackText(String(message?.imageDescription || "").trim())
+      };
+    });
+    return conversation;
+  });
+}
+
+function pruneOldestStoredConversationBatch(entries = []) {
+  const candidates = (Array.isArray(entries) ? entries : [])
+    .filter((conversation) => Array.isArray(conversation?.messages))
+    .filter((conversation) => conversation.messages.length > CHAT_SHARE_STORAGE_MIN_MESSAGE_LIMIT)
+    .sort(
+      (left, right) =>
+        (Number(left?.updatedAt) || 0) - (Number(right?.updatedAt) || 0) ||
+        (left.messages.length || 0) - (right.messages.length || 0)
+    );
+
+  const target = candidates[0] || null;
+  if (!target) {
+    return false;
+  }
+
+  const removableCount = Math.max(
+    1,
+    Math.min(
+      12,
+      target.messages.length - CHAT_SHARE_STORAGE_MIN_MESSAGE_LIMIT,
+      Math.ceil(target.messages.length / 12)
+    )
+  );
+  target.messages = target.messages.slice(removableCount);
+  const latestMessage = target.messages[target.messages.length - 1] || null;
+  target.updatedAt = Number(latestMessage?.createdAt) || Date.now();
+  return true;
+}
+
+function relieveChatStorageForThreadShare() {
+  const storageKey = resolveStoredConversationStorageKey();
+  const storedConversations = extractStoredConversationEntries();
+  if (!storedConversations.length) {
+    return false;
+  }
+
+  let nextConversations = trimStoredConversationMessagesForShare(storedConversations);
+  let payload = JSON.stringify(nextConversations);
+  let attemptedAggressiveImageStrip = false;
+
+  if (payload.length > CHAT_SHARE_STORAGE_TARGET_CHARS) {
+    nextConversations = stripStoredConversationImagePayloads(nextConversations);
+    payload = JSON.stringify(nextConversations);
+  }
+
+  while (payload.length > CHAT_SHARE_STORAGE_TARGET_CHARS) {
+    const changed = pruneOldestStoredConversationBatch(nextConversations);
+    if (!changed) {
+      break;
+    }
+    payload = JSON.stringify(nextConversations);
+  }
+
+  let persisted = safeSetItem(storageKey, payload);
+  while (!persisted) {
+    if (!attemptedAggressiveImageStrip) {
+      const strippedConversations = stripStoredConversationImagePayloads(nextConversations, 0);
+      const strippedPayload = JSON.stringify(strippedConversations);
+      attemptedAggressiveImageStrip = true;
+      if (strippedPayload !== payload) {
+        nextConversations = strippedConversations;
+        payload = strippedPayload;
+        persisted = safeSetItem(storageKey, payload);
+        if (persisted) {
+          break;
+        }
+      }
+    }
+
+    const changed = pruneOldestStoredConversationBatch(nextConversations);
+    if (!changed) {
+      break;
+    }
+    payload = JSON.stringify(nextConversations);
+    persisted = safeSetItem(storageKey, payload);
+  }
+
+  return persisted;
+}
+
 function getChatShareAvatarFallback(source = {}) {
   const name = String(source.name || source.contactNameSnapshot || "聊天").trim();
   return name.slice(0, 2) || "聊";
@@ -4016,7 +4170,14 @@ function shareCurrentThreadToChat(targetConversationId = "", targetContactId = "
     targetAvatarTextSnapshot: target.avatarText || "",
     payload
   });
-  const persisted = persistMessageShareInbox(inbox.slice(-60));
+  const trimmedInbox = inbox.slice(-THREAD_SHARE_INBOX_LIMIT);
+  let persisted = persistMessageShareInbox(trimmedInbox);
+  if (!persisted) {
+    const relieved = relieveChatStorageForThreadShare();
+    if (relieved) {
+      persisted = persistMessageShareInbox(trimmedInbox);
+    }
+  }
   state.threadShareSubmitting = false;
   renderThreadShareModal();
   if (!persisted) {
