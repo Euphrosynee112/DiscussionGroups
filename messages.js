@@ -7440,7 +7440,38 @@ function buildChatRequestInjectedMessages(requestOptions = {}, settings = loadSe
       });
     }
   }
+  if (resolvedRequestOptions.awarenessInContents && resolvedRequestOptions.triggeredAwareness?.text) {
+    const awarenessMessage = buildTriggeredAwarenessContext(
+      resolvedRequestOptions.triggeredAwareness
+    );
+    if (awarenessMessage) {
+      injectedMessages.push({
+        role: "user",
+        text: awarenessMessage,
+        imageDataUrls: []
+      });
+    }
+  }
   return injectedMessages;
+}
+
+function buildTriggeredAwarenessContext(triggeredAwareness = null) {
+  if (!triggeredAwareness?.text) {
+    return "";
+  }
+  return [
+    `你刚刚自己忽然想起了一条并非来自用户当前对话、而是你此前独自察觉到的额外信息；这条信息和最近几轮聊天记录具有同等优先级，需要和当前聊天一起理解：${String(
+      triggeredAwareness.text || ""
+    ).trim()}。`,
+    triggeredAwareness.emotionShift
+      ? `这让你此刻的心绪与态度轻微转向：${String(
+          triggeredAwareness.emotionShift || ""
+        ).trim()}。`
+      : "",
+    "请把它当作你自己突然联想到的隐性线索，而不是用户刚刚告诉你的内容；它的重要程度不要低于最近聊天记录。你可以自然地主动带起相关话题，但仍然要先接住当前聊天。"
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function buildConversationSystemPrompt(
@@ -7466,21 +7497,9 @@ function buildConversationSystemPrompt(
     requestOptions.pendingUserMessages,
     settings
   );
-  const triggeredAwarenessContext = requestOptions.triggeredAwareness?.text
-    ? [
-        `你刚刚自己忽然想起了一条并非来自用户当前对话、而是你此前独自察觉到的额外信息；这条信息和最近几轮聊天记录具有同等优先级，需要和当前聊天一起理解：${String(
-          requestOptions.triggeredAwareness.text || ""
-        ).trim()}。`,
-        requestOptions.triggeredAwareness.emotionShift
-          ? `这让你此刻的心绪与态度轻微转向：${String(
-              requestOptions.triggeredAwareness.emotionShift || ""
-            ).trim()}。`
-          : "",
-        "请把它当作你自己突然联想到的隐性线索，而不是用户刚刚告诉你的内容；它的重要程度不要低于最近聊天记录。你可以自然地主动带起相关话题，但仍然要先接住当前聊天。"
-      ]
-        .filter(Boolean)
-        .join("\n")
-    : "";
+  const triggeredAwarenessContext = requestOptions.awarenessInContents
+    ? ""
+    : buildTriggeredAwarenessContext(requestOptions.triggeredAwareness);
 
   return buildStructuredPromptSections(
     "chat_conversation",
@@ -14989,6 +15008,8 @@ async function requestConversationReply(options = {}) {
     ? normalizeManualAwarenessTrigger(contact.awarenessManualTriggerPending)
     : null;
   const hasManualAwarenessTrigger = Boolean(manualAwarenessTrigger?.text);
+  const shouldInjectAwarenessIntoContents =
+    hasManualAwarenessTrigger && Boolean(requestOptions.awarenessImmediateTrigger);
   const awarenessResolvedState = normalizeAwarenessResolvedState(
     contact.awarenessResolvedState,
     contact.awarenessConsumed
@@ -15042,13 +15063,13 @@ async function requestConversationReply(options = {}) {
       const hasContinuationSource = conversation.messages.some(
         (message) => message.role === "assistant"
       );
-      if (!hasContinuationSource) {
+      if (!hasContinuationSource && !shouldInjectAwarenessIntoContents) {
         if (!suppressUi) {
           setMessagesStatus("当前没有待推送到 API 的新消息。");
         }
         return;
       }
-      continueAssistant = true;
+      continueAssistant = !shouldInjectAwarenessIntoContents;
     } else {
       pendingUserMessagesForPrompt = pendingUserMessages.map((message) => ({ ...message }));
       requestedPendingUserMessageIds = pendingUserMessages.map((message) =>
@@ -15157,6 +15178,7 @@ async function requestConversationReply(options = {}) {
         regenerate: isRegenerate,
         regenerateInstruction,
         triggeredAwareness,
+        awarenessInContents: shouldInjectAwarenessIntoContents,
         pendingUserMessages: pendingUserMessagesForPrompt,
         continueAssistant,
         sceneMode: conversation.sceneMode === "offline" ? "offline" : "online",
@@ -17170,7 +17192,7 @@ function attachEvents() {
   }
 
   if (messagesAwarenessTriggerBtnEl) {
-    messagesAwarenessTriggerBtnEl.addEventListener("click", () => {
+    messagesAwarenessTriggerBtnEl.addEventListener("click", async () => {
       const conversation = getConversationById();
       const contact = conversation ? getResolvedConversationContact(conversation) : null;
       if (!contact) {
@@ -17190,8 +17212,8 @@ function attachEvents() {
         return;
       }
       renderMessagesPage();
-      setAwarenessStatus("已准备手动触发；下一次获取回复时会直接带入。", "success");
-      setMessagesStatus("这条察觉已准备手动触发。", "success");
+      setAwarenessStatus("察觉已保存，正在按这条信息直接生成消息。", "success");
+      setMessagesStatus("正在按这条察觉生成消息…", "success");
       state.awarenessFormResetRequested = true;
       if (messagesAwarenessTitleInputEl) {
         messagesAwarenessTitleInputEl.value = "";
@@ -17202,9 +17224,17 @@ function attachEvents() {
       if (messagesAwarenessEmotionInputEl) {
         messagesAwarenessEmotionInputEl.value = "";
       }
-      window.setTimeout(() => {
-        setAwarenessModalOpen(false);
-      }, 220);
+      setAwarenessModalOpen(false);
+      messagesAwarenessTriggerBtnEl.disabled = true;
+      try {
+        await requestConversationReply({
+          conversationId: conversation.id,
+          forceDirect: true,
+          awarenessImmediateTrigger: true
+        });
+      } finally {
+        messagesAwarenessTriggerBtnEl.disabled = false;
+      }
     });
   }
 
