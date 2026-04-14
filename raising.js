@@ -323,6 +323,14 @@ function normalizeApiConfigToken(token) {
   return String(token || "").trim();
 }
 
+function normalizeTemperature(value, fallback = DEFAULT_TEMPERATURE) {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(2, Math.max(0, parsed));
+}
+
 function normalizeOpenAICompatibleEndpoint(endpoint) {
   const trimmed = String(endpoint || "").trim();
   if (!trimmed) {
@@ -421,6 +429,7 @@ function normalizeApiConfigs(configs = []) {
           mode === "generic"
             ? ""
             : String(item.model || getDefaultModelByMode(mode)).trim() || getDefaultModelByMode(mode),
+        temperature: normalizeTemperature(item.temperature, DEFAULT_TEMPERATURE),
         updatedAt: Number(item.updatedAt) || Date.now()
       };
     });
@@ -432,6 +441,7 @@ function buildNormalizedSettingsSnapshot(source) {
     endpoint: DEFAULT_OPENAI_ENDPOINT,
     token: "",
     model: DEFAULT_DEEPSEEK_MODEL,
+    temperature: DEFAULT_TEMPERATURE,
     apiConfigs: [],
     activeApiConfigId: "",
     ...(source && typeof source === "object" ? source : {})
@@ -440,6 +450,7 @@ function buildNormalizedSettingsSnapshot(source) {
   merged.mode = normalizeApiMode(merged.mode);
   merged.endpoint = normalizeSettingsEndpointByMode(merged.mode, merged.endpoint);
   merged.token = normalizeApiConfigToken(merged.token);
+  merged.temperature = normalizeTemperature(merged.temperature, DEFAULT_TEMPERATURE);
   merged.model =
     merged.mode === "generic"
       ? ""
@@ -463,6 +474,7 @@ function buildNormalizedSettingsSnapshot(source) {
   merged.mode = normalizeApiMode(activeConfig.mode);
   merged.endpoint = normalizeSettingsEndpointByMode(activeConfig.mode, activeConfig.endpoint);
   merged.token = normalizeApiConfigToken(activeConfig.token);
+  merged.temperature = normalizeTemperature(activeConfig.temperature, DEFAULT_TEMPERATURE);
   merged.model =
     merged.mode === "generic"
       ? ""
@@ -1396,7 +1408,7 @@ function buildJsonObjectRequestBody(settings, prompt) {
   if (isOpenAICompatibleMode(mode)) {
     return {
       model: settings.model || getDefaultModelByMode(mode),
-      temperature: DEFAULT_TEMPERATURE,
+      temperature: normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE),
       messages: [
         {
           role: "system",
@@ -1424,14 +1436,14 @@ function buildJsonObjectRequestBody(settings, prompt) {
       ],
       safetySettings: buildGeminiSafetySettings(),
       generationConfig: {
-        temperature: DEFAULT_TEMPERATURE
+        temperature: normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE)
       }
     };
   }
 
   return {
     prompt,
-    temperature: DEFAULT_TEMPERATURE,
+    temperature: normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE),
     format: "json-object",
     intent: "raising_archive"
   };

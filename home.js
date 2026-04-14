@@ -4,8 +4,9 @@ const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1bet
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GROK_MODEL = "grok-4";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260414-130808";
-const APP_BUILD_UPDATED_AT = "2026-04-14 13:08:08";
+const DEFAULT_TEMPERATURE = 0.85;
+const APP_BUILD_VERSION = "20260414-141318";
+const APP_BUILD_UPDATED_AT = "2026-04-14 14:13:18";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -76,6 +77,7 @@ const homeApiModeSelect = document.querySelector("#home-api-mode");
 const homeApiEndpointInput = document.querySelector("#home-api-endpoint");
 const homeApiTokenInput = document.querySelector("#home-api-token");
 const homeApiModelInput = document.querySelector("#home-api-model");
+const homeApiTemperatureInput = document.querySelector("#home-api-temperature");
 const homeApiModelFetchBtn = document.querySelector("#home-api-model-fetch-btn");
 const homeApiModelOptionsEl = document.querySelector("#home-api-model-options");
 const homeApiModelHintEl = document.querySelector("#home-api-model-hint");
@@ -89,6 +91,7 @@ const homeTranslationApiConfigSelectEl = document.querySelector(
 );
 const homeSummaryApiEnabledEl = document.querySelector("#home-summary-api-enabled");
 const homeSummaryApiConfigSelectEl = document.querySelector("#home-summary-api-config-select");
+const homeFloatingApiSwitcherEnabledEl = document.querySelector("#home-floating-api-switcher-enabled");
 const homeNegativePromptInputEl = document.querySelector("#home-negative-prompt-input");
 const homeConfigExportBtn = document.querySelector("#home-config-export-btn");
 const homeConfigImportBtn = document.querySelector("#home-config-import-btn");
@@ -154,12 +157,14 @@ const DEFAULT_SETTINGS = {
   endpoint: DEFAULT_OPENAI_ENDPOINT,
   token: "",
   model: DEFAULT_DEEPSEEK_MODEL,
+  temperature: DEFAULT_TEMPERATURE,
   apiConfigs: [],
   activeApiConfigId: "",
   translationApiEnabled: false,
   translationApiConfigId: "",
   summaryApiEnabled: false,
   summaryApiConfigId: "",
+  floatingApiSwitcherEnabled: false,
   negativePromptConstraints: [],
   privacyAllowlist: [],
   manualTimeSettings: {
@@ -362,6 +367,14 @@ function setHomeApiModelHint(message) {
 
 function normalizeApiConfigToken(token) {
   return String(token || "").trim();
+}
+
+function normalizeTemperature(value, fallback = DEFAULT_TEMPERATURE) {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(2, Math.max(0, parsed));
 }
 
 function normalizePrivacyAllowlist(value) {
@@ -774,6 +787,7 @@ function normalizeApiConfigs(configs = []) {
           mode === "generic"
             ? ""
             : String(item.model || getDefaultModelByMode(mode)).trim() || getDefaultModelByMode(mode),
+        temperature: normalizeTemperature(item.temperature, DEFAULT_TEMPERATURE),
         updatedAt: Number(item.updatedAt) || Date.now()
       };
     });
@@ -792,6 +806,7 @@ function buildNormalizedSettingsSnapshot(source, options = {}) {
   merged.mode = normalizeApiMode(merged.mode);
   merged.endpoint = normalizeSettingsEndpointByMode(merged.mode, merged.endpoint);
   merged.token = normalizeApiConfigToken(merged.token);
+  merged.temperature = normalizeTemperature(merged.temperature, DEFAULT_TEMPERATURE);
   merged.model =
     merged.mode === "generic"
       ? ""
@@ -824,6 +839,7 @@ function buildNormalizedSettingsSnapshot(source, options = {}) {
           ? ""
           : String(activeConfig.model || getDefaultModelByMode(activeConfig.mode)).trim() ||
             getDefaultModelByMode(activeConfig.mode);
+      merged.temperature = normalizeTemperature(activeConfig.temperature, DEFAULT_TEMPERATURE);
     }
   }
 
@@ -839,6 +855,7 @@ function buildNormalizedSettingsSnapshot(source, options = {}) {
     merged.summaryApiEnabled = false;
   }
   merged.summaryApiEnabled = Boolean(merged.summaryApiEnabled && merged.summaryApiConfigId);
+  merged.floatingApiSwitcherEnabled = Boolean(merged.floatingApiSwitcherEnabled);
   merged.manualTimeSettings =
     typeof window.PulsePromptConfig?.normalizeManualTimeSettings === "function"
       ? window.PulsePromptConfig.normalizeManualTimeSettings(merged.manualTimeSettings)
@@ -888,6 +905,13 @@ function persistSettings(settings) {
   });
   safeSetItem(SETTINGS_KEY, JSON.stringify(normalized));
   persistStoredPrivacyAllowlistTerms(normalized.privacyAllowlist || []);
+  window.dispatchEvent(
+    new CustomEvent("pulse-settings-updated", {
+      detail: {
+        settings: normalized
+      }
+    })
+  );
 }
 
 function setHomeApiConfigStatus(message, tone = "") {
@@ -2044,11 +2068,13 @@ function buildTransferPayloadFromCurrentState() {
             ? ""
             : String(settings.model || getDefaultModelByMode(settings.mode)).trim() ||
               getDefaultModelByMode(settings.mode),
+        temperature: normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE),
         activeApiConfigId: String(settings.activeApiConfigId || "").trim(),
         translationApiEnabled: Boolean(settings.translationApiEnabled),
         translationApiConfigId: String(settings.translationApiConfigId || "").trim(),
         summaryApiEnabled: Boolean(settings.summaryApiEnabled),
-        summaryApiConfigId: String(settings.summaryApiConfigId || "").trim()
+        summaryApiConfigId: String(settings.summaryApiConfigId || "").trim(),
+        floatingApiSwitcherEnabled: Boolean(settings.floatingApiSwitcherEnabled)
       },
       apiConfigs: apiConfigs.map(({ token, ...rest }) => ({ ...rest }))
     },
@@ -2064,7 +2090,7 @@ function buildTransferPayloadFromCurrentState() {
         homeCount: Number(settings.homeCount) || "",
         replyCount: Number(settings.replyCount) || "",
         temperature: Number.isFinite(Number(settings.temperature))
-          ? Number(settings.temperature)
+          ? normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE)
           : ""
       },
       customTabs: normalizeObjectArray(settings.customTabs)
@@ -3630,11 +3656,13 @@ function normalizeTransferPayload(parsed) {
             mode: settings.mode,
             endpoint: settings.endpoint,
             model: settings.model,
+            temperature: normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE),
             activeApiConfigId: settings.activeApiConfigId || "",
             translationApiEnabled: Boolean(settings.translationApiEnabled),
             translationApiConfigId: settings.translationApiConfigId || "",
             summaryApiEnabled: Boolean(settings.summaryApiEnabled),
-            summaryApiConfigId: settings.summaryApiConfigId || ""
+            summaryApiConfigId: settings.summaryApiConfigId || "",
+            floatingApiSwitcherEnabled: Boolean(settings.floatingApiSwitcherEnabled)
           },
           apiConfigs: normalizeApiConfigs(settings.apiConfigs || []).map(({ token, ...rest }) => ({
             ...rest
@@ -3656,7 +3684,7 @@ function normalizeTransferPayload(parsed) {
             homeCount: Number(settings.homeCount) || "",
             replyCount: Number(settings.replyCount) || "",
             temperature: Number.isFinite(Number(settings.temperature))
-              ? Number(settings.temperature)
+              ? normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE)
               : ""
           },
           customTabs: normalizeObjectArray(settings.customTabs)
@@ -4600,6 +4628,10 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
         : String(
             imported.apiConfig.current?.model || getDefaultModelByMode(imported.apiConfig.current?.mode)
           ).trim() || getDefaultModelByMode(imported.apiConfig.current?.mode);
+    nextSettings.temperature = normalizeTemperature(
+      imported.apiConfig.current?.temperature,
+      DEFAULT_TEMPERATURE
+    );
     nextSettings.activeApiConfigId = String(imported.apiConfig.current?.activeApiConfigId || "").trim();
     nextSettings.translationApiEnabled = Boolean(imported.apiConfig.current?.translationApiEnabled);
     nextSettings.translationApiConfigId = String(
@@ -4609,6 +4641,9 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
     nextSettings.summaryApiConfigId = String(
       imported.apiConfig.current?.summaryApiConfigId || ""
     ).trim();
+    nextSettings.floatingApiSwitcherEnabled = Boolean(
+      imported.apiConfig.current?.floatingApiSwitcherEnabled
+    );
     nextSettings.token = "";
     nextSettings.apiConfigs = normalizeApiConfigs(
       normalizeObjectArray(imported.apiConfig.apiConfigs).map((item) => ({
@@ -4647,8 +4682,10 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
           Number(imported.forum.baseSettings.replyCount) || nextSettings.replyCount;
       }
       if (Object.prototype.hasOwnProperty.call(imported.forum.baseSettings, "temperature")) {
-        nextSettings.temperature =
-          Number(imported.forum.baseSettings.temperature) || nextSettings.temperature;
+        nextSettings.temperature = normalizeTemperature(
+          imported.forum.baseSettings.temperature,
+          nextSettings.temperature
+        );
       }
     }
     nextSettings.customTabs = mergeCustomTabs(nextSettings.customTabs, imported.forum.customTabs);
@@ -4864,9 +4901,6 @@ function updateHomeModeUI() {
   if (mode === "gemini" && !homeApiEndpointInput.value.trim()) {
     homeApiEndpointInput.value = DEFAULT_GEMINI_ENDPOINT;
   }
-  if (needsModel && !homeApiModelInput.value.trim()) {
-    homeApiModelInput.value = getDefaultModelByMode(mode);
-  }
   homeApiModelInput.placeholder =
     mode === "gemini"
       ? DEFAULT_GEMINI_MODEL
@@ -4891,6 +4925,14 @@ function applySettingsToHomeForm(settings) {
       normalizeApiMode(settings.mode) === "generic"
         ? ""
         : settings.model || getDefaultModelByMode(settings.mode);
+  }
+  if (homeApiTemperatureInput) {
+    homeApiTemperatureInput.value = String(
+      normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE)
+    );
+  }
+  if (homeFloatingApiSwitcherEnabledEl) {
+    homeFloatingApiSwitcherEnabledEl.checked = Boolean(settings.floatingApiSwitcherEnabled);
   }
   if (homeNegativePromptInputEl) {
     homeNegativePromptInputEl.value = normalizeNegativePromptConstraints(
@@ -4917,7 +4959,9 @@ function readHomeSettingsFromForm() {
       mode === "generic"
         ? ""
         : String(homeApiModelInput?.value || "").trim() || getDefaultModelByMode(mode),
+    temperature: normalizeTemperature(homeApiTemperatureInput?.value, DEFAULT_TEMPERATURE),
     negativePromptConstraints,
+    floatingApiSwitcherEnabled: Boolean(homeFloatingApiSwitcherEnabledEl?.checked),
     privacyAllowlist: normalizePrivacyAllowlist(homeState.settings.privacyAllowlist || []),
     apiConfigs: normalizeApiConfigs(homeState.settings.apiConfigs)
   };
@@ -4964,7 +5008,8 @@ function buildHomeApiConfigSnapshot() {
     model:
       mode === "generic"
         ? ""
-        : String(homeApiModelInput?.value || "").trim() || getDefaultModelByMode(mode)
+        : String(homeApiModelInput?.value || "").trim() || getDefaultModelByMode(mode),
+    temperature: normalizeTemperature(homeApiTemperatureInput?.value, DEFAULT_TEMPERATURE)
   };
 }
 
@@ -4993,16 +5038,12 @@ async function handleHomeModelFetch() {
 
     homeState.fetchedModelOptions = options;
     renderHomeFetchedModelOptions();
-    if (!String(homeApiModelInput?.value || "").trim() && options[0]?.value && homeApiModelInput) {
-      homeApiModelInput.value = options[0].value;
-    }
-
     if (options.length) {
       setHomeApiModelHint(`已拉取 ${options.length} 个模型；仅本次页面内可选，不会写入本地缓存。`);
       const selectedModel = String(homeApiModelInput?.value || "").trim();
       const statusMessage = selectedModel
         ? `已拉取 ${options.length} 个模型，当前模型：${selectedModel}。`
-        : `已拉取 ${options.length} 个模型。`;
+        : `已拉取 ${options.length} 个模型，请从候选中选择或手动输入。`;
       setHomeApiConfigStatus(statusMessage, "success");
     } else {
       setHomeApiModelHint("当前接口没有返回模型列表，可继续手动填写模型名称。");
@@ -5146,6 +5187,10 @@ function renderHomeApiConfigList() {
       const isSummarySelected =
         homeState.settings.summaryApiEnabled && item.id === homeState.settings.summaryApiConfigId;
       const modelText = item.model ? `模型：${item.model}` : "模型：无";
+      const temperatureText = `温度：${normalizeTemperature(
+        item.temperature,
+        DEFAULT_TEMPERATURE
+      ).toFixed(2)}`;
       const tokenText = item.token ? "密钥：已保存" : "密钥：未保存";
       return `
         <article class="home-api-item${isActive ? " active" : ""}">
@@ -5160,7 +5205,7 @@ function renderHomeApiConfigList() {
           <p class="home-api-item__meta">
             类型：${escapeHtml(getApiModeLabel(item.mode))}
             \n地址：${escapeHtml(item.endpoint || "未填写")}
-            \n${escapeHtml(modelText)} · ${escapeHtml(tokenText)}
+            \n${escapeHtml(modelText)} · ${escapeHtml(temperatureText)} · ${escapeHtml(tokenText)}
           </p>
           <div class="home-api-actions">
             <button class="home-chip" type="button" data-action="switch-home-api-config" data-config-id="${escapeHtml(
@@ -5208,6 +5253,7 @@ function saveCurrentHomeApiConfig() {
     targetConfig.endpoint = snapshot.endpoint;
     targetConfig.token = snapshot.token;
     targetConfig.model = snapshot.model;
+    targetConfig.temperature = snapshot.temperature;
     targetConfig.updatedAt = Date.now();
   } else {
     targetConfig = {
@@ -5228,6 +5274,7 @@ function saveCurrentHomeApiConfig() {
   homeState.settings.endpoint = snapshot.endpoint;
   homeState.settings.token = snapshot.token;
   homeState.settings.model = snapshot.model;
+  homeState.settings.temperature = snapshot.temperature;
   homeState.settings.activeApiConfigId = targetConfig.id;
   persistSettings(homeState.settings);
   if (homeApiConfigNameInput) {
@@ -5250,6 +5297,7 @@ function switchHomeApiConfig(configId) {
   homeState.settings.endpoint = normalizeSettingsEndpointByMode(config.mode, config.endpoint);
   homeState.settings.token = config.token || "";
   homeState.settings.model = config.model || getDefaultModelByMode(config.mode);
+  homeState.settings.temperature = normalizeTemperature(config.temperature, DEFAULT_TEMPERATURE);
   homeState.settings.activeApiConfigId = config.id;
   persistSettings(homeState.settings);
   applySettingsToHomeForm(homeState.settings);
@@ -5298,7 +5346,7 @@ function syncHomeActiveConfigSummary() {
   if (activeConfig) {
     homeActiveConfigSummaryEl.textContent = `当前已切换：${activeConfig.name} · ${getApiModeLabel(
       activeConfig.mode
-    )}`;
+    )} · 温度 ${normalizeTemperature(activeConfig.temperature, DEFAULT_TEMPERATURE).toFixed(2)}`;
     return;
   }
 
@@ -6496,7 +6544,7 @@ function attachHomeSettingsEvents() {
     });
   }
 
-  [homeApiModeSelect, homeApiEndpointInput, homeApiTokenInput, homeApiModelInput]
+  [homeApiModeSelect, homeApiEndpointInput, homeApiTokenInput, homeApiModelInput, homeApiTemperatureInput]
     .filter(Boolean)
     .forEach((field) => {
       field.addEventListener("input", () => {
@@ -6733,6 +6781,26 @@ function attachHomeSettingsEvents() {
       renderHomeApiConfigList();
     });
   }
+
+  if (homeFloatingApiSwitcherEnabledEl) {
+    homeFloatingApiSwitcherEnabledEl.addEventListener("change", () => {
+      homeState.settings = readHomeSettingsFromForm();
+      homeState.settings.floatingApiSwitcherEnabled = Boolean(homeFloatingApiSwitcherEnabledEl.checked);
+      persistSettings(homeState.settings);
+      setHomeApiConfigStatus(
+        homeState.settings.floatingApiSwitcherEnabled
+          ? "已开启悬浮窗快速切换 API。"
+          : "已关闭悬浮窗快速切换 API。",
+        "success"
+      );
+    });
+  }
+
+  window.addEventListener("pulse-api-config-switched", () => {
+    homeState.settings = loadSettings({ forceActiveConfig: false });
+    applySettingsToHomeForm(homeState.settings);
+    setHomeApiConfigStatus("已通过悬浮窗切换当前 API 配置。", "success");
+  });
 
   if (homeTransferSelectAllBtn) {
     homeTransferSelectAllBtn.addEventListener("click", () => {

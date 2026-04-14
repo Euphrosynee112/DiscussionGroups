@@ -18,7 +18,7 @@ const DEFAULT_REPLY_COUNT = 4;
 const MAX_FEED_ITEMS = 50;
 const MAX_POST_TEXT_LENGTH = 1400;
 const MAX_REPLY_TEXT_LENGTH = 1400;
-const DEFAULT_TEMPERATURE = 0.8;
+const DEFAULT_TEMPERATURE = 0.85;
 const DEFAULT_CONTEXT_FOCUS_MINUTES = 60;
 const MAX_CONTEXT_FOCUS_MINUTES = 1440;
 const PULL_THRESHOLD = 88;
@@ -59,6 +59,7 @@ const DEFAULT_SETTINGS = {
   activeApiConfigId: "",
   translationApiEnabled: false,
   translationApiConfigId: "",
+  floatingApiSwitcherEnabled: false,
   negativePromptConstraints: [],
   privacyAllowlist: []
 };
@@ -1169,6 +1170,14 @@ function normalizeApiConfigToken(token) {
   return String(token || "").trim();
 }
 
+function normalizeTemperature(value, fallback = DEFAULT_TEMPERATURE) {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(2, Math.max(0, parsed));
+}
+
 function normalizeApiConfigs(configs = []) {
   if (!Array.isArray(configs)) {
     return [];
@@ -1190,6 +1199,7 @@ function normalizeApiConfigs(configs = []) {
           mode === "generic"
             ? ""
             : String(item.model || getDefaultModelByMode(mode)).trim() || getDefaultModelByMode(mode),
+        temperature: normalizeTemperature(item.temperature, DEFAULT_TEMPERATURE),
         updatedAt: Number(item.updatedAt) || Date.now()
       };
     });
@@ -1515,14 +1525,6 @@ function normalizePositiveInteger(value, fallback) {
   return fallback;
 }
 
-function normalizeTemperature(value, fallback = DEFAULT_TEMPERATURE) {
-  const parsed = Number.parseFloat(value);
-  if (!Number.isFinite(parsed)) {
-    return fallback;
-  }
-  return Math.min(2, Math.max(0, parsed));
-}
-
 function persistSettings(nextSettings) {
   safeSetItem(SETTINGS_KEY, JSON.stringify(nextSettings));
 }
@@ -1540,6 +1542,46 @@ function loadSettings() {
   }
 }
 
+function refreshRuntimeApiSettingsFromStorage() {
+  const nextSettings = loadSettings();
+  state.settings = {
+    ...state.settings,
+    mode: nextSettings.mode,
+    endpoint: nextSettings.endpoint,
+    token: nextSettings.token,
+    model: nextSettings.model,
+    temperature: normalizeTemperature(nextSettings.temperature, DEFAULT_TEMPERATURE),
+    apiConfigs: normalizeApiConfigs(nextSettings.apiConfigs),
+    activeApiConfigId: nextSettings.activeApiConfigId || "",
+    translationApiEnabled: Boolean(nextSettings.translationApiEnabled),
+    translationApiConfigId: nextSettings.translationApiConfigId || "",
+    floatingApiSwitcherEnabled: Boolean(nextSettings.floatingApiSwitcherEnabled)
+  };
+  if (modeSelect) {
+    modeSelect.value = state.settings.mode;
+  }
+  if (endpointInput) {
+    endpointInput.value = state.settings.endpoint;
+  }
+  if (tokenInput) {
+    tokenInput.value = state.settings.token || "";
+  }
+  if (modelInput) {
+    modelInput.value = state.settings.model || getDefaultModelByMode(state.settings.mode);
+  }
+  if (temperatureInput) {
+    temperatureInput.value = String(state.settings.temperature);
+  }
+  if (translationApiEnabledEl) {
+    translationApiEnabledEl.checked = Boolean(state.settings.translationApiEnabled);
+  }
+  updateModeUI();
+  renderApiConfigList();
+  updatePromptPreview();
+  updateReplyPromptPreview();
+  updateInsightPanel();
+}
+
 function buildNormalizedSettingsSnapshot(source, options = {}) {
   const merged = {
     ...DEFAULT_SETTINGS,
@@ -1548,6 +1590,7 @@ function buildNormalizedSettingsSnapshot(source, options = {}) {
   merged.mode = normalizeApiMode(merged.mode);
   merged.endpoint = normalizeSettingsEndpointByMode(merged.mode, merged.endpoint);
   merged.token = normalizeApiConfigToken(merged.token);
+  merged.temperature = normalizeTemperature(merged.temperature, DEFAULT_TEMPERATURE);
   const legacyCustomTabs =
     merged.customTabs || source?.customTabs || source?.customFeeds || source?.customTabList || [];
   merged.customTabs = normalizeCustomTabs(legacyCustomTabs);
@@ -1586,6 +1629,7 @@ function buildNormalizedSettingsSnapshot(source, options = {}) {
           ? ""
           : String(activeConfig.model || getDefaultModelByMode(activeConfig.mode)).trim() ||
             getDefaultModelByMode(activeConfig.mode);
+      merged.temperature = normalizeTemperature(activeConfig.temperature, DEFAULT_TEMPERATURE);
     }
   }
 
@@ -2483,7 +2527,8 @@ function buildApiConfigSnapshot() {
     mode,
     endpoint,
     token: normalizeApiConfigToken(tokenInput?.value || state.settings.token),
-    model
+    model,
+    temperature: normalizeTemperature(temperatureInput?.value, DEFAULT_TEMPERATURE)
   };
 }
 
@@ -2615,6 +2660,10 @@ function renderApiConfigList() {
       const isTranslationSelected =
         state.settings.translationApiEnabled && item.id === state.settings.translationApiConfigId;
       const modelText = item.model ? `模型：${item.model}` : "模型：无";
+      const temperatureText = `温度：${normalizeTemperature(
+        item.temperature,
+        DEFAULT_TEMPERATURE
+      ).toFixed(2)}`;
       const tokenText = item.token ? "密钥：已保存" : "密钥：未保存";
       return `
         <article class="api-config-item${isActive ? " active" : ""}">
@@ -2628,7 +2677,7 @@ function renderApiConfigList() {
           <p class="api-config-item__meta">
             类型：${escapeHtml(getApiModeLabel(item.mode))}
             \n地址：${escapeHtml(item.endpoint || "未填写")}
-            \n${escapeHtml(modelText)} · ${escapeHtml(tokenText)}
+            \n${escapeHtml(modelText)} · ${escapeHtml(temperatureText)} · ${escapeHtml(tokenText)}
           </p>
           <div class="settings-actions">
             <button class="ghost-chip" type="button" data-action="switch-api-config" data-config-id="${escapeHtml(
@@ -2681,6 +2730,7 @@ function saveCurrentApiConfig() {
     targetConfig.endpoint = snapshot.endpoint;
     targetConfig.token = snapshot.token;
     targetConfig.model = snapshot.model;
+    targetConfig.temperature = snapshot.temperature;
     targetConfig.updatedAt = Date.now();
   } else {
     targetConfig = {
@@ -2715,6 +2765,7 @@ function switchApiConfig(configId) {
   state.settings.endpoint = normalizeSettingsEndpointByMode(config.mode, config.endpoint);
   state.settings.token = config.token || "";
   state.settings.model = config.model || getDefaultModelByMode(config.mode);
+  state.settings.temperature = normalizeTemperature(config.temperature, DEFAULT_TEMPERATURE);
   if (modeSelect) {
     modeSelect.value = state.settings.mode;
   }
@@ -2726,6 +2777,9 @@ function switchApiConfig(configId) {
   }
   if (modelInput) {
     modelInput.value = state.settings.model;
+  }
+  if (temperatureInput) {
+    temperatureInput.value = String(state.settings.temperature);
   }
   state.settings.activeApiConfigId = config.id;
   updateModeUI();
@@ -7664,7 +7718,7 @@ function attachEvents() {
     }
   });
 
-  const apiFields = [modeSelect, endpointInput, tokenInput, modelInput];
+  const apiFields = [modeSelect, endpointInput, tokenInput, modelInput, temperatureInput];
   [modeSelect, endpointInput, tokenInput, modelInput, temperatureInput, homeCountInput, replyCountInput, worldviewInput]
     .filter(Boolean)
     .forEach(
@@ -7738,6 +7792,15 @@ function attachEvents() {
     renderThreadModal();
     updateReplyPromptPreview();
   });
+
+  window.addEventListener("storage", (event) => {
+    if (String(event?.key || "").trim() !== SETTINGS_KEY) {
+      return;
+    }
+    refreshRuntimeApiSettingsFromStorage();
+  });
+
+  window.addEventListener("pulse-api-config-switched", refreshRuntimeApiSettingsFromStorage);
 
   window.addEventListener("storage", (event) => {
     const key = String(event?.key || "").trim();

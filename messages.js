@@ -71,6 +71,7 @@ const DEFAULT_SETTINGS = {
   endpoint: DEFAULT_OPENAI_ENDPOINT,
   token: "",
   model: DEFAULT_DEEPSEEK_MODEL,
+  temperature: DEFAULT_TEMPERATURE,
   apiConfigs: [],
   activeApiConfigId: "",
   translationApiEnabled: false,
@@ -3723,6 +3724,14 @@ function normalizeApiConfigToken(token) {
   return String(token || "").trim();
 }
 
+function normalizeTemperature(value, fallback = DEFAULT_TEMPERATURE) {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(2, Math.max(0, parsed));
+}
+
 function normalizeOpenAICompatibleEndpoint(endpoint) {
   const trimmed = String(endpoint || "").trim();
   if (!trimmed) {
@@ -3824,6 +3833,7 @@ function normalizeApiConfigs(configs = []) {
           mode === "generic"
             ? ""
             : String(item.model || getDefaultModelByMode(mode)).trim() || getDefaultModelByMode(mode),
+        temperature: normalizeTemperature(item.temperature, DEFAULT_TEMPERATURE),
         updatedAt: Number(item.updatedAt) || Date.now()
       };
     });
@@ -3837,6 +3847,7 @@ function buildNormalizedSettingsSnapshot(source) {
   merged.mode = normalizeApiMode(merged.mode);
   merged.endpoint = normalizeSettingsEndpointByMode(merged.mode, merged.endpoint);
   merged.token = normalizeApiConfigToken(merged.token);
+  merged.temperature = normalizeTemperature(merged.temperature, DEFAULT_TEMPERATURE);
   merged.model =
     merged.mode === "generic"
       ? ""
@@ -3865,6 +3876,7 @@ function buildNormalizedSettingsSnapshot(source) {
     merged.mode = normalizeApiMode(activeConfig.mode);
     merged.endpoint = normalizeSettingsEndpointByMode(activeConfig.mode, activeConfig.endpoint);
     merged.token = normalizeApiConfigToken(activeConfig.token);
+    merged.temperature = normalizeTemperature(activeConfig.temperature, DEFAULT_TEMPERATURE);
     merged.model =
       merged.mode === "generic"
         ? ""
@@ -8366,7 +8378,7 @@ function buildChatRequestBody(settings, systemPrompt, history = [], options = {}
   if (isOpenAICompatibleMode(mode)) {
     return {
       model: settings.model || getDefaultModelByMode(mode),
-      temperature: DEFAULT_TEMPERATURE,
+      temperature: normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE),
       messages: [
         {
           role: "system",
@@ -8404,13 +8416,14 @@ function buildChatRequestBody(settings, systemPrompt, history = [], options = {}
       })),
       safetySettings: buildGeminiSafetySettings(),
       generationConfig: {
-        temperature: DEFAULT_TEMPERATURE
+        temperature: normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE)
       }
     };
   }
 
   return {
     prompt: buildGenericConversationPrompt(systemPrompt, requestHistory),
+    temperature: normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE),
     intent: "chat"
   };
 }
@@ -8456,7 +8469,7 @@ function buildDiaryRequestBody(settings, systemPrompt, userInstruction) {
   if (isOpenAICompatibleMode(mode)) {
     return {
       model: settings.model || getDefaultModelByMode(mode),
-      temperature: DEFAULT_TEMPERATURE,
+      temperature: normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE),
       messages: [
         {
           role: "system",
@@ -8484,13 +8497,14 @@ function buildDiaryRequestBody(settings, systemPrompt, userInstruction) {
       ],
       safetySettings: buildGeminiSafetySettings(),
       generationConfig: {
-        temperature: DEFAULT_TEMPERATURE
+        temperature: normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE)
       }
     };
   }
 
   return {
     prompt: [systemPrompt, userInstruction, "日记正文："].filter(Boolean).join("\n\n"),
+    temperature: normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE),
     intent: "journal"
   };
 }
@@ -8505,7 +8519,7 @@ function buildSingleInstructionRequestBody(
   if (isOpenAICompatibleMode(mode)) {
     return {
       model: settings.model || getDefaultModelByMode(mode),
-      temperature: DEFAULT_TEMPERATURE,
+      temperature: normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE),
       messages: [
         {
           role: "system",
@@ -8533,13 +8547,14 @@ function buildSingleInstructionRequestBody(
       ],
       safetySettings: buildGeminiSafetySettings(),
       generationConfig: {
-        temperature: DEFAULT_TEMPERATURE
+        temperature: normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE)
       }
     };
   }
 
   return {
     prompt: [systemPrompt, userInstruction].filter(Boolean).join("\n\n"),
+    temperature: normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE),
     intent
   };
 }
