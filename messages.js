@@ -23,8 +23,8 @@ const MESSAGE_REPLY_TASKS_KEY = "x_style_generator_message_reply_tasks_v1";
 const MESSAGE_REPLY_RECOVERY_KEY = "x_style_generator_message_reply_recovery_v1";
 const MESSAGE_ACTIVE_VIEW_KEY = "x_style_generator_message_active_view_v1";
 const DEFAULT_TEMPERATURE = 0.85;
-const DEFAULT_MESSAGE_HISTORY_ROUNDS = 6;
-const MAX_MESSAGE_HISTORY_ROUNDS = 20;
+const DEFAULT_MESSAGE_HISTORY_ROUNDS = 20;
+const MAX_MESSAGE_HISTORY_ROUNDS = 50;
 const DEFAULT_MESSAGE_REPLY_SENTENCE_LIMIT = 7;
 const MAX_MESSAGE_REPLY_SENTENCE_LIMIT = 20;
 const DEFAULT_MESSAGE_JOURNAL_LENGTH = 320;
@@ -264,6 +264,22 @@ const messagesChatShowContactAvatarInputEl = document.querySelector(
 const messagesChatShowUserAvatarInputEl = document.querySelector(
   "#messages-chat-show-user-avatar-input"
 );
+const messagesChatVideoContactPreviewEl = document.querySelector(
+  "#messages-chat-video-contact-preview"
+);
+const messagesChatVideoContactFileInputEl = document.querySelector(
+  "#messages-chat-video-contact-file-input"
+);
+const messagesChatVideoContactResetBtnEl = document.querySelector(
+  "#messages-chat-video-contact-reset-btn"
+);
+const messagesChatVideoUserPreviewEl = document.querySelector("#messages-chat-video-user-preview");
+const messagesChatVideoUserFileInputEl = document.querySelector(
+  "#messages-chat-video-user-file-input"
+);
+const messagesChatVideoUserResetBtnEl = document.querySelector(
+  "#messages-chat-video-user-reset-btn"
+);
 const messagesChatAllowAiPresenceUpdateInputEl = document.querySelector(
   "#messages-chat-allow-ai-presence-update-input"
 );
@@ -305,6 +321,7 @@ let foregroundReplySyncTimerId = 0;
 let foregroundReplySyncConversationId = "";
 let foregroundReplySyncUntil = 0;
 let conversationStorageMaintenanceTimerId = 0;
+let voiceCallDurationTimerId = 0;
 const messagesChatClearHistoryBtnEl = document.querySelector("#messages-chat-clear-history-btn");
 const messagesChatClearMemoryBtnEl = document.querySelector("#messages-chat-clear-memory-btn");
 const messagesChatSettingsStatusEl = document.querySelector("#messages-chat-settings-status");
@@ -470,6 +487,12 @@ const messagesLocationNameInputEl = document.querySelector("#messages-location-n
 const messagesLocationRecentListEl = document.querySelector("#messages-location-recent-list");
 const messagesLocationPreviewEl = document.querySelector("#messages-location-preview");
 const messagesLocationStatusEl = document.querySelector("#messages-location-status");
+const messagesVoiceModalEl = document.querySelector("#messages-voice-modal");
+const messagesVoiceCloseBtnEl = document.querySelector("#messages-voice-close-btn");
+const messagesVoiceCancelBtnEl = document.querySelector("#messages-voice-cancel-btn");
+const messagesVoiceFormEl = document.querySelector("#messages-voice-form");
+const messagesVoiceTextInputEl = document.querySelector("#messages-voice-text-input");
+const messagesVoiceStatusEl = document.querySelector("#messages-voice-status");
 const messagesPhotoModalEl = document.querySelector("#messages-photo-modal");
 const messagesPhotoCloseBtnEl = document.querySelector("#messages-photo-close-btn");
 const messagesPhotoCancelBtnEl = document.querySelector("#messages-photo-cancel-btn");
@@ -634,6 +657,8 @@ const state = {
   contactEditorAvatarImage: "",
   conversationPickerOpen: false,
   chatSettingsOpen: false,
+  chatSettingsVideoContactImage: "",
+  chatSettingsVideoUserImage: "",
   autoScheduleRequestOpen: false,
   autoScheduleRequestDraft: {
     worldbookIds: [],
@@ -657,15 +682,18 @@ const state = {
   regenerateModalOpen: false,
   regenerateInstruction: "",
   locationModalOpen: false,
+  voiceModalOpen: false,
   photoModalOpen: false,
   awarenessModalOpen: false,
   awarenessFormResetRequested: false,
   locationDraftName: "",
   locationDraftCoordinates: "",
+  voiceDraftText: "",
   photoDraftDescription: "",
   journalOpen: false,
   journalHistoryOpen: false,
   journalSettingsOpen: false,
+  journalSelectedEntryId: "",
   schedulePreviewOpen: false,
   discussionShareModalOpen: false,
   discussionShareModalMessageId: "",
@@ -691,6 +719,7 @@ const state = {
   conversationDrafts: {},
   quotedMessageId: "",
   expandedImageMessageId: "",
+  expandedVoiceMessageId: "",
   innerThoughtModalOpen: false,
   innerThoughtLoading: false,
   innerThoughtError: "",
@@ -1790,6 +1819,256 @@ function buildImageMessageText(description = "") {
     .join("\n");
 }
 
+function estimateVoiceMessageDurationSeconds(text = "") {
+  const normalized = String(text || "").trim().replace(/\s+/g, "");
+  if (!normalized) {
+    return 1;
+  }
+  return clampNumber(Math.ceil(normalized.length / 8), 1, 60);
+}
+
+function formatVoiceMessageDurationLabel(durationSeconds = 0) {
+  const resolvedDuration = clampNumber(Number(durationSeconds) || 0, 1, 60);
+  return `${resolvedDuration}''`;
+}
+
+function buildVoiceMessageText(content = "", durationSeconds = 0) {
+  const resolvedContent = String(content || "").trim();
+  const resolvedDuration = estimateVoiceMessageDurationSeconds(
+    resolvedContent
+  );
+  const explicitDuration = clampNumber(Number(durationSeconds) || resolvedDuration, 1, 60);
+  return [
+    "[语音消息]",
+    `语音时长：${formatVoiceMessageDurationLabel(explicitDuration)}`,
+    resolvedContent ? `语音转文字：${resolvedContent}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function parseVoiceMessageText(text = "") {
+  const normalized = String(text || "").replace(/\r/g, "").trim();
+  if (!normalized.startsWith("[语音消息]")) {
+    return null;
+  }
+  const lines = normalized
+    .split("\n")
+    .map((line) => String(line || "").trim())
+    .filter(Boolean);
+  const durationLine = lines.find((line) => line.startsWith("语音时长：")) || "";
+  const contentLine = lines.find((line) => line.startsWith("语音转文字：")) || "";
+  const durationMatch = durationLine.match(/(\d+)/);
+  return {
+    voiceText: contentLine.slice("语音转文字：".length).trim(),
+    voiceDurationSeconds: clampNumber(
+      Number.parseInt(String(durationMatch?.[1] || ""), 10) || estimateVoiceMessageDurationSeconds(
+        contentLine.slice("语音转文字：".length).trim()
+      ),
+      1,
+      60
+    )
+  };
+}
+
+function formatVoiceCallDurationLabel(durationSeconds = 0) {
+  const resolvedDuration = Math.max(0, Math.floor(Number(durationSeconds) || 0));
+  const hours = Math.floor(resolvedDuration / 3600);
+  const minutes = Math.floor((resolvedDuration % 3600) / 60);
+  const seconds = resolvedDuration % 60;
+  return [hours, minutes, seconds].map((item) => String(item).padStart(2, "0")).join(":");
+}
+
+function getVoiceCallDurationSeconds(callState = null, now = Date.now()) {
+  const startedAt = Number(callState?.startedAt) || 0;
+  if (!startedAt) {
+    return 0;
+  }
+  return Math.max(0, Math.floor((Number(now) - startedAt) / 1000));
+}
+
+function normalizeConversationCallMode(value = "") {
+  return String(value || "").trim().toLowerCase() === "video" ? "video" : "voice";
+}
+
+function getConversationCallModeLabel(callMode = "voice") {
+  return normalizeConversationCallMode(callMode) === "video" ? "视频通话" : "语音通话";
+}
+
+function getConversationCallModeShortLabel(callMode = "voice") {
+  return normalizeConversationCallMode(callMode) === "video" ? "视频" : "语音";
+}
+
+function getConversationCallModeIcon(callMode = "voice") {
+  return normalizeConversationCallMode(callMode) === "video" ? "video" : "phone";
+}
+
+function normalizeVoiceCallRequestStatus(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["accepted", "rejected", "pending"].includes(normalized)) {
+    return normalized;
+  }
+  if (["已接通", "已接受", "接通", "接受"].includes(normalized)) {
+    return "accepted";
+  }
+  if (["已拒绝", "拒绝"].includes(normalized)) {
+    return "rejected";
+  }
+  return "pending";
+}
+
+function getVoiceCallRequestStatusLabel(status = "pending") {
+  const resolvedStatus = normalizeVoiceCallRequestStatus(status);
+  if (resolvedStatus === "accepted") {
+    return "已接通";
+  }
+  if (resolvedStatus === "rejected") {
+    return "已拒绝";
+  }
+  return "等待接通";
+}
+
+function normalizeVoiceCallEventKind(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["connected", "rejected", "ended"].includes(normalized)) {
+    return normalized;
+  }
+  if (["已接通", "接通", "connected"].includes(normalized)) {
+    return "connected";
+  }
+  if (["已拒绝", "拒绝", "rejected"].includes(normalized)) {
+    return "rejected";
+  }
+  if (["已挂断", "挂断", "已结束", "ended"].includes(normalized)) {
+    return "ended";
+  }
+  return "connected";
+}
+
+function getVoiceCallEventKindLabel(kind = "connected") {
+  const resolvedKind = normalizeVoiceCallEventKind(kind);
+  if (resolvedKind === "ended") {
+    return "已挂断";
+  }
+  if (resolvedKind === "rejected") {
+    return "已拒绝";
+  }
+  return "已接通";
+}
+
+function buildConversationCallRequestMessageText(
+  callMode = "voice",
+  status = "pending",
+  message = "",
+  initiatorRole = "assistant"
+) {
+  const resolvedMode = normalizeConversationCallMode(callMode);
+  const resolvedMessage = String(message || "").trim();
+  return [
+    `[${getConversationCallModeLabel(resolvedMode)}请求]`,
+    resolvedMessage ? `请求留言：${resolvedMessage}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildVoiceCallRequestMessageText(status = "pending", message = "", initiatorRole = "assistant") {
+  return buildConversationCallRequestMessageText("voice", status, message, initiatorRole);
+}
+
+function buildVideoCallRequestMessageText(status = "pending", message = "", initiatorRole = "assistant") {
+  return buildConversationCallRequestMessageText("video", status, message, initiatorRole);
+}
+
+function parseConversationCallRequestMessageText(text = "", callMode = "voice") {
+  const normalized = String(text || "").replace(/\r/g, "").trim();
+  if (!normalized.startsWith(`[${getConversationCallModeLabel(callMode)}请求]`)) {
+    return null;
+  }
+  const lines = normalized
+    .split("\n")
+    .map((line) => String(line || "").trim())
+    .filter(Boolean);
+  const statusLine = lines.find((line) => line.startsWith("当前状态：")) || "";
+  const messageLine = lines.find((line) => line.startsWith("请求留言：")) || "";
+  const initiatorLine = lines.find((line) => line.startsWith("发起方：")) || "";
+  return {
+    callRequestStatus: statusLine
+      ? normalizeVoiceCallRequestStatus(statusLine.slice("当前状态：".length))
+      : "pending",
+    callRequestMessage: messageLine.slice("请求留言：".length).trim(),
+    callRequestInitiatorRole: initiatorLine
+      ? initiatorLine.includes("用户")
+        ? "user"
+        : "assistant"
+      : "assistant"
+  };
+}
+
+function parseVoiceCallRequestMessageText(text = "") {
+  return parseConversationCallRequestMessageText(text, "voice");
+}
+
+function parseVideoCallRequestMessageText(text = "") {
+  return parseConversationCallRequestMessageText(text, "video");
+}
+
+function buildConversationCallEventMessageText(callMode = "voice", kind = "connected", options = {}) {
+  const eventOptions = options && typeof options === "object" ? options : {};
+  const resolvedMode = normalizeConversationCallMode(callMode);
+  const resolvedKind = normalizeVoiceCallEventKind(kind);
+  const durationSeconds = Math.max(0, Math.floor(Number(eventOptions.durationSeconds) || 0));
+  const note = String(eventOptions.note || "").trim();
+  const lines = [
+    `[${getConversationCallModeLabel(resolvedMode)}事件]`,
+    `状态：${getVoiceCallEventKindLabel(resolvedKind)}`
+  ];
+  if (resolvedKind === "ended") {
+    lines.push(`持续时长：${formatVoiceCallDurationLabel(durationSeconds)}`);
+  }
+  if (note) {
+    lines.push(`补充：${note}`);
+  }
+  return lines.join("\n");
+}
+
+function buildVoiceCallEventMessageText(kind = "connected", options = {}) {
+  return buildConversationCallEventMessageText("voice", kind, options);
+}
+
+function buildVideoCallEventMessageText(kind = "connected", options = {}) {
+  return buildConversationCallEventMessageText("video", kind, options);
+}
+
+function parseConversationCallEventMessageText(text = "", callMode = "voice") {
+  const normalized = String(text || "").replace(/\r/g, "").trim();
+  if (!normalized.startsWith(`[${getConversationCallModeLabel(callMode)}事件]`)) {
+    return null;
+  }
+  const lines = normalized
+    .split("\n")
+    .map((line) => String(line || "").trim())
+    .filter(Boolean);
+  const kindLine = lines.find((line) => line.startsWith("状态：")) || "";
+  const durationLine = lines.find((line) => line.startsWith("持续时长：")) || "";
+  const durationMatch = durationLine.match(/(\d{1,2}):(\d{2}):(\d{2})/);
+  const durationSeconds = durationMatch
+    ? Number(durationMatch[1]) * 3600 + Number(durationMatch[2]) * 60 + Number(durationMatch[3])
+    : 0;
+  return {
+    callEventKind: normalizeVoiceCallEventKind(kindLine.slice("状态：".length)),
+    callEventDurationSeconds: durationSeconds
+  };
+}
+
+function parseVoiceCallEventMessageText(text = "") {
+  return parseConversationCallEventMessageText(text, "voice");
+}
+
+function parseVideoCallEventMessageText(text = "") {
+  return parseConversationCallEventMessageText(text, "video");
+}
+
 function parseImageMessageText(text = "") {
   const normalized = String(text || "").replace(/\r/g, "").trim();
   if (!normalized.startsWith("[图片消息]")) {
@@ -1893,6 +2172,65 @@ function isImageConversationMessage(message) {
     Boolean(String(message?.imageDataUrl || "").trim()) ||
     Boolean(String(message?.imageDescription || legacyPayload?.imageDescription || "").trim());
   return explicitType || hasPayload;
+}
+
+function isVoiceConversationMessage(message) {
+  const explicitType = String(message?.messageType || "").trim() === "voice";
+  const legacyPayload = parseVoiceMessageText(message?.text);
+  const hasPayload = Boolean(
+    String(message?.voiceText || legacyPayload?.voiceText || "").trim()
+  );
+  return explicitType || hasPayload;
+}
+
+function isVoiceCallRequestConversationMessage(message) {
+  const explicitType = String(message?.messageType || "").trim() === "voice_call_request";
+  const legacyPayload = parseVoiceCallRequestMessageText(message?.text);
+  return explicitType || Boolean(legacyPayload);
+}
+
+function isVideoCallRequestConversationMessage(message) {
+  const explicitType = String(message?.messageType || "").trim() === "video_call_request";
+  const legacyPayload = parseVideoCallRequestMessageText(message?.text);
+  return explicitType || Boolean(legacyPayload);
+}
+
+function isVoiceCallEventConversationMessage(message) {
+  const explicitType = String(message?.messageType || "").trim() === "voice_call_event";
+  const legacyPayload = parseVoiceCallEventMessageText(message?.text);
+  return explicitType || Boolean(legacyPayload);
+}
+
+function isVideoCallEventConversationMessage(message) {
+  const explicitType = String(message?.messageType || "").trim() === "video_call_event";
+  const legacyPayload = parseVideoCallEventMessageText(message?.text);
+  return explicitType || Boolean(legacyPayload);
+}
+
+function isConversationCallRequestMessage(message) {
+  return (
+    isVoiceCallRequestConversationMessage(message) ||
+    isVideoCallRequestConversationMessage(message)
+  );
+}
+
+function isConversationCallEventMessage(message) {
+  return (
+    isVoiceCallEventConversationMessage(message) ||
+    isVideoCallEventConversationMessage(message)
+  );
+}
+
+function getConversationCallModeFromMessage(message = {}) {
+  if (
+    isVideoCallRequestConversationMessage(message) ||
+    isVideoCallEventConversationMessage(message) ||
+    String(message?.messageType || "").trim() === "video_call_request" ||
+    String(message?.messageType || "").trim() === "video_call_event"
+  ) {
+    return "video";
+  }
+  return "voice";
 }
 
 function isQuoteConversationMessage(message) {
@@ -2138,6 +2476,36 @@ function getConversationMessagePromptText(message = {}) {
   if (isImageConversationMessage(message)) {
     return buildImageMessageText(String(message.imageDescription || "").trim());
   }
+  if (isVoiceConversationMessage(message)) {
+    return buildVoiceMessageText(
+      String(message.voiceText || "").trim(),
+      Number(message.voiceDurationSeconds) || 0
+    );
+  }
+  if (isVideoCallRequestConversationMessage(message)) {
+    return buildVideoCallRequestMessageText(
+      message.callRequestStatus,
+      message.callRequestMessage,
+      message.role
+    );
+  }
+  if (isVoiceCallRequestConversationMessage(message)) {
+    return buildVoiceCallRequestMessageText(
+      message.callRequestStatus,
+      message.callRequestMessage,
+      message.role
+    );
+  }
+  if (isVideoCallEventConversationMessage(message)) {
+    return buildVideoCallEventMessageText(message.callEventKind, {
+      durationSeconds: message.callEventDurationSeconds
+    });
+  }
+  if (isVoiceCallEventConversationMessage(message)) {
+    return buildVoiceCallEventMessageText(message.callEventKind, {
+      durationSeconds: message.callEventDurationSeconds
+    });
+  }
   if (isQuoteConversationMessage(message)) {
     return buildQuoteMessageText(message.quotedText, message.quotedRole, message.text);
   }
@@ -2157,6 +2525,36 @@ function getConversationMessagePreviewText(message) {
   if (isImageConversationMessage(message)) {
     const description = String(message?.imageDescription || "").trim();
     return description ? `🖼️ 照片：${truncate(description, 18)}` : "🖼️ 发送了图片";
+  }
+  if (isVoiceConversationMessage(message)) {
+    const voiceText = String(message?.voiceText || "").trim();
+    return voiceText ? `🔊 语音：${truncate(voiceText, 18)}` : "🔊 发送了语音";
+  }
+  if (isVideoCallRequestConversationMessage(message)) {
+    return `📹 视频请求：${getVoiceCallRequestStatusLabel(message?.callRequestStatus)}`;
+  }
+  if (isVoiceCallRequestConversationMessage(message)) {
+    return `📞 语音请求：${getVoiceCallRequestStatusLabel(message?.callRequestStatus)}`;
+  }
+  if (isVideoCallEventConversationMessage(message)) {
+    const kind = normalizeVoiceCallEventKind(message?.callEventKind);
+    if (kind === "ended") {
+      return `📹 视频已挂断 ${formatVoiceCallDurationLabel(message?.callEventDurationSeconds || 0)}`;
+    }
+    if (kind === "rejected") {
+      return "📹 视频通话已拒绝";
+    }
+    return "📹 视频通话已接通";
+  }
+  if (isVoiceCallEventConversationMessage(message)) {
+    const kind = normalizeVoiceCallEventKind(message?.callEventKind);
+    if (kind === "ended") {
+      return `📞 通话已挂断 ${formatVoiceCallDurationLabel(message?.callEventDurationSeconds || 0)}`;
+    }
+    if (kind === "rejected") {
+      return "📞 语音通话已拒绝";
+    }
+    return "📞 语音通话已接通";
   }
   if (isQuoteConversationMessage(message)) {
     return `↪ ${String(message.text || "").trim()}`;
@@ -4314,11 +4712,16 @@ function normalizeConversationMessage(message, index = 0) {
   const legacyQuotePayload =
     parseQuoteMessageText(message?.text) || parseInlineQuoteReplyMessage(message?.text);
   const legacyImagePayload = parseImageMessageText(message?.text);
+  const legacyVoiceCallRequestPayload = parseVoiceCallRequestMessageText(message?.text);
+  const legacyVideoCallRequestPayload = parseVideoCallRequestMessageText(message?.text);
+  const legacyVoiceCallEventPayload = parseVoiceCallEventMessageText(message?.text);
+  const legacyVideoCallEventPayload = parseVideoCallEventMessageText(message?.text);
   const quotedText = String(message?.quotedText || legacyQuotePayload?.quotedText || "").trim();
   const quotedRole =
     String(message?.quotedRole || legacyQuotePayload?.quotedRole || "").trim() === "assistant"
       ? "assistant"
       : "user";
+  const legacyVoicePayload = parseVoiceMessageText(message?.text);
   const messageType = isDiscussionShareConversationMessage(message)
     ? "discussion_share"
     : isScheduleInviteConversationMessage(message)
@@ -4327,6 +4730,16 @@ function normalizeConversationMessage(message, index = 0) {
     ? "location"
     : isImageConversationMessage(message)
       ? "image"
+      : isVoiceConversationMessage(message)
+        ? "voice"
+      : isVideoCallRequestConversationMessage(message)
+        ? "video_call_request"
+      : isVoiceCallRequestConversationMessage(message)
+        ? "voice_call_request"
+      : isVideoCallEventConversationMessage(message)
+        ? "video_call_event"
+      : isVoiceCallEventConversationMessage(message)
+        ? "voice_call_event"
       : isQuoteConversationMessage(message)
         ? "quote"
       : "text";
@@ -4336,6 +4749,41 @@ function normalizeConversationMessage(message, index = 0) {
   const imageDescription = String(
     message?.imageDescription || legacyImagePayload?.imageDescription || ""
   ).trim();
+  const voiceText = String(message?.voiceText || legacyVoicePayload?.voiceText || "").trim();
+  const voiceDurationSeconds = clampNumber(
+    Number(message?.voiceDurationSeconds) ||
+      Number(legacyVoicePayload?.voiceDurationSeconds) ||
+      estimateVoiceMessageDurationSeconds(voiceText),
+    1,
+    60
+  );
+  const callRequestStatus = normalizeVoiceCallRequestStatus(
+    message?.callRequestStatus ||
+      legacyVideoCallRequestPayload?.callRequestStatus ||
+      legacyVoiceCallRequestPayload?.callRequestStatus
+  );
+  const callRequestMessage = String(
+    message?.callRequestMessage ||
+      legacyVideoCallRequestPayload?.callRequestMessage ||
+      legacyVoiceCallRequestPayload?.callRequestMessage ||
+      ""
+  )
+    .trim()
+    .slice(0, 160);
+  const callEventKind = normalizeVoiceCallEventKind(
+    message?.callEventKind ||
+      legacyVideoCallEventPayload?.callEventKind ||
+      legacyVoiceCallEventPayload?.callEventKind
+  );
+  const callEventDurationSeconds = Math.max(
+    0,
+    Math.floor(
+      Number(message?.callEventDurationSeconds) ||
+        Number(legacyVideoCallEventPayload?.callEventDurationSeconds) ||
+        Number(legacyVoiceCallEventPayload?.callEventDurationSeconds) ||
+        0
+    )
+  );
   const replyText = String(message?.text || "").trim();
   const text =
     messageType === "discussion_share"
@@ -4355,6 +4803,20 @@ function normalizeConversationMessage(message, index = 0) {
         )
       : messageType === "image"
         ? buildImageMessageText(imageDescription)
+      : messageType === "voice"
+        ? buildVoiceMessageText(voiceText, voiceDurationSeconds)
+      : messageType === "video_call_request"
+        ? buildVideoCallRequestMessageText(callRequestStatus, callRequestMessage, role)
+      : messageType === "voice_call_request"
+        ? buildVoiceCallRequestMessageText(callRequestStatus, callRequestMessage, role)
+      : messageType === "video_call_event"
+        ? buildVideoCallEventMessageText(callEventKind, {
+            durationSeconds: callEventDurationSeconds
+          })
+      : messageType === "voice_call_event"
+        ? buildVoiceCallEventMessageText(callEventKind, {
+            durationSeconds: callEventDurationSeconds
+          })
       : messageType === "quote"
         ? String(message?.text || legacyQuotePayload?.replyText || "").trim()
       : replyText;
@@ -4379,6 +4841,30 @@ function normalizeConversationMessage(message, index = 0) {
         : "",
     imageDataUrl: messageType === "image" ? imageDataUrl : "",
     imageDescription: messageType === "image" ? imageDescription : "",
+    voiceText: messageType === "voice" ? voiceText : "",
+    voiceDurationSeconds: messageType === "voice" ? voiceDurationSeconds : 0,
+    callRequestStatus:
+      messageType === "voice_call_request" || messageType === "video_call_request"
+        ? callRequestStatus
+        : "",
+    callRequestMessage:
+      messageType === "voice_call_request" || messageType === "video_call_request"
+        ? callRequestMessage
+        : "",
+    callEventKind:
+      messageType === "voice_call_event" || messageType === "video_call_event"
+        ? callEventKind
+        : "",
+    callEventDurationSeconds:
+      messageType === "voice_call_event" || messageType === "video_call_event"
+        ? callEventDurationSeconds
+        : 0,
+    callMode:
+      messageType === "video_call_request" || messageType === "video_call_event"
+        ? "video"
+        : messageType === "voice_call_request" || messageType === "voice_call_event"
+          ? "voice"
+          : "",
     quotedText: messageType === "quote" ? quotedText : "",
     quotedRole: messageType === "quote" ? quotedRole : "",
     text,
@@ -4401,6 +4887,34 @@ function normalizeConversationMemorySummaryCursor(value = 0, messageCount = 0) {
     return rawCursor;
   }
   return 0;
+}
+
+function normalizeVoiceCallState(value = null) {
+  const source = value && typeof value === "object" ? value : {};
+  const active = Boolean(source.active);
+  const startedAt = Number(source.startedAt) || 0;
+  const callMode = normalizeConversationCallMode(source.callMode);
+  return {
+    active: active && startedAt > 0,
+    startedAt: active && startedAt > 0 ? startedAt : 0,
+    initiatedBy: String(source.initiatedBy || "").trim() === "assistant" ? "assistant" : "user",
+    requestMessageId: String(source.requestMessageId || "").trim(),
+    connectedAt: Number(source.connectedAt) || (active && startedAt > 0 ? startedAt : 0),
+    callMode
+  };
+}
+
+function getConversationVoiceCallState(conversation = getConversationById()) {
+  return normalizeVoiceCallState(conversation?.voiceCallState);
+}
+
+function isConversationVoiceCallActive(conversation = getConversationById()) {
+  return getConversationVoiceCallState(conversation).active;
+}
+
+function getConversationActiveCallMode(conversation = getConversationById()) {
+  const callState = getConversationVoiceCallState(conversation);
+  return callState.active ? normalizeConversationCallMode(callState.callMode) : "";
 }
 
 function adjustConversationMemorySummaryCursorAfterTrim(conversation = null, removedCount = 0) {
@@ -4442,6 +4956,8 @@ function normalizeConversation(conversation, index = 0) {
     contactNameSnapshot: String(source.contactNameSnapshot || "").trim(),
     contactAvatarImageSnapshot: String(source.contactAvatarImageSnapshot || "").trim(),
     contactAvatarTextSnapshot: String(source.contactAvatarTextSnapshot || "").trim(),
+    videoContactImage: String(source.videoContactImage || "").trim(),
+    videoUserImage: String(source.videoUserImage || "").trim(),
     sceneMode: String(source.sceneMode || "").trim().toLowerCase() === "offline" ? "offline" : "online",
     allowAiPresenceUpdate: Boolean(source.allowAiPresenceUpdate),
     allowAiAutoSchedule: Boolean(source.allowAiAutoSchedule),
@@ -4450,6 +4966,7 @@ function normalizeConversation(conversation, index = 0) {
     autoScheduleLastRunDate: /^\d{4}-\d{2}-\d{2}$/.test(String(source.autoScheduleLastRunDate || "").trim())
       ? String(source.autoScheduleLastRunDate || "").trim()
       : "",
+    voiceCallState: normalizeVoiceCallState(source.voiceCallState),
     messages,
     awarenessCounter: Math.max(
       0,
@@ -5285,6 +5802,9 @@ function buildConversationListAvatarMarkup(conversation = {}) {
 }
 
 function getConversationPreviewSafe(conversation = {}) {
+  if (isConversationVoiceCallActive(conversation)) {
+    return getConversationActiveCallMode(conversation) === "video" ? "📹 正在视频中" : "📞 正在通话中";
+  }
   const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];
   const latestMessage = messages.length ? messages[messages.length - 1] : null;
   if (!latestMessage) {
@@ -5298,6 +5818,11 @@ function getConversationPreviewSafe(conversation = {}) {
 }
 
 function getConversationTimeSafe(conversation = {}) {
+  if (isConversationVoiceCallActive(conversation)) {
+    return formatLocalTime(
+      new Date(getConversationVoiceCallState(conversation).startedAt || Date.now())
+    );
+  }
   const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];
   const latestMessage = messages.length ? messages[messages.length - 1] : null;
   return String(latestMessage?.time || "").trim();
@@ -5351,12 +5876,15 @@ function createConversation(contact) {
     contactNameSnapshot: contact.name,
     contactAvatarImageSnapshot: contact.avatarImage,
     contactAvatarTextSnapshot: contact.avatarText || getContactAvatarFallback(contact),
+    videoContactImage: "",
+    videoUserImage: "",
     sceneMode: "online",
     allowAiPresenceUpdate: false,
     allowAiAutoSchedule: false,
     autoScheduleDays: DEFAULT_AUTO_SCHEDULE_DAYS,
     autoScheduleTime: "",
     autoScheduleLastRunDate: "",
+    voiceCallState: normalizeVoiceCallState(),
     messages: [],
     awarenessCounter: 0,
     replyContextVersion: 0,
@@ -6080,6 +6608,14 @@ function getJournalEntryForDate(contactId = "", dateText = getTodayDateValue()) 
     getJournalEntriesForContact(contactId).find((entry) => entry.date === String(dateText || "").trim()) ||
     null
   );
+}
+
+function getJournalEntryById(entryId = "") {
+  const resolvedEntryId = String(entryId || "").trim();
+  if (!resolvedEntryId) {
+    return null;
+  }
+  return state.journalEntries.find((entry) => entry.id === resolvedEntryId) || null;
 }
 
 function getJournalMessagesForDate(conversation, dateText = getTodayDateValue()) {
@@ -7484,6 +8020,10 @@ function buildConversationSystemPrompt(
 ) {
   const requestOptions = options && typeof options === "object" ? options : {};
   const sceneMode = requestOptions.sceneMode === "offline" ? "offline" : "online";
+  const activeCallMode = getConversationActiveCallMode(requestOptions.conversation);
+  const isVoiceCallMode = activeCallMode === "voice";
+  const isVideoCallMode = activeCallMode === "video";
+  const isCallMode = Boolean(activeCallMode);
   const memoryContexts = buildMemoryPromptContexts(contact, promptSettings);
   const presenceContext = buildPresencePromptContext(contact, requestOptions.conversation);
   const worldbookContext = buildWorldbookContext(promptSettings);
@@ -7517,7 +8057,11 @@ function buildConversationSystemPrompt(
       },
       persona_alignment: {
         scene_mode:
-          sceneMode === "offline"
+          isVideoCallMode
+            ? `现在你正在和 ${profile.username || DEFAULT_PROFILE.username} 进行一对一视频通话。你输出的每一行，都会被视为这次视频里直接说出口的话。`
+            : isVoiceCallMode
+            ? `现在你正在和 ${profile.username || DEFAULT_PROFILE.username} 进行一对一语音通话。你输出的每一行，都会被视为这通电话里直接说出口的话，而不是聊天框里的打字消息。`
+            : sceneMode === "offline"
             ? `现在是你和 ${profile.username || DEFAULT_PROFILE.username} 正在现实里见面相处，不是在即时聊天软件里远程对话。`
             : `现在是你和 ${profile.username || DEFAULT_PROFILE.username} 在即时聊天软件里的一对一私聊。`,
         core_memory: memoryContexts.core,
@@ -7540,6 +8084,12 @@ function buildConversationSystemPrompt(
         triggered_awareness: triggeredAwarenessContext
           ? `当前触发的察觉信息：\n${triggeredAwarenessContext}`
           : "",
+        voice_call_context: isVoiceCallMode
+          ? "当前互动方式：你们已经处于语音通话中。说话可以更像即时口头表达，允许自然语气词、停顿感和口语化短句，但不要写动作描写、舞台指令或心理旁白。"
+          : "",
+        video_call_context: isVideoCallMode
+          ? "当前互动方式：你们已经处于视频通话中。你说的是视频里直接说出口的话；这一轮回复里至少要自然带出一处简短动作、表情、视线、镜头内状态或停顿描写，优先使用中文全角括号（ ）轻轻带出，但不要写成长段舞台说明或旁白。"
+          : "",
         presence_context: presenceContext ? `当前地点与状态：\n${presenceContext}` : "",
         time_awareness: timeAwarenessContext || "",
         mentioned_time_schedule: mentionedTimeScheduleContext
@@ -7552,14 +8102,54 @@ function buildConversationSystemPrompt(
       output_standard: {
         presence_update_rule: buildPresenceUpdateOutputRule(contact, requestOptions.conversation),
         quote_rule:
-          sceneMode === "online"
+          !isCallMode && sceneMode === "online"
             ? [
                 '如果需要引用某一句话进行回应，可以使用以下格式（单独一行）：<quote_reply>{"quotedRole":"user|assistant","quotedText":"原句","reply":"回复"}</quote_reply>',
                 "每一轮最多使用一次引用，只在强情绪、明显回扣、明确点名回应或误解澄清时使用。默认不要引用，绝大多数回复都应该直接正常回消息。quotedText 必须引用聊天里真实出现过的一句原话，不要编造，也不要引用太短、太碎或没有必要单独点名的内容。"
               ].join("\n")
             : "",
+        voice_call_request_rule: isCallMode
+          ? ""
+          : [
+              getPromptRuleItemText(
+                "chat_conversation",
+                "output_standard",
+                "voice_call_request_rule",
+                settings
+              ),
+              getPromptRuleItemText(
+                "chat_conversation",
+                "output_standard",
+                "voice_call_request_plain",
+                settings
+              )
+            ]
+              .filter(Boolean)
+              .join("\n"),
+        video_call_request_rule: isCallMode
+          ? ""
+          : [
+              getPromptRuleItemText(
+                "chat_conversation",
+                "output_standard",
+                "video_call_request_rule",
+                settings
+              ),
+              getPromptRuleItemText(
+                "chat_conversation",
+                "output_standard",
+                "video_call_request_plain",
+                settings
+              )
+            ]
+              .filter(Boolean)
+              .join("\n"),
         scene_mode_rule:
-          sceneMode === "offline"
+          isVideoCallMode
+            ? "当前处于视频通话状态。回复必须像视频里直接说出口的话，并且这一轮至少自然带一处简短动作、表情、视线或镜头内状态描写；优先用全角括号（ ）轻轻点出，不要写成长段舞台指令、镜头说明或心理旁白。"
+            : isVoiceCallMode
+            ? "当前处于语音通话状态。回复时可以更口语、更像即时说出口的话，也可以有轻微语气词和停顿感；但不要写动作描写、环境说明、舞台指令、心理活动，也不要用括号补行为。"
+            : sceneMode === "offline"
             ? "这是见面状态；在自然需要时，可以用中文全角括号（ ）补一小段动作、表情、停顿或视线描写，但不要把每句都写成长舞台指令，也不要写长段心理活动。"
             : "不要输出编号、列表符号、引号包裹、解释说明、舞台指令或心理活动旁白。"
       }
@@ -7980,6 +8570,131 @@ function parseImageMessagePayload(value) {
     .filter(Boolean);
 }
 
+function parseVoiceMessagePayload(value) {
+  const parsed =
+    (Array.isArray(value) ? value : null) ||
+    parseJsonLikeContent(value) ||
+    parseJsonLikeContent(resolveMessage(value));
+
+  const items = Array.isArray(parsed) ? parsed : [];
+  return items
+    .map((item) => {
+      const source = item && typeof item === "object" ? item : {};
+      const type = String(source.type || "").trim().toLowerCase();
+      if (!["voice", "audio"].includes(type)) {
+        return null;
+      }
+      const voiceText = String(
+        source.content || source.text || source.transcript || source.caption || ""
+      )
+        .trim()
+        .slice(0, 1000);
+      if (!voiceText) {
+        return null;
+      }
+      return {
+        messageType: "voice",
+        voiceText,
+        voiceDurationSeconds: clampNumber(
+          Number(source.durationSeconds) ||
+            Number(source.duration) ||
+            estimateVoiceMessageDurationSeconds(voiceText),
+          1,
+          60
+        )
+      };
+    })
+    .filter(Boolean);
+}
+
+function parseConversationCallRequestPayload(value, callMode = "voice") {
+  const resolvedMode = normalizeConversationCallMode(callMode);
+  const requestTypeAliases =
+    resolvedMode === "video"
+      ? ["video_call_request", "videocall_request", "video_request", "videochat_request"]
+      : ["voice_call_request", "voicecall_request", "call_request", "phone_call_request"];
+  const messageType = resolvedMode === "video" ? "video_call_request" : "voice_call_request";
+
+  function buildCallRequestItem(callRequestMessage = "") {
+    const note = String(callRequestMessage || "").trim().slice(0, 160);
+    return {
+      messageType,
+      callRequestStatus: "pending",
+      callRequestMessage: note,
+      text: buildConversationCallRequestMessageText(resolvedMode, "pending", note, "assistant")
+    };
+  }
+
+  function parseLooseCallRequestObject(rawValue) {
+    const raw = String(rawValue || "")
+      .replace(/```(?:json)?/gi, "")
+      .replace(/```/g, "")
+      .trim();
+    if (!raw) {
+      return null;
+    }
+    const typeMatch =
+      raw.match(new RegExp(`"type"\\s*:\\s*"(${requestTypeAliases.join("|")})"`, "i")) ||
+      raw.match(new RegExp(`\\b(?:type|类型)\\s*[:：]\\s*(${requestTypeAliases.join("|")})\\b`, "i"));
+    if (!typeMatch) {
+      return null;
+    }
+    const messageMatch =
+      raw.match(
+        /"(?:message|content|text|note)"\s*:\s*"([\s\S]*?)"(?=\s*,\s*"(?:message|content|text|note|type)"\s*:|\s*}\s*$|\s*$)/i
+      ) ||
+      raw.match(/(?:^|\n)\s*(?:message|content|text|note|留言)\s*[:：]\s*([^\n]+)(?=\n|$)/i);
+    const callRequestMessage = String(messageMatch?.[1] || "")
+      .replace(/\\"/g, '"')
+      .replace(/\\n/g, "\n")
+      .trim()
+      .slice(0, 160);
+    return buildCallRequestItem(callRequestMessage);
+  }
+
+  const parsed =
+    (Array.isArray(value) ? value : null) ||
+    (value && typeof value === "object" ? value : null) ||
+    parseJsonLikeContent(value) ||
+    parseJsonLikeContent(resolveMessage(value));
+
+  const items = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object"
+    ? [parsed]
+    : [];
+  const normalizedItems = items
+    .map((item) => {
+      const source = item && typeof item === "object" ? item : {};
+      const type = String(source.type || "").trim().toLowerCase();
+      if (!requestTypeAliases.includes(type)) {
+        return null;
+      }
+      const callRequestMessage = String(
+        source.message || source.content || source.text || source.note || ""
+      )
+        .trim()
+        .slice(0, 160);
+      return buildCallRequestItem(callRequestMessage);
+    })
+    .filter(Boolean);
+  if (normalizedItems.length) {
+    return normalizedItems;
+  }
+
+  const looseParsed =
+    parseLooseCallRequestObject(value) || parseLooseCallRequestObject(resolveMessage(value));
+  return looseParsed ? [looseParsed] : [];
+}
+
+function parseVoiceCallRequestPayload(value) {
+  return parseConversationCallRequestPayload(value, "voice");
+}
+
+function parseVideoCallRequestPayload(value) {
+  return parseConversationCallRequestPayload(value, "video");
+}
+
 function parseMemorySummaryPayload(payload, contactId = "") {
   const parsed =
     (payload && typeof payload === "object" && Array.isArray(payload.memories) ? payload : null) ||
@@ -8342,6 +9057,135 @@ function extractImageReplyBlocks(text) {
   return { text: workingText, blocks };
 }
 
+function extractVoiceReplyBlocks(text) {
+  let workingText = String(text || "").replace(/\r/g, "").trim();
+  if (!workingText) {
+    return { text: "", blocks: [] };
+  }
+
+  const blocks = [];
+  const replaceBlock = (candidate, parsedItems) => {
+    if (!candidate || !parsedItems.length) {
+      return;
+    }
+    const token = `__PULSE_VOICE_BLOCK_${blocks.length}__`;
+    blocks.push({
+      token,
+      items: parsedItems
+    });
+    workingText = workingText.replace(candidate, `\n${token}\n`);
+  };
+
+  workingText = workingText.replace(/```(?:json)?\s*([\s\S]*?)```/gi, (match, inner) => {
+    const parsedItems = parseVoiceMessagePayload(String(inner || "").trim());
+    if (!parsedItems.length) {
+      return match;
+    }
+    const token = `__PULSE_VOICE_BLOCK_${blocks.length}__`;
+    blocks.push({ token, items: parsedItems });
+    return `\n${token}\n`;
+  });
+
+  const voicePattern = /\[\s*\{[\s\S]*?"type"\s*:\s*"(?:voice|audio)"[\s\S]*?\}\s*\]/i;
+  let guard = 0;
+  while (guard < 8) {
+    const match = voicePattern.exec(workingText);
+    if (!match || typeof match.index !== "number") {
+      break;
+    }
+    const candidate = match[0];
+    const parsedItems = parseVoiceMessagePayload(candidate);
+    if (!parsedItems.length) {
+      break;
+    }
+    replaceBlock(candidate, parsedItems);
+    guard += 1;
+  }
+
+  return { text: workingText, blocks };
+}
+
+function extractConversationCallRequestReplyBlocks(text, callMode = "voice") {
+  let workingText = String(text || "").replace(/\r/g, "").trim();
+  if (!workingText) {
+    return { text: "", blocks: [] };
+  }
+
+  const resolvedMode = normalizeConversationCallMode(callMode);
+  const blockTokenPrefix =
+    resolvedMode === "video" ? "__PULSE_VIDEO_CALL_REQUEST_BLOCK_" : "__PULSE_VOICE_CALL_REQUEST_BLOCK_";
+  const parsePayload =
+    resolvedMode === "video" ? parseVideoCallRequestPayload : parseVoiceCallRequestPayload;
+  const requestTypePattern =
+    resolvedMode === "video"
+      ? "(?:video_call_request|videocall_request|video_request|videochat_request)"
+      : "(?:voice_call_request|voicecall_request|call_request|phone_call_request)";
+  const blocks = [];
+  const replaceBlock = (candidate, parsedItems) => {
+    if (!candidate || !parsedItems.length) {
+      return;
+    }
+    const token = `${blockTokenPrefix}${blocks.length}__`;
+    blocks.push({
+      token,
+      items: parsedItems
+    });
+    workingText = workingText.replace(candidate, `\n${token}\n`);
+  };
+
+  workingText = workingText.replace(/```(?:json)?\s*([\s\S]*?)```/gi, (match, inner) => {
+    const parsedItems = parsePayload(String(inner || "").trim());
+    if (!parsedItems.length) {
+      return match;
+    }
+    const token = `${blockTokenPrefix}${blocks.length}__`;
+    blocks.push({ token, items: parsedItems });
+    return `\n${token}\n`;
+  });
+
+  const callRequestPatterns = [
+    new RegExp(`\\[\\s*\\{[\\s\\S]*?"type"\\s*:\\s*"${requestTypePattern}"[\\s\\S]*?\\}\\s*\\]`, "i"),
+    new RegExp(`\\{[\\s\\S]*?"type"\\s*:\\s*"${requestTypePattern}"[\\s\\S]*?\\}`, "i"),
+    new RegExp(`(?:^|\\n)\\s*(?:type|类型)\\s*[:：]\\s*${requestTypePattern}(?:\\s*\\n+\\s*(?:message|content|text|note|留言)\\s*[:：][^\\n]*)?`, "i")
+  ];
+
+  callRequestPatterns.forEach((pattern) => {
+    let guard = 0;
+    while (guard < 8) {
+      const match = pattern.exec(workingText);
+      if (!match || typeof match.index !== "number") {
+        break;
+      }
+      const candidate = match[0];
+      const parsedItems = parsePayload(candidate);
+      if (!parsedItems.length) {
+        break;
+      }
+      replaceBlock(candidate, parsedItems);
+      guard += 1;
+    }
+  });
+
+  return { text: workingText, blocks };
+}
+
+function extractVoiceCallRequestReplyBlocks(text) {
+  return extractConversationCallRequestReplyBlocks(text, "voice");
+}
+
+function extractVideoCallRequestReplyBlocks(text) {
+  return extractConversationCallRequestReplyBlocks(text, "video");
+}
+
+function parseVoiceCallRequestMessageContinuation(line = "") {
+  const normalized = String(line || "").trim();
+  if (!normalized) {
+    return "";
+  }
+  const match = normalized.match(/^(?:message|content|text|note|留言)\s*[:：]\s*(.+)$/i);
+  return match ? String(match[1] || "").trim().slice(0, 160) : "";
+}
+
 function parseQuoteReplyPayload(payload) {
   function parseLooseQuoteObject(value) {
     const raw = String(value || "")
@@ -8466,15 +9310,24 @@ function limitReplyItems(items = [], limit = DEFAULT_MESSAGE_REPLY_SENTENCE_LIMI
   const limited = normalized.slice(0, resolvedLimit);
   const overflow = normalized.slice(resolvedLimit);
   const lastItem = limited[resolvedLimit - 1];
+  const specialReplyTypes = [
+    "location",
+    "quote",
+    "image",
+    "voice",
+    "voice_call_request",
+    "video_call_request"
+  ];
   if (
     lastItem &&
-    !["location", "quote", "image"].includes(String(lastItem.messageType || "").trim())
+    !specialReplyTypes.includes(String(lastItem.messageType || "").trim())
   ) {
     const mergedText = [String(lastItem.text || "").trim()]
       .concat(
         overflow
           .filter(
-            (item) => !["location", "quote", "image"].includes(String(item.messageType || "").trim())
+            (item) =>
+              !specialReplyTypes.includes(String(item.messageType || "").trim())
           )
           .map((item) => String(item.text || "").trim())
       )
@@ -8492,20 +9345,57 @@ function limitReplyItems(items = [], limit = DEFAULT_MESSAGE_REPLY_SENTENCE_LIMI
 
 function buildReplyItems(replyText, promptSettings = {}, privacySession = null) {
   const { text: textWithoutQuoteBlocks, blocks: quoteBlocks } = extractQuoteReplyBlocks(replyText);
+  const { text: textWithoutCallRequestBlocks, blocks: callRequestBlocks } =
+    extractVoiceCallRequestReplyBlocks(textWithoutQuoteBlocks);
+  const { text: textWithoutVideoCallRequestBlocks, blocks: videoCallRequestBlocks } =
+    extractVideoCallRequestReplyBlocks(textWithoutCallRequestBlocks);
   const { text: textWithoutLocationBlocks, blocks: locationBlocks } =
-    extractLocationReplyBlocks(textWithoutQuoteBlocks);
+    extractLocationReplyBlocks(textWithoutVideoCallRequestBlocks);
   const { text: textWithoutImageBlocks, blocks: imageBlocks } =
     extractImageReplyBlocks(textWithoutLocationBlocks);
+  const { text: textWithoutVoiceBlocks, blocks: voiceBlocks } =
+    extractVoiceReplyBlocks(textWithoutImageBlocks);
   const blockMap = new Map(
-    [...quoteBlocks, ...locationBlocks, ...imageBlocks].map((block) => [block.token, block.items])
+    [
+      ...quoteBlocks,
+      ...callRequestBlocks,
+      ...videoCallRequestBlocks,
+      ...locationBlocks,
+      ...imageBlocks,
+      ...voiceBlocks
+    ].map((block) => [block.token, block.items])
   );
-  const rawLines = String(textWithoutImageBlocks || "")
+  const rawLines = String(textWithoutVoiceBlocks || "")
     .split("\n")
     .map((item) => String(item || "").trim())
     .filter(Boolean);
   const items = [];
 
   rawLines.forEach((line) => {
+    const voiceCallRequestContinuation = parseVoiceCallRequestMessageContinuation(line);
+    const lastItem = items[items.length - 1];
+    if (
+      voiceCallRequestContinuation &&
+      lastItem &&
+      ["voice_call_request", "video_call_request"].includes(
+        String(lastItem?.messageType || "").trim()
+      )
+    ) {
+      const nextCallRequestMessage =
+        String(lastItem.callRequestMessage || "").trim() || voiceCallRequestContinuation;
+      const callMode = String(lastItem?.messageType || "").trim() === "video_call_request" ? "video" : "voice";
+      items[items.length - 1] = {
+        ...lastItem,
+        callRequestMessage: nextCallRequestMessage,
+        text: buildConversationCallRequestMessageText(
+          callMode,
+          "pending",
+          nextCallRequestMessage,
+          "assistant"
+        )
+      };
+      return;
+    }
     if (blockMap.has(line)) {
       decodeValueWithPrivacy(blockMap.get(line), privacySession).forEach((item) => {
         if (String(item?.messageType || "").trim() === "location") {
@@ -8529,6 +9419,43 @@ function buildReplyItems(replyText, promptSettings = {}, privacySession = null) 
             messageType: "image",
             imageDescription: String(item.imageDescription || "").trim(),
             text: buildImageMessageText(String(item.imageDescription || "").trim())
+          });
+          return;
+        }
+        if (String(item?.messageType || "").trim() === "voice") {
+          items.push({
+            messageType: "voice",
+            voiceText: String(item.voiceText || "").trim(),
+            voiceDurationSeconds: clampNumber(
+              Number(item.voiceDurationSeconds) ||
+                estimateVoiceMessageDurationSeconds(String(item.voiceText || "").trim()),
+              1,
+              60
+            ),
+            text: buildVoiceMessageText(
+              String(item.voiceText || "").trim(),
+              Number(item.voiceDurationSeconds) || 0
+            )
+          });
+          return;
+        }
+        if (String(item?.messageType || "").trim() === "voice_call_request") {
+          const callRequestMessage = String(item.callRequestMessage || "").trim();
+          items.push({
+            messageType: "voice_call_request",
+            callRequestStatus: "pending",
+            callRequestMessage,
+            text: buildVoiceCallRequestMessageText("pending", callRequestMessage, "assistant")
+          });
+          return;
+        }
+        if (String(item?.messageType || "").trim() === "video_call_request") {
+          const callRequestMessage = String(item.callRequestMessage || "").trim();
+          items.push({
+            messageType: "video_call_request",
+            callRequestStatus: "pending",
+            callRequestMessage,
+            text: buildVideoCallRequestMessageText("pending", callRequestMessage, "assistant")
           });
         }
       });
@@ -8567,6 +9494,52 @@ function buildReplyItems(replyText, promptSettings = {}, privacySession = null) 
       });
       return;
     }
+    const inlineVoiceItems = parseVoiceMessagePayload(line);
+    if (inlineVoiceItems.length) {
+      decodeValueWithPrivacy(inlineVoiceItems, privacySession).forEach((item) => {
+        items.push({
+          messageType: "voice",
+          voiceText: String(item.voiceText || "").trim(),
+          voiceDurationSeconds: clampNumber(
+            Number(item.voiceDurationSeconds) ||
+              estimateVoiceMessageDurationSeconds(String(item.voiceText || "").trim()),
+            1,
+            60
+          ),
+          text: buildVoiceMessageText(
+            String(item.voiceText || "").trim(),
+            Number(item.voiceDurationSeconds) || 0
+          )
+        });
+      });
+      return;
+    }
+    const inlineCallRequestItems = parseVoiceCallRequestPayload(line);
+    if (inlineCallRequestItems.length) {
+      decodeValueWithPrivacy(inlineCallRequestItems, privacySession).forEach((item) => {
+        const callRequestMessage = String(item.callRequestMessage || "").trim();
+        items.push({
+          messageType: "voice_call_request",
+          callRequestStatus: "pending",
+          callRequestMessage,
+          text: buildVoiceCallRequestMessageText("pending", callRequestMessage, "assistant")
+        });
+      });
+      return;
+    }
+    const inlineVideoCallRequestItems = parseVideoCallRequestPayload(line);
+    if (inlineVideoCallRequestItems.length) {
+      decodeValueWithPrivacy(inlineVideoCallRequestItems, privacySession).forEach((item) => {
+        const callRequestMessage = String(item.callRequestMessage || "").trim();
+        items.push({
+          messageType: "video_call_request",
+          callRequestStatus: "pending",
+          callRequestMessage,
+          text: buildVideoCallRequestMessageText("pending", callRequestMessage, "assistant")
+        });
+      });
+      return;
+    }
     splitReplyIntoMessageLines(decodeTextWithPrivacy(line, privacySession)).forEach((textLine) => {
       const normalizedLine = String(textLine || "").trim();
       if (!normalizedLine) {
@@ -8580,8 +9553,36 @@ function buildReplyItems(replyText, promptSettings = {}, privacySession = null) 
   });
 
   const normalizedItems = items.filter(Boolean);
-  if (normalizedItems.length) {
-    return normalizedItems;
+  const callRequestMessages = normalizedItems
+    .filter((item) =>
+      ["voice_call_request", "video_call_request"].includes(
+        String(item?.messageType || "").trim()
+      )
+    )
+    .map((item) => String(item?.callRequestMessage || "").trim())
+    .filter(Boolean);
+  const callMetaPrefixes = ["发起方：", "当前状态："];
+  const filteredItems =
+    callRequestMessages.length > 0
+      ? normalizedItems.filter((item) => {
+          if (String(item?.messageType || "").trim() !== "text") {
+            return true;
+          }
+          const text = String(item?.text || "").trim();
+          if (!text) {
+            return false;
+          }
+          if (callMetaPrefixes.some((prefix) => text.startsWith(prefix))) {
+            return false;
+          }
+          if (callRequestMessages.includes(text)) {
+            return false;
+          }
+          return true;
+        })
+      : normalizedItems;
+  if (filteredItems.length) {
+    return filteredItems;
   }
   const fallback = String(replyText || "").trim();
   return fallback
@@ -8954,6 +9955,12 @@ async function appendAssistantReplyBatch(
         coordinates: item.coordinates || "",
         imageDataUrl: item.imageDataUrl || "",
         imageDescription: item.imageDescription || "",
+        voiceText: item.voiceText || "",
+        voiceDurationSeconds: item.voiceDurationSeconds || 0,
+        callRequestStatus: item.callRequestStatus || "",
+        callRequestMessage: item.callRequestMessage || "",
+        callEventKind: item.callEventKind || "",
+        callEventDurationSeconds: item.callEventDurationSeconds || 0,
         time: timeLabel,
         createdAt: now + index
       },
@@ -9795,6 +10802,7 @@ function updateBodyModalState() {
     state.memorySettingsOpen ||
     state.regenerateModalOpen ||
     state.locationModalOpen ||
+    state.voiceModalOpen ||
     state.photoModalOpen ||
     state.awarenessModalOpen ||
     state.innerThoughtModalOpen ||
@@ -9813,6 +10821,10 @@ function closeConversationTransientUi() {
 
 function setLocationStatus(message = "", tone = "") {
   setEditorStatus(messagesLocationStatusEl, message, tone);
+}
+
+function setVoiceStatus(message = "", tone = "") {
+  setEditorStatus(messagesVoiceStatusEl, message, tone);
 }
 
 function setPhotoStatus(message = "", tone = "") {
@@ -9915,6 +10927,12 @@ function renderPhotoModal() {
   }
 }
 
+function renderVoiceModal() {
+  if (messagesVoiceTextInputEl) {
+    messagesVoiceTextInputEl.value = String(state.voiceDraftText || "").trim();
+  }
+}
+
 function setPhotoModalOpen(isOpen) {
   state.photoModalOpen = Boolean(isOpen);
   if (messagesPhotoModalEl) {
@@ -9930,6 +10948,25 @@ function setPhotoModalOpen(isOpen) {
   } else {
     state.photoDraftDescription = "";
     setPhotoStatus("");
+  }
+  updateBodyModalState();
+}
+
+function setVoiceModalOpen(isOpen) {
+  state.voiceModalOpen = Boolean(isOpen);
+  if (messagesVoiceModalEl) {
+    messagesVoiceModalEl.hidden = !state.voiceModalOpen;
+    messagesVoiceModalEl.setAttribute("aria-hidden", String(!state.voiceModalOpen));
+  }
+  if (state.voiceModalOpen) {
+    renderVoiceModal();
+    setVoiceStatus("");
+    window.setTimeout(() => {
+      messagesVoiceTextInputEl?.focus();
+    }, 0);
+  } else {
+    state.voiceDraftText = "";
+    setVoiceStatus("");
   }
   updateBodyModalState();
 }
@@ -10441,8 +11478,22 @@ function renderJournalModal() {
 
   const { conversation, contact } = getActiveConversationContext();
   const todayDate = getTodayDateValue();
+  const selectedEntry =
+    contact && state.journalSelectedEntryId
+      ? getJournalEntryById(state.journalSelectedEntryId)
+      : null;
   const todayEntry = contact ? getJournalEntryForDate(contact.id, todayDate) : null;
-  const weatherText = todayEntry?.weather || "天气将从今日日内聊天里提取";
+  const activeEntry =
+    selectedEntry && selectedEntry.contactId === String(contact?.id || "").trim()
+      ? selectedEntry
+      : todayEntry;
+  const isViewingHistoryEntry = Boolean(
+    activeEntry &&
+      activeEntry.id &&
+      todayEntry &&
+      String(activeEntry.id || "").trim() !== String(todayEntry.id || "").trim()
+  );
+  const weatherText = activeEntry?.weather || todayEntry?.weather || "天气将从今日日内聊天里提取";
   const statusMarkup = state.journalStatusMessage
     ? `<p class="messages-journal-status ${escapeHtml(state.journalStatusTone)}">${escapeHtml(
         state.journalStatusMessage
@@ -10466,7 +11517,7 @@ function renderJournalModal() {
     return;
   }
 
-  if (!todayEntry) {
+  if (!activeEntry) {
     messagesJournalBodyEl.innerHTML = `
       <div class="messages-journal-empty">
         ${statusMarkup}
@@ -10489,18 +11540,32 @@ function renderJournalModal() {
       ${statusMarkup}
       <article class="messages-journal-paper">
         <div class="messages-journal-paper__meta">
-          <strong>${escapeHtml(formatJournalFullDateLabel(todayEntry.date))}</strong>
-          <span>${escapeHtml(todayEntry.weather || weatherText)}</span>
+          <strong>${escapeHtml(formatJournalFullDateLabel(activeEntry.date))}</strong>
+          <span>${escapeHtml(activeEntry.weather || weatherText)}</span>
         </div>
-        <div class="messages-journal-paper__content">${renderJournalContentText(todayEntry.content)}</div>
+        <div class="messages-journal-paper__content">${renderJournalContentText(activeEntry.content)}</div>
       </article>
-      <button
-        class="messages-journal-paper__action"
-        type="button"
-        data-action="generate-journal-entry"
-      >
-        重新让ta写一篇
-      </button>
+      ${
+        isViewingHistoryEntry
+          ? `
+              <button
+                class="messages-journal-paper__action"
+                type="button"
+                data-action="open-today-journal"
+              >
+                返回今日日记
+              </button>
+            `
+          : `
+              <button
+                class="messages-journal-paper__action"
+                type="button"
+                data-action="generate-journal-entry"
+              >
+                重新让ta写一篇
+              </button>
+            `
+      }
     </div>
   `;
 }
@@ -10628,7 +11693,13 @@ function renderJournalHistoryModal() {
   messagesJournalHistoryListEl.innerHTML = entries
     .map(
       (entry) => `
-        <article class="messages-journal-history-row">
+        <article
+          class="messages-journal-history-row"
+          data-action="open-journal-history-entry"
+          data-entry-id="${escapeHtml(entry.id)}"
+          role="button"
+          tabindex="0"
+        >
           <div class="messages-journal-history-row__head">
             <strong>${escapeHtml(formatJournalFullDateLabel(entry.date))}</strong>
             <span>${escapeHtml(entry.weather || "天气未记录")}</span>
@@ -10653,6 +11724,7 @@ function setJournalOpen(isOpen) {
   if (!state.journalOpen) {
     setJournalHistoryOpen(false);
     setJournalSettingsOpen(false);
+    state.journalSelectedEntryId = "";
     state.journalGenerating = false;
     state.journalStatusMessage = "";
     state.journalStatusTone = "";
@@ -10662,6 +11734,7 @@ function setJournalOpen(isOpen) {
     messagesJournalModalEl.setAttribute("aria-hidden", String(!state.journalOpen));
   }
   if (state.journalOpen) {
+    state.journalSelectedEntryId = "";
     state.journalStatusMessage = "";
     state.journalStatusTone = "";
     renderJournalModal();
@@ -10691,6 +11764,17 @@ function setJournalHistoryOpen(isOpen) {
     renderJournalHistoryModal();
   }
   updateBodyModalState();
+}
+
+function openJournalEntryDetail(entryId = "") {
+  const entry = getJournalEntryById(entryId);
+  if (!entry) {
+    return false;
+  }
+  state.journalSelectedEntryId = String(entry.id || "").trim();
+  setJournalHistoryOpen(false);
+  renderJournalModal();
+  return true;
 }
 
 function setJournalSettingsOpen(isOpen) {
@@ -10775,6 +11859,7 @@ async function requestJournalEntry() {
     } else {
       state.journalEntries = [nextEntry, ...state.journalEntries];
     }
+    state.journalSelectedEntryId = "";
     persistJournalEntries();
     renderJournalHistoryModal();
     setMessagesStatus("今日日记已生成。", "success");
@@ -10858,13 +11943,16 @@ function renderTopbar() {
   renderNavButton();
 
   const inConversation = Boolean(activeConversation && state.activeTab === "chat");
+  const inVoiceCall = inConversation && isConversationVoiceCallActive(activeConversation);
+  const hasPendingIncomingCall =
+    inConversation && Boolean(getLatestPendingAssistantVoiceCallRequest(activeConversation));
 
   if (messagesSearchBtnEl) {
     messagesSearchBtnEl.hidden = !(state.activeTab === "contacts" && !inConversation);
   }
 
   if (messagesChatSettingsBtnEl) {
-    messagesChatSettingsBtnEl.hidden = !inConversation;
+    messagesChatSettingsBtnEl.hidden = !inConversation || inVoiceCall || hasPendingIncomingCall;
   }
 
   if (messagesChatSceneBtnEl) {
@@ -10872,7 +11960,7 @@ function renderTopbar() {
       activeConversation?.sceneMode === "offline"
         ? "offline"
         : normalizeMessagePromptSettings(state.chatPromptSettings).sceneMode;
-    messagesChatSceneBtnEl.hidden = !inConversation;
+    messagesChatSceneBtnEl.hidden = !inConversation || inVoiceCall || hasPendingIncomingCall;
     messagesChatSceneBtnEl.classList.toggle("is-offline", sceneMode === "offline");
     messagesChatSceneBtnEl.setAttribute(
       "aria-label",
@@ -11120,18 +12208,27 @@ function renderConversationMessageMenu(message, isMenuOpen) {
     !isDiscussionShareMessage &&
     !isScheduleInviteConversationMessage(message) &&
     !isLocationConversationMessage(message) &&
-    !isImageConversationMessage(message);
+    !isImageConversationMessage(message) &&
+    !isVoiceConversationMessage(message) &&
+    !isConversationCallRequestMessage(message) &&
+    !isConversationCallEventMessage(message);
   const canReadInnerThought =
     message?.role === "assistant" &&
     !isDiscussionShareMessage &&
     !isScheduleInviteConversationMessage(message) &&
     !isLocationConversationMessage(message) &&
-    !isImageConversationMessage(message);
+    !isImageConversationMessage(message) &&
+    !isVoiceConversationMessage(message) &&
+    !isConversationCallRequestMessage(message) &&
+    !isConversationCallEventMessage(message);
   const actions =
     isDiscussionShareMessage ||
     isScheduleInviteConversationMessage(message) ||
     isLocationConversationMessage(message) ||
-    isImageConversationMessage(message)
+    isImageConversationMessage(message) ||
+    isVoiceConversationMessage(message) ||
+    isConversationCallRequestMessage(message) ||
+    isConversationCallEventMessage(message)
     ? [
         `
           <button
@@ -11361,6 +12458,466 @@ function renderConversationImageCard(message) {
   `;
 }
 
+function renderConversationVoiceCard(message, isUser = false) {
+  const voiceText = String(message?.voiceText || "").trim();
+  const isExpanded = state.expandedVoiceMessageId === String(message?.id || "").trim();
+  const durationSeconds = clampNumber(
+    Number(message?.voiceDurationSeconds) || estimateVoiceMessageDurationSeconds(voiceText),
+    1,
+    60
+  );
+  const width = clampNumber(92 + durationSeconds * 9, 92, 188);
+  const waveformMarkup = Array.from({ length: 5 }, (_, index) => {
+    const height = [10, 7, 5, 8, 11][index] || 8;
+    return `<span style="height:${height}px"></span>`;
+  }).join("");
+  return `
+    <article
+      class="messages-voice-card ${isUser ? "messages-voice-card--user" : "messages-voice-card--assistant"}${
+        isExpanded ? " is-expanded" : ""
+      }"
+      style="--voice-card-width:${width}px"
+    >
+      <div class="messages-voice-card__pill">
+        <span class="messages-voice-card__duration">${escapeHtml(
+          formatVoiceMessageDurationLabel(durationSeconds)
+        )}</span>
+        <span class="messages-voice-card__waveform" aria-hidden="true">${waveformMarkup}</span>
+      </div>
+      ${
+        voiceText
+          ? `
+            <div class="messages-voice-card__transcript${isExpanded ? " is-visible" : ""}">
+              ${escapeHtml(voiceText)}
+            </div>
+          `
+          : ""
+      }
+    </article>
+  `;
+}
+
+function renderConversationVoiceCallRequestCard(message, conversation) {
+  const callMode = getConversationCallModeFromMessage(message);
+  const status = normalizeVoiceCallRequestStatus(message?.callRequestStatus);
+  const isAssistantRequest = message?.role === "assistant";
+  const canRespond =
+    isAssistantRequest &&
+    status === "pending" &&
+    !isConversationVoiceCallActive(conversation);
+  const note = String(message?.callRequestMessage || "").trim();
+  const shouldShowNote = Boolean(note) && status === "pending";
+  const requestAction = callMode === "video" ? "accept-video-call-request" : "accept-voice-call-request";
+  const rejectAction = callMode === "video" ? "reject-video-call-request" : "reject-voice-call-request";
+  return `
+    <article class="messages-call-request-card messages-call-request-card--${escapeHtml(status)}">
+      <div class="messages-call-request-card__head">
+        <span class="messages-call-request-card__icon" aria-hidden="true">
+          ${renderConversationUtilityIcon(getConversationCallModeIcon(callMode))}
+        </span>
+        <span class="messages-call-request-card__badge">${escapeHtml(getConversationCallModeLabel(callMode))}</span>
+        <span class="messages-call-request-card__status">${escapeHtml(
+          getVoiceCallRequestStatusLabel(status)
+        )}</span>
+      </div>
+      <strong>${escapeHtml(
+        isAssistantRequest
+          ? `对方向你发起${getConversationCallModeShortLabel(callMode)}请求`
+          : `你发起了${getConversationCallModeShortLabel(callMode)}请求`
+      )}</strong>
+      ${shouldShowNote ? `<p>${escapeHtml(note)}</p>` : ""}
+      ${
+        canRespond
+          ? `
+            <div class="messages-call-request-card__actions">
+              <button
+                type="button"
+                data-action="${requestAction}"
+                data-message-id="${escapeHtml(message.id)}"
+              >
+                接通
+              </button>
+              <button
+                type="button"
+                data-action="${rejectAction}"
+                data-message-id="${escapeHtml(message.id)}"
+              >
+                拒绝
+              </button>
+            </div>
+          `
+          : ""
+      }
+    </article>
+  `;
+}
+
+function getLatestPendingAssistantVoiceCallRequest(conversation) {
+  const messages = normalizeObjectArray(conversation?.messages);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "assistant") {
+      continue;
+    }
+    if (!isConversationCallRequestMessage(message)) {
+      continue;
+    }
+    if (normalizeVoiceCallRequestStatus(message?.callRequestStatus) !== "pending") {
+      continue;
+    }
+    return message;
+  }
+  return null;
+}
+
+function renderConversationVoiceCallEventCard(message) {
+  const callMode = getConversationCallModeFromMessage(message);
+  const kind = normalizeVoiceCallEventKind(message?.callEventKind);
+  const durationText =
+    kind === "ended" ? formatVoiceCallDurationLabel(message?.callEventDurationSeconds || 0) : "";
+  return `
+    <article class="messages-call-event-card messages-call-event-card--${escapeHtml(kind)}">
+      <span class="messages-call-event-card__icon" aria-hidden="true">
+        ${renderConversationUtilityIcon(getConversationCallModeIcon(callMode))}
+      </span>
+      <div>
+        <strong>${escapeHtml(`${getConversationCallModeShortLabel(callMode)}${getVoiceCallEventKindLabel(kind)}`)}</strong>
+        ${durationText ? `<p>持续时长 ${escapeHtml(durationText)}</p>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function renderConversationCallTranscriptItem(message, conversation) {
+  return renderConversationMessage(message, conversation, state.chatPromptSettings);
+}
+
+function getActiveVoiceCallTranscriptMessages(conversation, callState) {
+  const startedAt = Number(callState?.startedAt) || 0;
+  return (Array.isArray(conversation?.messages) ? conversation.messages : [])
+    .filter((message) => (Number(message?.createdAt) || 0) >= Math.max(0, startedAt - 1000))
+    .slice(-24);
+}
+
+function renderActiveVoiceCallScreen(conversation, options = {}) {
+  if (getConversationActiveCallMode(conversation) === "video") {
+    return renderActiveVideoCallScreen(conversation, options);
+  }
+  const renderOptions = options && typeof options === "object" ? options : {};
+  const meta = getConversationMeta(conversation);
+  const callState = getConversationVoiceCallState(conversation);
+  const durationLabel = formatVoiceCallDurationLabel(getVoiceCallDurationSeconds(callState));
+  const isReplyBusy = isConversationReplyBusy(conversation.id);
+  const hasPendingUserMessages = conversation.messages.some(
+    (message) => message.role === "user" && message.needsReply
+  );
+  const canRequestContinuation =
+    !hasPendingUserMessages &&
+    conversation.messages.some((message) => message.role === "assistant");
+  const draft = getConversationDraft(conversation.id);
+  const transcriptMessages = getActiveVoiceCallTranscriptMessages(conversation, callState);
+  const transcriptMarkup = transcriptMessages.length
+    ? transcriptMessages
+        .map((message) => renderConversationCallTranscriptItem(message, conversation))
+        .join("")
+    : '<div class="messages-call-screen__history-empty">本次通话还没有文字记录。</div>';
+  return `
+    <section class="messages-call-screen" aria-label="语音通话">
+      <div class="messages-call-screen__hero">
+        ${buildAvatarMarkup(
+          meta.avatarImage,
+          meta.avatarText || getContactAvatarFallback({ name: meta.name }),
+          "messages-call-screen__avatar"
+        )}
+        <strong>${escapeHtml(meta.name)}</strong>
+        <span>${isReplyBusy ? "正在说话中…" : "正在通话中…"}</span>
+        <time id="messages-call-duration" data-started-at="${escapeHtml(String(callState.startedAt || 0))}">
+          ${escapeHtml(durationLabel)}
+        </time>
+      </div>
+      <div class="messages-call-screen__history" data-call-history="true">
+        ${transcriptMarkup}
+      </div>
+      <div class="messages-call-screen__footer">
+        <form
+          class="messages-call-screen__composer"
+          data-action="send-conversation-message"
+          data-call-mode="voice"
+        >
+          <input
+            class="messages-call-screen__input"
+            name="message"
+            type="text"
+            maxlength="600"
+            value="${escapeHtml(draft)}"
+            placeholder="输入消息…"
+            autocomplete="off"
+            ${isReplyBusy ? "disabled" : ""}
+          />
+          <button class="messages-call-screen__send" type="submit" ${isReplyBusy ? "disabled" : ""}>
+            发送
+          </button>
+          <button
+            class="messages-call-screen__trigger ${
+              hasPendingUserMessages || canRequestContinuation ? "is-ready" : ""
+            }"
+            type="button"
+            data-action="request-conversation-reply"
+            aria-label="获取语音回复"
+            ${isReplyBusy || (!hasPendingUserMessages && !canRequestContinuation) ? "disabled" : ""}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M8 6.5c4.7 0 8.5 3.8 8.5 8.5M8 11c2.2 0 4 1.8 4 4M8 4v5h5"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+        </form>
+        <button
+          class="messages-call-screen__hangup"
+          type="button"
+          data-action="hangup-voice-call"
+          aria-label="挂断语音通话"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6.8 14.5c3.5-2.2 6.9-2.2 10.4 0l1.1.7c.6.4.8 1.1.5 1.8l-.6 1.2c-.3.7-.9 1-1.7.8-3-.9-6-.9-9 0-.8.2-1.4-.1-1.7-.8L5.2 17c-.3-.7-.1-1.4.5-1.8l1.1-.7Z" fill="currentColor" />
+          </svg>
+        </button>
+      </div>
+    </section>
+  `;
+}
+
+function renderIncomingVoiceCallRequestScreen(conversation, message) {
+  const callMode = getConversationCallModeFromMessage(message);
+  const note = String(message?.callRequestMessage || "").trim();
+  if (callMode === "video") {
+    return renderIncomingVideoCallRequestScreen(conversation, message);
+  }
+  const meta = getConversationMeta(conversation);
+  return `
+    <section class="messages-call-screen messages-call-screen--incoming" aria-label="来电请求">
+      <div class="messages-call-screen__hero messages-call-screen__hero--incoming">
+        ${buildAvatarMarkup(
+          meta.avatarImage,
+          meta.avatarText || getContactAvatarFallback({ name: meta.name }),
+          "messages-call-screen__avatar"
+        )}
+        <strong>${escapeHtml(meta.name)}</strong>
+        <span>正在邀请你接通语音通话</span>
+        <time>等待接听</time>
+      </div>
+      <div class="messages-call-screen__incoming-card">
+        <span class="messages-call-screen__incoming-badge">语音请求</span>
+        <h3>对方向你发起语音请求</h3>
+        <p>${escapeHtml(note || "接通后会进入语音通话状态。")}</p>
+      </div>
+      <div class="messages-call-screen__footer messages-call-screen__footer--incoming">
+        <div class="messages-call-screen__incoming-actions">
+          <button
+            class="messages-call-screen__incoming-button messages-call-screen__incoming-button--reject"
+            type="button"
+            data-action="reject-voice-call-request"
+            data-message-id="${escapeHtml(message.id)}"
+          >
+            拒绝
+          </button>
+          <button
+            class="messages-call-screen__incoming-button messages-call-screen__incoming-button--accept"
+            type="button"
+            data-action="accept-voice-call-request"
+            data-message-id="${escapeHtml(message.id)}"
+          >
+            接通
+          </button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderVideoCallPreviewMarkup(image = "", fallbackText = "", className = "") {
+  const resolvedImage = String(image || "").trim();
+  if (resolvedImage) {
+    return `<div class="${escapeHtml(className)}"><img src="${escapeHtml(resolvedImage)}" alt="视频画面" /></div>`;
+  }
+  return `<div class="${escapeHtml(className)}"><span>${escapeHtml(fallbackText || "图")}</span></div>`;
+}
+
+function renderActiveVideoCallScreen(conversation, options = {}) {
+  const renderOptions = options && typeof options === "object" ? options : {};
+  const meta = getConversationMeta(conversation);
+  const callState = getConversationVoiceCallState(conversation);
+  const durationLabel = formatVoiceCallDurationLabel(getVoiceCallDurationSeconds(callState));
+  const isReplyBusy = isConversationReplyBusy(conversation.id);
+  const hasPendingUserMessages = conversation.messages.some(
+    (message) => message.role === "user" && message.needsReply
+  );
+  const canRequestContinuation =
+    !hasPendingUserMessages &&
+    conversation.messages.some((message) => message.role === "assistant");
+  const draft = getConversationDraft(conversation.id);
+  const transcriptMessages = getActiveVoiceCallTranscriptMessages(conversation, callState);
+  const transcriptMarkup = transcriptMessages.length
+    ? transcriptMessages
+        .map((message) => renderConversationCallTranscriptItem(message, conversation))
+        .join("")
+    : '<div class="messages-call-screen__history-empty">本次视频还没有文字记录。</div>';
+  const remoteImage = getConversationVideoContactDisplayImage(conversation);
+  const localImage = getConversationVideoUserDisplayImage(conversation);
+  return `
+    <section class="messages-call-screen messages-call-screen--video" aria-label="视频通话">
+      <div class="messages-call-screen__video-stage">
+        ${
+          remoteImage
+            ? `<div class="messages-call-screen__video-remote"><img src="${escapeHtml(remoteImage)}" alt="${escapeHtml(
+                meta.name
+              )} 的视频画面" /></div>`
+            : `<div class="messages-call-screen__video-remote messages-call-screen__video-remote--fallback">${buildAvatarMarkup(
+                "",
+                meta.avatarText || getContactAvatarFallback({ name: meta.name }),
+                "messages-call-screen__video-remote-fallback"
+              )}</div>`
+        }
+        <div class="messages-call-screen__video-topbar">
+          <div class="messages-call-screen__video-info">
+            <strong>${escapeHtml(meta.name)}</strong>
+            <span>${isReplyBusy ? "视频通话中…" : "视频通话中…"}</span>
+            <time id="messages-call-duration" data-started-at="${escapeHtml(String(callState.startedAt || 0))}">
+              ${escapeHtml(durationLabel)}
+            </time>
+          </div>
+          ${renderVideoCallPreviewMarkup(
+            localImage,
+            getProfileAvatarFallback(state.profile),
+            "messages-call-screen__video-local"
+          )}
+        </div>
+        <div class="messages-call-screen__history messages-call-screen__history--video" data-call-history="true">
+          ${transcriptMarkup}
+        </div>
+      </div>
+      <div class="messages-call-screen__footer messages-call-screen__footer--video">
+        <form
+          class="messages-call-screen__composer"
+          data-action="send-conversation-message"
+          data-call-mode="video"
+        >
+          <input
+            class="messages-call-screen__input"
+            name="message"
+            type="text"
+            maxlength="600"
+            value="${escapeHtml(draft)}"
+            placeholder="输入消息…"
+            autocomplete="off"
+            ${isReplyBusy ? "disabled" : ""}
+          />
+          <button class="messages-call-screen__send" type="submit" ${isReplyBusy ? "disabled" : ""}>
+            发送
+          </button>
+          <button
+            class="messages-call-screen__trigger ${
+              hasPendingUserMessages || canRequestContinuation ? "is-ready" : ""
+            }"
+            type="button"
+            data-action="request-conversation-reply"
+            aria-label="获取视频回复"
+            ${isReplyBusy || (!hasPendingUserMessages && !canRequestContinuation) ? "disabled" : ""}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M8 6.5c4.7 0 8.5 3.8 8.5 8.5M8 11c2.2 0 4 1.8 4 4M8 4v5h5"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+        </form>
+        <button
+          class="messages-call-screen__hangup"
+          type="button"
+          data-action="hangup-active-call"
+          aria-label="挂断视频通话"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6.8 14.5c3.5-2.2 6.9-2.2 10.4 0l1.1.7c.6.4.8 1.1.5 1.8l-.6 1.2c-.3.7-.9 1-1.7.8-3-.9-6-.9-9 0-.8.2-1.4-.1-1.7-.8L5.2 17c-.3-.7-.1-1.4.5-1.8l1.1-.7Z" fill="currentColor" />
+          </svg>
+        </button>
+      </div>
+    </section>
+  `;
+}
+
+function renderIncomingVideoCallRequestScreen(conversation, message) {
+  const meta = getConversationMeta(conversation);
+  const remoteImage = getConversationVideoContactDisplayImage(conversation);
+  const localImage = getConversationVideoUserDisplayImage(conversation);
+  const note = String(message?.callRequestMessage || "").trim();
+  return `
+    <section class="messages-call-screen messages-call-screen--video messages-call-screen--incoming-video" aria-label="视频来电请求">
+      <div class="messages-call-screen__video-stage">
+        ${
+          remoteImage
+            ? `<div class="messages-call-screen__video-remote"><img src="${escapeHtml(remoteImage)}" alt="${escapeHtml(
+                meta.name
+              )} 的视频画面" /></div>`
+            : `<div class="messages-call-screen__video-remote messages-call-screen__video-remote--fallback">${buildAvatarMarkup(
+                "",
+                meta.avatarText || getContactAvatarFallback({ name: meta.name }),
+                "messages-call-screen__video-remote-fallback"
+              )}</div>`
+        }
+        <div class="messages-call-screen__video-topbar">
+          <div class="messages-call-screen__video-info">
+            <strong>${escapeHtml(meta.name)}</strong>
+            <span>视频通话邀请…</span>
+            <time>等待接听</time>
+          </div>
+          ${renderVideoCallPreviewMarkup(
+            localImage,
+            getProfileAvatarFallback(state.profile),
+            "messages-call-screen__video-local"
+          )}
+        </div>
+        <div class="messages-call-screen__incoming-card messages-call-screen__incoming-card--video">
+          <span class="messages-call-screen__incoming-badge">视频请求</span>
+          <h3>对方向你发起视频通话</h3>
+          <p>${escapeHtml(note || "接通后会进入视频通话状态。")}</p>
+        </div>
+      </div>
+      <div class="messages-call-screen__footer messages-call-screen__footer--incoming">
+        <div class="messages-call-screen__incoming-actions">
+          <button
+            class="messages-call-screen__incoming-button messages-call-screen__incoming-button--reject"
+            type="button"
+            data-action="reject-video-call-request"
+            data-message-id="${escapeHtml(message.id)}"
+          >
+            拒绝
+          </button>
+          <button
+            class="messages-call-screen__incoming-button messages-call-screen__incoming-button--accept"
+            type="button"
+            data-action="accept-video-call-request"
+            data-message-id="${escapeHtml(message.id)}"
+          >
+            接通
+          </button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 function renderConversationDiscussionShareCard(message) {
   const payload = getDiscussionSharePayloadFromMessage(message);
   if (!payload) {
@@ -11410,6 +12967,11 @@ function renderConversationMessage(message, conversation, promptSettings = state
   const isScheduleInviteMessage = isScheduleInviteConversationMessage(message);
   const isLocationMessage = isLocationConversationMessage(message);
   const isImageMessage = isImageConversationMessage(message);
+  const isVoiceMessage = isVoiceConversationMessage(message);
+  const isVideoCallRequestMessage = isVideoCallRequestConversationMessage(message);
+  const isVoiceCallRequestMessage = isVoiceCallRequestConversationMessage(message);
+  const isVideoCallEventMessage = isVideoCallEventConversationMessage(message);
+  const isVoiceCallEventMessage = isVoiceCallEventConversationMessage(message);
   const isQuoteMessage = isQuoteConversationMessage(message);
   const bubbleMarkup = isDiscussionShareMessage
     ? renderConversationDiscussionShareCard(message)
@@ -11418,9 +12980,19 @@ function renderConversationMessage(message, conversation, promptSettings = state
     : isLocationMessage
     ? renderConversationLocationCard(message)
     : isImageMessage
-      ? renderConversationImageCard(message)
+    ? renderConversationImageCard(message)
+    : isVoiceMessage
+    ? renderConversationVoiceCard(message, isUser)
+    : isVideoCallRequestMessage
+    ? renderConversationVoiceCallRequestCard(message, conversation)
+    : isVoiceCallRequestMessage
+    ? renderConversationVoiceCallRequestCard(message, conversation)
+    : isVideoCallEventMessage
+    ? renderConversationVoiceCallEventCard(message)
+    : isVoiceCallEventMessage
+    ? renderConversationVoiceCallEventCard(message)
     : isQuoteMessage
-      ? renderConversationQuoteCard(message, isUser)
+    ? renderConversationQuoteCard(message, isUser)
     : `
       <article class="messages-bubble ${isUser ? "messages-bubble--user" : "messages-bubble--assistant"}">
         <p>${escapeHtml(message.text)}</p>
@@ -11448,28 +13020,65 @@ function renderConversationMessage(message, conversation, promptSettings = state
         </button>
       </div>
     `
+    : isVoiceMessage
+    ? `
+      <div class="messages-message-row__stack-shell messages-message-row__stack-shell--voice">
+        <button
+          type="button"
+          class="messages-bubble-toggle messages-bubble-toggle--voice"
+          data-action="toggle-voice-transcript"
+          data-message-id="${escapeHtml(message.id)}"
+        >
+          ${bubbleMarkup}
+        </button>
+        <button
+          type="button"
+          class="messages-message-row__menu-toggle"
+          data-action="toggle-message-menu"
+          data-message-id="${escapeHtml(message.id)}"
+          aria-label="打开消息操作"
+        >
+          <span></span><span></span><span></span>
+        </button>
+      </div>
+    `
+    : isVideoCallRequestMessage || isVoiceCallRequestMessage
+    ? `
+      <div class="messages-message-row__stack-shell messages-message-row__stack-shell--call-request">
+        ${bubbleMarkup}
+        <button
+          type="button"
+          class="messages-message-row__menu-toggle"
+          data-action="toggle-message-menu"
+          data-message-id="${escapeHtml(message.id)}"
+          aria-label="打开消息操作"
+        >
+          <span></span><span></span><span></span>
+        </button>
+      </div>
+    `
     : isDiscussionShareMessage
-      ? `
-        <div class="messages-message-row__stack-shell messages-message-row__stack-shell--discussion-share">
-          <button
-            type="button"
-            class="messages-bubble-toggle messages-bubble-toggle--discussion-share"
-            data-action="open-discussion-share-message"
-            data-message-id="${escapeHtml(message.id)}"
-          >
-            ${bubbleMarkup}
-          </button>
-          <button
-            type="button"
-            class="messages-message-row__menu-toggle"
-            data-action="toggle-message-menu"
-            data-message-id="${escapeHtml(message.id)}"
-            aria-label="打开消息操作"
-          >
-            <span></span><span></span><span></span>
-          </button>
-        </div>
-      `
+    ? `
+      <div class="messages-message-row__stack-shell messages-message-row__stack-shell--discussion-share">
+        <button
+          type="button"
+          class="messages-bubble-toggle messages-bubble-toggle--discussion-share"
+          data-action="open-discussion-share-message"
+          data-message-id="${escapeHtml(message.id)}"
+        >
+          ${bubbleMarkup}
+        </button>
+        <button
+          type="button"
+          class="messages-message-row__menu-toggle"
+          data-action="toggle-message-menu"
+          data-message-id="${escapeHtml(message.id)}"
+          aria-label="打开消息操作"
+        >
+          <span></span><span></span><span></span>
+        </button>
+      </div>
+    `
     : `
       <button
         type="button"
@@ -11477,8 +13086,8 @@ function renderConversationMessage(message, conversation, promptSettings = state
           isScheduleInviteMessage
             ? " messages-bubble-toggle--schedule-invite"
             : isLocationMessage
-              ? " messages-bubble-toggle--location"
-              : ""
+            ? " messages-bubble-toggle--location"
+            : ""
         }"
         data-action="toggle-message-menu"
         data-message-id="${escapeHtml(message.id)}"
@@ -11493,8 +13102,14 @@ function renderConversationMessage(message, conversation, promptSettings = state
       isScheduleInviteMessage ? " messages-message-row--schedule-invite" : ""
     }${
       isLocationMessage ? " messages-message-row--location" : ""
-    }${
+          }${
       isImageMessage ? " messages-message-row--image" : ""
+    }${
+      isVoiceMessage ? " messages-message-row--voice" : ""
+    }${
+      isVideoCallRequestMessage || isVoiceCallRequestMessage ? " messages-message-row--call-request" : ""
+    }${
+      isVideoCallEventMessage || isVoiceCallEventMessage ? " messages-message-row--call-event" : ""
     }${
       isQuoteMessage ? " messages-message-row--quote" : ""
     }">
@@ -11505,8 +13120,8 @@ function renderConversationMessage(message, conversation, promptSettings = state
           : isScheduleInviteMessage
           ? " messages-message-row__bubble-wrap--schedule-invite"
           : isLocationMessage
-            ? " messages-message-row__bubble-wrap--location"
-            : ""
+          ? " messages-message-row__bubble-wrap--location"
+          : ""
       }">
         <div class="messages-message-row__stack">
           ${bubbleControlMarkup}
@@ -11569,6 +13184,14 @@ function appendConversationMessageToVisibleHistory(
   const messageId = String(message?.id || "").trim();
   const historyEl = messagesContentEl?.querySelector(".messages-conversation__history");
   if (!(historyEl instanceof HTMLElement) || !conversation) {
+    return false;
+  }
+  if (
+    message?.role === "assistant" &&
+    isConversationCallRequestMessage(message) &&
+    normalizeVoiceCallRequestStatus(message?.callRequestStatus) === "pending" &&
+    !isConversationVoiceCallActive(conversation)
+  ) {
     return false;
   }
   if (
@@ -11713,6 +13336,34 @@ function renderConversationDetail(options = {}) {
     conversation.messages.some((message) => message.role === "assistant");
   const promptSettings = normalizeMessagePromptSettings(state.chatPromptSettings);
   const renderOptions = options && typeof options === "object" ? options : {};
+  const isVoiceCallActive = isConversationVoiceCallActive(conversation);
+  if (isVoiceCallActive) {
+    messagesContentEl.innerHTML = renderActiveVoiceCallScreen(conversation, renderOptions);
+    syncActiveConversationViewMarker();
+    updateVoiceCallDurationDisplay();
+    const callHistoryEl = messagesContentEl.querySelector(".messages-call-screen__history");
+    window.requestAnimationFrame(() => {
+      if (callHistoryEl instanceof HTMLElement) {
+        callHistoryEl.scrollTop = callHistoryEl.scrollHeight;
+      }
+      if (renderOptions.focusInput) {
+        focusConversationInput({
+          force: true,
+          preventScroll: true
+        });
+      }
+    });
+    return;
+  }
+  const incomingVoiceCallRequest = getLatestPendingAssistantVoiceCallRequest(conversation);
+  if (incomingVoiceCallRequest) {
+    messagesContentEl.innerHTML = renderIncomingVoiceCallRequestScreen(
+      conversation,
+      incomingVoiceCallRequest
+    );
+    syncActiveConversationViewMarker();
+    return;
+  }
   const composerDraft = getConversationDraft(conversation.id);
   const renderWindow = buildConversationRenderWindow(conversation);
   const pendingRevealIds =
@@ -12075,6 +13726,61 @@ function getConversationAutoScheduleDays(conversation = getConversationById()) {
 
 function getConversationAutoScheduleTime(conversation = getConversationById()) {
   return normalizeAutoScheduleTime(conversation?.autoScheduleTime);
+}
+
+function getConversationVideoContactImage(conversation = getConversationById()) {
+  return String(conversation?.videoContactImage || "").trim();
+}
+
+function getConversationVideoUserImage(conversation = getConversationById()) {
+  return String(conversation?.videoUserImage || "").trim();
+}
+
+function getConversationVideoContactDisplayImage(conversation = getConversationById()) {
+  return (
+    getConversationVideoContactImage(conversation) ||
+    getConversationSnapshotAvatarImage(conversation)
+  );
+}
+
+function getConversationVideoUserDisplayImage(conversation = getConversationById()) {
+  return getConversationVideoUserImage(conversation) || String(state.profile?.avatarImage || "").trim();
+}
+
+function setConversationVideoMediaSettings(contactImage = "", userImage = "") {
+  const conversation = getConversationById();
+  if (!conversation) {
+    return;
+  }
+  conversation.videoContactImage = String(contactImage || "").trim();
+  conversation.videoUserImage = String(userImage || "").trim();
+  persistConversations();
+}
+
+function renderChatSettingsVideoPreview(previewEl, image = "", fallbackText = "") {
+  if (!(previewEl instanceof HTMLElement)) {
+    return;
+  }
+  const resolvedImage = String(image || "").trim();
+  if (resolvedImage) {
+    previewEl.innerHTML = `<img src="${escapeHtml(resolvedImage)}" alt="视频通话预览图" />`;
+    return;
+  }
+  previewEl.textContent = String(fallbackText || "").trim() || "图";
+}
+
+function renderChatSettingsVideoPreviews(conversation = getConversationById()) {
+  const meta = conversation ? getConversationMeta(conversation) : null;
+  renderChatSettingsVideoPreview(
+    messagesChatVideoContactPreviewEl,
+    state.chatSettingsVideoContactImage || getConversationSnapshotAvatarImage(conversation),
+    meta?.avatarText || getContactAvatarFallback({ name: meta?.name || "角色" })
+  );
+  renderChatSettingsVideoPreview(
+    messagesChatVideoUserPreviewEl,
+    state.chatSettingsVideoUserImage || String(state.profile?.avatarImage || "").trim(),
+    getProfileAvatarFallback(state.profile)
+  );
 }
 
 function applySceneModeToButtons(sceneMode = "online") {
@@ -13037,7 +14743,9 @@ function isCoarsePointerDevice() {
 }
 
 function getConversationInputElement() {
-  const input = messagesContentEl?.querySelector(".messages-conversation__input");
+  const input = messagesContentEl?.querySelector(
+    ".messages-conversation__input, .messages-call-screen__input"
+  );
   return input instanceof HTMLInputElement ? input : null;
 }
 
@@ -13082,7 +14790,7 @@ function shouldDismissConversationKeyboardFromTarget(target) {
   if (!activeInput || document.activeElement !== activeInput) {
     return false;
   }
-  return !target.closest(".messages-conversation__composer");
+  return !target.closest(".messages-conversation__composer, .messages-call-screen__composer");
 }
 
 function primeForegroundRefreshSuppression(durationMs = 1200) {
@@ -13826,6 +15534,10 @@ function deleteMemoryEntry(memoryId = "") {
 function applyChatPromptSettingsToForm(promptSettings) {
   const resolved = normalizeMessagePromptSettings(promptSettings);
   const conversation = getConversationById();
+  state.chatSettingsVideoContactImage = conversation
+    ? getConversationVideoContactImage(conversation)
+    : "";
+  state.chatSettingsVideoUserImage = conversation ? getConversationVideoUserImage(conversation) : "";
   if (messagesChatHistoryRoundsInputEl) {
     messagesChatHistoryRoundsInputEl.value = String(resolved.historyRounds);
   }
@@ -13876,6 +15588,7 @@ function applyChatPromptSettingsToForm(promptSettings) {
     messagesChatAllowAiAutoScheduleInputEl.checked = getConversationAllowAiAutoSchedule();
     messagesChatAllowAiAutoScheduleInputEl.disabled = !Boolean(getConversationById());
   }
+  renderChatSettingsVideoPreviews(conversation);
   if (messagesChatAutoScheduleDaysInputEl) {
     messagesChatAutoScheduleDaysInputEl.value = String(getConversationAutoScheduleDays());
     messagesChatAutoScheduleDaysInputEl.disabled = !Boolean(getConversationById());
@@ -14090,6 +15803,9 @@ function setChatSettingsOpen(isOpen) {
     window.setTimeout(() => {
       messagesChatHistoryRoundsInputEl?.focus();
     }, 0);
+  } else {
+    state.chatSettingsVideoContactImage = "";
+    state.chatSettingsVideoUserImage = "";
   }
   updateBodyModalState();
 }
@@ -14111,6 +15827,14 @@ function editConversationMessage(messageId = "") {
   }
   if (isLocationConversationMessage(targetMessage)) {
     setMessagesStatus("定位消息暂不支持直接编辑，请删除后重新发送。", "error");
+    return;
+  }
+  if (
+    isVoiceConversationMessage(targetMessage) ||
+    isConversationCallRequestMessage(targetMessage) ||
+    isConversationCallEventMessage(targetMessage)
+  ) {
+    setMessagesStatus("这类通话/语音卡片暂不支持直接编辑，请删除后重新发送。", "error");
     return;
   }
   const nextText = window.prompt(
@@ -14165,6 +15889,9 @@ function deleteConversationMessage(messageId = "") {
   if (String(state.expandedImageMessageId || "").trim() === targetMessage.id) {
     state.expandedImageMessageId = "";
   }
+  if (String(state.expandedVoiceMessageId || "").trim() === targetMessage.id) {
+    state.expandedVoiceMessageId = "";
+  }
   if (
     state.discussionShareModalOpen &&
     String(state.discussionShareModalMessageId || "").trim() === targetMessage.id
@@ -14204,6 +15931,7 @@ function clearCurrentConversationHistory() {
   conversation.messages = [];
   conversation.memorySummaryCounter = 0;
   conversation.memorySummaryLastMessageCount = 0;
+  conversation.voiceCallState = normalizeVoiceCallState();
   conversation.updatedAt = Date.now();
   bumpConversationReplyContextVersion(conversation);
   cancelConversationReplyWork(conversation.id);
@@ -14585,6 +16313,40 @@ function handleConversationToolAction(toolId = "") {
     return;
   }
 
+  if (resolvedToolId === "voice") {
+    const conversation = getConversationById();
+    if (!conversation) {
+      setMessagesStatus("请先进入一个聊天，再发送语音。", "error");
+      renderConversationDetail();
+      return;
+    }
+    renderConversationDetail();
+    setVoiceModalOpen(true);
+    return;
+  }
+
+  if (resolvedToolId === "phone") {
+    const conversation = getConversationById();
+    if (!conversation) {
+      setMessagesStatus("请先进入一个聊天，再发起语音通话。", "error");
+      renderConversationDetail();
+      return;
+    }
+    beginOutgoingVoiceCall();
+    return;
+  }
+
+  if (resolvedToolId === "video") {
+    const conversation = getConversationById();
+    if (!conversation) {
+      setMessagesStatus("请先进入一个聊天，再发起视频通话。", "error");
+      renderConversationDetail();
+      return;
+    }
+    beginOutgoingVideoCall();
+    return;
+  }
+
   if (resolvedToolId === "camera") {
     const conversation = getConversationById();
     if (!conversation) {
@@ -14671,7 +16433,10 @@ async function openInnerThoughtForMessage(messageId = "") {
   if (
     isScheduleInviteConversationMessage(targetMessage) ||
     isLocationConversationMessage(targetMessage) ||
-    isImageConversationMessage(targetMessage)
+    isImageConversationMessage(targetMessage) ||
+    isVoiceConversationMessage(targetMessage) ||
+    isConversationCallRequestMessage(targetMessage) ||
+    isConversationCallEventMessage(targetMessage)
   ) {
     setMessagesStatus("这类卡片消息暂不支持心声分析。", "error");
     return;
@@ -14818,6 +16583,50 @@ function sendConversationPhoto(description = "") {
   setMessagesStatus("图片已加入对话，点击右侧圆标向 API 请求回复。", "success");
 }
 
+function sendConversationVoice(content = "") {
+  const resolvedContent = String(content || "").trim();
+  if (!resolvedContent) {
+    setVoiceStatus("请输入语音转文字内容。", "error");
+    return;
+  }
+  const conversation = getConversationById();
+  if (!conversation) {
+    setMessagesStatus("请先进入一个聊天，再发送语音。", "error");
+    return;
+  }
+
+  const durationSeconds = estimateVoiceMessageDurationSeconds(resolvedContent);
+  closeConversationTransientUi();
+  const userMessage = normalizeConversationMessage(
+    {
+      id: `message_${Date.now()}_${hashText(`voice_${resolvedContent}`)}`,
+      role: "user",
+      messageType: "voice",
+      voiceText: resolvedContent,
+      voiceDurationSeconds: durationSeconds,
+      text: buildVoiceMessageText(resolvedContent, durationSeconds),
+      needsReply: true,
+      time: formatLocalTime(),
+      createdAt: Date.now()
+    },
+    conversation.messages.length
+  );
+
+  conversation.messages = [...conversation.messages, userMessage];
+  conversation.updatedAt = userMessage.createdAt;
+  bumpConversationReplyContextVersion(conversation);
+  persistConversations({
+    deferMaintenance: true,
+    fallbackToMaintenanceOnFailure: true
+  });
+  setVoiceModalOpen(false);
+  queueConversationRenderOptions({
+    scrollBehavior: "bottom"
+  });
+  renderMessagesPage();
+  setMessagesStatus("语音已加入对话，点击右侧圆标向 API 请求回复。", "success");
+}
+
 function sendConversationLocation(locationName, coordinates) {
   const resolvedName = String(locationName || "").trim();
   if (!resolvedName) {
@@ -14863,7 +16672,310 @@ function sendConversationLocation(locationName, coordinates) {
   setMessagesStatus("定位已加入对话，点击右侧圆标向 API 请求回复。", "success");
 }
 
-function sendConversationMessage(text) {
+function updateVoiceCallDurationDisplay() {
+  const durationEl = document.querySelector("#messages-call-duration");
+  if (!(durationEl instanceof HTMLElement)) {
+    return;
+  }
+  const startedAt = Number(durationEl.dataset.startedAt || 0);
+  durationEl.textContent = formatVoiceCallDurationLabel(
+    getVoiceCallDurationSeconds({ startedAt, active: startedAt > 0 })
+  );
+}
+
+function ensureVoiceCallDurationClock() {
+  if (voiceCallDurationTimerId) {
+    return;
+  }
+  voiceCallDurationTimerId = window.setInterval(() => {
+    updateVoiceCallDurationDisplay();
+  }, 1000);
+}
+
+function buildVoiceCallEventMessage(kind = "connected", options = {}) {
+  const eventOptions = options && typeof options === "object" ? options : {};
+  const createdAt = Number(eventOptions.createdAt) || Date.now();
+  const callMode = normalizeConversationCallMode(eventOptions.callMode);
+  const messageType = callMode === "video" ? "video_call_event" : "voice_call_event";
+  return normalizeConversationMessage(
+    {
+      id: `message_${createdAt}_${hashText(`${callMode}_call_event_${kind}_${eventOptions.durationSeconds || 0}`)}`,
+      role: eventOptions.role === "assistant" ? "assistant" : "user",
+      messageType,
+      callEventKind: normalizeVoiceCallEventKind(kind),
+      callEventDurationSeconds: Math.max(0, Math.floor(Number(eventOptions.durationSeconds) || 0)),
+      text: buildConversationCallEventMessageText(callMode, kind, {
+        durationSeconds: eventOptions.durationSeconds
+      }),
+      callMode,
+      needsReply: Boolean(eventOptions.needsReply),
+      time: formatLocalTime(new Date(createdAt)),
+      createdAt
+    },
+    Array.isArray(eventOptions.conversation?.messages) ? eventOptions.conversation.messages.length : 0
+  );
+}
+
+function updateVoiceCallRequestStatusMessage(
+  conversation,
+  messageId = "",
+  status = "pending"
+) {
+  if (!conversation || !Array.isArray(conversation.messages)) {
+    return null;
+  }
+  const resolvedMessageId = String(messageId || "").trim();
+  const resolvedStatus = normalizeVoiceCallRequestStatus(status);
+  let updatedMessage = null;
+  conversation.messages = conversation.messages.map((message) => {
+    if (String(message?.id || "").trim() !== resolvedMessageId) {
+      return message;
+    }
+    const callMode = getConversationCallModeFromMessage(message);
+    const messageType = callMode === "video" ? "video_call_request" : "voice_call_request";
+    updatedMessage = normalizeConversationMessage(
+      {
+        ...message,
+        messageType,
+        callRequestStatus: resolvedStatus,
+        text: buildConversationCallRequestMessageText(
+          callMode,
+          resolvedStatus,
+          message?.callRequestMessage || "",
+          message?.role || "assistant"
+        ),
+        callMode
+      },
+      0
+    );
+    return updatedMessage;
+  });
+  return updatedMessage;
+}
+
+function setConversationVoiceCallState(conversation, nextState = null) {
+  if (!conversation || typeof conversation !== "object") {
+    return;
+  }
+  conversation.voiceCallState = normalizeVoiceCallState(nextState);
+}
+
+function startConversationVoiceCall(conversation, options = {}) {
+  const callOptions = options && typeof options === "object" ? options : {};
+  const startedAt = Number(callOptions.startedAt) || Date.now();
+  const callMode = normalizeConversationCallMode(callOptions.callMode);
+  setConversationVoiceCallState(conversation, {
+    active: true,
+    startedAt,
+    connectedAt: startedAt,
+    initiatedBy: callOptions.initiatedBy === "assistant" ? "assistant" : "user",
+    requestMessageId: String(callOptions.requestMessageId || "").trim(),
+    callMode
+  });
+  state.quotedMessageId = "";
+}
+
+function finalizeConversationMutation(conversation, renderOptions = {}, statusMessage = "", statusTone = "success") {
+  if (!conversation) {
+    return;
+  }
+  recalculateConversationUpdatedAt(conversation);
+  bumpConversationReplyContextVersion(conversation);
+  persistConversations({
+    deferMaintenance: true,
+    fallbackToMaintenanceOnFailure: true
+  });
+  queueConversationRenderOptions(renderOptions);
+  renderMessagesPage();
+  if (statusMessage) {
+    setMessagesStatus(statusMessage, statusTone);
+  }
+}
+
+function beginOutgoingVoiceCall(callMode = "voice") {
+  const conversation = getConversationById();
+  const resolvedMode = normalizeConversationCallMode(callMode);
+  if (!conversation) {
+    setMessagesStatus(`请先进入一个聊天，再发起${getConversationCallModeShortLabel(resolvedMode)}通话。`, "error");
+    return;
+  }
+  if (isConversationVoiceCallActive(conversation)) {
+    queueConversationRenderOptions({
+      scrollBehavior: "preserve"
+    });
+    renderMessagesPage();
+    return;
+  }
+
+  closeConversationTransientUi();
+  const startedAt = Date.now();
+  startConversationVoiceCall(conversation, {
+    startedAt,
+    initiatedBy: "user",
+    callMode: resolvedMode
+  });
+  conversation.messages = [
+    ...conversation.messages,
+    buildVoiceCallEventMessage("connected", {
+      role: "user",
+      needsReply: true,
+      createdAt: startedAt,
+      callMode: resolvedMode,
+      conversation
+    })
+  ];
+  finalizeConversationMutation(
+    conversation,
+    {
+      scrollBehavior: "bottom",
+      focusInput: true
+    },
+    `${getConversationCallModeShortLabel(resolvedMode)}已接通，点击右侧圆标获取对方回复。`
+  );
+}
+
+function beginOutgoingVideoCall() {
+  beginOutgoingVoiceCall("video");
+}
+
+function acceptVoiceCallRequest(messageId = "") {
+  const conversation = getConversationById();
+  if (!conversation) {
+    return;
+  }
+  const targetMessage =
+    conversation.messages.find((message) => String(message?.id || "").trim() === String(messageId || "").trim()) ||
+    null;
+  const callMode = getConversationCallModeFromMessage(targetMessage);
+  if (!targetMessage || !isConversationCallRequestMessage(targetMessage)) {
+    setMessagesStatus("未找到对应的通话请求。", "error");
+    return;
+  }
+  if (normalizeVoiceCallRequestStatus(targetMessage.callRequestStatus) !== "pending") {
+    setMessagesStatus("这条通话请求已经处理过了。", "error");
+    return;
+  }
+  closeConversationTransientUi();
+  updateVoiceCallRequestStatusMessage(conversation, targetMessage.id, "accepted");
+  const startedAt = Date.now();
+  const openingMessageText = String(targetMessage?.callRequestMessage || "").trim();
+  startConversationVoiceCall(conversation, {
+    startedAt,
+    initiatedBy: "assistant",
+    requestMessageId: targetMessage.id,
+    callMode
+  });
+  const nextMessages = [
+    ...conversation.messages,
+    buildVoiceCallEventMessage("connected", {
+      role: "user",
+      needsReply: !openingMessageText,
+      createdAt: startedAt,
+      callMode,
+      conversation
+    })
+  ];
+  if (openingMessageText) {
+    nextMessages.push(
+      normalizeConversationMessage(
+        {
+          id: `message_${startedAt + 1}_${hashText(`${callMode}_call_opening_${targetMessage.id}_${openingMessageText}`)}`,
+          role: "assistant",
+          messageType: "text",
+          text: openingMessageText,
+          time: formatLocalTime(new Date(startedAt + 1)),
+          createdAt: startedAt + 1
+        },
+        nextMessages.length
+      )
+    );
+  }
+  conversation.messages = nextMessages;
+  finalizeConversationMutation(
+    conversation,
+    {
+      scrollBehavior: "bottom",
+      focusInput: true
+    },
+    `已接通${getConversationCallModeShortLabel(callMode)}。`
+  );
+  if (!openingMessageText) {
+    void requestConversationReply();
+  }
+}
+
+function rejectVoiceCallRequest(messageId = "") {
+  const conversation = getConversationById();
+  if (!conversation) {
+    return;
+  }
+  const targetMessage =
+    conversation.messages.find((message) => String(message?.id || "").trim() === String(messageId || "").trim()) ||
+    null;
+  const callMode = getConversationCallModeFromMessage(targetMessage);
+  if (!targetMessage || !isConversationCallRequestMessage(targetMessage)) {
+    setMessagesStatus("未找到对应的通话请求。", "error");
+    return;
+  }
+  if (normalizeVoiceCallRequestStatus(targetMessage.callRequestStatus) !== "pending") {
+    setMessagesStatus("这条通话请求已经处理过了。", "error");
+    return;
+  }
+  closeConversationTransientUi();
+  updateVoiceCallRequestStatusMessage(conversation, targetMessage.id, "rejected");
+  const rejectedAt = Date.now();
+  conversation.messages = [
+    ...conversation.messages,
+    buildVoiceCallEventMessage("rejected", {
+      role: "user",
+      needsReply: false,
+      createdAt: rejectedAt,
+      callMode,
+      conversation
+    })
+  ];
+  finalizeConversationMutation(
+    conversation,
+    {
+      scrollBehavior: "bottom"
+    },
+    `已拒绝${getConversationCallModeShortLabel(callMode)}请求。`
+  );
+}
+
+function hangupActiveVoiceCall() {
+  const conversation = getConversationById();
+  if (!conversation || !isConversationVoiceCallActive(conversation)) {
+    return;
+  }
+  const callState = getConversationVoiceCallState(conversation);
+  const callMode = normalizeConversationCallMode(callState.callMode);
+  const durationSeconds = getVoiceCallDurationSeconds(callState);
+  const endedAt = Date.now();
+  setConversationVoiceCallState(conversation, null);
+  conversation.messages = [
+    ...conversation.messages,
+    buildVoiceCallEventMessage("ended", {
+      role: "user",
+      needsReply: false,
+      durationSeconds,
+      createdAt: endedAt,
+      callMode,
+      conversation
+    })
+  ];
+  cancelConversationReplyWork(conversation.id);
+  finalizeConversationMutation(
+    conversation,
+    {
+      scrollBehavior: "bottom",
+      focusInput: true
+    },
+    `${getConversationCallModeShortLabel(callMode)}已挂断，通话时长 ${formatVoiceCallDurationLabel(durationSeconds)}。`
+  );
+}
+
+function sendConversationMessage(text, options = {}) {
   const content = String(text || "").trim();
   if (!content) {
     setMessagesStatus("请输入消息内容后再发送。", "error");
@@ -14881,9 +16993,12 @@ function sendConversationMessage(text) {
     return;
   }
 
+  const sendOptions = options && typeof options === "object" ? options : {};
   closeConversationTransientUi();
   const quotedMessage =
-    getConversationSceneMode(conversation) === "online" ? getQuotedConversationMessage(conversation) : null;
+    !isConversationVoiceCallActive(conversation) && getConversationSceneMode(conversation) === "online"
+      ? getQuotedConversationMessage(conversation)
+      : null;
   const userMessage = normalizeConversationMessage(
     {
       id: `message_${Date.now()}_${hashText(content)}`,
@@ -14913,7 +17028,15 @@ function sendConversationMessage(text) {
     focusInput: true
   });
   renderMessagesPage();
-  setMessagesStatus("消息已加入对话，点击右侧圆标向 API 请求回复。", "success");
+  setMessagesStatus(
+    sendOptions.requestReplyAfterSend
+      ? "消息已发送，正在等待对方回应…"
+      : "消息已加入对话，点击右侧圆标向 API 请求回复。",
+    "success"
+  );
+  if (sendOptions.requestReplyAfterSend) {
+    void requestConversationReply();
+  }
 }
 
 async function requestConversationReply(options = {}) {
@@ -15699,6 +17822,7 @@ function initForegroundReplySyncClock() {
       state.contactEditorOpen ||
       state.chatSettingsOpen ||
       state.locationModalOpen ||
+      state.voiceModalOpen ||
       state.photoModalOpen ||
       state.innerThoughtModalOpen ||
       state.regenerateModalOpen
@@ -15932,10 +18056,29 @@ function attachEvents() {
         if (!String(targetMessage?.imageDescription || "").trim()) {
           state.messageActionMessageId = state.messageActionMessageId === messageId ? "" : messageId;
           state.expandedImageMessageId = "";
+          state.expandedVoiceMessageId = "";
         } else {
           state.messageActionMessageId = "";
           state.expandedImageMessageId = state.expandedImageMessageId === messageId ? "" : messageId;
+          state.expandedVoiceMessageId = "";
         }
+        renderConversationDetail({
+          scrollBehavior: "preserve",
+          scrollSnapshot
+        });
+        return;
+      }
+
+      if (
+        actionEl.getAttribute("data-action") === "toggle-voice-transcript" &&
+        actionEl.getAttribute("data-message-id")
+      ) {
+        const messageId = String(actionEl.getAttribute("data-message-id") || "").trim();
+        const scrollSnapshot = captureConversationScrollSnapshot();
+        state.composerPanelOpen = false;
+        state.messageActionMessageId = "";
+        state.expandedVoiceMessageId =
+          state.expandedVoiceMessageId === messageId ? "" : messageId;
         renderConversationDetail({
           scrollBehavior: "preserve",
           scrollSnapshot
@@ -16009,6 +18152,46 @@ function attachEvents() {
         return;
       }
 
+      if (
+        actionEl.getAttribute("data-action") === "accept-voice-call-request" &&
+        actionEl.getAttribute("data-message-id")
+      ) {
+        acceptVoiceCallRequest(String(actionEl.getAttribute("data-message-id") || ""));
+        return;
+      }
+
+      if (
+        actionEl.getAttribute("data-action") === "accept-video-call-request" &&
+        actionEl.getAttribute("data-message-id")
+      ) {
+        acceptVoiceCallRequest(String(actionEl.getAttribute("data-message-id") || ""));
+        return;
+      }
+
+      if (
+        actionEl.getAttribute("data-action") === "reject-voice-call-request" &&
+        actionEl.getAttribute("data-message-id")
+      ) {
+        rejectVoiceCallRequest(String(actionEl.getAttribute("data-message-id") || ""));
+        return;
+      }
+
+      if (
+        actionEl.getAttribute("data-action") === "reject-video-call-request" &&
+        actionEl.getAttribute("data-message-id")
+      ) {
+        rejectVoiceCallRequest(String(actionEl.getAttribute("data-message-id") || ""));
+        return;
+      }
+
+      if (
+        actionEl.getAttribute("data-action") === "hangup-voice-call" ||
+        actionEl.getAttribute("data-action") === "hangup-active-call"
+      ) {
+        hangupActiveVoiceCall();
+        return;
+      }
+
       if (actionEl.getAttribute("data-action") === "request-conversation-reply") {
         requestConversationReply();
         return;
@@ -16027,6 +18210,7 @@ function attachEvents() {
         refreshStateFromStorage();
         closeConversationTransientUi();
         state.expandedImageMessageId = "";
+        state.expandedVoiceMessageId = "";
         state.activeConversationId = nextConversationId;
         resetConversationVisibleMessageCount(state.activeConversationId);
         syncConversationPresenceFromSchedules(state.activeConversationId);
@@ -16083,7 +18267,9 @@ function attachEvents() {
       event.preventDefault();
       const formData = new FormData(target);
       const message = String(formData.get("message") || "");
-      sendConversationMessage(message);
+      sendConversationMessage(message, {
+        requestReplyAfterSend: false
+      });
     });
 
     messagesContentEl.addEventListener("pointerdown", (event) => {
@@ -16335,6 +18521,64 @@ function attachEvents() {
     });
   }
 
+  if (messagesChatVideoContactResetBtnEl) {
+    messagesChatVideoContactResetBtnEl.addEventListener("click", () => {
+      state.chatSettingsVideoContactImage = "";
+      renderChatSettingsVideoPreviews();
+      setEditorStatus(messagesChatSettingsStatusEl, "角色视频图片已恢复为头像。", "success");
+    });
+  }
+
+  if (messagesChatVideoUserResetBtnEl) {
+    messagesChatVideoUserResetBtnEl.addEventListener("click", () => {
+      state.chatSettingsVideoUserImage = "";
+      renderChatSettingsVideoPreviews();
+      setEditorStatus(messagesChatSettingsStatusEl, "用户视频图片已恢复为头像。", "success");
+    });
+  }
+
+  if (messagesChatVideoContactFileInputEl) {
+    messagesChatVideoContactFileInputEl.addEventListener("change", async () => {
+      const [file] = messagesChatVideoContactFileInputEl.files || [];
+      if (!file) {
+        return;
+      }
+      try {
+        state.chatSettingsVideoContactImage = await readAvatarAsDataUrl(file, {
+          maxSide: 900,
+          quality: 0.78
+        });
+        renderChatSettingsVideoPreviews();
+        setEditorStatus(messagesChatSettingsStatusEl, "角色视频图片已更新。", "success");
+      } catch (error) {
+        setEditorStatus(messagesChatSettingsStatusEl, error?.message || "角色视频图片上传失败。", "error");
+      } finally {
+        messagesChatVideoContactFileInputEl.value = "";
+      }
+    });
+  }
+
+  if (messagesChatVideoUserFileInputEl) {
+    messagesChatVideoUserFileInputEl.addEventListener("change", async () => {
+      const [file] = messagesChatVideoUserFileInputEl.files || [];
+      if (!file) {
+        return;
+      }
+      try {
+        state.chatSettingsVideoUserImage = await readAvatarAsDataUrl(file, {
+          maxSide: 900,
+          quality: 0.78
+        });
+        renderChatSettingsVideoPreviews();
+        setEditorStatus(messagesChatSettingsStatusEl, "用户视频图片已更新。", "success");
+      } catch (error) {
+        setEditorStatus(messagesChatSettingsStatusEl, error?.message || "用户视频图片上传失败。", "error");
+      } finally {
+        messagesChatVideoUserFileInputEl.value = "";
+      }
+    });
+  }
+
   if (messagesSceneCloseBtnEl) {
     messagesSceneCloseBtnEl.addEventListener("click", () => {
       setSceneModalOpen(false);
@@ -16437,6 +18681,10 @@ function attachEvents() {
       nextSettings.messagePromptSettings = draft;
       persistSettings(nextSettings);
       state.chatPromptSettings = draft;
+      setConversationVideoMediaSettings(
+        state.chatSettingsVideoContactImage,
+        state.chatSettingsVideoUserImage
+      );
       setConversationAllowAiPresenceUpdate(
         Boolean(messagesChatAllowAiPresenceUpdateInputEl?.checked)
       );
@@ -17097,6 +19345,32 @@ function attachEvents() {
     });
   }
 
+  if (messagesVoiceCloseBtnEl) {
+    messagesVoiceCloseBtnEl.addEventListener("click", () => {
+      setVoiceModalOpen(false);
+    });
+  }
+
+  if (messagesVoiceCancelBtnEl) {
+    messagesVoiceCancelBtnEl.addEventListener("click", () => {
+      setVoiceModalOpen(false);
+    });
+  }
+
+  if (messagesVoiceTextInputEl) {
+    messagesVoiceTextInputEl.addEventListener("input", () => {
+      state.voiceDraftText = String(messagesVoiceTextInputEl.value || "");
+      setVoiceStatus("");
+    });
+  }
+
+  if (messagesVoiceFormEl) {
+    messagesVoiceFormEl.addEventListener("submit", (event) => {
+      event.preventDefault();
+      sendConversationVoice(state.voiceDraftText);
+    });
+  }
+
   if (messagesPhotoCloseBtnEl) {
     messagesPhotoCloseBtnEl.addEventListener("click", () => {
       setPhotoModalOpen(false);
@@ -17262,6 +19536,12 @@ function attachEvents() {
       if (!(target instanceof Element)) {
         return;
       }
+      const todayActionEl = target.closest("[data-action='open-today-journal']");
+      if (todayActionEl instanceof Element) {
+        state.journalSelectedEntryId = "";
+        renderJournalModal();
+        return;
+      }
       const actionEl = target.closest("[data-action='generate-journal-entry']");
       if (!(actionEl instanceof Element)) {
         return;
@@ -17273,6 +19553,35 @@ function attachEvents() {
   if (messagesJournalHistoryCloseBtnEl) {
     messagesJournalHistoryCloseBtnEl.addEventListener("click", () => {
       setJournalHistoryOpen(false);
+    });
+  }
+
+  if (messagesJournalHistoryListEl) {
+    messagesJournalHistoryListEl.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      const rowEl = target.closest("[data-action='open-journal-history-entry']");
+      if (!(rowEl instanceof HTMLElement)) {
+        return;
+      }
+      openJournalEntryDetail(rowEl.dataset.entryId);
+    });
+    messagesJournalHistoryListEl.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      const rowEl = target.closest("[data-action='open-journal-history-entry']");
+      if (!(rowEl instanceof HTMLElement)) {
+        return;
+      }
+      event.preventDefault();
+      openJournalEntryDetail(rowEl.dataset.entryId);
     });
   }
 
@@ -17504,6 +19813,14 @@ function attachEvents() {
     });
   }
 
+  if (messagesVoiceModalEl) {
+    messagesVoiceModalEl.addEventListener("click", (event) => {
+      if (event.target === messagesVoiceModalEl) {
+        setVoiceModalOpen(false);
+      }
+    });
+  }
+
   if (messagesPhotoModalEl) {
     messagesPhotoModalEl.addEventListener("click", (event) => {
       if (event.target === messagesPhotoModalEl) {
@@ -17602,6 +19919,7 @@ function attachEvents() {
       state.placesManagerOpen ||
       state.placeEditorOpen ||
       state.awarenessModalOpen ||
+      state.voiceModalOpen ||
       state.photoModalOpen ||
       state.innerThoughtModalOpen ||
       state.conversationPickerOpen ||
@@ -17682,6 +20000,7 @@ function attachEvents() {
       state.profileEditorOpen ||
       state.contactEditorOpen ||
       state.awarenessModalOpen ||
+      state.voiceModalOpen ||
       state.photoModalOpen ||
       state.innerThoughtModalOpen ||
       state.placeEditorOpen ||
@@ -17703,6 +20022,9 @@ function attachEvents() {
     renderMessagesPage();
     if (state.locationModalOpen) {
       renderLocationModal();
+    }
+    if (state.voiceModalOpen) {
+      renderVoiceModal();
     }
     if (state.photoModalOpen) {
       renderPhotoModal();
@@ -17768,6 +20090,10 @@ function attachEvents() {
     }
     if (event.key === "Escape" && state.locationModalOpen) {
       setLocationModalOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.voiceModalOpen) {
+      setVoiceModalOpen(false);
       return;
     }
     if (event.key === "Escape" && state.photoModalOpen) {
@@ -17839,7 +20165,10 @@ function attachEvents() {
     "pointerdown",
     (event) => {
       const target = event.target;
-      if (target instanceof Element && target.closest(".messages-conversation__composer")) {
+      if (
+        target instanceof Element &&
+        target.closest(".messages-conversation__composer, .messages-call-screen__composer")
+      ) {
         primeForegroundRefreshSuppression(1600);
       }
       if (shouldDismissConversationKeyboardFromTarget(event.target)) {
@@ -17872,6 +20201,7 @@ function init() {
     state.activeTab = "me";
   }
   bindMessagesViewportHeight();
+  ensureVoiceCallDurationClock();
   attachEvents();
   renderMessagesPage();
   window.setTimeout(() => {

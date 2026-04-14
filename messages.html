@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <title>Pulse Generator · Chat</title>
-    <link rel="stylesheet" href="./messages.css?v=20260409-135017" />
+    <link rel="stylesheet" href="./messages.css?v=20260414-131332" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -394,7 +394,7 @@
               id="messages-chat-history-rounds-input"
               type="number"
               min="1"
-              max="20"
+              max="50"
               inputmode="numeric"
               placeholder="输入保留轮数"
               autocomplete="off"
@@ -574,6 +574,77 @@
             </div>
             <small class="messages-form-field__hint">
               关闭后，对应一侧的聊天头像会在对话页隐藏，仅保留气泡。
+            </small>
+          </section>
+
+          <section class="messages-form-field">
+            <div class="messages-form-field__head">
+              <span>视频通话图片</span>
+            </div>
+            <div class="messages-chat-video-media-grid">
+              <section class="messages-avatar-editor messages-avatar-editor--video">
+                <div
+                  id="messages-chat-video-contact-preview"
+                  class="messages-avatar-editor__preview messages-avatar-editor__preview--video"
+                >
+                  角
+                </div>
+                <div class="messages-avatar-editor__content">
+                  <strong>角色视频图片</strong>
+                  <p>视频页主画面优先使用这张图，未设置则使用角色头像。</p>
+                  <div class="messages-avatar-editor__actions">
+                    <label class="messages-text-button">
+                      上传图片
+                      <input
+                        id="messages-chat-video-contact-file-input"
+                        type="file"
+                        accept="image/*"
+                        hidden
+                      />
+                    </label>
+                    <button
+                      id="messages-chat-video-contact-reset-btn"
+                      class="messages-text-button"
+                      type="button"
+                    >
+                      恢复头像
+                    </button>
+                  </div>
+                </div>
+              </section>
+              <section class="messages-avatar-editor messages-avatar-editor--video">
+                <div
+                  id="messages-chat-video-user-preview"
+                  class="messages-avatar-editor__preview messages-avatar-editor__preview--video"
+                >
+                  我
+                </div>
+                <div class="messages-avatar-editor__content">
+                  <strong>用户视频图片</strong>
+                  <p>右上角小窗优先使用这张图，未设置则使用用户头像。</p>
+                  <div class="messages-avatar-editor__actions">
+                    <label class="messages-text-button">
+                      上传图片
+                      <input
+                        id="messages-chat-video-user-file-input"
+                        type="file"
+                        accept="image/*"
+                        hidden
+                      />
+                    </label>
+                    <button
+                      id="messages-chat-video-user-reset-btn"
+                      class="messages-text-button"
+                      type="button"
+                    >
+                      恢复头像
+                    </button>
+                  </div>
+                </div>
+              </section>
+            </div>
+            <small class="messages-form-field__hint">
+              仅作用于当前 1v1 会话的视频通话展示，不会覆盖聊天头像或通讯录头像。
             </small>
           </section>
 
@@ -2162,6 +2233,73 @@
       </div>
     </section>
 
+    <section id="messages-voice-modal" class="messages-dialog-modal" hidden aria-hidden="true">
+      <div class="messages-dialog-modal__panel messages-voice-modal__panel" role="dialog" aria-modal="true" aria-label="语音转文字">
+        <header class="messages-dialog-modal__header messages-voice-modal__header">
+          <strong>语音转文字</strong>
+          <button
+            id="messages-voice-close-btn"
+            class="messages-dialog-modal__close"
+            type="button"
+            aria-label="关闭语音转文字弹窗"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M7 7l10 10M17 7 7 17"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </header>
+
+        <form id="messages-voice-form" class="messages-dialog-modal__form messages-voice-modal__form">
+          <label class="messages-dialog-modal__field">
+            <span>请输入想发送的内容：</span>
+            <textarea
+              id="messages-voice-text-input"
+              rows="5"
+              maxlength="1000"
+              placeholder="在这里输入语音内容..."
+            ></textarea>
+          </label>
+
+          <div class="messages-voice-modal__mic" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path
+                d="M12 5.5a2.7 2.7 0 0 1 2.7 2.7v4.6a2.7 2.7 0 0 1-5.4 0V8.2A2.7 2.7 0 0 1 12 5.5Z"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linejoin="round"
+              />
+              <path
+                d="M7.8 11.7a4.2 4.2 0 1 0 8.4 0M12 16v2.4M9.6 18.4h4.8"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </div>
+
+          <p id="messages-voice-status" class="messages-editor-status" aria-live="polite"></p>
+
+          <div class="messages-dialog-modal__actions">
+            <button id="messages-voice-cancel-btn" class="messages-dialog-modal__button" type="button">
+              取消
+            </button>
+            <button class="messages-dialog-modal__button messages-dialog-modal__button--primary" type="submit">
+              发送
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
     <section id="messages-photo-modal" class="messages-dialog-modal" hidden aria-hidden="true">
       <div class="messages-dialog-modal__panel" role="dialog" aria-modal="true" aria-label="发送图片">
         <header class="messages-dialog-modal__header">
@@ -2379,13 +2517,13 @@
 
     <input id="messages-image-file-input" type="file" accept="image/*" hidden />
 
-    <script src="./prompt-config.js?v=20260409-135017"></script>
+    <script src="./prompt-config.js?v=20260414-131332"></script>
     <script src="./privacy-allowlist.js?v=20260403-165212"></script>
     <script src="./pulse-privacy-cover.js?v=20260403-170109"></script>
     <script src="./pulse-message-banner.js?v=20260403-165212"></script>
     <script src="./api-log.js?v=20260405-231617"></script>
     <script src="./messages-awareness-config.js?v=20260403-165212"></script>
     <script src="./messages-memory-retention-config.js?v=20260408-184215"></script>
-    <script src="./messages.js?v=20260410-175001"></script>
+    <script src="./messages.js?v=20260414-131332"></script>
   </body>
 </html>
