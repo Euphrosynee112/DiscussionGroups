@@ -7,8 +7,10 @@ const SETTINGS_KEY = "x_style_generator_settings_v2";
 const MESSAGE_THREADS_KEY = "x_style_generator_message_threads_v1";
 const DIRECT_MESSAGES_KEY = "x_style_generator_direct_messages_v1";
 const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
+const DEFAULT_GROK_ENDPOINT = "https://api.x.ai/v1/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
+const DEFAULT_GROK_MODEL = "grok-4";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 const DEFAULT_TEMPERATURE = 0.85;
 const MAX_SCHEDULE_INVITE_CONCURRENCY = 3;
@@ -354,14 +356,26 @@ function appendApiLog(entry) {
 }
 
 function normalizeApiMode(mode) {
-  if (mode === "gemini" || mode === "generic") {
+  if (mode === "gemini" || mode === "generic" || mode === "grok") {
     return mode;
   }
   return "openai";
 }
 
 function getDefaultModelByMode(mode) {
-  return normalizeApiMode(mode) === "gemini" ? DEFAULT_GEMINI_MODEL : DEFAULT_DEEPSEEK_MODEL;
+  const resolvedMode = normalizeApiMode(mode);
+  if (resolvedMode === "gemini") {
+    return DEFAULT_GEMINI_MODEL;
+  }
+  if (resolvedMode === "grok") {
+    return DEFAULT_GROK_MODEL;
+  }
+  return DEFAULT_DEEPSEEK_MODEL;
+}
+
+function isOpenAICompatibleMode(mode) {
+  const resolvedMode = normalizeApiMode(mode);
+  return resolvedMode === "openai" || resolvedMode === "grok";
 }
 
 function normalizeApiConfigToken(token) {
@@ -403,10 +417,39 @@ function normalizeGeminiEndpoint(endpoint) {
   return trimmed.replace(/\/+$/, "");
 }
 
+function normalizeGrokEndpoint(endpoint) {
+  const trimmed = String(endpoint || "").trim();
+  if (!trimmed) {
+    return DEFAULT_GROK_ENDPOINT;
+  }
+  try {
+    const url = new URL(trimmed);
+    if (url.hostname !== "api.x.ai") {
+      return trimmed.replace(/\/+$/, "");
+    }
+    if (
+      url.pathname === "/" ||
+      url.pathname === "/v1" ||
+      url.pathname === "/v1/" ||
+      url.pathname === "/v1/chat/completions" ||
+      url.pathname === "/v1/chat/completions/" ||
+      url.pathname === "/chat/completions/"
+    ) {
+      return DEFAULT_GROK_ENDPOINT;
+    }
+    return trimmed.replace(/\/+$/, "");
+  } catch (_error) {
+    return trimmed;
+  }
+}
+
 function normalizeSettingsEndpointByMode(mode, endpoint) {
   const resolvedMode = normalizeApiMode(mode);
   if (resolvedMode === "openai") {
     return normalizeOpenAICompatibleEndpoint(endpoint);
+  }
+  if (resolvedMode === "grok") {
+    return normalizeGrokEndpoint(endpoint);
   }
   if (resolvedMode === "gemini") {
     return normalizeGeminiEndpoint(endpoint);
@@ -507,6 +550,9 @@ function resolveApiRequestEndpoint(settings) {
   if (resolvedMode === "openai") {
     return normalizeOpenAICompatibleEndpoint(settings.endpoint);
   }
+  if (resolvedMode === "grok") {
+    return normalizeGrokEndpoint(settings.endpoint);
+  }
   if (resolvedMode === "gemini") {
     return resolveGeminiGenerateEndpoint(settings.endpoint, settings.model);
   }
@@ -535,8 +581,8 @@ function validateApiSettings(settings, purpose = "请求") {
   if (!requestEndpoint) {
     throw new Error(`未配置 API 地址，无法执行${purpose}。`);
   }
-  if (normalizeApiMode(settings.mode) === "openai" && !settings.model) {
-    throw new Error("DeepSeek / OpenAI 兼容模式需要填写模型名称。");
+  if (isOpenAICompatibleMode(settings.mode) && !settings.model) {
+    throw new Error("DeepSeek / Grok / OpenAI 兼容模式需要填写模型名称。");
   }
   if (normalizeApiMode(settings.mode) === "gemini" && !settings.token) {
     throw new Error("Gemini 模式需要填写 API Key。");
@@ -559,9 +605,9 @@ function buildGeminiSafetySettings() {
 
 function buildChatRequestBody(settings, systemPrompt, history = []) {
   const mode = normalizeApiMode(settings.mode);
-  if (mode === "openai") {
+  if (isOpenAICompatibleMode(mode)) {
     return {
-      model: settings.model || DEFAULT_DEEPSEEK_MODEL,
+      model: settings.model || getDefaultModelByMode(mode),
       temperature: DEFAULT_TEMPERATURE,
       messages: [
         {

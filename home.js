@@ -1,9 +1,11 @@
 const DEFAULT_OPENAI_ENDPOINT = "https://api.deepseek.com/chat/completions";
+const DEFAULT_GROK_ENDPOINT = "https://api.x.ai/v1/chat/completions";
 const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
+const DEFAULT_GROK_MODEL = "grok-4";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260414-131332";
-const APP_BUILD_UPDATED_AT = "2026-04-14 13:13:32";
+const APP_BUILD_VERSION = "20260414-113939";
+const APP_BUILD_UPDATED_AT = "2026-04-14 11:39:39";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -295,7 +297,7 @@ function escapeHtml(value) {
 }
 
 function normalizeApiMode(mode) {
-  if (mode === "gemini" || mode === "generic") {
+  if (mode === "gemini" || mode === "generic" || mode === "grok") {
     return mode;
   }
   return "openai";
@@ -303,6 +305,9 @@ function normalizeApiMode(mode) {
 
 function getApiModeLabel(mode) {
   const resolvedMode = normalizeApiMode(mode);
+  if (resolvedMode === "grok") {
+    return "Grok API";
+  }
   if (resolvedMode === "gemini") {
     return "Gemini API";
   }
@@ -313,7 +318,19 @@ function getApiModeLabel(mode) {
 }
 
 function getDefaultModelByMode(mode) {
-  return normalizeApiMode(mode) === "gemini" ? DEFAULT_GEMINI_MODEL : DEFAULT_DEEPSEEK_MODEL;
+  const resolvedMode = normalizeApiMode(mode);
+  if (resolvedMode === "gemini") {
+    return DEFAULT_GEMINI_MODEL;
+  }
+  if (resolvedMode === "grok") {
+    return DEFAULT_GROK_MODEL;
+  }
+  return DEFAULT_DEEPSEEK_MODEL;
+}
+
+function isOpenAICompatibleMode(mode) {
+  const resolvedMode = normalizeApiMode(mode);
+  return resolvedMode === "openai" || resolvedMode === "grok";
 }
 
 function normalizeApiConfigToken(token) {
@@ -412,10 +429,42 @@ function normalizeGeminiEndpoint(endpoint) {
   return trimmed.replace(/\/+$/, "");
 }
 
+function normalizeGrokEndpoint(endpoint) {
+  const trimmed = String(endpoint || "").trim();
+  if (!trimmed) {
+    return DEFAULT_GROK_ENDPOINT;
+  }
+
+  try {
+    const url = new URL(trimmed);
+    if (url.hostname !== "api.x.ai") {
+      return trimmed.replace(/\/+$/, "");
+    }
+
+    if (
+      url.pathname === "/" ||
+      url.pathname === "/v1" ||
+      url.pathname === "/v1/" ||
+      url.pathname === "/v1/chat/completions" ||
+      url.pathname === "/v1/chat/completions/" ||
+      url.pathname === "/chat/completions/"
+    ) {
+      return DEFAULT_GROK_ENDPOINT;
+    }
+
+    return trimmed.replace(/\/+$/, "");
+  } catch (_error) {
+    return trimmed;
+  }
+}
+
 function normalizeSettingsEndpointByMode(mode, endpoint) {
   const resolvedMode = normalizeApiMode(mode);
   if (resolvedMode === "openai") {
     return normalizeOpenAICompatibleEndpoint(endpoint);
+  }
+  if (resolvedMode === "grok") {
+    return normalizeGrokEndpoint(endpoint);
   }
   if (resolvedMode === "gemini") {
     return normalizeGeminiEndpoint(endpoint);
@@ -4520,13 +4569,16 @@ function updateHomeModeUI() {
 
   const mode = normalizeApiMode(homeApiModeSelect.value);
   const modelField = homeApiModelInput.closest(".home-field");
-  const needsModel = mode === "openai" || mode === "gemini";
+  const needsModel = mode !== "generic";
   if (modelField) {
     modelField.style.display = needsModel ? "grid" : "none";
   }
 
   if (mode === "openai" && !homeApiEndpointInput.value.trim()) {
     homeApiEndpointInput.value = DEFAULT_OPENAI_ENDPOINT;
+  }
+  if (mode === "grok" && !homeApiEndpointInput.value.trim()) {
+    homeApiEndpointInput.value = DEFAULT_GROK_ENDPOINT;
   }
   if (mode === "gemini" && !homeApiEndpointInput.value.trim()) {
     homeApiEndpointInput.value = DEFAULT_GEMINI_ENDPOINT;
@@ -4535,7 +4587,11 @@ function updateHomeModeUI() {
     homeApiModelInput.value = getDefaultModelByMode(mode);
   }
   homeApiModelInput.placeholder =
-    mode === "gemini" ? DEFAULT_GEMINI_MODEL : DEFAULT_DEEPSEEK_MODEL;
+    mode === "gemini"
+      ? DEFAULT_GEMINI_MODEL
+      : mode === "grok"
+        ? DEFAULT_GROK_MODEL
+        : DEFAULT_DEEPSEEK_MODEL;
 }
 
 function applySettingsToHomeForm(settings) {
