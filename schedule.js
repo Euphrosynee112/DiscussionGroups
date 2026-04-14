@@ -36,6 +36,7 @@ const DEFAULT_SETTINGS = {
   token: "",
   model: DEFAULT_DEEPSEEK_MODEL,
   temperature: DEFAULT_TEMPERATURE,
+  privacyCoverEnabled: true,
   apiConfigs: [],
   activeApiConfigId: "",
   negativePromptConstraints: [],

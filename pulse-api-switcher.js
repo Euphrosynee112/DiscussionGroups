@@ -168,6 +168,7 @@
     return {
       raw: settings,
       enabled: Boolean(settings.floatingApiSwitcherEnabled),
+      privacyCoverEnabled: settings.privacyCoverEnabled !== false,
       configs,
       activeApiConfigId: activeConfig ? activeConfig.id : "",
       activeConfig
@@ -356,9 +357,39 @@
         font-size: 11px;
         font-weight: 700;
       }
+      .pulse-api-switcher__controls {
+        padding: 10px 14px 2px;
+      }
+      .pulse-api-switcher__toggle {
+        width: 100%;
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        border-radius: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 12px;
+        background: rgba(15, 23, 42, 0.04);
+        color: #0f172a;
+        cursor: pointer;
+      }
+      .pulse-api-switcher__toggle.is-on {
+        background: rgba(34, 197, 94, 0.11);
+        border-color: rgba(34, 197, 94, 0.2);
+      }
+      .pulse-api-switcher__toggle strong {
+        font-size: 13px;
+        font-weight: 800;
+      }
+      .pulse-api-switcher__toggle span {
+        color: rgba(15, 23, 42, 0.6);
+        font-size: 12px;
+        line-height: 1.35;
+      }
       @media (pointer: coarse) {
         .pulse-api-switcher__item,
-        .pulse-api-switcher__button {
+        .pulse-api-switcher__button,
+        .pulse-api-switcher__toggle {
           -webkit-tap-highlight-color: transparent;
         }
       }
@@ -444,6 +475,17 @@
             : "当前没有选中的缓存配置"
         }</p>
       </div>
+      <div class="pulse-api-switcher__controls">
+        <button
+          class="pulse-api-switcher__toggle${state.privacyCoverEnabled ? " is-on" : ""}"
+          type="button"
+          data-action="toggle-privacy-cover"
+          aria-pressed="${state.privacyCoverEnabled ? "true" : "false"}"
+        >
+          <strong>关键词屏蔽</strong>
+          <span>${state.privacyCoverEnabled ? "已开启，prompt 会做隐私覆盖" : "已关闭，prompt 不做关键词屏蔽"}</span>
+        </button>
+      </div>
       <div class="pulse-api-switcher__list">${listMarkup}</div>
     `;
   }
@@ -477,6 +519,35 @@
         detail: {
           configId: config.id,
           config
+        }
+      })
+    );
+  }
+
+  function togglePrivacyCover() {
+    const state = readSwitcherSettings();
+    const nextSettings = {
+      ...state.raw,
+      privacyCoverEnabled: !state.privacyCoverEnabled,
+      floatingApiSwitcherEnabled: true
+    };
+    const serializedSettings = JSON.stringify(nextSettings);
+    if (!safeSetItem(SETTINGS_KEY, serializedSettings)) {
+      return;
+    }
+    dispatchLocalStorageUpdate(SETTINGS_KEY, serializedSettings);
+    renderPanel();
+    rootScope.dispatchEvent(
+      new CustomEvent("pulse-settings-updated", {
+        detail: {
+          settings: nextSettings
+        }
+      })
+    );
+    rootScope.dispatchEvent(
+      new CustomEvent("pulse-privacy-cover-toggled", {
+        detail: {
+          enabled: Boolean(nextSettings.privacyCoverEnabled)
         }
       })
     );
@@ -569,6 +640,11 @@
 
     panelEl.addEventListener("click", (event) => {
       const target = event.target instanceof Element ? event.target : null;
+      const toggleEl = target?.closest("[data-action='toggle-privacy-cover']");
+      if (toggleEl) {
+        togglePrivacyCover();
+        return;
+      }
       const itemEl = target?.closest("[data-api-config-id]");
       if (!itemEl) {
         return;

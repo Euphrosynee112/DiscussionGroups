@@ -21,6 +21,7 @@ const MESSAGE_MEMORIES_KEY = "x_style_generator_message_memories_v1";
 const MESSAGE_RECENT_LOCATIONS_KEY = "x_style_generator_message_recent_locations_v1";
 const MESSAGE_COMMON_PLACES_KEY = "x_style_generator_common_places_v1";
 const MESSAGE_PRESENCE_STATE_KEY = "x_style_generator_presence_state_v1";
+const MESSAGE_VIDEO_MEDIA_KEY = "x_style_generator_message_video_media_v1";
 const MESSAGE_REPLY_TASKS_KEY = "x_style_generator_message_reply_tasks_v1";
 const MESSAGE_REPLY_RECOVERY_KEY = "x_style_generator_message_reply_recovery_v1";
 const MESSAGE_ACTIVE_VIEW_KEY = "x_style_generator_message_active_view_v1";
@@ -72,6 +73,7 @@ const DEFAULT_SETTINGS = {
   token: "",
   model: DEFAULT_DEEPSEEK_MODEL,
   temperature: DEFAULT_TEMPERATURE,
+  privacyCoverEnabled: true,
   apiConfigs: [],
   activeApiConfigId: "",
   translationApiEnabled: false,
@@ -5065,6 +5067,49 @@ function loadConversations() {
   }
 }
 
+function normalizeConversationVideoMediaPayload(payload = {}) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const normalized = {};
+  Object.keys(source).forEach((contactId) => {
+    const resolvedContactId = String(contactId || "").trim();
+    if (!resolvedContactId) {
+      return;
+    }
+    const entry = source[contactId];
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+    const videoContactImage = String(entry.videoContactImage || "").trim();
+    const videoUserImage = String(entry.videoUserImage || "").trim();
+    if (!videoContactImage && !videoUserImage) {
+      return;
+    }
+    normalized[resolvedContactId] = {
+      videoContactImage,
+      videoUserImage
+    };
+  });
+  return normalized;
+}
+
+function loadConversationVideoMediaMap() {
+  return normalizeConversationVideoMediaPayload(readStoredJson(MESSAGE_VIDEO_MEDIA_KEY, {}));
+}
+
+function persistConversationVideoMediaMap(payload = {}) {
+  const normalized = normalizeConversationVideoMediaPayload(payload);
+  return safeSetItem(MESSAGE_VIDEO_MEDIA_KEY, JSON.stringify(normalized));
+}
+
+function getStoredConversationVideoMedia(conversation = getConversationById()) {
+  const resolvedContactId = String(conversation?.contactId || "").trim();
+  if (!resolvedContactId) {
+    return null;
+  }
+  const payload = loadConversationVideoMediaMap();
+  return payload[resolvedContactId] || null;
+}
+
 function cloneConversationsForStorage(conversations = []) {
   return (Array.isArray(conversations) ? conversations : []).map((conversation) => ({
     ...conversation,
@@ -8290,6 +8335,11 @@ function buildConversationSystemPrompt(
             ]
               .filter(Boolean)
               .join("\n"),
+        call_event_rule: isVideoCallMode
+          ? '如果你想自然结束这次视频通话，必须单独一行输出如下格式：[{"type":"video_call_event","kind":"ended"}]。只有在对话自然收尾、你临时有事、环境不适合继续或明确准备结束时才使用；不要放进代码块，不要加解释、前缀或额外说明。'
+          : isVoiceCallMode
+          ? '[{"type":"voice_call_event","kind":"ended"}] 可用于自然结束当前语音通话。只有在真的准备结束、临时有事、信号不适合继续或对话自然收尾时才单独输出这一行；不要放进代码块，不要加解释、前缀或额外说明。'
+          : "",
         scene_mode_rule:
           isVideoCallMode
             ? "当前处于视频通话状态。回复必须像视频里直接说出口的话，并且这一轮至少自然带一处简短动作、表情、视线或镜头内状态描写；优先用全角括号（ ）轻轻点出，不要写成长段舞台指令、镜头说明或心理旁白。"
@@ -8934,6 +8984,100 @@ function parseVideoCallRequestPayload(value) {
   return parseConversationCallRequestPayload(value, "video");
 }
 
+function parseConversationCallEventPayload(value, callMode = "voice") {
+  const resolvedMode = normalizeConversationCallMode(callMode);
+  const eventTypeAliases =
+    resolvedMode === "video"
+      ? ["video_call_event", "videocall_event", "video_event"]
+      : ["voice_call_event", "voicecall_event", "call_event", "phone_call_event"];
+  const messageType = resolvedMode === "video" ? "video_call_event" : "voice_call_event";
+
+  function buildCallEventItem(kind = "ended", note = "") {
+    const resolvedKind = normalizeVoiceCallEventKind(kind);
+    return {
+      messageType,
+      callEventKind: resolvedKind,
+      callEventDurationSeconds: 0,
+      text: buildConversationCallEventMessageText(resolvedMode, resolvedKind, {
+        note: String(note || "").trim().slice(0, 120)
+      })
+    };
+  }
+
+  function parseLooseCallEventObject(rawValue) {
+    const raw = String(rawValue || "")
+      .replace(/```(?:json)?/gi, "")
+      .replace(/```/g, "")
+      .trim();
+    if (!raw) {
+      return null;
+    }
+    const typeMatch =
+      raw.match(new RegExp(`"type"\\s*:\\s*"(${eventTypeAliases.join("|")})"`, "i")) ||
+      raw.match(new RegExp(`\\b(?:type|类型)\\s*[:：]\\s*(${eventTypeAliases.join("|")})\\b`, "i"));
+    if (!typeMatch) {
+      return null;
+    }
+    const kindMatch =
+      raw.match(
+        /"(?:kind|status|action|event)"\s*:\s*"([\s\S]*?)"(?=\s*,\s*"(?:kind|status|action|event|note|message|content|type)"\s*:|\s*}\s*$|\s*$)/i
+      ) ||
+      raw.match(/(?:^|\n)\s*(?:kind|status|action|event|状态)\s*[:：]\s*([^\n]+)(?=\n|$)/i);
+    const noteMatch =
+      raw.match(
+        /"(?:note|message|content|text)"\s*:\s*"([\s\S]*?)"(?=\s*,\s*"(?:kind|status|action|event|note|message|content|text|type)"\s*:|\s*}\s*$|\s*$)/i
+      ) ||
+      raw.match(/(?:^|\n)\s*(?:note|message|content|text|补充)\s*[:：]\s*([^\n]+)(?=\n|$)/i);
+    const kind = normalizeVoiceCallEventKind(String(kindMatch?.[1] || "").trim());
+    const note = String(noteMatch?.[1] || "")
+      .replace(/\\"/g, '"')
+      .replace(/\\n/g, "\n")
+      .trim()
+      .slice(0, 120);
+    return buildCallEventItem(kind, note);
+  }
+
+  const parsed =
+    (Array.isArray(value) ? value : null) ||
+    (value && typeof value === "object" ? value : null) ||
+    parseJsonLikeContent(value) ||
+    parseJsonLikeContent(resolveMessage(value));
+
+  const items = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object"
+      ? [parsed]
+      : [];
+  const normalizedItems = items
+    .map((item) => {
+      const source = item && typeof item === "object" ? item : {};
+      const type = String(source.type || "").trim().toLowerCase();
+      if (!eventTypeAliases.includes(type)) {
+        return null;
+      }
+      return buildCallEventItem(
+        source.kind || source.status || source.action || source.event || "ended",
+        source.note || source.message || source.content || source.text || ""
+      );
+    })
+    .filter(Boolean);
+  if (normalizedItems.length) {
+    return normalizedItems;
+  }
+
+  const looseParsed =
+    parseLooseCallEventObject(value) || parseLooseCallEventObject(resolveMessage(value));
+  return looseParsed ? [looseParsed] : [];
+}
+
+function parseVoiceCallEventPayload(value) {
+  return parseConversationCallEventPayload(value, "voice");
+}
+
+function parseVideoCallEventPayload(value) {
+  return parseConversationCallEventPayload(value, "video");
+}
+
 function parseMemorySummaryPayload(payload, contactId = "") {
   const parsed =
     (payload && typeof payload === "object" && Array.isArray(payload.memories) ? payload : null) ||
@@ -9461,6 +9605,81 @@ function extractVideoCallRequestReplyBlocks(text) {
   return extractConversationCallRequestReplyBlocks(text, "video");
 }
 
+function extractConversationCallEventReplyBlocks(text, callMode = "voice") {
+  let workingText = String(text || "").replace(/\r/g, "").trim();
+  if (!workingText) {
+    return { text: "", blocks: [] };
+  }
+
+  const resolvedMode = normalizeConversationCallMode(callMode);
+  const blockTokenPrefix =
+    resolvedMode === "video" ? "__PULSE_VIDEO_CALL_EVENT_BLOCK_" : "__PULSE_VOICE_CALL_EVENT_BLOCK_";
+  const parsePayload =
+    resolvedMode === "video" ? parseVideoCallEventPayload : parseVoiceCallEventPayload;
+  const eventTypePattern =
+    resolvedMode === "video"
+      ? "(?:video_call_event|videocall_event|video_event)"
+      : "(?:voice_call_event|voicecall_event|call_event|phone_call_event)";
+  const blocks = [];
+  const replaceBlock = (candidate, parsedItems) => {
+    if (!candidate || !parsedItems.length) {
+      return;
+    }
+    const token = `${blockTokenPrefix}${blocks.length}__`;
+    blocks.push({
+      token,
+      items: parsedItems
+    });
+    workingText = workingText.replace(candidate, `\n${token}\n`);
+  };
+
+  workingText = workingText.replace(/```(?:json)?\s*([\s\S]*?)```/gi, (match, inner) => {
+    const parsedItems = parsePayload(String(inner || "").trim());
+    if (!parsedItems.length) {
+      return match;
+    }
+    const token = `${blockTokenPrefix}${blocks.length}__`;
+    blocks.push({ token, items: parsedItems });
+    return `\n${token}\n`;
+  });
+
+  const callEventPatterns = [
+    new RegExp(`\\[\\s*\\{[\\s\\S]*?"type"\\s*:\\s*"${eventTypePattern}"[\\s\\S]*?\\}\\s*\\]`, "i"),
+    new RegExp(`\\{[\\s\\S]*?"type"\\s*:\\s*"${eventTypePattern}"[\\s\\S]*?\\}`, "i"),
+    new RegExp(
+      `(?:^|\\n)\\s*(?:type|类型)\\s*[:：]\\s*${eventTypePattern}(?:\\s*\\n+\\s*(?:kind|status|action|event|状态)\\s*[:：][^\\n]*)?`,
+      "i"
+    )
+  ];
+
+  callEventPatterns.forEach((pattern) => {
+    let guard = 0;
+    while (guard < 8) {
+      const match = pattern.exec(workingText);
+      if (!match || typeof match.index !== "number") {
+        break;
+      }
+      const candidate = match[0];
+      const parsedItems = parsePayload(candidate);
+      if (!parsedItems.length) {
+        break;
+      }
+      replaceBlock(candidate, parsedItems);
+      guard += 1;
+    }
+  });
+
+  return { text: workingText, blocks };
+}
+
+function extractVoiceCallEventReplyBlocks(text) {
+  return extractConversationCallEventReplyBlocks(text, "voice");
+}
+
+function extractVideoCallEventReplyBlocks(text) {
+  return extractConversationCallEventReplyBlocks(text, "video");
+}
+
 function parseVoiceCallRequestMessageContinuation(line = "") {
   const normalized = String(line || "").trim();
   if (!normalized) {
@@ -9600,7 +9819,9 @@ function limitReplyItems(items = [], limit = DEFAULT_MESSAGE_REPLY_SENTENCE_LIMI
     "image",
     "voice",
     "voice_call_request",
-    "video_call_request"
+    "video_call_request",
+    "voice_call_event",
+    "video_call_event"
   ];
   if (
     lastItem &&
@@ -9633,8 +9854,12 @@ function buildReplyItems(replyText, promptSettings = {}, privacySession = null) 
     extractVoiceCallRequestReplyBlocks(textWithoutQuoteBlocks);
   const { text: textWithoutVideoCallRequestBlocks, blocks: videoCallRequestBlocks } =
     extractVideoCallRequestReplyBlocks(textWithoutCallRequestBlocks);
+  const { text: textWithoutVoiceCallEventBlocks, blocks: voiceCallEventBlocks } =
+    extractVoiceCallEventReplyBlocks(textWithoutVideoCallRequestBlocks);
+  const { text: textWithoutVideoCallEventBlocks, blocks: videoCallEventBlocks } =
+    extractVideoCallEventReplyBlocks(textWithoutVoiceCallEventBlocks);
   const { text: textWithoutLocationBlocks, blocks: locationBlocks } =
-    extractLocationReplyBlocks(textWithoutVideoCallRequestBlocks);
+    extractLocationReplyBlocks(textWithoutVideoCallEventBlocks);
   const { text: textWithoutImageBlocks, blocks: imageBlocks } =
     extractImageReplyBlocks(textWithoutLocationBlocks);
   const { text: textWithoutVoiceBlocks, blocks: voiceBlocks } =
@@ -9644,6 +9869,8 @@ function buildReplyItems(replyText, promptSettings = {}, privacySession = null) 
       ...quoteBlocks,
       ...callRequestBlocks,
       ...videoCallRequestBlocks,
+      ...voiceCallEventBlocks,
+      ...videoCallEventBlocks,
       ...locationBlocks,
       ...imageBlocks,
       ...voiceBlocks
@@ -9741,6 +9968,34 @@ function buildReplyItems(replyText, promptSettings = {}, privacySession = null) 
             callRequestMessage,
             text: buildVideoCallRequestMessageText("pending", callRequestMessage, "assistant")
           });
+          return;
+        }
+        if (String(item?.messageType || "").trim() === "voice_call_event") {
+          items.push({
+            messageType: "voice_call_event",
+            callEventKind: normalizeVoiceCallEventKind(item.callEventKind),
+            callEventDurationSeconds: Math.max(
+              0,
+              Math.floor(Number(item.callEventDurationSeconds) || 0)
+            ),
+            text: buildVoiceCallEventMessageText(item.callEventKind, {
+              durationSeconds: item.callEventDurationSeconds
+            })
+          });
+          return;
+        }
+        if (String(item?.messageType || "").trim() === "video_call_event") {
+          items.push({
+            messageType: "video_call_event",
+            callEventKind: normalizeVoiceCallEventKind(item.callEventKind),
+            callEventDurationSeconds: Math.max(
+              0,
+              Math.floor(Number(item.callEventDurationSeconds) || 0)
+            ),
+            text: buildVideoCallEventMessageText(item.callEventKind, {
+              durationSeconds: item.callEventDurationSeconds
+            })
+          });
         }
       });
       return;
@@ -9820,6 +10075,40 @@ function buildReplyItems(replyText, promptSettings = {}, privacySession = null) 
           callRequestStatus: "pending",
           callRequestMessage,
           text: buildVideoCallRequestMessageText("pending", callRequestMessage, "assistant")
+        });
+      });
+      return;
+    }
+    const inlineVoiceCallEventItems = parseVoiceCallEventPayload(line);
+    if (inlineVoiceCallEventItems.length) {
+      decodeValueWithPrivacy(inlineVoiceCallEventItems, privacySession).forEach((item) => {
+        items.push({
+          messageType: "voice_call_event",
+          callEventKind: normalizeVoiceCallEventKind(item.callEventKind),
+          callEventDurationSeconds: Math.max(
+            0,
+            Math.floor(Number(item.callEventDurationSeconds) || 0)
+          ),
+          text: buildVoiceCallEventMessageText(item.callEventKind, {
+            durationSeconds: item.callEventDurationSeconds
+          })
+        });
+      });
+      return;
+    }
+    const inlineVideoCallEventItems = parseVideoCallEventPayload(line);
+    if (inlineVideoCallEventItems.length) {
+      decodeValueWithPrivacy(inlineVideoCallEventItems, privacySession).forEach((item) => {
+        items.push({
+          messageType: "video_call_event",
+          callEventKind: normalizeVoiceCallEventKind(item.callEventKind),
+          callEventDurationSeconds: Math.max(
+            0,
+            Math.floor(Number(item.callEventDurationSeconds) || 0)
+          ),
+          text: buildVideoCallEventMessageText(item.callEventKind, {
+            durationSeconds: item.callEventDurationSeconds
+          })
         });
       });
       return;
@@ -9967,6 +10256,20 @@ function appendUniqueMessagesToConversation(conversation = null, messages = []) 
     }
     currentMessages.push(clonedMessage);
     appendedMessages.push(clonedMessage);
+    const messageType = String(clonedMessage?.messageType || "").trim();
+    const callEventKind = normalizeVoiceCallEventKind(clonedMessage?.callEventKind);
+    if (
+      clonedMessage?.role === "assistant" &&
+      (messageType === "voice_call_event" || messageType === "video_call_event") &&
+      callEventKind === "ended"
+    ) {
+      const activeCallState = getConversationVoiceCallState(conversation);
+      const activeCallMode = normalizeConversationCallMode(activeCallState?.callMode);
+      const messageCallMode = messageType === "video_call_event" ? "video" : "voice";
+      if (activeCallState?.active && activeCallMode === messageCallMode) {
+        setConversationVoiceCallState(conversation, null);
+      }
+    }
   });
   conversation.messages = currentMessages;
   ensureConversationMessageUniqueness(conversation);
@@ -10575,6 +10878,7 @@ async function requestChatReplyText(
       privacySession
     );
     let logged = false;
+    let structuredFallbackToText = false;
 
     try {
       const response = await fetch(requestEndpoint, {
@@ -10633,6 +10937,25 @@ async function requestChatReplyText(
         );
         if (repairResult?.ok) {
           structuredPayload = repairResult.structuredPayload;
+        }
+        if (!structuredPayload) {
+          const fallbackReplyText = String(
+            resolveMessage(payload) || resolveMessage(repairResult?.payload) || ""
+          ).trim();
+          const normalizedFallbackStructuredPayload =
+            chatStructuredOutputContext.contractName === "chat_presence_update_v1" &&
+            fallbackReplyText
+              ? chatStructuredOutputContext.contract?.normalize?.({
+                  reply_text: fallbackReplyText
+                }) || {
+                  reply_text: fallbackReplyText,
+                  presence_update: null
+                }
+              : null;
+          if (normalizedFallbackStructuredPayload) {
+            structuredPayload = normalizedFallbackStructuredPayload;
+            structuredFallbackToText = true;
+          }
         }
         if (!structuredPayload) {
           const errorMessage = "对话回复返回了不可解析的结构化内容。";
@@ -10727,12 +11050,13 @@ async function requestChatReplyText(
         responseText: repairResult?.rawResponseText || rawResponse,
         responseBody: repairResult?.payload || payload,
         repairAttempted: Boolean(repairResult),
+        structuredFallbackToText,
         originalResponseText: repairResult ? rawResponse : "",
         originalResponseBody: repairResult ? payload : null,
         summary: encodeTextWithPrivacy(
           `联系人：${contact.name} · 已生成 ${
             buildReplyItems(cleanedEncodedMessage, resolvedPromptSettings, privacySession).length || 1
-          } 行回复${summarySuffix}`,
+          } 行回复${summarySuffix}${structuredFallbackToText ? " · 文本兜底" : ""}`,
           privacySession
         )
       });
@@ -10847,7 +11171,7 @@ async function requestJournalEntryText(
     journalOptions
   );
   const userInstruction =
-    "请根据这些信息，直接写出今天的日记正文。重点写成这个角色当天稍晚自己记下来的私人记录，语气和情绪都要像 ta 本人，不要写成客观总结。";
+    "请根据这些信息，直接写出今天的日记正文。重点写成这个角色当天稍晚自己记下来的私人记录，语气和情绪都要像 ta 本人。不要写成客观总结、事项汇报或从早到晚的流水账；优先写今天最有后劲的情绪、没说出口的话和心态变化。";
   const privacySession = createPrivacySession({
     settings,
     profile,
@@ -14130,11 +14454,17 @@ function getConversationAutoScheduleTime(conversation = getConversationById()) {
 }
 
 function getConversationVideoContactImage(conversation = getConversationById()) {
-  return String(conversation?.videoContactImage || "").trim();
+  return (
+    String(conversation?.videoContactImage || "").trim() ||
+    String(getStoredConversationVideoMedia(conversation)?.videoContactImage || "").trim()
+  );
 }
 
 function getConversationVideoUserImage(conversation = getConversationById()) {
-  return String(conversation?.videoUserImage || "").trim();
+  return (
+    String(conversation?.videoUserImage || "").trim() ||
+    String(getStoredConversationVideoMedia(conversation)?.videoUserImage || "").trim()
+  );
 }
 
 function getConversationVideoContactDisplayImage(conversation = getConversationById()) {
@@ -14151,11 +14481,33 @@ function getConversationVideoUserDisplayImage(conversation = getConversationById
 function setConversationVideoMediaSettings(contactImage = "", userImage = "") {
   const conversation = getConversationById();
   if (!conversation) {
-    return;
+    return {
+      conversationPersisted: false,
+      mediaPersisted: false
+    };
   }
-  conversation.videoContactImage = String(contactImage || "").trim();
-  conversation.videoUserImage = String(userImage || "").trim();
-  persistConversations();
+  const resolvedContactImage = String(contactImage || "").trim();
+  const resolvedUserImage = String(userImage || "").trim();
+  const contactId = String(conversation.contactId || "").trim();
+  const mediaMap = loadConversationVideoMediaMap();
+  if (contactId) {
+    if (!resolvedContactImage && !resolvedUserImage) {
+      delete mediaMap[contactId];
+    } else {
+      mediaMap[contactId] = {
+        videoContactImage: resolvedContactImage,
+        videoUserImage: resolvedUserImage
+      };
+    }
+  }
+  const mediaPersisted = persistConversationVideoMediaMap(mediaMap);
+  conversation.videoContactImage = resolvedContactImage;
+  conversation.videoUserImage = resolvedUserImage;
+  const conversationPersisted = persistConversations();
+  return {
+    conversationPersisted,
+    mediaPersisted
+  };
 }
 
 function renderChatSettingsVideoPreview(previewEl, image = "", fallbackText = "") {
@@ -19082,10 +19434,14 @@ function attachEvents() {
       nextSettings.messagePromptSettings = draft;
       persistSettings(nextSettings);
       state.chatPromptSettings = draft;
-      setConversationVideoMediaSettings(
+      const videoMediaSaveResult = setConversationVideoMediaSettings(
         state.chatSettingsVideoContactImage,
         state.chatSettingsVideoUserImage
       );
+      state.chatSettingsVideoContactImage = conversation
+        ? getConversationVideoContactImage(conversation)
+        : "";
+      state.chatSettingsVideoUserImage = conversation ? getConversationVideoUserImage(conversation) : "";
       setConversationAllowAiPresenceUpdate(
         Boolean(messagesChatAllowAiPresenceUpdateInputEl?.checked)
       );
@@ -19095,8 +19451,21 @@ function attachEvents() {
         messagesChatAutoScheduleTimeInputEl?.value || ""
       );
       updateChatHotTopicsWarning(draft);
-      setEditorStatus(messagesChatSettingsStatusEl, "对话回复设置已保存。", "success");
-      setMessagesStatus("对话 prompt 设置已更新。", "success");
+      let chatSettingsStatusMessage = "对话回复设置已保存。";
+      let chatSettingsStatusTone = "success";
+      if (!videoMediaSaveResult.conversationPersisted && videoMediaSaveResult.mediaPersisted) {
+        chatSettingsStatusMessage = "对话回复设置已保存，视频图片已单独保存。";
+        chatSettingsStatusTone = "warning";
+      } else if (!videoMediaSaveResult.conversationPersisted && !videoMediaSaveResult.mediaPersisted) {
+        chatSettingsStatusMessage = "对话回复设置已保存，但视频图片写入本地缓存失败，请清理缓存后重试。";
+        chatSettingsStatusTone = "error";
+      }
+      setEditorStatus(
+        messagesChatSettingsStatusEl,
+        chatSettingsStatusMessage,
+        chatSettingsStatusTone
+      );
+      setMessagesStatus(chatSettingsStatusMessage, chatSettingsStatusTone);
       if (state.activeConversationId && state.activeTab === "chat") {
         renderConversationDetail();
       }

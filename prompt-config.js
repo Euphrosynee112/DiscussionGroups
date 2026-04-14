@@ -540,6 +540,7 @@
           createTemplateItem("video_call_message_rule", "视频通话规则", "如果聊天记录里出现“[视频通话请求]”或“[视频通话事件]”，那代表双方真实发生过一次视频请求、接通、拒绝或挂断，而不是普通文本。"),
           createTemplateItem("video_call_request_rule", "视频请求 JSON 规则", "如果你想主动发起一通视频通话请求，必须单独一行输出如下格式：[{\"type\":\"video_call_request\",\"message\":\"想说的话\"}]。message 必填，写成接通后你会先说出口的开场第一句，不要解释机制。"),
           createTemplateItem("video_call_request_plain", "视频请求 JSON 输出要求", "视频通话请求 JSON 不要放进代码块，不要添加解释、前缀、序号或额外说明；它本身就算一行回复。"),
+          createDynamicItem("call_event_rule", "通话挂断 JSON 规则", "按当前通话状态决定是否加入挂断事件约束"),
           createTemplateItem("image_json_rule", "图片 JSON 规则", "如果需要主动发送一张照片，必须单独一行输出如下格式：[{\"type\":\"image\",\"description\":\"照片内容描述\"}]。description 要写成你真正发出去的照片内容，而不是解释你为什么要发。"),
           createTemplateItem("image_json_plain", "图片 JSON 输出要求", "图片 JSON 不要放进代码块，不要添加解释、前缀、序号或额外说明；它本身就算一行回复。"),
           createTemplateItem("emotion_punctuation", "情绪标点保留", "不要去掉感叹号、问号、波浪号、省略号等表达情绪的标点。"),
@@ -638,9 +639,10 @@
           createTemplateItem("date_weather", "日期天气", "2. 正文里要自然写出今天是几月几日、星期几；天气只能从今天的聊天记录里提取，若聊天里没有提到天气，就自然写成没特别留意到天气，不要硬编温度、天气现象或城市。"),
           createTemplateItem("priority", "优先级", "3. 今日聊天记录是核心，挂载的世界书和论坛背景只做辅助参考。"),
           createTemplateItem("length", "字数限制", "4. 控制在 {{journalLength}} 字以内。"),
-          createTemplateItem("tone", "语气", "5. 整篇要像这个角色当天稍晚自己写下来的私人记录，要带 ta 本人的说话习惯、在意点和情绪偏向，不要写成客观总结报告或流水账。"),
-          createTemplateItem("emotion_focus", "情绪重心", "6. 多写今天真正挂在心上的情绪变化、回味、别扭、松动、犹豫和没说出口的小念头，少做冷静客观的事实陈列。"),
-          createTemplateItem("inner_thought", "心理活动", "7. 适当增加一些心理活动、犹豫、回味和没说出口的小念头。")
+          createTemplateItem("tone", "语气", "5. 整篇要像这个角色当天稍晚自己写下来的私人记录，要带 ta 本人的说话习惯、在意点和情绪偏向，不要写成客观总结报告、事项汇报或时间线流水账。"),
+          createTemplateItem("emotion_focus", "情绪重心", "6. 优先抓住今天最有后劲、最挂心的 1～3 个点来写，多写感受、回味、别扭、松动、犹豫和心态变化，少做冷静客观的事实陈列。"),
+          createTemplateItem("inner_thought", "心理活动", "7. 多写为什么会在意、当时没说出口的话、后来才反应过来的念头，以及情绪是怎么慢慢变掉的。"),
+          createTemplateItem("chronology", "避免平铺直叙", "8. 不要按早上、中午、晚上从头到尾平铺直叙；可以围绕最在意的情绪节点自然展开，允许跳着回想。")
         ]
       }
     },

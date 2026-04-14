@@ -5,8 +5,8 @@ const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GROK_MODEL = "grok-4";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 const DEFAULT_TEMPERATURE = 0.85;
-const APP_BUILD_VERSION = "20260414-141318";
-const APP_BUILD_UPDATED_AT = "2026-04-14 14:13:18";
+const APP_BUILD_VERSION = "20260414-184332";
+const APP_BUILD_UPDATED_AT = "2026-04-14 18:43:32";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -165,6 +165,7 @@ const DEFAULT_SETTINGS = {
   summaryApiEnabled: false,
   summaryApiConfigId: "",
   floatingApiSwitcherEnabled: false,
+  privacyCoverEnabled: true,
   negativePromptConstraints: [],
   privacyAllowlist: [],
   manualTimeSettings: {
@@ -856,6 +857,7 @@ function buildNormalizedSettingsSnapshot(source, options = {}) {
   }
   merged.summaryApiEnabled = Boolean(merged.summaryApiEnabled && merged.summaryApiConfigId);
   merged.floatingApiSwitcherEnabled = Boolean(merged.floatingApiSwitcherEnabled);
+  merged.privacyCoverEnabled = merged.privacyCoverEnabled !== false;
   merged.manualTimeSettings =
     typeof window.PulsePromptConfig?.normalizeManualTimeSettings === "function"
       ? window.PulsePromptConfig.normalizeManualTimeSettings(merged.manualTimeSettings)
@@ -2074,7 +2076,8 @@ function buildTransferPayloadFromCurrentState() {
         translationApiConfigId: String(settings.translationApiConfigId || "").trim(),
         summaryApiEnabled: Boolean(settings.summaryApiEnabled),
         summaryApiConfigId: String(settings.summaryApiConfigId || "").trim(),
-        floatingApiSwitcherEnabled: Boolean(settings.floatingApiSwitcherEnabled)
+        floatingApiSwitcherEnabled: Boolean(settings.floatingApiSwitcherEnabled),
+        privacyCoverEnabled: settings.privacyCoverEnabled !== false
       },
       apiConfigs: apiConfigs.map(({ token, ...rest }) => ({ ...rest }))
     },
@@ -3662,7 +3665,8 @@ function normalizeTransferPayload(parsed) {
             translationApiConfigId: settings.translationApiConfigId || "",
             summaryApiEnabled: Boolean(settings.summaryApiEnabled),
             summaryApiConfigId: settings.summaryApiConfigId || "",
-            floatingApiSwitcherEnabled: Boolean(settings.floatingApiSwitcherEnabled)
+            floatingApiSwitcherEnabled: Boolean(settings.floatingApiSwitcherEnabled),
+            privacyCoverEnabled: settings.privacyCoverEnabled !== false
           },
           apiConfigs: normalizeApiConfigs(settings.apiConfigs || []).map(({ token, ...rest }) => ({
             ...rest
@@ -4644,6 +4648,9 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
     nextSettings.floatingApiSwitcherEnabled = Boolean(
       imported.apiConfig.current?.floatingApiSwitcherEnabled
     );
+    if (Object.prototype.hasOwnProperty.call(imported.apiConfig.current || {}, "privacyCoverEnabled")) {
+      nextSettings.privacyCoverEnabled = imported.apiConfig.current?.privacyCoverEnabled !== false;
+    }
     nextSettings.token = "";
     nextSettings.apiConfigs = normalizeApiConfigs(
       normalizeObjectArray(imported.apiConfig.apiConfigs).map((item) => ({

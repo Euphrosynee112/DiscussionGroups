@@ -936,6 +936,24 @@
   }
 
   function createSession(options = {}) {
+    let privacyCoverEnabled = options?.settings?.privacyCoverEnabled !== false;
+    try {
+      const rawSettings = window.localStorage?.getItem("x_style_generator_settings_v2") || "";
+      if (rawSettings) {
+        const parsedSettings = JSON.parse(rawSettings);
+        if (
+          parsedSettings &&
+          typeof parsedSettings === "object" &&
+          parsedSettings.privacyCoverEnabled === false
+        ) {
+          privacyCoverEnabled = false;
+        }
+      }
+    } catch (_error) {
+    }
+    if (!privacyCoverEnabled) {
+      return null;
+    }
     const session = {
       id: createSessionId(),
       replacements: [],

@@ -49,11 +49,12 @@ const DEFAULT_SETTINGS = {
   endpoint: DEFAULT_OPENAI_ENDPOINT,
   token: "",
   model: DEFAULT_DEEPSEEK_MODEL,
+  temperature: DEFAULT_TEMPERATURE,
+  privacyCoverEnabled: true,
   worldview:
     "这是一个强调长期主义、产品洞察和公共讨论质量的中文社交世界。用户习惯像在 X 上一样快速表达观点，但会天然追问效率、增长、AI 和平台变迁。整体语气要真实、犀利、能引发跟帖，不要写成官方通稿。",
   homeCount: DEFAULT_POST_COUNT,
   replyCount: DEFAULT_REPLY_COUNT,
-  temperature: DEFAULT_TEMPERATURE,
   customTabs: [],
   apiConfigs: [],
   activeApiConfigId: "",
