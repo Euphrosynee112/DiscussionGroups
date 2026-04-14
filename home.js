@@ -4,8 +4,8 @@ const DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1bet
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GROK_MODEL = "grok-4";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
-const APP_BUILD_VERSION = "20260414-113939";
-const APP_BUILD_UPDATED_AT = "2026-04-14 11:39:39";
+const APP_BUILD_VERSION = "20260414-130808";
+const APP_BUILD_UPDATED_AT = "2026-04-14 13:08:08";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -76,6 +76,9 @@ const homeApiModeSelect = document.querySelector("#home-api-mode");
 const homeApiEndpointInput = document.querySelector("#home-api-endpoint");
 const homeApiTokenInput = document.querySelector("#home-api-token");
 const homeApiModelInput = document.querySelector("#home-api-model");
+const homeApiModelFetchBtn = document.querySelector("#home-api-model-fetch-btn");
+const homeApiModelOptionsEl = document.querySelector("#home-api-model-options");
+const homeApiModelHintEl = document.querySelector("#home-api-model-hint");
 const homeApiConfigNameInput = document.querySelector("#home-api-config-name-input");
 const homeApiConfigSaveBtn = document.querySelector("#home-api-config-save-btn");
 const homeApiConfigStatusEl = document.querySelector("#home-api-config-status");
@@ -189,7 +192,10 @@ const homeState = {
   privacyIgnorelistItems: [],
   privacyRecentHitItems: [],
   privacyPendingCandidates: [],
-  privacyAddModalOpen: false
+  privacyAddModalOpen: false,
+  fetchedModelOptions: [],
+  modelFetchPending: false,
+  modelFetchRequestId: 0
 };
 
 function showHomeLayer(element, displayValue = "block") {
@@ -328,9 +334,30 @@ function getDefaultModelByMode(mode) {
   return DEFAULT_DEEPSEEK_MODEL;
 }
 
+function getHomeModelHintMessage(mode) {
+  const resolvedMode = normalizeApiMode(mode);
+  if (resolvedMode === "generic") {
+    return "通用 JSON 接口不支持自动拉取模型，请手动填写模型名称。";
+  }
+  if (resolvedMode === "gemini") {
+    return "将读取 Gemini 官方模型列表；失败时仍可手动填写，不会写入本地缓存。";
+  }
+  if (resolvedMode === "grok") {
+    return "将读取 Grok 官方模型列表；失败时仍可手动填写，不会写入本地缓存。";
+  }
+  return "会尝试读取当前 OpenAI 兼容接口的 /models；如果接口不支持，仍可手动填写。";
+}
+
 function isOpenAICompatibleMode(mode) {
   const resolvedMode = normalizeApiMode(mode);
   return resolvedMode === "openai" || resolvedMode === "grok";
+}
+
+function setHomeApiModelHint(message) {
+  if (!homeApiModelHintEl) {
+    return;
+  }
+  homeApiModelHintEl.textContent = message;
 }
 
 function normalizeApiConfigToken(token) {
@@ -470,6 +497,260 @@ function normalizeSettingsEndpointByMode(mode, endpoint) {
     return normalizeGeminiEndpoint(endpoint);
   }
   return String(endpoint || "").trim();
+}
+
+function resolveOpenAICompatibleModelsEndpoint(endpoint, mode = "openai") {
+  const normalizedEndpoint =
+    normalizeApiMode(mode) === "grok"
+      ? normalizeGrokEndpoint(endpoint)
+      : normalizeOpenAICompatibleEndpoint(endpoint);
+
+  try {
+    const url = new URL(normalizedEndpoint);
+    let pathname = url.pathname.replace(/\/+$/, "");
+    pathname = pathname
+      .replace(/\/chat\/completions$/, "")
+      .replace(/\/responses$/, "")
+      .replace(/\/completions$/, "");
+    if (!pathname.endsWith("/models")) {
+      pathname = `${pathname}/models`;
+    }
+    url.pathname = pathname.replace(/\/{2,}/g, "/") || "/models";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch (_error) {
+    return normalizedEndpoint
+      .replace(/\/+$/, "")
+      .replace(/\/chat\/completions$/, "")
+      .replace(/\/responses$/, "")
+      .replace(/\/completions$/, "")
+      .replace(/\/models$/, "")
+      .concat("/models");
+  }
+}
+
+function resolveGeminiModelsEndpoint(endpoint) {
+  const normalizedEndpoint = normalizeGeminiEndpoint(endpoint);
+
+  try {
+    const url = new URL(normalizedEndpoint);
+    let pathname = url.pathname.replace(/\/+$/, "");
+    pathname = pathname.replace(/\/models\/[^/]+$/, "");
+    if (!pathname.endsWith("/models")) {
+      pathname = `${pathname}/models`;
+    }
+    url.pathname = pathname.replace(/\/{2,}/g, "/") || "/models";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch (_error) {
+    return normalizedEndpoint
+      .replace(/\/+$/, "")
+      .replace(/\/models\/[^/]+$/, "")
+      .replace(/\/models$/, "")
+      .concat("/models");
+  }
+}
+
+function normalizeFetchedModelValue(value, mode) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (normalizeApiMode(mode) === "gemini") {
+    return trimmed.replace(/^models\//, "");
+  }
+  return trimmed;
+}
+
+function normalizeFetchedModelOptions(payload, mode) {
+  const resolvedMode = normalizeApiMode(mode);
+  const rawItems = Array.isArray(payload?.data)
+    ? payload.data
+    : Array.isArray(payload?.models)
+      ? payload.models
+      : Array.isArray(payload?.items)
+        ? payload.items
+        : [];
+  const options = [];
+  const seen = new Set();
+
+  const appendOption = (value, label = "") => {
+    const normalizedValue = normalizeFetchedModelValue(value, resolvedMode);
+    if (!normalizedValue || seen.has(normalizedValue)) {
+      return;
+    }
+    seen.add(normalizedValue);
+    options.push({
+      value: normalizedValue,
+      label: String(label || normalizedValue).trim() || normalizedValue
+    });
+  };
+
+  rawItems.forEach((item) => {
+    if (typeof item === "string") {
+      appendOption(item);
+      return;
+    }
+    if (!item || typeof item !== "object") {
+      return;
+    }
+
+    if (resolvedMode === "gemini") {
+      const supportedMethods = Array.isArray(item.supportedGenerationMethods)
+        ? item.supportedGenerationMethods.map((entry) => String(entry || "").trim())
+        : [];
+      const rawName = item.name || item.id || item.model || "";
+      const labelBase = item.displayName || item.description || rawName;
+      if (!rawName) {
+        return;
+      }
+      if (supportedMethods.length && !supportedMethods.includes("generateContent")) {
+        return;
+      }
+      appendOption(rawName, labelBase);
+      return;
+    }
+
+    const rawName = item.id || item.name || item.model || "";
+    if (!rawName) {
+      return;
+    }
+    const ownedBy = String(item.owned_by || item.ownedBy || "").trim();
+    appendOption(rawName, ownedBy ? `${rawName} · ${ownedBy}` : rawName);
+  });
+
+  if (!options.length && resolvedMode === "gemini" && Array.isArray(payload?.models)) {
+    payload.models.forEach((item) => {
+      if (!item || typeof item !== "object") {
+        return;
+      }
+      appendOption(item.name || item.id || item.model || "", item.displayName || "");
+    });
+  }
+
+  return options;
+}
+
+function renderHomeFetchedModelOptions() {
+  if (!homeApiModelOptionsEl) {
+    return;
+  }
+  homeApiModelOptionsEl.innerHTML = homeState.fetchedModelOptions
+    .map(
+      (item) =>
+        `<option value="${escapeHtml(item.value)}" label="${escapeHtml(item.label)}"></option>`
+    )
+    .join("");
+}
+
+function clearHomeFetchedModelOptions(options = {}) {
+  homeState.fetchedModelOptions = [];
+  renderHomeFetchedModelOptions();
+  if (!options.preserveHint) {
+    setHomeApiModelHint(getHomeModelHintMessage(homeApiModeSelect?.value || homeState.settings.mode));
+  }
+}
+
+function invalidateHomeModelFetch(options = {}) {
+  homeState.modelFetchRequestId += 1;
+  homeState.modelFetchPending = false;
+  clearHomeFetchedModelOptions(options);
+  updateHomeModelFetchUI();
+}
+
+function updateHomeModelFetchUI() {
+  const mode = normalizeApiMode(homeApiModeSelect?.value || homeState.settings.mode);
+  if (homeApiModelFetchBtn) {
+    homeApiModelFetchBtn.disabled = homeState.modelFetchPending || mode === "generic";
+    homeApiModelFetchBtn.textContent = homeState.modelFetchPending ? "获取中…" : "获取模型";
+    homeApiModelFetchBtn.title =
+      mode === "generic"
+        ? "通用 JSON 接口请手动填写模型名称"
+        : "从当前接口拉取可用模型列表";
+  }
+  if (!homeState.fetchedModelOptions.length) {
+    setHomeApiModelHint(getHomeModelHintMessage(mode));
+  }
+}
+
+async function readModelListErrorMessage(response) {
+  try {
+    const payload = await response.json();
+    const detail =
+      payload?.error?.message ||
+      payload?.message ||
+      payload?.detail ||
+      payload?.error_description ||
+      "";
+    return String(detail || "").trim();
+  } catch (_error) {
+    try {
+      return String(await response.text()).trim();
+    } catch (_textError) {
+      return "";
+    }
+  }
+}
+
+async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 15000) {
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timerId = controller
+    ? window.setTimeout(() => {
+        controller.abort();
+      }, timeoutMs)
+    : 0;
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller?.signal
+    });
+    return response;
+  } finally {
+    if (timerId) {
+      window.clearTimeout(timerId);
+    }
+  }
+}
+
+async function fetchAvailableModels(snapshot) {
+  const mode = normalizeApiMode(snapshot.mode);
+  if (mode === "generic") {
+    return [];
+  }
+
+  const token = normalizeApiConfigToken(snapshot.token);
+  const headers = {
+    Accept: "application/json"
+  };
+
+  let endpoint = "";
+  if (mode === "gemini") {
+    endpoint = resolveGeminiModelsEndpoint(snapshot.endpoint);
+    if (token) {
+      headers["x-goog-api-key"] = token;
+    }
+  } else {
+    endpoint = resolveOpenAICompatibleModelsEndpoint(snapshot.endpoint, mode);
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+  }
+
+  const response = await fetchJsonWithTimeout(endpoint, {
+    method: "GET",
+    headers
+  });
+
+  if (!response.ok) {
+    const errorMessage = await readModelListErrorMessage(response);
+    throw new Error(errorMessage || `HTTP ${response.status}`);
+  }
+
+  const payload = await response.json();
+  return normalizeFetchedModelOptions(payload, mode);
 }
 
 function normalizeApiConfigs(configs = []) {
@@ -4592,6 +4873,7 @@ function updateHomeModeUI() {
       : mode === "grok"
         ? DEFAULT_GROK_MODEL
         : DEFAULT_DEEPSEEK_MODEL;
+  updateHomeModelFetchUI();
 }
 
 function applySettingsToHomeForm(settings) {
@@ -4616,6 +4898,7 @@ function applySettingsToHomeForm(settings) {
     ).join("\n");
   }
   updateHomeModeUI();
+  invalidateHomeModelFetch();
   renderHomeApiConfigList();
   syncHomeActiveConfigSummary();
 }
@@ -4683,6 +4966,69 @@ function buildHomeApiConfigSnapshot() {
         ? ""
         : String(homeApiModelInput?.value || "").trim() || getDefaultModelByMode(mode)
   };
+}
+
+async function handleHomeModelFetch() {
+  const snapshot = buildHomeApiConfigSnapshot();
+  const mode = normalizeApiMode(snapshot.mode);
+  if (mode === "generic") {
+    invalidateHomeModelFetch();
+    setHomeApiConfigStatus("通用 JSON 接口不支持自动拉取模型，请手动填写模型名称。", "");
+    return;
+  }
+
+  const requestId = homeState.modelFetchRequestId + 1;
+  homeState.modelFetchRequestId = requestId;
+  homeState.modelFetchPending = true;
+  clearHomeFetchedModelOptions({ preserveHint: true });
+  setHomeApiModelHint("正在拉取模型列表…");
+  updateHomeModelFetchUI();
+  setHomeApiConfigStatus("正在拉取模型列表…", "");
+
+  try {
+    const options = await fetchAvailableModels(snapshot);
+    if (requestId !== homeState.modelFetchRequestId) {
+      return;
+    }
+
+    homeState.fetchedModelOptions = options;
+    renderHomeFetchedModelOptions();
+    if (!String(homeApiModelInput?.value || "").trim() && options[0]?.value && homeApiModelInput) {
+      homeApiModelInput.value = options[0].value;
+    }
+
+    if (options.length) {
+      setHomeApiModelHint(`已拉取 ${options.length} 个模型；仅本次页面内可选，不会写入本地缓存。`);
+      const selectedModel = String(homeApiModelInput?.value || "").trim();
+      const statusMessage = selectedModel
+        ? `已拉取 ${options.length} 个模型，当前模型：${selectedModel}。`
+        : `已拉取 ${options.length} 个模型。`;
+      setHomeApiConfigStatus(statusMessage, "success");
+    } else {
+      setHomeApiModelHint("当前接口没有返回模型列表，可继续手动填写模型名称。");
+      setHomeApiConfigStatus("当前接口没有返回模型列表，可继续手动填写模型名称。", "");
+    }
+  } catch (error) {
+    if (requestId !== homeState.modelFetchRequestId) {
+      return;
+    }
+    clearHomeFetchedModelOptions({ preserveHint: true });
+    const fallbackMessage =
+      mode === "openai"
+        ? "当前 OpenAI 兼容接口没有返回 /models，可继续手动填写模型名称。"
+        : "模型列表获取失败，可继续手动填写模型名称。";
+    setHomeApiModelHint(fallbackMessage);
+    const detail = String(error?.message || "").trim();
+    setHomeApiConfigStatus(
+      detail ? `获取模型失败：${detail}；可继续手动填写。` : fallbackMessage,
+      "error"
+    );
+  } finally {
+    if (requestId === homeState.modelFetchRequestId) {
+      homeState.modelFetchPending = false;
+      updateHomeModelFetchUI();
+    }
+  }
 }
 
 function renderHomeTranslationApiControls() {
@@ -6166,6 +6512,21 @@ function attachHomeSettingsEvents() {
         saveCurrentHomeSettings({ silent: true });
       });
     });
+
+  [homeApiModeSelect, homeApiEndpointInput, homeApiTokenInput].filter(Boolean).forEach((field) => {
+    field.addEventListener("input", () => {
+      invalidateHomeModelFetch();
+    });
+    field.addEventListener("change", () => {
+      invalidateHomeModelFetch();
+    });
+  });
+
+  if (homeApiModelFetchBtn) {
+    homeApiModelFetchBtn.addEventListener("click", () => {
+      handleHomeModelFetch();
+    });
+  }
 
   if (homeApiConfigSaveBtn) {
     homeApiConfigSaveBtn.addEventListener("click", () => {

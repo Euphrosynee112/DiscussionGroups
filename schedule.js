@@ -651,6 +651,145 @@ function buildChatRequestBody(settings, systemPrompt, history = []) {
   };
 }
 
+function buildSingleInstructionRequestBody(
+  settings,
+  systemPrompt,
+  userInstruction,
+  intent = "utility"
+) {
+  const mode = normalizeApiMode(settings.mode);
+  if (isOpenAICompatibleMode(mode)) {
+    return {
+      model: settings.model || getDefaultModelByMode(mode),
+      temperature: DEFAULT_TEMPERATURE,
+      messages: [
+        {
+          role: "system",
+          content: systemPrompt
+        },
+        {
+          role: "user",
+          content: userInstruction
+        }
+      ],
+      stream: false
+    };
+  }
+
+  if (mode === "gemini") {
+    return {
+      systemInstruction: {
+        parts: [{ text: systemPrompt }]
+      },
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: userInstruction }]
+        }
+      ],
+      safetySettings: buildGeminiSafetySettings(),
+      generationConfig: {
+        temperature: DEFAULT_TEMPERATURE
+      }
+    };
+  }
+
+  return {
+    prompt: [systemPrompt, userInstruction].filter(Boolean).join("\n\n"),
+    intent
+  };
+}
+
+function createStructuredOutputContext(settings, contractName = "") {
+  if (!window.PulseStructuredOutput?.createRequestContext) {
+    return {
+      enabled: false,
+      provider: "none",
+      contractName: "",
+      contract: null
+    };
+  }
+  return window.PulseStructuredOutput.createRequestContext(settings, contractName);
+}
+
+function decorateRequestBodyWithStructuredOutput(requestBody, context) {
+  if (!window.PulseStructuredOutput?.decorateRequestBody) {
+    return requestBody;
+  }
+  return window.PulseStructuredOutput.decorateRequestBody(requestBody, context);
+}
+
+function appendStructuredOutputPromptHint(text = "", context = null) {
+  const baseText = String(text || "").trim();
+  const hint = String(window.PulseStructuredOutput?.getPromptHint?.(context) || "").trim();
+  return [baseText, hint].filter(Boolean).join("\n\n");
+}
+
+function parseStructuredOutputPayload(payload, context = null) {
+  if (!window.PulseStructuredOutput?.parseStructuredResponse) {
+    return null;
+  }
+  return window.PulseStructuredOutput.parseStructuredResponse(payload, context);
+}
+
+async function requestStructuredRepairOnce(
+  settings,
+  requestEndpoint,
+  context,
+  rawResponseText = "",
+  repairIntent = "structured_output_repair"
+) {
+  if (
+    !context?.enabled ||
+    context.provider !== "deepseek_json" ||
+    !window.PulseStructuredOutput?.buildRepairInstruction
+  ) {
+    return null;
+  }
+
+  const rawText = String(rawResponseText || "").trim();
+  if (!rawText) {
+    return null;
+  }
+
+  const repairInstruction = window.PulseStructuredOutput.buildRepairInstruction(
+    context,
+    rawText,
+    "上一次输出不是可解析的目标 JSON。"
+  );
+  if (!repairInstruction) {
+    return null;
+  }
+
+  const repairSystemPrompt =
+    "你是一个只负责修复 JSON 的格式整理器。不要补充新信息，不要解释原因，只把已有内容整理成合法 JSON。";
+  const repairRequestBody = decorateRequestBodyWithStructuredOutput(
+    buildSingleInstructionRequestBody(settings, repairSystemPrompt, repairInstruction, repairIntent),
+    context
+  );
+  const repairResponse = await fetch(requestEndpoint, {
+    method: "POST",
+    headers: buildRequestHeaders(settings),
+    body: JSON.stringify(repairRequestBody)
+  });
+  const repairRawResponse = await repairResponse.text();
+  let repairPayload = repairRawResponse;
+  try {
+    repairPayload = JSON.parse(repairRawResponse);
+  } catch (_error) {
+    repairPayload = repairRawResponse;
+  }
+
+  return {
+    ok: repairResponse.ok,
+    status: repairResponse.status,
+    rawResponseText: repairRawResponse,
+    payload: repairPayload,
+    requestBody: repairRequestBody,
+    structuredPayload: parseStructuredOutputPayload(repairPayload, context)
+  };
+}
+
 function resolveMessage(payload) {
   if (typeof payload === "string") {
     return payload.trim();
@@ -1421,7 +1560,14 @@ async function requestScheduleInviteDecision(settings, profile, contact, inviteE
   const systemPrompt = buildScheduleInviteSystemPrompt(profile, contact, inviteEntry, {
     companionNames
   });
-  const userInstruction = buildScheduleInviteUserInstruction(inviteEntry, companionNames);
+  const structuredOutputContext = createStructuredOutputContext(
+    settings,
+    "schedule_invite_decision_v1"
+  );
+  const userInstruction = appendStructuredOutputPromptHint(
+    buildScheduleInviteUserInstruction(inviteEntry, companionNames),
+    structuredOutputContext
+  );
   const collapsedHistory = selectConversationHistory(history, settings.messagePromptSettings?.historyRounds);
   const requestHistory = collapsedHistory.concat([
     {
@@ -1446,7 +1592,10 @@ async function requestScheduleInviteDecision(settings, profile, contact, inviteE
   });
   const encodedSystemPrompt = preparePromptWithPrivacy(systemPrompt, privacySession);
   const encodedHistory = encodeValueWithPrivacy(requestHistory, privacySession);
-  const requestBody = buildChatRequestBody(settings, encodedSystemPrompt, encodedHistory);
+  const requestBody = decorateRequestBodyWithStructuredOutput(
+    buildChatRequestBody(settings, encodedSystemPrompt, encodedHistory),
+    structuredOutputContext
+  );
   const logEntry = applyPrivacyToLogEntry(
     {
       source: "schedule",
@@ -1488,13 +1637,47 @@ async function requestScheduleInviteDecision(settings, profile, contact, inviteE
       throw new Error(`接口请求失败：HTTP ${response.status}`);
     }
 
-    const decision = parseScheduleInviteDecision(payload);
+    let repairResult = null;
+    let structuredPayload = parseStructuredOutputPayload(payload, structuredOutputContext);
+    if (structuredOutputContext.enabled && !structuredPayload) {
+      repairResult = await requestStructuredRepairOnce(
+        settings,
+        requestEndpoint,
+        structuredOutputContext,
+        rawResponse,
+        "schedule_invite_repair"
+      );
+      if (repairResult?.ok) {
+        structuredPayload = repairResult.structuredPayload;
+      }
+      if (!structuredPayload) {
+        const errorMessage = "日程邀请返回了不可解析的结构化内容。";
+        appendApiLog({
+          ...logEntry,
+          status: "error",
+          statusCode: repairResult?.status || response.status,
+          responseText: rawResponse,
+          responseBody: payload,
+          repairAttempted: Boolean(repairResult),
+          repairResponseText: repairResult?.rawResponseText || "",
+          repairResponseBody: repairResult?.payload || null,
+          errorMessage
+        });
+        logged = true;
+        throw new Error(errorMessage);
+      }
+    }
+
+    const decision = parseScheduleInviteDecision(structuredPayload || repairResult?.payload || payload);
     appendApiLog({
       ...logEntry,
       status: "success",
       statusCode: response.status,
-      responseText: rawResponse,
-      responseBody: payload
+      responseText: repairResult?.rawResponseText || rawResponse,
+      responseBody: repairResult?.payload || payload,
+      repairAttempted: Boolean(repairResult),
+      originalResponseText: repairResult ? rawResponse : "",
+      originalResponseBody: repairResult ? payload : null
     });
     logged = true;
     return decision;

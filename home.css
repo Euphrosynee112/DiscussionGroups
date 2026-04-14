@@ -41,7 +41,10 @@ body.modal-open {
 }
 
 button,
-a {
+a,
+input,
+select,
+textarea {
   font: inherit;
 }
 
@@ -529,6 +532,21 @@ button {
 
 .home-field--grow {
   flex: 1;
+}
+
+.home-api-model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.home-api-model-row > input {
+  flex: 1 1 auto;
+}
+
+.home-api-model-row > .home-chip {
+  flex: 0 0 auto;
+  min-height: 48px;
 }
 
 .home-field input,
@@ -1519,6 +1537,15 @@ button {
     align-items: stretch;
   }
 
+  .home-api-model-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .home-api-model-row > .home-chip {
+    width: 100%;
+  }
+
   .home-config-transfer__actions {
     flex-direction: column;
   }
@@ -1690,5 +1717,18 @@ button {
 
   .privacy-app-item__field {
     gap: 4px;
+  }
+}
+
+@media (pointer: coarse) {
+  .home-field input,
+  .home-field select,
+  .home-field textarea,
+  .home-rules-item__textarea,
+  .home-rules-item__segment-input,
+  .home-privacy-scan-item__input,
+  .privacy-app-item__input,
+  .privacy-app-item__select {
+    font-size: 16px;
   }
 }

@@ -1941,6 +1941,7 @@ body.embedded {
 @media (pointer: coarse) {
   .messages-search input,
   .messages-conversation__input,
+  .messages-call-screen__input,
   .messages-form-field input,
   .messages-form-field textarea,
   .messages-form-field select,

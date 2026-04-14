@@ -474,7 +474,7 @@
           createTemplateItem(
             "json_format",
             "JSON 格式",
-            "只输出 JSON 数组，格式为：[{\"date\":\"YYYY-MM-DD\",\"title\":\"安排名称\",\"startTime\":\"HH:00\",\"endTime\":\"HH:00\"}]。"
+            "只输出 JSON 对象，格式为：{\"items\":[{\"date\":\"YYYY-MM-DD\",\"title\":\"安排名称\",\"startTime\":\"HH:00\",\"endTime\":\"HH:00\"}]}。"
           )
         ]
       }

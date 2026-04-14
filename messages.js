@@ -6368,8 +6368,8 @@ function normalizeScheduleEntry(entry, index = 0) {
     ? String(source.date).trim()
     : "";
   const normalizeTimeValue = (value, fallback = "") => {
-    const trimmed = String(value || "").trim();
-    return /^\d{2}:\d{2}$/.test(trimmed) ? trimmed : fallback;
+    const normalized = normalizeHourTimeText(value);
+    return normalized || fallback;
   };
   return {
     id: String(source.id || `schedule_${index}_${hashText(`${source.title || ""}-${date}`)}`),
@@ -6402,6 +6402,22 @@ function normalizeScheduleEntry(entry, index = 0) {
     createdAt: Number(source.createdAt) || Date.now(),
     updatedAt: Number(source.updatedAt) || Date.now()
   };
+}
+
+function normalizeHourTimeText(value = "") {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) {
+    return "";
+  }
+  const directMatch = trimmed.match(/^(\d{2}):(\d{2})$/);
+  if (directMatch) {
+    return `${directMatch[1]}:${directMatch[2]}`;
+  }
+  const extendedMatch = trimmed.match(/^(\d{2}):(\d{2})(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})$/i);
+  if (extendedMatch) {
+    return `${extendedMatch[1]}:${extendedMatch[2]}`;
+  }
+  return "";
 }
 
 function loadScheduleEntries() {
@@ -7595,7 +7611,7 @@ function buildAutoScheduleGenerationInstruction(contactId = "", dateValues = [],
       ? `补充注意事项（若与默认节奏冲突，以这里为准）：${extraInstruction}`
       : "没有额外限制时，请默认区分工作日与休息日，周末以休息恢复为主。",
     "",
-    "返回时不要解释思路，不要加 markdown，只返回 JSON 数组。"
+    "返回时不要解释思路，不要加 markdown，只返回 JSON。"
   ]
     .filter(Boolean)
     .join("\n");
@@ -7606,6 +7622,8 @@ function parseAutoScheduleItems(payload, dateValues = []) {
     (Array.isArray(dateValues) ? dateValues : []).map((item) => String(item || "").trim()).filter(Boolean)
   );
   const rawValue =
+    (Array.isArray(payload) ? payload : null) ||
+    (payload && typeof payload === "object" ? payload : null) ||
     parseJsonLikeContent(payload) ||
     parseJsonLikeContent(resolveMessage(payload)) ||
     [];
@@ -7622,8 +7640,8 @@ function parseAutoScheduleItems(payload, dateValues = []) {
       const source = item && typeof item === "object" ? item : {};
       const date = String(source.date || "").trim();
       const title = String(source.title || source.name || "").trim();
-      const startTime = String(source.startTime || "").trim();
-      const endTime = String(source.endTime || "").trim();
+      const startTime = normalizeHourTimeText(source.startTime || "");
+      const endTime = normalizeHourTimeText(source.endTime || "");
       if (!title || !date || (allowedDates.size && !allowedDates.has(date))) {
         return null;
       }
@@ -7685,7 +7703,14 @@ async function generateAutoSchedulesForConversation(
     resolvedDays,
     requestOptions
   );
-  const userInstruction = buildAutoScheduleGenerationInstruction(contact.id, dateValues, requestOptions);
+  const structuredOutputContext = createStructuredOutputContext(
+    settings,
+    "auto_schedule_fill_v1"
+  );
+  const userInstruction = appendStructuredOutputPromptHint(
+    buildAutoScheduleGenerationInstruction(contact.id, dateValues, requestOptions),
+    structuredOutputContext
+  );
   const requestEndpoint = validateApiSettings(settings, "自动生成行程");
   const privacySession = createPrivacySession({
     settings,
@@ -7702,11 +7727,14 @@ async function generateAutoSchedulesForConversation(
   });
   const encodedSystemPrompt = preparePromptWithPrivacy(systemPrompt, privacySession);
   const encodedUserInstruction = encodeTextWithPrivacy(userInstruction, privacySession);
-  const requestBody = buildSingleInstructionRequestBody(
-    settings,
-    encodedSystemPrompt,
-    encodedUserInstruction,
-    "chat_auto_schedule_generate"
+  const requestBody = decorateRequestBodyWithStructuredOutput(
+    buildSingleInstructionRequestBody(
+      settings,
+      encodedSystemPrompt,
+      encodedUserInstruction,
+      "chat_auto_schedule_generate"
+    ),
+    structuredOutputContext
   );
   const logBase = applyPrivacyToLogEntry(
     buildMessageApiLogBase(
@@ -7749,8 +7777,40 @@ async function generateAutoSchedulesForConversation(
       throw new Error(`接口请求失败：HTTP ${response.status}`);
     }
 
+    let repairResult = null;
+    let structuredPayload = parseStructuredOutputPayload(payload, structuredOutputContext);
+    if (structuredOutputContext.enabled && !structuredPayload) {
+      repairResult = await requestStructuredRepairOnce(
+        settings,
+        requestEndpoint,
+        structuredOutputContext,
+        rawResponse,
+        "chat_auto_schedule_generate_repair"
+      );
+      if (repairResult?.ok) {
+        structuredPayload = repairResult.structuredPayload;
+      }
+      if (!structuredPayload) {
+        const errorMessage = "自动生成行程返回了不可解析的结构化内容。";
+        appendApiLog({
+          ...logBase,
+          ...buildGeminiLogFields(settings, payload),
+          status: "error",
+          statusCode: repairResult?.status || response.status,
+          responseText: rawResponse,
+          responseBody: payload,
+          repairAttempted: Boolean(repairResult),
+          repairResponseText: repairResult?.rawResponseText || "",
+          repairResponseBody: repairResult?.payload || null,
+          errorMessage
+        });
+        logged = true;
+        throw new Error(errorMessage);
+      }
+    }
+
     const parsedItems = parseAutoScheduleItems(
-      decodeValueWithPrivacy(payload, privacySession),
+      decodeValueWithPrivacy(structuredPayload || repairResult?.payload || payload, privacySession),
       dateValues
     );
     const existingEntries = getAutoScheduleExistingEntries(contact.id, dateValues);
@@ -7776,11 +7836,14 @@ async function generateAutoSchedulesForConversation(
 
     appendApiLog({
       ...logBase,
-      ...buildGeminiLogFields(settings, payload),
+      ...buildGeminiLogFields(settings, repairResult?.payload || payload),
       status: "success",
       statusCode: response.status,
-      responseText: rawResponse,
-      responseBody: payload,
+      responseText: repairResult?.rawResponseText || rawResponse,
+      responseBody: repairResult?.payload || payload,
+      repairAttempted: Boolean(repairResult),
+      originalResponseText: repairResult ? rawResponse : "",
+      originalResponseBody: repairResult ? payload : null,
       summary: encodeTextWithPrivacy(
         `联系人：${contact.name} · 自动补齐 ${acceptedEntries.length} 条小时行程`,
         privacySession
@@ -7978,7 +8041,7 @@ function buildPresencePromptContext(contact, conversation) {
   return lines.join("\n");
 }
 
-function buildPresenceUpdateOutputRule(contact, conversation) {
+function buildPresenceUpdateOutputRule(contact, conversation, settings = loadSettings()) {
   const resolvedConversation = conversation && typeof conversation === "object" ? conversation : null;
   const resolvedContact = contact && typeof contact === "object" ? contact : null;
   const contactId = String(resolvedContact?.id || resolvedConversation?.contactId || "").trim();
@@ -7986,6 +8049,10 @@ function buildPresenceUpdateOutputRule(contact, conversation) {
     return "";
   }
 
+  const structuredOutputContext = createStructuredOutputContext(
+    settings,
+    "chat_presence_update_v1"
+  );
   const visiblePlaceHints = getVisibleCommonPlacesForContact(contactId)
     .map((place) => {
       const tags = [getCommonPlaceTypeLabel(place.type)];
@@ -7995,6 +8062,20 @@ function buildPresenceUpdateOutputRule(contact, conversation) {
       return `- ${place.name}：${tags.join(" · ")}`;
     })
     .slice(0, 12);
+
+  if (structuredOutputContext.enabled) {
+    return [
+      "这次回复需要按 JSON 返回：把可展示的自然聊天正文放进 reply_text。",
+      "reply_text 里仍然按照正常聊天规则写正文；如果你要使用引用、定位、语音消息或通话请求等特殊格式，也把它们写在 reply_text 里。",
+      "只有当这一轮正文里自然出现了你自己的状态变化，例如正在过来、已经在路上、刚刚到达、刚回到某地时，才额外填写 presence_update；不要修改用户状态，也不要修改线上/线下模式。",
+      "如果没有自然发生状态变化，就不要填写 presence_update。",
+      'presence_update 可用格式一：{"presenceType":"at_place","placeName":"地点名"}',
+      'presence_update 可用格式二：{"presenceType":"in_transit","fromPlaceName":"地点名","toPlaceName":"地点名"}',
+      visiblePlaceHints.length
+        ? `状态更新可用地点（仅在确实发生状态变化时选择，不要当成正文资料复述）：\n${visiblePlaceHints.join("\n")}`
+        : "当前没有可用于状态更新的已知地点。"
+    ].join("\n");
+  }
 
   return [
     "如果这一轮正文里自然出现了你自己的状态变化，例如正在过来、已经在路上、刚刚到达、刚回到某地，才可以在正文后追加一行 presence_update；不要修改用户状态，也不要修改线上/线下模式。",
@@ -8149,7 +8230,11 @@ function buildConversationSystemPrompt(
           : ""
       },
       output_standard: {
-        presence_update_rule: buildPresenceUpdateOutputRule(contact, requestOptions.conversation),
+        presence_update_rule: buildPresenceUpdateOutputRule(
+          contact,
+          requestOptions.conversation,
+          settings
+        ),
         quote_rule:
           !isCallMode && sceneMode === "online"
             ? [
@@ -8456,6 +8541,96 @@ function buildSingleInstructionRequestBody(
   return {
     prompt: [systemPrompt, userInstruction].filter(Boolean).join("\n\n"),
     intent
+  };
+}
+
+function createStructuredOutputContext(settings, contractName = "") {
+  if (!window.PulseStructuredOutput?.createRequestContext) {
+    return {
+      enabled: false,
+      provider: "none",
+      contractName: "",
+      contract: null
+    };
+  }
+  return window.PulseStructuredOutput.createRequestContext(settings, contractName);
+}
+
+function decorateRequestBodyWithStructuredOutput(requestBody, context) {
+  if (!window.PulseStructuredOutput?.decorateRequestBody) {
+    return requestBody;
+  }
+  return window.PulseStructuredOutput.decorateRequestBody(requestBody, context);
+}
+
+function appendStructuredOutputPromptHint(text = "", context = null) {
+  const baseText = String(text || "").trim();
+  const hint = String(window.PulseStructuredOutput?.getPromptHint?.(context) || "").trim();
+  return [baseText, hint].filter(Boolean).join("\n\n");
+}
+
+function parseStructuredOutputPayload(payload, context = null) {
+  if (!window.PulseStructuredOutput?.parseStructuredResponse) {
+    return null;
+  }
+  return window.PulseStructuredOutput.parseStructuredResponse(payload, context);
+}
+
+async function requestStructuredRepairOnce(
+  settings,
+  requestEndpoint,
+  context,
+  rawResponseText = "",
+  repairIntent = "structured_output_repair"
+) {
+  if (
+    !context?.enabled ||
+    context.provider !== "deepseek_json" ||
+    !window.PulseStructuredOutput?.buildRepairInstruction
+  ) {
+    return null;
+  }
+
+  const rawText = String(rawResponseText || "").trim();
+  if (!rawText) {
+    return null;
+  }
+
+  const repairInstruction = window.PulseStructuredOutput.buildRepairInstruction(
+    context,
+    rawText,
+    "上一次输出不是可解析的目标 JSON。"
+  );
+  if (!repairInstruction) {
+    return null;
+  }
+
+  const repairSystemPrompt =
+    "你是一个只负责修复 JSON 的格式整理器。不要补充新信息，不要解释原因，只把已有内容整理成合法 JSON。";
+  const repairRequestBody = decorateRequestBodyWithStructuredOutput(
+    buildSingleInstructionRequestBody(settings, repairSystemPrompt, repairInstruction, repairIntent),
+    context
+  );
+  const repairResponse = await fetch(requestEndpoint, {
+    method: "POST",
+    headers: buildRequestHeaders(settings),
+    body: JSON.stringify(repairRequestBody)
+  });
+  const repairRawResponse = await repairResponse.text();
+  let repairPayload = repairRawResponse;
+  try {
+    repairPayload = JSON.parse(repairRawResponse);
+  } catch (_error) {
+    repairPayload = repairRawResponse;
+  }
+
+  return {
+    ok: repairResponse.ok,
+    status: repairResponse.status,
+    rawResponseText: repairRawResponse,
+    payload: repairPayload,
+    requestBody: repairRequestBody,
+    structuredPayload: parseStructuredOutputPayload(repairPayload, context)
   };
 }
 
@@ -8789,15 +8964,22 @@ async function requestMemorySummaryItems(
   const requestEndpoint = validateApiSettings(apiSettings, "记忆总结");
   const transcript = buildMemorySummaryTranscript(messages);
   const systemPrompt = buildMemorySummarySystemPrompt(profile, contact);
-  const userInstruction = [
-    "已有记忆（用于去重；如果语义重复，请不要重新生成）：",
-    buildExistingMemoryDigest(contact.id),
-    "",
-    "需要整理的新对话：",
-    transcript || "本次没有可用对话。",
-    "",
-    "请只输出 JSON。"
-  ].join("\n");
+  const structuredOutputContext = createStructuredOutputContext(
+    apiSettings,
+    "memory_extract_v1"
+  );
+  const userInstruction = appendStructuredOutputPromptHint(
+    [
+      "已有记忆（用于去重；如果语义重复，请不要重新生成）：",
+      buildExistingMemoryDigest(contact.id),
+      "",
+      "需要整理的新对话：",
+      transcript || "本次没有可用对话。",
+      "",
+      "请只输出 JSON。"
+    ].join("\n"),
+    structuredOutputContext
+  );
   const privacySession = createPrivacySession({
     settings: apiSettings,
     profile,
@@ -8809,11 +8991,14 @@ async function requestMemorySummaryItems(
   });
   const encodedSystemPrompt = preparePromptWithPrivacy(systemPrompt, privacySession);
   const encodedUserInstruction = encodeTextWithPrivacy(userInstruction, privacySession);
-  const requestBody = buildSingleInstructionRequestBody(
-    apiSettings,
-    encodedSystemPrompt,
-    encodedUserInstruction,
-    "memory_summary"
+  const requestBody = decorateRequestBodyWithStructuredOutput(
+    buildSingleInstructionRequestBody(
+      apiSettings,
+      encodedSystemPrompt,
+      encodedUserInstruction,
+      "memory_summary"
+    ),
+    structuredOutputContext
   );
   const logBase = applyPrivacyToLogEntry(
     buildMessageApiLogBase(
@@ -8856,17 +9041,52 @@ async function requestMemorySummaryItems(
       throw new Error(`接口请求失败：HTTP ${response.status}`);
     }
 
+    let repairResult = null;
+    let structuredPayload = parseStructuredOutputPayload(payload, structuredOutputContext);
+    if (structuredOutputContext.enabled && !structuredPayload) {
+      repairResult = await requestStructuredRepairOnce(
+        apiSettings,
+        requestEndpoint,
+        structuredOutputContext,
+        rawResponse,
+        "memory_summary_repair"
+      );
+      if (repairResult?.ok) {
+        structuredPayload = repairResult.structuredPayload;
+      }
+      if (!structuredPayload) {
+        const errorMessage = "记忆总结返回了不可解析的结构化内容。";
+        appendApiLog({
+          ...logBase,
+          ...buildGeminiLogFields(apiSettings, payload),
+          status: "error",
+          statusCode: repairResult?.status || response.status,
+          responseText: rawResponse,
+          responseBody: payload,
+          repairAttempted: Boolean(repairResult),
+          repairResponseText: repairResult?.rawResponseText || "",
+          repairResponseBody: repairResult?.payload || null,
+          errorMessage
+        });
+        logged = true;
+        throw new Error(errorMessage);
+      }
+    }
+
     const memoryItems = decodeValueWithPrivacy(
-      parseMemorySummaryPayload(payload, contact.id),
+      parseMemorySummaryPayload(structuredPayload || repairResult?.payload || payload, contact.id),
       privacySession
     );
     appendApiLog({
       ...logBase,
-      ...buildGeminiLogFields(apiSettings, payload),
+      ...buildGeminiLogFields(apiSettings, repairResult?.payload || payload),
       status: "success",
       statusCode: response.status,
-      responseText: rawResponse,
-      responseBody: payload,
+      responseText: repairResult?.rawResponseText || rawResponse,
+      responseBody: repairResult?.payload || payload,
+      repairAttempted: Boolean(repairResult),
+      originalResponseText: repairResult ? rawResponse : "",
+      originalResponseBody: repairResult ? payload : null,
       summary: encodeTextWithPrivacy(
         `联系人：${contact.name} · 已提取 ${memoryItems.length} 条记忆`,
         privacySession
@@ -9850,6 +10070,57 @@ function parseAssistantPresenceUpdate(text = "", contactId = "") {
   };
 }
 
+function parseAssistantPresenceUpdateFromStructuredPayload(
+  payload = null,
+  fallbackText = "",
+  contactId = ""
+) {
+  const source = payload && typeof payload === "object" ? payload : null;
+  if (!source) {
+    return {
+      cleanedText: String(fallbackText || "").trim(),
+      update: inferAssistantPresenceUpdateFromText(fallbackText, contactId)
+    };
+  }
+
+  const presenceType =
+    String(source.presenceType || "").trim() === "in_transit" ? "in_transit" : "at_place";
+  if (presenceType === "at_place") {
+    const place = findCommonPlaceByName(source.placeName || "", contactId);
+    return {
+      cleanedText: String(fallbackText || "").trim(),
+      update: place
+        ? {
+            presenceType: "at_place",
+            placeId: place.id,
+            fromPlaceId: "",
+            toPlaceId: "",
+            updatedAt: Date.now()
+          }
+        : inferAssistantPresenceUpdateFromText(fallbackText, contactId)
+    };
+  }
+
+  const fromPlace = findCommonPlaceByName(source.fromPlaceName || "", contactId);
+  const toPlace = findCommonPlaceByName(source.toPlaceName || "", contactId);
+  if (!fromPlace && !toPlace) {
+    return {
+      cleanedText: String(fallbackText || "").trim(),
+      update: inferAssistantPresenceUpdateFromText(fallbackText, contactId)
+    };
+  }
+  return {
+    cleanedText: String(fallbackText || "").trim(),
+    update: {
+      presenceType: "in_transit",
+      placeId: "",
+      fromPlaceId: fromPlace?.id || "",
+      toPlaceId: toPlace?.id || "",
+      updatedAt: Date.now()
+    }
+  };
+}
+
 function recalculateConversationUpdatedAt(conversation) {
   if (!conversation || typeof conversation !== "object") {
     return;
@@ -10224,6 +10495,16 @@ async function requestChatReplyText(
             ...extraRequestOptions
           }
         : requestOptions;
+    const chatStructuredOutputContext = getConversationAllowAiPresenceUpdate(
+      mergedRequestOptions.conversation
+    )
+      ? createStructuredOutputContext(settings, "chat_presence_update_v1")
+      : {
+          enabled: false,
+          provider: "none",
+          contractName: "",
+          contract: null
+        };
     const systemPrompt = buildConversationSystemPrompt(
       profile,
       contact,
@@ -10254,13 +10535,16 @@ async function requestChatReplyText(
       ...message,
       text: encodeTextWithPrivacy(message.text, privacySession)
     }));
-    const requestBody = buildChatRequestBody(
-      settings,
-      encodedSystemPrompt,
-      encodedHistory,
-      {
-        extraMessages: injectedRequestMessages
-      }
+    const requestBody = decorateRequestBodyWithStructuredOutput(
+      buildChatRequestBody(
+        settings,
+        encodedSystemPrompt,
+        encodedHistory,
+        {
+          extraMessages: injectedRequestMessages
+        }
+      ),
+      chatStructuredOutputContext
     );
     const logBase = applyPrivacyToLogEntry(
       buildMessageApiLogBase(
@@ -10322,21 +10606,60 @@ async function requestChatReplyText(
         throw new Error(`接口请求失败：HTTP ${response.status}`);
       }
 
-      const rawMessage = resolveMessage(payload)
+      let repairResult = null;
+      let structuredPayload = parseStructuredOutputPayload(payload, chatStructuredOutputContext);
+      if (chatStructuredOutputContext.enabled && !structuredPayload) {
+        repairResult = await requestStructuredRepairOnce(
+          settings,
+          requestEndpoint,
+          chatStructuredOutputContext,
+          rawResponse,
+          "chat_reply_presence_repair"
+        );
+        if (repairResult?.ok) {
+          structuredPayload = repairResult.structuredPayload;
+        }
+        if (!structuredPayload) {
+          const errorMessage = "对话回复返回了不可解析的结构化内容。";
+          appendApiLog({
+            ...logBase,
+            ...buildGeminiLogFields(settings, payload),
+            status: "error",
+            statusCode: repairResult?.status || response.status,
+            responseText: rawResponse,
+            responseBody: payload,
+            repairAttempted: Boolean(repairResult),
+            repairResponseText: repairResult?.rawResponseText || "",
+            repairResponseBody: repairResult?.payload || null,
+            errorMessage
+          });
+          logged = true;
+          throw new Error(errorMessage);
+        }
+      }
+
+      const rawMessage = String(
+        chatStructuredOutputContext.enabled
+          ? structuredPayload?.reply_text || ""
+          : resolveMessage(payload)
+      )
         .replace(/^(?:联系人|对方|assistant|AI)[:：]\s*/i, "")
         .trim();
       if (!rawMessage) {
         const errorMessage =
           requestMode === "gemini"
-            ? buildGeminiEmptyResponseErrorMessage(payload)
+            ? buildGeminiEmptyResponseErrorMessage(repairResult?.payload || payload)
             : "接口请求成功，但响应中没有可解析的文本。";
         appendApiLog({
           ...logBase,
-          ...buildGeminiLogFields(settings, payload),
+          ...buildGeminiLogFields(settings, repairResult?.payload || payload),
           status: "error",
           statusCode: response.status,
-          responseText: rawResponse,
-          responseBody: payload,
+          responseText: repairResult?.rawResponseText || rawResponse,
+          responseBody: repairResult?.payload || payload,
+          repairAttempted: Boolean(repairResult),
+          originalResponseText: repairResult ? rawResponse : "",
+          originalResponseBody: repairResult ? payload : null,
           errorMessage
         });
         logged = true;
@@ -10349,21 +10672,32 @@ async function requestChatReplyText(
 
       const decodedMessage = decodeTextWithPrivacy(rawMessage, privacySession);
       const parsedPresenceUpdate = getConversationAllowAiPresenceUpdate(mergedRequestOptions.conversation)
-        ? parseAssistantPresenceUpdate(decodedMessage, contact.id)
+        ? chatStructuredOutputContext.enabled
+          ? parseAssistantPresenceUpdateFromStructuredPayload(
+              structuredPayload?.presence_update || null,
+              decodedMessage,
+              contact.id
+            )
+          : parseAssistantPresenceUpdate(decodedMessage, contact.id)
         : {
             cleanedText: stripAssistantPresenceUpdateTag(decodedMessage),
             update: null
           };
-      const cleanedEncodedMessage = stripAssistantPresenceUpdateTag(rawMessage);
+      const cleanedEncodedMessage = chatStructuredOutputContext.enabled
+        ? rawMessage
+        : stripAssistantPresenceUpdateTag(rawMessage);
       if (!String(parsedPresenceUpdate.cleanedText || "").trim()) {
         const errorMessage = "接口请求成功，但回复里只有状态更新标签，缺少可展示的正文。";
         appendApiLog({
           ...logBase,
-          ...buildGeminiLogFields(settings, payload),
+          ...buildGeminiLogFields(settings, repairResult?.payload || payload),
           status: "error",
           statusCode: response.status,
-          responseText: rawResponse,
-          responseBody: payload,
+          responseText: repairResult?.rawResponseText || rawResponse,
+          responseBody: repairResult?.payload || payload,
+          repairAttempted: Boolean(repairResult),
+          originalResponseText: repairResult ? rawResponse : "",
+          originalResponseBody: repairResult ? payload : null,
           errorMessage
         });
         logged = true;
@@ -10372,11 +10706,14 @@ async function requestChatReplyText(
 
       appendApiLog({
         ...logBase,
-        ...buildGeminiLogFields(settings, payload),
+        ...buildGeminiLogFields(settings, repairResult?.payload || payload),
         status: "success",
         statusCode: response.status,
-        responseText: rawResponse,
-        responseBody: payload,
+        responseText: repairResult?.rawResponseText || rawResponse,
+        responseBody: repairResult?.payload || payload,
+        repairAttempted: Boolean(repairResult),
+        originalResponseText: repairResult ? rawResponse : "",
+        originalResponseBody: repairResult ? payload : null,
         summary: encodeTextWithPrivacy(
           `联系人：${contact.name} · 已生成 ${
             buildReplyItems(cleanedEncodedMessage, resolvedPromptSettings, privacySession).length || 1
