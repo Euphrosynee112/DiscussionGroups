@@ -330,7 +330,10 @@
     if (hostname === "localhost" || hostname === "127.0.0.1") {
       return LOCAL_STORAGE_API_BASE_URL;
     }
-    return origin.replace(/\/+$/, "");
+    if (hostname.endsWith(".fly.dev")) {
+      return origin.replace(/\/+$/, "");
+    }
+    return DEPLOYED_STORAGE_API_BASE_URL;
   }
 
   function buildStorageApiUrl(pathname = "/api/privacy-allowlist") {
