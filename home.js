@@ -13,6 +13,7 @@ const REFRESH_KEY = "x_style_generator_refresh_v2";
 const PROFILE_KEY = "x_style_generator_profile_v1";
 const PROFILE_POSTS_KEY = "x_style_generator_profile_posts_v1";
 const DISCUSSIONS_KEY = "x_style_generator_discussions_v1";
+const DIRECT_MESSAGES_KEY = "x_style_generator_direct_messages_v1";
 const PLOT_THREADS_KEY = "x_style_generator_plot_threads_v1";
 const WORLD_BOOKS_KEY = "x_style_generator_message_worldbooks_v1";
 const MESSAGE_CONTACTS_KEY = "x_style_generator_message_contacts_v1";
@@ -37,6 +38,10 @@ const TRANSFER_SCHEDULE_USER_ITEM_ID = "__schedule_owner__user";
 const TRANSFER_SCHEDULE_CONTACT_ITEM_PREFIX = "__schedule_owner__contact:";
 const TRANSFER_FORUM_FEED_POSTS_PREFIX = "__forum_feed_posts__:";
 const TRANSFER_FORUM_PROFILE_POSTS_ITEM_ID = "__forum_profile_posts__";
+const STORAGE_KEY_PREFIX = "x_style_generator_";
+const HOME_SYNC_FLASH_KEY = "pulse_home_cloud_sync_flash_v1";
+const LOCAL_STORAGE_API_BASE_URL = "http://localhost:3000";
+const DEPLOYED_STORAGE_API_BASE_URL = "https://spring-field-3219.fly.dev";
 
 const homeSceneEl = document.querySelector(".home-scene");
 const phoneDateEl = document.querySelector("#phone-date");
@@ -96,6 +101,8 @@ const homeNegativePromptInputEl = document.querySelector("#home-negative-prompt-
 const homeConfigExportBtn = document.querySelector("#home-config-export-btn");
 const homeConfigImportBtn = document.querySelector("#home-config-import-btn");
 const homeConfigImportInput = document.querySelector("#home-config-import-input");
+const homeCloudUploadBtn = document.querySelector("#home-cloud-upload-btn");
+const homeCloudRestoreBtn = document.querySelector("#home-cloud-restore-btn");
 const homeApiLogBtn = document.querySelector("#home-api-log-btn");
 const homeConfigTransferStatusEl = document.querySelector("#home-config-transfer-status");
 const homeTransferSelectAllBtn = document.querySelector("#home-transfer-select-all-btn");
@@ -194,6 +201,7 @@ const homeState = {
   exportTransferSelection: [],
   pendingImportTransferPayload: null,
   importTransferSelection: [],
+  cloudSyncPending: false,
   privacyAllowlistItems: [],
   privacyIgnorelistItems: [],
   privacyRecentHitItems: [],
@@ -1188,6 +1196,280 @@ function downloadJsonFile(filename, payload) {
   window.setTimeout(() => {
     URL.revokeObjectURL(url);
   }, 0);
+}
+
+function persistHomeSyncFlash(message, tone = "") {
+  try {
+    window.sessionStorage.setItem(
+      HOME_SYNC_FLASH_KEY,
+      JSON.stringify({
+        message: String(message || "").trim(),
+        tone: String(tone || "").trim()
+      })
+    );
+  } catch (_error) {
+  }
+}
+
+function consumeHomeSyncFlash() {
+  try {
+    const raw = window.sessionStorage.getItem(HOME_SYNC_FLASH_KEY);
+    if (!raw) {
+      return;
+    }
+    window.sessionStorage.removeItem(HOME_SYNC_FLASH_KEY);
+    const payload = JSON.parse(raw);
+    const message = String(payload?.message || "").trim();
+    if (message) {
+      setHomeTransferStatus(message, String(payload?.tone || "").trim());
+    }
+  } catch (_error) {
+  }
+}
+
+function resolveHomeStorageApiBaseUrl() {
+  const injectedBaseUrl = String(
+    window.PULSE_STORAGE_API_BASE_URL || window.PULSE_API_BASE_URL || ""
+  ).trim();
+  if (injectedBaseUrl) {
+    return injectedBaseUrl.replace(/\/+$/, "");
+  }
+
+  const origin = String(window.location?.origin || "").trim();
+  const protocol = String(window.location?.protocol || "").trim().toLowerCase();
+  const hostname = String(window.location?.hostname || "").trim().toLowerCase();
+
+  if (!origin || origin === "null" || protocol === "file:") {
+    return DEPLOYED_STORAGE_API_BASE_URL;
+  }
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return LOCAL_STORAGE_API_BASE_URL;
+  }
+  if (hostname.endsWith(".fly.dev")) {
+    return origin.replace(/\/+$/, "");
+  }
+  return DEPLOYED_STORAGE_API_BASE_URL;
+}
+
+function buildHomeStorageApiUrl(pathname = "/api/health") {
+  const baseUrl = resolveHomeStorageApiBaseUrl();
+  return new URL(String(pathname || "").replace(/^\/+/, ""), `${baseUrl}/`).toString();
+}
+
+function setHomeCloudSyncPending(isPending) {
+  homeState.cloudSyncPending = Boolean(isPending);
+  if (homeCloudUploadBtn) {
+    homeCloudUploadBtn.disabled = homeState.cloudSyncPending;
+  }
+  if (homeCloudRestoreBtn) {
+    homeCloudRestoreBtn.disabled = homeState.cloudSyncPending;
+  }
+}
+
+function getManagedStorageKeys() {
+  const keys = new Set([
+    SETTINGS_KEY,
+    POSTS_KEY,
+    REFRESH_KEY,
+    PROFILE_KEY,
+    PROFILE_POSTS_KEY,
+    DISCUSSIONS_KEY,
+    DIRECT_MESSAGES_KEY,
+    PLOT_THREADS_KEY,
+    WORLD_BOOKS_KEY,
+    MESSAGE_CONTACTS_KEY,
+    MESSAGE_THREADS_KEY,
+    MESSAGE_MEMORIES_KEY,
+    SCHEDULE_ENTRIES_KEY,
+    MESSAGE_COMMON_PLACES_KEY,
+    MESSAGE_PRESENCE_STATE_KEY,
+    PRIVACY_ALLOWLIST_META_KEY,
+    PRIVACY_PENDING_SCAN_KEY,
+    PRIVACY_ALLOWLIST_TERMS_KEY,
+    PRIVACY_IGNORELIST_TERMS_KEY,
+    PRIVACY_RECENT_HITS_SINCE_KEY,
+    PRIVACY_RECENT_HITS_DISMISSED_KEY
+  ]);
+
+  try {
+    const keyCount = Number(window.localStorage?.length || 0);
+    for (let index = 0; index < keyCount; index += 1) {
+      const key = String(window.localStorage.key(index) || "").trim();
+      if (key.startsWith(STORAGE_KEY_PREFIX)) {
+        keys.add(key);
+      }
+    }
+  } catch (_error) {
+  }
+
+  Object.keys(memoryStorage).forEach((key) => {
+    const normalizedKey = String(key || "").trim();
+    if (normalizedKey.startsWith(STORAGE_KEY_PREFIX)) {
+      keys.add(normalizedKey);
+    }
+  });
+
+  return [...keys];
+}
+
+function parseStoredSnapshotValue(rawValue) {
+  if (typeof rawValue !== "string") {
+    return rawValue;
+  }
+  try {
+    return JSON.parse(rawValue);
+  } catch (_error) {
+    return rawValue;
+  }
+}
+
+function serializeCloudSnapshotValue(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+function buildCloudStorageSnapshot() {
+  const records = {};
+  getManagedStorageKeys().forEach((key) => {
+    const storedValue = safeGetItem(key);
+    if (storedValue == null) {
+      return;
+    }
+    records[key] = parseStoredSnapshotValue(storedValue);
+  });
+  return {
+    records
+  };
+}
+
+async function requestHomeStorageApi(pathname, options = {}) {
+  const response = await fetch(buildHomeStorageApiUrl(pathname), {
+    ...options,
+    headers: {
+      Accept: "application/json",
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.headers || {})
+    }
+  });
+
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch (_error) {
+  }
+
+  if (!response.ok || payload?.ok === false) {
+    throw new Error(
+      String(payload?.error || payload?.details || `请求失败（HTTP ${response.status || 500}）。`).trim()
+    );
+  }
+
+  return payload;
+}
+
+async function uploadCurrentLocalStorageToCloud() {
+  saveCurrentHomeSettings({ silent: true });
+  setHomeExportReviewOpen(false);
+  setHomeImportReviewOpen(false);
+
+  const snapshot = buildCloudStorageSnapshot();
+  const recordKeys = Object.keys(snapshot.records || {});
+  if (!recordKeys.length) {
+    setHomeTransferStatus("当前浏览器里没有可上传的本地缓存。", "error");
+    return;
+  }
+
+  setHomeCloudSyncPending(true);
+  setHomeTransferStatus("正在上传当前本地缓存到云端数据库…", "");
+
+  try {
+    const payload = await requestHomeStorageApi("/api/storage/import", {
+      method: "POST",
+      body: JSON.stringify(snapshot)
+    });
+    const importedKeys = Number(payload?.importedKeys) || recordKeys.length;
+    setHomeTransferStatus(`已上传 ${importedKeys} 项本地缓存到云端数据库。`, "success");
+  } catch (error) {
+    setHomeTransferStatus(`上传失败：${error?.message || "无法连接云端存储服务。"}`, "error");
+  } finally {
+    setHomeCloudSyncPending(false);
+  }
+}
+
+function dispatchSyntheticStorageEvent(key, newValue) {
+  try {
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key,
+        newValue,
+        oldValue: null,
+        storageArea: window.localStorage,
+        url: window.location.href
+      })
+    );
+  } catch (_error) {
+  }
+}
+
+async function restoreLocalStorageFromCloud() {
+  const shouldContinue = window.confirm(
+    "从云端恢复会覆盖当前浏览器里同名的本地缓存。确认继续吗？"
+  );
+  if (!shouldContinue) {
+    setHomeTransferStatus("已取消从云端恢复。", "");
+    return;
+  }
+
+  setHomeExportReviewOpen(false);
+  setHomeImportReviewOpen(false);
+  setHomeCloudSyncPending(true);
+  setHomeTransferStatus("正在从云端恢复缓存…", "");
+
+  try {
+    const payload = await requestHomeStorageApi("/api/storage/bootstrap");
+    const records = Array.isArray(payload?.records) ? payload.records : [];
+    if (!records.length) {
+      setHomeTransferStatus("云端数据库里还没有可恢复的缓存记录。", "");
+      return;
+    }
+
+    const restoredKeys = [];
+    records.forEach((record) => {
+      const key = String(record?.key || "").trim();
+      if (!key) {
+        return;
+      }
+      const nextValue = serializeCloudSnapshotValue(record?.value_json);
+      safeSetItem(key, nextValue);
+      dispatchSyntheticStorageEvent(key, nextValue);
+      restoredKeys.push(key);
+    });
+
+    homeState.settings = loadSettings({ forceActiveConfig: false });
+    persistSettings(homeState.settings);
+    applySettingsToHomeForm(homeState.settings);
+    syncHomeActiveConfigSummary();
+    renderHomeEffectiveTime(homeState.settings);
+    refreshHomeTransferExportSelection();
+    if (homeState.timeModalOpen) {
+      renderHomeTimeModal();
+    }
+    if (homeState.rulesModalOpen) {
+      renderHomeRulesModal();
+    }
+    if (typeof refreshPrivacyAppFromStorage === "function" && isPrivacyAppView()) {
+      refreshPrivacyAppFromStorage();
+    }
+
+    persistHomeSyncFlash(`已从云端恢复 ${restoredKeys.length} 项缓存，页面已刷新。`, "success");
+    window.location.reload();
+  } catch (error) {
+    setHomeTransferStatus(`恢复失败：${error?.message || "无法读取云端缓存。"}`, "error");
+  } finally {
+    setHomeCloudSyncPending(false);
+  }
 }
 
 function truncateText(value, length = 60) {
@@ -6897,6 +7179,18 @@ function attachHomeSettingsEvents() {
     });
   }
 
+  if (homeCloudUploadBtn) {
+    homeCloudUploadBtn.addEventListener("click", () => {
+      uploadCurrentLocalStorageToCloud();
+    });
+  }
+
+  if (homeCloudRestoreBtn) {
+    homeCloudRestoreBtn.addEventListener("click", () => {
+      restoreLocalStorageFromCloud();
+    });
+  }
+
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && homeState.privacyAddModalOpen) {
       setPrivacyAppAddModalOpen(false);
@@ -6939,6 +7233,7 @@ function initHome() {
   renderHomeEffectiveTime(homeState.settings);
   setInterval(updateLocalClock, 1000);
   attachHomeSettingsEvents();
+  consumeHomeSyncFlash();
 
   if (isPrivacyAppView()) {
     setPrivacyAppVisible(true);
