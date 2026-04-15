@@ -3575,6 +3575,60 @@ function normalizeMessagePromptSettings(source = {}) {
   };
 }
 
+function buildConversationPromptSettingsBase(globalPromptSettings = loadSettings().messagePromptSettings) {
+  const defaults = normalizeMessagePromptSettings(DEFAULT_SETTINGS.messagePromptSettings);
+  const globalSettings = normalizeMessagePromptSettings(globalPromptSettings);
+  return normalizeMessagePromptSettings({
+    ...defaults,
+    journalLength: globalSettings.journalLength,
+    memorySummaryIntervalRounds: globalSettings.memorySummaryIntervalRounds,
+    coreMemoryThreshold: globalSettings.coreMemoryThreshold,
+    sceneMemoryThreshold: globalSettings.sceneMemoryThreshold
+  });
+}
+
+function normalizeConversationPromptSettings(
+  source = null,
+  globalPromptSettings = loadSettings().messagePromptSettings
+) {
+  if (!source || typeof source !== "object") {
+    return null;
+  }
+  return normalizeMessagePromptSettings({
+    ...buildConversationPromptSettingsBase(globalPromptSettings),
+    ...source
+  });
+}
+
+function getConversationPromptSettings(
+  conversation = getConversationById(),
+  globalPromptSettings = loadSettings().messagePromptSettings
+) {
+  return (
+    normalizeConversationPromptSettings(conversation?.promptSettings, globalPromptSettings) ||
+    buildConversationPromptSettingsBase(globalPromptSettings)
+  );
+}
+
+function syncActiveConversationPromptSettings(conversation = getConversationById()) {
+  state.chatPromptSettings = getConversationPromptSettings(conversation);
+  return state.chatPromptSettings;
+}
+
+function setConversationPromptSettings(promptSettings = {}, conversation = getConversationById()) {
+  if (!conversation) {
+    return null;
+  }
+  const nextPromptSettings = normalizeMessagePromptSettings({
+    ...getConversationPromptSettings(conversation),
+    ...(promptSettings && typeof promptSettings === "object" ? promptSettings : {})
+  });
+  conversation.promptSettings = nextPromptSettings;
+  state.chatPromptSettings = nextPromptSettings;
+  persistConversations();
+  return nextPromptSettings;
+}
+
 function getDefaultConversationMemorySummaryIntervalRounds(promptSettings = loadSettings().messagePromptSettings) {
   return clampNumber(
     normalizePositiveInteger(
@@ -3792,19 +3846,18 @@ function normalizeWorldbookSelectionIds(ids = []) {
   );
 }
 
-function repairPersistedChatWorldbookMounts(promptSettings = {}) {
+function repairPersistedChatWorldbookMounts(promptSettings = {}, conversation = getConversationById()) {
   const usedPromptSettings = normalizeMessagePromptSettings(promptSettings);
   const usedWorldbookIds = normalizeWorldbookSelectionIds(usedPromptSettings.worldbookIds);
   if (!usedPromptSettings.worldbookEnabled || !usedWorldbookIds.length) {
     return usedPromptSettings;
   }
 
-  const nextSettings = loadSettings();
   const rawStoredPromptSettings =
-    nextSettings?.messagePromptSettings && typeof nextSettings.messagePromptSettings === "object"
-      ? nextSettings.messagePromptSettings
+    conversation?.promptSettings && typeof conversation.promptSettings === "object"
+      ? conversation.promptSettings
       : {};
-  const storedPromptSettings = normalizeMessagePromptSettings(rawStoredPromptSettings);
+  const storedPromptSettings = getConversationPromptSettings(conversation);
   const hasStoredWorldbookEnabled = Object.prototype.hasOwnProperty.call(
     rawStoredPromptSettings,
     "worldbookEnabled"
@@ -3823,15 +3876,12 @@ function repairPersistedChatWorldbookMounts(promptSettings = {}) {
     return storedPromptSettings;
   }
 
-  const repairedPromptSettings = normalizeMessagePromptSettings({
+  const repairedPromptSettings = setConversationPromptSettings({
     ...storedPromptSettings,
     worldbookEnabled: true,
     worldbookIds: usedWorldbookIds
-  });
-  nextSettings.messagePromptSettings = repairedPromptSettings;
-  persistSettings(nextSettings);
-  state.chatPromptSettings = repairedPromptSettings;
-  return repairedPromptSettings;
+  }, conversation);
+  return repairedPromptSettings || usedPromptSettings;
 }
 
 function normalizeMountedIds(value) {
@@ -5163,12 +5213,14 @@ function normalizeConversation(conversation, index = 0) {
         .filter((item) => item.text)
     : [];
   const messages = dedupeConversationMessageList(normalizedMessages).messages;
+  const promptSettings = normalizeConversationPromptSettings(source.promptSettings);
   return {
     id: String(source.id || `conversation_${index}_${hashText(source.contactId)}`),
     contactId: String(source.contactId || ""),
     contactNameSnapshot: String(source.contactNameSnapshot || "").trim(),
     contactAvatarImageSnapshot: String(source.contactAvatarImageSnapshot || "").trim(),
     contactAvatarTextSnapshot: String(source.contactAvatarTextSnapshot || "").trim(),
+    promptSettings,
     videoContactImage: String(source.videoContactImage || "").trim(),
     videoUserImage: String(source.videoUserImage || "").trim(),
     sceneMode: String(source.sceneMode || "").trim().toLowerCase() === "offline" ? "offline" : "online",
@@ -6133,6 +6185,7 @@ function createConversation(contact) {
     contactNameSnapshot: contact.name,
     contactAvatarImageSnapshot: contact.avatarImage,
     contactAvatarTextSnapshot: contact.avatarText || getContactAvatarFallback(contact),
+    promptSettings: buildConversationPromptSettingsBase(),
     videoContactImage: "",
     videoUserImage: "",
     sceneMode: "online",
@@ -7903,7 +7956,7 @@ async function generateAutoSchedulesForConversation(
 
   const resolvedDays = normalizeAutoScheduleDays(days, getConversationAutoScheduleDays(conversation));
   const settings = loadSettings();
-  const promptSettings = normalizeMessagePromptSettings(state.chatPromptSettings);
+  const promptSettings = getConversationPromptSettings(conversation, settings.messagePromptSettings);
   const requestOptions = options && typeof options === "object" ? options : {};
   const dateValues = buildAutoScheduleDateValues(resolvedDays, getPromptTodayDateValue(settings));
   const systemPrompt = buildAutoScheduleGenerationSystemPrompt(
@@ -12334,7 +12387,7 @@ async function requestInnerThoughtText(settings, profile, contact, conversation,
     contact,
     conversation,
     history: historyTurns,
-    promptSettings: state.chatPromptSettings,
+    promptSettings: getConversationPromptSettings(conversation, settings.messagePromptSettings),
     systemPrompt,
     userInstruction
   });
@@ -12673,7 +12726,9 @@ function renderAwarenessHistory(contact = null, conversation = null) {
     return;
   }
 
-  const promptSettings = normalizeMessagePromptSettings(state.chatPromptSettings);
+  const promptSettings = getConversationPromptSettings(
+    resolvedConversation || getConversationById()
+  );
   const currentRounds = Math.max(
     0,
     Number.parseInt(String(resolvedConversation?.awarenessCounter || 0), 10) || 0
@@ -13502,13 +13557,7 @@ async function requestJournalEntry() {
     return;
   }
 
-  const storedPromptSettings = normalizeMessagePromptSettings(settings.messagePromptSettings);
-  const currentPromptSettings = normalizeMessagePromptSettings(state.chatPromptSettings);
-  const promptSettings = normalizeMessagePromptSettings({
-    ...storedPromptSettings,
-    worldbookEnabled: currentPromptSettings.worldbookEnabled,
-    worldbookIds: currentPromptSettings.worldbookIds
-  });
+  const promptSettings = getConversationPromptSettings(conversation, settings.messagePromptSettings);
   state.chatPromptSettings = promptSettings;
   state.journalGenerating = true;
   setJournalStatus("", "");
@@ -13642,10 +13691,7 @@ function renderTopbar() {
   }
 
   if (messagesChatSceneBtnEl) {
-    const sceneMode =
-      activeConversation?.sceneMode === "offline"
-        ? "offline"
-        : normalizeMessagePromptSettings(state.chatPromptSettings).sceneMode;
+    const sceneMode = activeConversation?.sceneMode === "offline" ? "offline" : "online";
     messagesChatSceneBtnEl.hidden = !inConversation || inVoiceCall || hasPendingIncomingCall;
     messagesChatSceneBtnEl.classList.toggle("is-offline", sceneMode === "offline");
     messagesChatSceneBtnEl.setAttribute(
@@ -14275,7 +14321,11 @@ function renderConversationVoiceCallEventCard(message) {
 }
 
 function renderConversationCallTranscriptItem(message, conversation) {
-  return renderConversationMessage(message, conversation, state.chatPromptSettings);
+  return renderConversationMessage(
+    message,
+    conversation,
+    getConversationPromptSettings(conversation)
+  );
 }
 
 function getActiveVoiceCallTranscriptMessages(conversation, callState) {
@@ -15020,7 +15070,7 @@ function renderConversationDetail(options = {}) {
   const canRequestContinuation =
     !hasPendingUserMessages &&
     conversation.messages.some((message) => message.role === "assistant");
-  const promptSettings = normalizeMessagePromptSettings(state.chatPromptSettings);
+  const promptSettings = syncActiveConversationPromptSettings(conversation);
   const renderOptions = options && typeof options === "object" ? options : {};
   const isVoiceCallActive = isConversationVoiceCallActive(conversation);
   if (isVoiceCallActive) {
@@ -16896,17 +16946,28 @@ function deleteWorldbookEntry(entryId = "") {
   state.worldbooks.entries = state.worldbooks.entries.filter((item) => item.id !== entry.id);
   persistWorldbooks();
 
-  const nextPromptSettings = normalizeMessagePromptSettings({
-    ...state.chatPromptSettings,
-    worldbookIds: (state.chatPromptSettings.worldbookIds || []).filter((id) => id !== entry.id)
+  let promptSettingsChanged = false;
+  state.conversations = state.conversations.map((conversation) => {
+    const promptSettings = normalizeConversationPromptSettings(conversation?.promptSettings);
+    if (!promptSettings || !promptSettings.worldbookIds.includes(entry.id)) {
+      return conversation;
+    }
+    promptSettingsChanged = true;
+    return {
+      ...conversation,
+      promptSettings: normalizeMessagePromptSettings({
+        ...promptSettings,
+        worldbookIds: promptSettings.worldbookIds.filter((id) => id !== entry.id)
+      })
+    };
   });
-  state.chatPromptSettings = nextPromptSettings;
-  const nextSettings = loadSettings();
-  nextSettings.messagePromptSettings = nextPromptSettings;
-  persistSettings(nextSettings);
+  if (promptSettingsChanged) {
+    persistConversations();
+  }
+  syncActiveConversationPromptSettings();
 
   renderWorldbookManager();
-  renderWorldbookMountOptions(nextPromptSettings.worldbookIds || []);
+  renderWorldbookMountOptions(state.chatPromptSettings.worldbookIds || []);
   setWorldbookStatus("世界书已删除。", "success");
 }
 
@@ -17402,7 +17463,7 @@ function updateChatHotTopicsWarning(promptSettings = getCurrentChatPromptSetting
 function getCurrentChatPromptSettingsDraft() {
   const tabs = getAvailableCustomTabs(loadSettings());
   const selectedTabId = String(messagesChatHotTopicsTabSelectEl?.value || "").trim();
-  const currentSettings = normalizeMessagePromptSettings(state.chatPromptSettings);
+  const currentSettings = getConversationPromptSettings();
   const selectedWorldbookIds = messagesChatWorldbookListEl
     ? [...messagesChatWorldbookListEl.querySelectorAll("input[type='checkbox']:checked")]
         .map((input) =>
@@ -17436,9 +17497,9 @@ function getCurrentChatPromptSettingsDraft() {
 }
 
 function createAutoScheduleRequestDraft() {
-  const promptSettings = normalizeMessagePromptSettings(
-    state.chatSettingsOpen ? getCurrentChatPromptSettingsDraft() : state.chatPromptSettings
-  );
+  const promptSettings = state.chatSettingsOpen
+    ? getCurrentChatPromptSettingsDraft()
+    : getConversationPromptSettings();
   return {
     worldbookIds: normalizeWorldbookSelectionIds(
       promptSettings.worldbookEnabled ? promptSettings.worldbookIds : []
@@ -17533,7 +17594,7 @@ function setChatSettingsOpen(isOpen) {
     messagesChatSettingsModalEl.setAttribute("aria-hidden", String(!state.chatSettingsOpen));
   }
   if (state.chatSettingsOpen) {
-    applyChatPromptSettingsToForm(state.chatPromptSettings);
+    applyChatPromptSettingsToForm(getConversationPromptSettings());
     window.setTimeout(() => {
       messagesChatHistoryRoundsInputEl?.focus();
     }, 0);
@@ -19040,13 +19101,7 @@ async function requestConversationReply(options = {}) {
   }
 
   const settings = loadSettings();
-  const storedPromptSettings = normalizeMessagePromptSettings(settings.messagePromptSettings);
-  const currentPromptSettings = normalizeMessagePromptSettings(state.chatPromptSettings);
-  const promptSettings = normalizeMessagePromptSettings({
-    ...storedPromptSettings,
-    worldbookEnabled: currentPromptSettings.worldbookEnabled,
-    worldbookIds: currentPromptSettings.worldbookIds
-  });
+  const promptSettings = getConversationPromptSettings(conversation, settings.messagePromptSettings);
   state.chatPromptSettings = promptSettings;
   let history = [];
   let removedReplyBatch = [];
@@ -19312,7 +19367,7 @@ async function requestConversationReply(options = {}) {
       }
     }
     pushConversationReplyNotification(contact, latestConversation, createdMessages);
-    repairPersistedChatWorldbookMounts(promptSettings);
+    repairPersistedChatWorldbookMounts(promptSettings, latestConversation);
     if (!isRegenerate) {
       const nextAwarenessCounter =
         hasAwarenessMonitor && !hasManualAwarenessTrigger
@@ -19661,7 +19716,12 @@ function refreshStateFromStorage() {
   state.journalEntries = loadJournalEntries();
   state.memories = loadMessageMemories();
   state.recentLocations = loadRecentLocations();
-  state.chatPromptSettings = normalizeMessagePromptSettings(settings.messagePromptSettings);
+  state.chatPromptSettings = state.activeConversationId
+    ? getConversationPromptSettings(
+        getConversationById(state.activeConversationId),
+        settings.messagePromptSettings
+      )
+    : buildConversationPromptSettingsBase(settings.messagePromptSettings);
   state.chatGlobalSettings = normalizeChatGlobalSettings(settings.chatGlobalSettings);
   sanitizePresenceStateReferences();
   syncSendingConversationStateFromReplyTasks();
@@ -20181,6 +20241,7 @@ function attachEvents() {
         state.expandedImageMessageId = "";
         state.expandedVoiceMessageId = "";
         state.activeConversationId = nextConversationId;
+        syncActiveConversationPromptSettings(getConversationById(nextConversationId));
         resetConversationVisibleMessageCount(state.activeConversationId);
         syncConversationPresenceFromSchedules(state.activeConversationId);
         setMessagesStatus("");
@@ -20478,6 +20539,7 @@ function attachEvents() {
       const conversation = createConversation(contact);
       state.activeTab = "chat";
       state.activeConversationId = conversation.id;
+      syncActiveConversationPromptSettings(conversation);
       resetConversationVisibleMessageCount(conversation.id);
       setConversationPickerOpen(false);
       renderMessagesPage();
@@ -20652,10 +20714,11 @@ function attachEvents() {
         setEditorStatus(messagesChatSettingsStatusEl, "请至少选择一条世界书。", "error");
         return;
       }
-      const nextSettings = loadSettings();
-      nextSettings.messagePromptSettings = draft;
-      persistSettings(nextSettings);
-      state.chatPromptSettings = draft;
+      const savedPromptSettings = setConversationPromptSettings(draft, conversation);
+      if (!savedPromptSettings) {
+        setEditorStatus(messagesChatSettingsStatusEl, "当前没有打开的会话。", "error");
+        return;
+      }
       const videoMediaSaveResult = setConversationVideoMediaSettings(
         state.chatSettingsVideoContactImage,
         state.chatSettingsVideoUserImage
@@ -20675,7 +20738,7 @@ function attachEvents() {
         messagesChatAutoScheduleDaysInputEl?.value || DEFAULT_AUTO_SCHEDULE_DAYS,
         messagesChatAutoScheduleTimeInputEl?.value || ""
       );
-      updateChatHotTopicsWarning(draft);
+      updateChatHotTopicsWarning(savedPromptSettings);
       let chatSettingsStatusMessage = "对话回复设置已保存。";
       let chatSettingsStatusTone = "success";
       if (!videoMediaSaveResult.conversationPersisted && videoMediaSaveResult.mediaPersisted) {
@@ -21250,7 +21313,7 @@ function attachEvents() {
       });
       nextSettings.messagePromptSettings = nextPromptSettings;
       persistSettings(nextSettings);
-      state.chatPromptSettings = nextPromptSettings;
+      syncActiveConversationPromptSettings();
       setMemorySettingsStatus("记忆设置已保存。", "success");
       renderMemoryViewer();
       window.setTimeout(() => {
@@ -21602,7 +21665,7 @@ function attachEvents() {
       });
       nextSettings.messagePromptSettings = nextPromptSettings;
       persistSettings(nextSettings);
-      state.chatPromptSettings = nextPromptSettings;
+      syncActiveConversationPromptSettings();
       setEditorStatus(messagesJournalSettingsStatusEl, "日记长度设置已保存。", "success");
       renderJournalModal();
       window.setTimeout(() => {
