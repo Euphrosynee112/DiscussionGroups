@@ -8514,6 +8514,30 @@ function hasConversationPendingReplyMessages(conversation = null) {
   );
 }
 
+function isUserRelevantScheduleEntryForProactiveTrigger(entry = null) {
+  const resolvedEntry = entry && typeof entry === "object" ? entry : null;
+  if (!resolvedEntry) {
+    return false;
+  }
+  if (resolvedEntry.ownerType === "user") {
+    return true;
+  }
+  return resolvedEntry.ownerType === "contact" && Boolean(resolvedEntry.companionIncludesUser);
+}
+
+function buildProactiveExcludedContactIdsForScheduleEntry(entry = null) {
+  const resolvedEntry = entry && typeof entry === "object" ? entry : null;
+  const excludedContactIds = new Set(
+    (Array.isArray(resolvedEntry?.companionContactIds) ? resolvedEntry.companionContactIds : [])
+      .map((item) => String(item || "").trim())
+      .filter(Boolean)
+  );
+  if (resolvedEntry?.ownerType === "contact" && String(resolvedEntry.ownerId || "").trim()) {
+    excludedContactIds.add(String(resolvedEntry.ownerId || "").trim());
+  }
+  return excludedContactIds;
+}
+
 function hasConversationHistoryForProactiveTrigger(conversation = null) {
   return Boolean(
     Array.isArray(conversation?.messages) &&
@@ -8674,7 +8698,7 @@ function buildFinishedUserScheduleEvents(
   }
   const nowTimestamp = now.getTime();
   return loadScheduleEntries()
-    .filter((entry) => entry.ownerType === "user")
+    .filter((entry) => isUserRelevantScheduleEntryForProactiveTrigger(entry))
     .flatMap((entry) =>
       buildScheduleOccurrenceWindows(entry, now).map((range) => {
         const startAt = Number(range?.start?.getTime?.() || 0);
@@ -8688,11 +8712,7 @@ function buildFinishedUserScheduleEvents(
           durationMinutes,
           finishedAgoMs: Math.max(0, nowTimestamp - endAt),
           scheduleEventId: buildProactiveScheduleEventKey(resolvedTrigger, entry, range),
-          excludedContactIds: new Set(
-            (Array.isArray(entry.companionContactIds) ? entry.companionContactIds : [])
-              .map((item) => String(item || "").trim())
-              .filter(Boolean)
-          )
+          excludedContactIds: buildProactiveExcludedContactIdsForScheduleEntry(entry)
         };
       })
     )
