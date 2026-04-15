@@ -11,6 +11,12 @@ dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 const PORT = Number.parseInt(String(process.env.PORT || "3000"), 10) || 3000;
 const DATABASE_URL = String(process.env.DATABASE_URL || "").trim();
 const STATIC_ROOT = path.resolve(__dirname, "..", "..");
+const SETTINGS_KEY = "x_style_generator_settings_v2";
+const PRIVACY_ALLOWLIST_TERMS_KEY = "x_style_generator_privacy_allowlist_terms_v1";
+const PRIVACY_ALLOWLIST_META_KEY = "x_style_generator_privacy_allowlist_meta_v1";
+const PRIVACY_ALLOWLIST_SOURCES = new Set(["manual", "scan"]);
+const PRIVACY_ALLOWLIST_CATEGORIES = new Set(["TERM", "TITLE", "NAME"]);
+const PRIVACY_ALLOWLIST_NAME_LEVELS = new Set(["FULL", "COMMON", "NICK", "PET", "HONOR"]);
 
 function createPoolConfig(connectionString = "") {
   const normalized = String(connectionString || "").trim();
@@ -28,9 +34,313 @@ function createPoolConfig(connectionString = "") {
 const poolConfig = createPoolConfig(DATABASE_URL);
 const pool = poolConfig ? new Pool(poolConfig) : null;
 
+function parseJsonValue(value, fallback = null) {
+  if (value == null) {
+    return fallback;
+  }
+  if (typeof value !== "string") {
+    return value;
+  }
+  try {
+    return JSON.parse(value);
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+function normalizeTextArray(value) {
+  const list = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/\r?\n/g)
+      : [];
+  const unique = new Set();
+  const result = [];
+  list.forEach((item) => {
+    const text = String(item || "").trim();
+    if (!text || unique.has(text)) {
+      return;
+    }
+    unique.add(text);
+    result.push(text);
+  });
+  return result;
+}
+
+function normalizePrivacyAllowlistSource(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return PRIVACY_ALLOWLIST_SOURCES.has(normalized) ? normalized : "manual";
+}
+
+function normalizePrivacyAllowlistCategory(value = "") {
+  const normalized = String(value || "").trim().toUpperCase();
+  return PRIVACY_ALLOWLIST_CATEGORIES.has(normalized) ? normalized : "TERM";
+}
+
+function normalizePrivacyAllowlistNameLevel(value = "") {
+  const normalized = String(value || "").trim().toUpperCase();
+  return PRIVACY_ALLOWLIST_NAME_LEVELS.has(normalized) ? normalized : "COMMON";
+}
+
+function normalizePrivacyAllowlistNameGroupId(value = "", fallbackText = "") {
+  return (
+    String(value || "").trim().slice(0, 40) ||
+    String(fallbackText || "").trim().slice(0, 40)
+  );
+}
+
+function normalizePrivacyAllowlistItems(items = []) {
+  const list = Array.isArray(items) ? items : [];
+  const result = [];
+  const indexMap = new Map();
+
+  list.forEach((item) => {
+    const record =
+      typeof item === "string" ? { text: item } : item && typeof item === "object" ? item : null;
+    if (!record) {
+      return;
+    }
+
+    const text = String(record.text || "").trim();
+    if (!text) {
+      return;
+    }
+
+    const source = normalizePrivacyAllowlistSource(record.source);
+    const category = normalizePrivacyAllowlistCategory(record.category);
+    const normalized = {
+      id: String(record.id || "").trim(),
+      text,
+      source,
+      category,
+      nameGroupId:
+        category === "NAME"
+          ? normalizePrivacyAllowlistNameGroupId(record.nameGroupId, text)
+          : "",
+      nameLevel:
+        category === "NAME"
+          ? normalizePrivacyAllowlistNameLevel(record.nameLevel)
+          : "COMMON",
+      sortOrder: Number.isFinite(Number(record.sortOrder ?? record.sort_order))
+        ? Math.max(0, Math.round(Number(record.sortOrder ?? record.sort_order)))
+        : result.length
+    };
+
+    if (indexMap.has(text)) {
+      const existing = result[indexMap.get(text)];
+      if (source === "manual") {
+        existing.source = "manual";
+      }
+      if (existing.category === "TERM" && category !== "TERM") {
+        existing.category = category;
+      }
+      if (category === "NAME") {
+        existing.category = "NAME";
+        existing.nameGroupId = normalizePrivacyAllowlistNameGroupId(
+          record.nameGroupId,
+          text
+        );
+        existing.nameLevel = normalizePrivacyAllowlistNameLevel(record.nameLevel);
+      } else if (existing.category !== "NAME" && category === "TITLE") {
+        existing.category = "TITLE";
+      }
+      return;
+    }
+
+    indexMap.set(text, result.length);
+    result.push(normalized);
+  });
+
+  return result.map((item, index) => ({
+    ...item,
+    sortOrder: index
+  }));
+}
+
+function mapPrivacyAllowlistRow(row = {}) {
+  const text = String(row.text || "").trim();
+  const category = normalizePrivacyAllowlistCategory(row.category);
+  return {
+    id: String(row.id || "").trim(),
+    text,
+    source: normalizePrivacyAllowlistSource(row.source),
+    category,
+    nameGroupId:
+      category === "NAME"
+        ? normalizePrivacyAllowlistNameGroupId(row.name_group_id, text)
+        : "",
+    nameLevel:
+      category === "NAME"
+        ? normalizePrivacyAllowlistNameLevel(row.name_level)
+        : "COMMON",
+    sortOrder: Number(row.sort_order) || 0,
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null
+  };
+}
+
+function buildPrivacyAllowlistItemsFromLegacyRecords(records = new Map()) {
+  const settingsRecord = parseJsonValue(records.get(SETTINGS_KEY), {}) || {};
+  const termsRecord = parseJsonValue(records.get(PRIVACY_ALLOWLIST_TERMS_KEY), []);
+  const metaRecord = parseJsonValue(records.get(PRIVACY_ALLOWLIST_META_KEY), []);
+  const metaItems = normalizePrivacyAllowlistItems(metaRecord);
+  const metaMap = new Map(metaItems.map((item) => [item.text, item]));
+  const mergedTexts = normalizeTextArray([
+    ...normalizeTextArray(termsRecord),
+    ...normalizeTextArray(settingsRecord?.privacyAllowlist || []),
+    ...metaItems.map((item) => item.text)
+  ]);
+
+  return normalizePrivacyAllowlistItems(
+    mergedTexts.map((text, index) => {
+      const matchedMeta = metaMap.get(text) || null;
+      return {
+        id: matchedMeta?.id || "",
+        text,
+        source: matchedMeta?.source || "manual",
+        category: matchedMeta?.category || "TERM",
+        nameGroupId: matchedMeta?.nameGroupId || text,
+        nameLevel: matchedMeta?.nameLevel || "COMMON",
+        sortOrder: index
+      };
+    })
+  );
+}
+
+async function replacePrivacyAllowlistItemsInDb(db, items = []) {
+  const normalizedItems = normalizePrivacyAllowlistItems(items);
+  const existingResult = await db.query(`
+    select id, text
+    from privacy_allowlist_entries
+  `);
+  const existingByText = new Map(
+    existingResult.rows.map((row) => [
+      String(row.text || "").trim(),
+      String(row.id || "").trim()
+    ])
+  );
+
+  const nextItems = normalizedItems.map((item, index) => ({
+    ...item,
+    id: item.id || existingByText.get(item.text) || randomUUID(),
+    sortOrder: index
+  }));
+  const keepIds = nextItems.map((item) => item.id);
+
+  if (keepIds.length) {
+    await db.query(
+      `
+        delete from privacy_allowlist_entries
+        where id <> all($1::text[])
+      `,
+      [keepIds]
+    );
+  } else {
+    await db.query("delete from privacy_allowlist_entries");
+  }
+
+  for (const item of nextItems) {
+    await db.query(
+      `
+        insert into privacy_allowlist_entries (
+          id,
+          text,
+          source,
+          category,
+          name_group_id,
+          name_level,
+          sort_order,
+          created_at,
+          updated_at
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, now(), now())
+        on conflict (id) do update
+          set text = excluded.text,
+              source = excluded.source,
+              category = excluded.category,
+              name_group_id = excluded.name_group_id,
+              name_level = excluded.name_level,
+              sort_order = excluded.sort_order,
+              updated_at = now()
+      `,
+      [
+        item.id,
+        item.text,
+        item.source,
+        item.category,
+        item.nameGroupId,
+        item.nameLevel,
+        item.sortOrder
+      ]
+    );
+  }
+
+  const result = await db.query(`
+    select id, text, source, category, name_group_id, name_level, sort_order, created_at, updated_at
+    from privacy_allowlist_entries
+    order by sort_order asc, updated_at asc, text asc
+  `);
+  return result.rows.map(mapPrivacyAllowlistRow);
+}
+
+async function ensurePrivacyAllowlistSeeded(db) {
+  const existingSeedResult = await db.query(`
+    select id
+    from migration_runs
+    where type = 'privacy_allowlist_seed'
+      and status = 'completed'
+    limit 1
+  `);
+  if (existingSeedResult.rows.length) {
+    return 0;
+  }
+
+  const runId = randomUUID();
+  const countResult = await db.query(`
+    select count(*)::int as count
+    from privacy_allowlist_entries
+  `);
+  const existingCount = Number(countResult.rows[0]?.count) || 0;
+  if (existingCount > 0) {
+    await db.query(
+      `
+        insert into migration_runs (id, type, status, started_at, finished_at, summary)
+        values ($1, 'privacy_allowlist_seed', 'completed', now(), now(), $2::jsonb)
+      `,
+      [runId, JSON.stringify({ seeded: 0, skipped: "table_not_empty" })]
+    );
+    return 0;
+  }
+
+  const legacyResult = await db.query(
+    `
+      select key, value_json
+      from storage_records
+      where key = any($1::text[])
+    `,
+    [[SETTINGS_KEY, PRIVACY_ALLOWLIST_TERMS_KEY, PRIVACY_ALLOWLIST_META_KEY]]
+  );
+  const recordMap = new Map(
+    legacyResult.rows.map((row) => [String(row.key || "").trim(), row.value_json])
+  );
+  const items = buildPrivacyAllowlistItemsFromLegacyRecords(recordMap);
+  if (items.length) {
+    await replacePrivacyAllowlistItemsInDb(db, items);
+  }
+
+  await db.query(
+    `
+      insert into migration_runs (id, type, status, started_at, finished_at, summary)
+      values ($1, 'privacy_allowlist_seed', 'completed', now(), now(), $2::jsonb)
+    `,
+    [runId, JSON.stringify({ seeded: items.length })]
+  );
+  return items.length;
+}
+
 async function ensureCoreTables() {
   if (!pool) {
-    return;
+    return 0;
   }
   await pool.query(`
     create table if not exists storage_records (
@@ -52,6 +362,30 @@ async function ensureCoreTables() {
       error text
     );
   `);
+  await pool.query(`
+    create table if not exists privacy_allowlist_entries (
+      id text primary key,
+      text text not null unique,
+      source text not null default 'manual',
+      category text not null default 'TERM',
+      name_group_id text not null default '',
+      name_level text not null default 'COMMON',
+      sort_order integer not null default 0,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      constraint privacy_allowlist_entries_source_check
+        check (source in ('manual', 'scan')),
+      constraint privacy_allowlist_entries_category_check
+        check (category in ('TERM', 'TITLE', 'NAME')),
+      constraint privacy_allowlist_entries_name_level_check
+        check (name_level in ('FULL', 'COMMON', 'NICK', 'PET', 'HONOR'))
+    );
+  `);
+  await pool.query(`
+    create index if not exists privacy_allowlist_entries_sort_order_idx
+      on privacy_allowlist_entries (sort_order asc, updated_at asc);
+  `);
+  return ensurePrivacyAllowlistSeeded(pool);
 }
 
 function normalizeStorageImportItems(payload = {}) {
@@ -136,6 +470,53 @@ app.use("/api", (request, response, next) => {
   response
     .status(500)
     .json(createJsonError("DATABASE_URL is missing. API routes are unavailable."));
+});
+
+app.get("/api/privacy-allowlist", async (_request, response) => {
+  try {
+    await ensurePrivacyAllowlistSeeded(pool);
+    const result = await pool.query(`
+      select id, text, source, category, name_group_id, name_level, sort_order, created_at, updated_at
+      from privacy_allowlist_entries
+      order by sort_order asc, updated_at asc, text asc
+    `);
+    response.json({
+      ok: true,
+      items: result.rows.map(mapPrivacyAllowlistRow)
+    });
+  } catch (error) {
+    response
+      .status(500)
+      .json(createJsonError("Failed to load privacy allowlist.", error?.message));
+  }
+});
+
+app.put("/api/privacy-allowlist", async (request, response) => {
+  const body = request.body && typeof request.body === "object" ? request.body : {};
+  const rawItems = Array.isArray(body) ? body : body.items;
+  if (!Array.isArray(rawItems)) {
+    response.status(400).json(createJsonError('Request body must include an "items" array.'));
+    return;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const items = await replacePrivacyAllowlistItemsInDb(client, rawItems);
+    await client.query("commit");
+    response.json({
+      ok: true,
+      items,
+      count: items.length
+    });
+  } catch (error) {
+    await client.query("rollback");
+    response
+      .status(500)
+      .json(createJsonError("Failed to save privacy allowlist.", error?.message));
+  } finally {
+    client.release();
+  }
 });
 
 app.get("/api/storage/bootstrap", async (_request, response) => {
@@ -342,9 +723,12 @@ app.use((request, response) => {
 async function startServer() {
   try {
     if (pool) {
-      await ensureCoreTables();
+      const seededCount = await ensureCoreTables();
       await pool.query("select 1");
       console.log("[Pulse Server] Connected to PostgreSQL.");
+      if (seededCount > 0) {
+        console.log(`[Pulse Server] Seeded ${seededCount} privacy allowlist entries from legacy storage.`);
+      }
     } else {
       console.warn("[Pulse Server] DATABASE_URL is not set. Storage APIs will be unavailable.");
     }

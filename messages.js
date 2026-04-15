@@ -25,6 +25,10 @@ const MESSAGE_VIDEO_MEDIA_KEY = "x_style_generator_message_video_media_v1";
 const MESSAGE_REPLY_TASKS_KEY = "x_style_generator_message_reply_tasks_v1";
 const MESSAGE_REPLY_RECOVERY_KEY = "x_style_generator_message_reply_recovery_v1";
 const MESSAGE_ACTIVE_VIEW_KEY = "x_style_generator_message_active_view_v1";
+const MESSAGE_PROACTIVE_TRIGGER_RUNS_KEY = "x_style_generator_message_proactive_trigger_runs_v1";
+const MESSAGE_PROACTIVE_TRIGGER_LOCKS_KEY = "x_style_generator_message_proactive_trigger_locks_v1";
+const PLOT_THREADS_KEY = "x_style_generator_plot_threads_v1";
+const RAISING_RECORDS_KEY = "x_style_generator_raising_records_v1";
 const DEFAULT_TEMPERATURE = 0.85;
 const DEFAULT_MESSAGE_HISTORY_ROUNDS = 20;
 const MAX_MESSAGE_HISTORY_ROUNDS = 50;
@@ -47,6 +51,11 @@ const MAX_AUTO_SCHEDULE_DAYS = 14;
 const MAX_AWARENESS_HISTORY_ITEMS = 12;
 const MAX_AWARENESS_MONITOR_ROUNDS = 20;
 const AUTO_SCHEDULE_TIMER_INTERVAL_MS = 60 * 1000;
+const DEFAULT_PROACTIVE_TRIGGER_SCAN_INTERVAL_MS = 60 * 1000;
+const DEFAULT_PROACTIVE_TRIGGER_CATCHUP_MINUTES = 240;
+const PROACTIVE_TRIGGER_LOCK_TTL_MS = 2 * 60 * 1000;
+const MAX_PROACTIVE_TRIGGER_RUNS = 200;
+const PROACTIVE_RELATION_ACTIVITY_LOOKBACK_DAYS = 7;
 const FOREGROUND_REPLY_SYNC_INTERVAL_MS = 1200;
 const FOREGROUND_REPLY_SYNC_GRACE_MS = 8000;
 const ASSISTANT_REPLY_REVEAL_INTERVAL_MS = 2000;
@@ -211,6 +220,8 @@ const messagesContactSpecialPersonaInputEl = document.querySelector(
   "#messages-contact-special-persona-input"
 );
 const messagesContactEditorStatusEl = document.querySelector("#messages-contact-editor-status");
+const messagesContactDeleteSectionEl = document.querySelector("#messages-contact-delete-section");
+const messagesContactDeleteBtnEl = document.querySelector("#messages-contact-delete-btn");
 
 const messagesPickerModalEl = document.querySelector("#messages-picker-modal");
 const messagesPickerCloseBtnEl = document.querySelector("#messages-picker-close-btn");
@@ -288,6 +299,9 @@ const messagesChatVideoUserResetBtnEl = document.querySelector(
 const messagesChatAllowAiPresenceUpdateInputEl = document.querySelector(
   "#messages-chat-allow-ai-presence-update-input"
 );
+const messagesChatAllowAiProactiveMessageInputEl = document.querySelector(
+  "#messages-chat-allow-ai-proactive-message-input"
+);
 const messagesChatAllowAiAutoScheduleInputEl = document.querySelector(
   "#messages-chat-allow-ai-auto-schedule-input"
 );
@@ -322,6 +336,8 @@ const messagesChatAutoScheduleStatusEl = document.querySelector(
   "#messages-chat-auto-schedule-status"
 );
 let autoScheduleTimerId = 0;
+let proactiveTriggerTimerId = 0;
+let proactiveTriggerInitialCatchupPending = true;
 let foregroundReplySyncTimerId = 0;
 let foregroundReplySyncConversationId = "";
 let foregroundReplySyncUntil = 0;
@@ -625,6 +641,9 @@ let conversationListLongPressConversationId = "";
 let conversationListLongPressTriggeredId = "";
 let conversationListLongPressStartPoint = null;
 let foregroundReplyTaskHeartbeatStop = () => {};
+const proactiveTriggerWorkerInstanceId = `proactive_worker_${Date.now()}_${Math.random()
+  .toString(36)
+  .slice(2, 8)}`;
 
 const state = {
   profile: { ...DEFAULT_PROFILE },
@@ -2779,6 +2798,25 @@ function resolveScheduleOccurrenceRange(
   return { start, end };
 }
 
+function resolvePromptAdjustedTimestamp(timestamp = 0, settings = loadSettings()) {
+  const resolvedTimestamp = Number(timestamp) || 0;
+  if (!(resolvedTimestamp > 0)) {
+    return 0;
+  }
+  const promptNow = getPromptNow(settings);
+  const manualTimeSettings =
+    typeof window.PulsePromptConfig?.normalizeManualTimeSettings === "function"
+      ? window.PulsePromptConfig.normalizeManualTimeSettings(
+          settings?.manualTimeSettings,
+          promptNow
+        )
+      : null;
+  const promptOffsetMs = Boolean(manualTimeSettings?.enabled)
+    ? Number(manualTimeSettings?.offsetMs) || 0
+    : 0;
+  return resolvedTimestamp + promptOffsetMs;
+}
+
 function buildContinuationRequestUserMessage(conversation, settings = loadSettings()) {
   const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];
   const lastAssistantMessage = [...messages]
@@ -2796,17 +2834,10 @@ function buildContinuationRequestUserMessage(conversation, settings = loadSettin
 
   if (Number.isFinite(lastAssistantCreatedAt) && lastAssistantCreatedAt > 0) {
     const promptNow = getPromptNow(settings);
-    const manualTimeSettings =
-      typeof window.PulsePromptConfig?.normalizeManualTimeSettings === "function"
-        ? window.PulsePromptConfig.normalizeManualTimeSettings(
-            settings?.manualTimeSettings,
-            promptNow
-          )
-        : null;
-    const promptOffsetMs = Boolean(manualTimeSettings?.enabled)
-      ? Number(manualTimeSettings?.offsetMs) || 0
-      : 0;
-    const promptLastAssistantTimestamp = lastAssistantCreatedAt + promptOffsetMs;
+    const promptLastAssistantTimestamp = resolvePromptAdjustedTimestamp(
+      lastAssistantCreatedAt,
+      settings
+    );
     const elapsedDurationMs = promptNow.getTime() - promptLastAssistantTimestamp;
     elapsedDurationLabel = formatConversationElapsedDuration(elapsedDurationMs);
     const totalMinutes = Math.max(0, Math.floor(elapsedDurationMs / 60000));
@@ -2856,6 +2887,125 @@ function buildContinuationRequestUserMessage(conversation, settings = loadSettin
     ) ||
       `距离你上一次开口大约已经过了 ${elapsedDurationLabel}。${waitingMoodGuidance} 这种等待感只体现在语气变化里，不要直接说出时长；这次必须先给出可发送正文，没有自然的状态变化就不要输出 presence_update。`
   ].join("\n");
+}
+
+function replacePromptTemplateVariables(template = "", variables = {}) {
+  const resolvedTemplate = String(template || "").trim();
+  if (!resolvedTemplate) {
+    return "";
+  }
+  return resolvedTemplate.replace(/\{([a-zA-Z0-9_]+)\}/g, (_match, key) => {
+    const value = Object.prototype.hasOwnProperty.call(variables, key) ? variables[key] : "";
+    return String(value ?? "").trim();
+  });
+}
+
+function normalizeProactiveTriggerRequest(trigger = null) {
+  const source = trigger && typeof trigger === "object" ? trigger : null;
+  const triggerId = String(source?.triggerId || source?.id || "").trim();
+  const scheduleEventId = String(source?.scheduleEventId || "").trim();
+  if (!triggerId || !scheduleEventId) {
+    return null;
+  }
+  const scheduleDurationMinutes = Math.max(0, Number(source.scheduleDurationMinutes) || 0);
+  const idleGapMs = Math.max(0, Number(source.idleGapMs) || 0);
+  const finishedAgoMs = Math.max(0, Number(source.finishedAgoMs) || 0);
+  return {
+    triggerId,
+    triggerType: String(source?.triggerType || "").trim(),
+    scheduleEventId,
+    scheduleTitle: String(source?.scheduleTitle || "").trim() || "这段行程",
+    scheduleDurationMinutes,
+    scheduleDurationText:
+      String(source?.scheduleDurationText || "").trim() ||
+      formatConversationElapsedDuration(scheduleDurationMinutes * 60 * 1000),
+    idleGapMs,
+    idleGapText:
+      String(source?.idleGapText || "").trim() ||
+      formatConversationElapsedDuration(idleGapMs),
+    finishedAgoMs,
+    finishedAgoText:
+      String(source?.finishedAgoText || "").trim() ||
+      formatConversationElapsedDuration(finishedAgoMs),
+    promptTemplate: String(source?.promptTemplate || "").trim(),
+    toneByIdleGap:
+      source?.toneByIdleGap && typeof source.toneByIdleGap === "object"
+        ? { ...source.toneByIdleGap }
+        : {},
+    reasonSummary: String(source?.reasonSummary || "").trim()
+  };
+}
+
+function buildProactiveTriggerIdleToneGuidance(proactiveTrigger = null) {
+  const normalizedTrigger = normalizeProactiveTriggerRequest(proactiveTrigger);
+  const toneByIdleGap =
+    normalizedTrigger?.toneByIdleGap && typeof normalizedTrigger.toneByIdleGap === "object"
+      ? normalizedTrigger.toneByIdleGap
+      : {};
+  const idleHours = normalizedTrigger ? normalizedTrigger.idleGapMs / (60 * 60 * 1000) : 0;
+  if (idleHours > 24 && String(toneByIdleGap.after24Hours || "").trim()) {
+    return String(toneByIdleGap.after24Hours || "").trim();
+  }
+  if (idleHours > 6 && String(toneByIdleGap.within24Hours || "").trim()) {
+    return String(toneByIdleGap.within24Hours || "").trim();
+  }
+  return String(
+    toneByIdleGap.within6Hours || toneByIdleGap.within24Hours || toneByIdleGap.after24Hours || ""
+  ).trim();
+}
+
+function buildProactiveTriggerRequestUserMessage(
+  proactiveTrigger = null,
+  conversation = null,
+  settings = loadSettings()
+) {
+  const normalizedTrigger = normalizeProactiveTriggerRequest(proactiveTrigger);
+  if (!normalizedTrigger) {
+    return "";
+  }
+
+  const resolvedConversation = conversation && typeof conversation === "object" ? conversation : null;
+  const messages = Array.isArray(resolvedConversation?.messages) ? resolvedConversation.messages : [];
+  const lastMessage = messages[messages.length - 1] || null;
+  const latestConversationTimestamp = resolvePromptAdjustedTimestamp(
+    lastMessage?.createdAt || resolvedConversation?.updatedAt || 0,
+    settings
+  );
+  const promptNow = getPromptNow(settings);
+  const idleGapText =
+    normalizedTrigger.idleGapMs > 0
+      ? normalizedTrigger.idleGapText
+      : latestConversationTimestamp > 0
+        ? formatConversationElapsedDuration(promptNow.getTime() - latestConversationTimestamp)
+        : "一阵子";
+  const idleToneGuidance = buildProactiveTriggerIdleToneGuidance({
+    ...normalizedTrigger,
+    idleGapText
+  });
+  const promptTemplate =
+    normalizedTrigger.promptTemplate ||
+    [
+      "这不是对用户上一条消息的回复，而是你主动发起的一轮新对话。",
+      "你知道用户刚结束了一段持续 {schedule_duration_text} 的行程「{schedule_title}」，这只是促使你主动开口的内部动机。",
+      "距离你们上次自然聊天已经过去了 {idle_gap_text}。",
+      "请结合最近聊天氛围、你自己的角色设定和此刻态度，自然地主动发来一条消息。",
+      "不要把它写成日程提醒，也不要直白说你监测到用户刚结束行程。"
+    ].join("\n");
+  const resolvedMessage = replacePromptTemplateVariables(promptTemplate, {
+    schedule_title: normalizedTrigger.scheduleTitle,
+    schedule_duration_text: normalizedTrigger.scheduleDurationText,
+    idle_gap_text: idleGapText,
+    finished_ago_text: normalizedTrigger.finishedAgoText
+  });
+
+  return [
+    resolvedMessage,
+    idleToneGuidance ? `语气补充：${idleToneGuidance}` : "",
+    "这次必须先直接输出可发送的聊天正文；不要写旁白、系统解释或触发原因。",
+    "如果没有特别自然的状态变化，就不要输出 presence_update。"
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function readFileAsDataUrl(file) {
@@ -5023,6 +5173,7 @@ function normalizeConversation(conversation, index = 0) {
     videoUserImage: String(source.videoUserImage || "").trim(),
     sceneMode: String(source.sceneMode || "").trim().toLowerCase() === "offline" ? "offline" : "online",
     allowAiPresenceUpdate: Boolean(source.allowAiPresenceUpdate),
+    allowAiProactiveMessage: Boolean(source.allowAiProactiveMessage),
     allowAiAutoSchedule: Boolean(source.allowAiAutoSchedule),
     autoScheduleDays: normalizeAutoScheduleDays(source.autoScheduleDays, DEFAULT_AUTO_SCHEDULE_DAYS),
     autoScheduleTime: normalizeAutoScheduleTime(source.autoScheduleTime),
@@ -5986,6 +6137,7 @@ function createConversation(contact) {
     videoUserImage: "",
     sceneMode: "online",
     allowAiPresenceUpdate: false,
+    allowAiProactiveMessage: false,
     allowAiAutoSchedule: false,
     autoScheduleDays: DEFAULT_AUTO_SCHEDULE_DAYS,
     autoScheduleTime: "",
@@ -7969,6 +8121,757 @@ async function maybeAutoGenerateSchedulesForConversation(conversation = null) {
   }
 }
 
+function normalizeProactiveQuietHourEntry(entry = {}, index = 0) {
+  const source = entry && typeof entry === "object" ? entry : {};
+  const start = normalizeAutoScheduleTime(source.start || "");
+  const end = normalizeAutoScheduleTime(source.end || "");
+  if (!start || !end) {
+    return null;
+  }
+  return {
+    id: String(source.id || `quiet_hour_${index}_${start}_${end}`),
+    start,
+    end
+  };
+}
+
+function normalizeProactiveTriggerRule(rule = {}, index = 0) {
+  const source = rule && typeof rule === "object" ? rule : {};
+  const type = String(source.type || "").trim() === "user_schedule_finished"
+    ? "user_schedule_finished"
+    : "";
+  if (!type) {
+    return null;
+  }
+  return {
+    id: String(source.id || `proactive_trigger_${index}_${type}`),
+    enabled: source.enabled !== false,
+    type,
+    description: String(source.description || "").trim(),
+    contactIds: Array.isArray(source.contactIds)
+      ? [...new Set(source.contactIds.map((item) => String(item || "").trim()).filter(Boolean))]
+      : [],
+    requireExistingConversation: source.requireExistingConversation !== false,
+    recentFinishWithinMinutes: clampNumber(
+      normalizePositiveInteger(source.recentFinishWithinMinutes, 30),
+      1,
+      24 * 60
+    ),
+    minDurationMinutes: clampNumber(
+      normalizePositiveInteger(source.minDurationMinutes, 180),
+      1,
+      7 * 24 * 60
+    ),
+    maxContactsPerEvent: 1,
+    cooldownMinutesPerContact: clampNumber(
+      normalizePositiveInteger(source.cooldownMinutesPerContact, 12 * 60),
+      1,
+      14 * 24 * 60
+    ),
+    maxTriggersPerContactPerDay: clampNumber(
+      normalizePositiveInteger(source.maxTriggersPerContactPerDay, 1),
+      1,
+      24
+    ),
+    skipIfConversationActiveWithinMinutes: clampNumber(
+      normalizePositiveInteger(source.skipIfConversationActiveWithinMinutes, 120),
+      1,
+      7 * 24 * 60
+    ),
+    skipIfUserSentWithinMinutes: clampNumber(
+      normalizePositiveInteger(source.skipIfUserSentWithinMinutes, 180),
+      1,
+      7 * 24 * 60
+    ),
+    skipIfAssistantSentWithinMinutes: clampNumber(
+      normalizePositiveInteger(source.skipIfAssistantSentWithinMinutes, 360),
+      1,
+      7 * 24 * 60
+    ),
+    promptTemplate: String(source.promptTemplate || "").trim(),
+    toneByIdleGap:
+      source.toneByIdleGap && typeof source.toneByIdleGap === "object"
+        ? { ...source.toneByIdleGap }
+        : {}
+  };
+}
+
+function getProactiveMessageConfig() {
+  const source =
+    window.PulseProactiveMessageConfig &&
+    typeof window.PulseProactiveMessageConfig === "object"
+      ? window.PulseProactiveMessageConfig
+      : {};
+  const quietHours = Array.isArray(source.quietHours)
+    ? source.quietHours
+        .map((entry, index) => normalizeProactiveQuietHourEntry(entry, index))
+        .filter(Boolean)
+    : [];
+  const triggers = Array.isArray(source.triggers)
+    ? source.triggers
+        .map((rule, index) => normalizeProactiveTriggerRule(rule, index))
+        .filter((rule) => rule && rule.enabled)
+    : [];
+  return {
+    enabled: Boolean(source.enabled) && triggers.length > 0,
+    triggerScanIntervalMs: Math.max(
+      10 * 1000,
+      Number(source.triggerScanIntervalMs) || DEFAULT_PROACTIVE_TRIGGER_SCAN_INTERVAL_MS
+    ),
+    openPageCatchupLookbackMinutes: clampNumber(
+      normalizePositiveInteger(
+        source.openPageCatchupLookbackMinutes,
+        DEFAULT_PROACTIVE_TRIGGER_CATCHUP_MINUTES
+      ),
+      1,
+      24 * 60
+    ),
+    quietHours,
+    triggers
+  };
+}
+
+function isNowWithinProactiveQuietHours(config = getProactiveMessageConfig(), now = new Date()) {
+  const quietHours = Array.isArray(config?.quietHours) ? config.quietHours : [];
+  if (!quietHours.length) {
+    return false;
+  }
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  return quietHours.some((entry) => {
+    const startMinutes = parseTimeToMinutes(entry.start);
+    const endMinutes = parseTimeToMinutes(entry.end);
+    if (startMinutes === endMinutes) {
+      return true;
+    }
+    if (startMinutes < endMinutes) {
+      return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+    }
+    return currentMinutes >= startMinutes || currentMinutes < endMinutes;
+  });
+}
+
+function normalizeProactiveTriggerRun(entry = {}) {
+  const source = entry && typeof entry === "object" ? entry : {};
+  const triggerId = String(source.triggerId || "").trim();
+  const scheduleEventId = String(source.scheduleEventId || "").trim();
+  const contactId = String(source.contactId || "").trim();
+  const triggeredAt = Number(source.triggeredAt) || 0;
+  if (!triggerId || !scheduleEventId || !contactId || !(triggeredAt > 0)) {
+    return null;
+  }
+  return {
+    triggerId,
+    scheduleEventId,
+    contactId,
+    conversationId: String(source.conversationId || "").trim(),
+    triggeredAt,
+    dateValue:
+      /^\d{4}-\d{2}-\d{2}$/.test(String(source.dateValue || "").trim())
+        ? String(source.dateValue || "").trim()
+        : formatDateToValue(new Date(triggeredAt)),
+    scheduleEndedAt: Number(source.scheduleEndedAt) || 0,
+    scheduleTitle: String(source.scheduleTitle || "").trim()
+  };
+}
+
+function loadProactiveTriggerRuns() {
+  const raw = safeGetItem(MESSAGE_PROACTIVE_TRIGGER_RUNS_KEY);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return (Array.isArray(parsed) ? parsed : [])
+      .map((entry) => normalizeProactiveTriggerRun(entry))
+      .filter(Boolean)
+      .sort((left, right) => right.triggeredAt - left.triggeredAt)
+      .slice(0, MAX_PROACTIVE_TRIGGER_RUNS);
+  } catch (_error) {
+    return [];
+  }
+}
+
+function persistProactiveTriggerRuns(runs = []) {
+  const normalizedRuns = (Array.isArray(runs) ? runs : [])
+    .map((entry) => normalizeProactiveTriggerRun(entry))
+    .filter(Boolean)
+    .sort((left, right) => right.triggeredAt - left.triggeredAt)
+    .slice(0, MAX_PROACTIVE_TRIGGER_RUNS);
+  return safeSetItem(MESSAGE_PROACTIVE_TRIGGER_RUNS_KEY, JSON.stringify(normalizedRuns));
+}
+
+function recordProactiveTriggerRun(entry = {}) {
+  const normalizedEntry = normalizeProactiveTriggerRun(entry);
+  if (!normalizedEntry) {
+    return false;
+  }
+  const nextRuns = [
+    normalizedEntry,
+    ...loadProactiveTriggerRuns().filter(
+      (item) =>
+        !(
+          item.triggerId === normalizedEntry.triggerId &&
+          item.scheduleEventId === normalizedEntry.scheduleEventId
+        )
+    )
+  ];
+  return persistProactiveTriggerRuns(nextRuns);
+}
+
+function hasRecordedProactiveTriggerRun(triggerId = "", scheduleEventId = "", runs = loadProactiveTriggerRuns()) {
+  const resolvedTriggerId = String(triggerId || "").trim();
+  const resolvedEventId = String(scheduleEventId || "").trim();
+  return (Array.isArray(runs) ? runs : []).some(
+    (entry) =>
+      entry.triggerId === resolvedTriggerId &&
+      entry.scheduleEventId === resolvedEventId
+  );
+}
+
+function normalizeProactiveTriggerLock(entry = {}) {
+  const source = entry && typeof entry === "object" ? entry : {};
+  const key = String(source.key || "").trim();
+  const ownerId = String(source.ownerId || "").trim();
+  const expiresAt = Number(source.expiresAt) || 0;
+  if (!key || !ownerId || !(expiresAt > Date.now() - PROACTIVE_TRIGGER_LOCK_TTL_MS)) {
+    return null;
+  }
+  return {
+    key,
+    ownerId,
+    claimedAt: Number(source.claimedAt) || Date.now(),
+    expiresAt
+  };
+}
+
+function loadProactiveTriggerLocks() {
+  const raw = safeGetItem(MESSAGE_PROACTIVE_TRIGGER_LOCKS_KEY);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return (Array.isArray(parsed) ? parsed : [])
+      .map((entry) => normalizeProactiveTriggerLock(entry))
+      .filter((entry) => entry && entry.expiresAt > Date.now());
+  } catch (_error) {
+    return [];
+  }
+}
+
+function persistProactiveTriggerLocks(locks = []) {
+  const normalizedLocks = (Array.isArray(locks) ? locks : [])
+    .map((entry) => normalizeProactiveTriggerLock(entry))
+    .filter((entry) => entry && entry.expiresAt > Date.now());
+  return safeSetItem(MESSAGE_PROACTIVE_TRIGGER_LOCKS_KEY, JSON.stringify(normalizedLocks));
+}
+
+function acquireProactiveTriggerLock(lockKey = "", ttlMs = PROACTIVE_TRIGGER_LOCK_TTL_MS) {
+  const resolvedKey = String(lockKey || "").trim();
+  if (!resolvedKey) {
+    return "";
+  }
+  const now = Date.now();
+  const activeLocks = loadProactiveTriggerLocks();
+  if (activeLocks.some((entry) => entry.key === resolvedKey && entry.expiresAt > now)) {
+    return "";
+  }
+  const ownerId = `${proactiveTriggerWorkerInstanceId}_${now}`;
+  persistProactiveTriggerLocks([
+    ...activeLocks.filter((entry) => entry.key !== resolvedKey),
+    {
+      key: resolvedKey,
+      ownerId,
+      claimedAt: now,
+      expiresAt: now + Math.max(5 * 1000, Number(ttlMs) || PROACTIVE_TRIGGER_LOCK_TTL_MS)
+    }
+  ]);
+  const confirmedLock = loadProactiveTriggerLocks().find((entry) => entry.key === resolvedKey) || null;
+  return confirmedLock?.ownerId === ownerId ? ownerId : "";
+}
+
+function releaseProactiveTriggerLock(lockKey = "", ownerId = "") {
+  const resolvedKey = String(lockKey || "").trim();
+  const resolvedOwnerId = String(ownerId || "").trim();
+  if (!resolvedKey || !resolvedOwnerId) {
+    return false;
+  }
+  const remainingLocks = loadProactiveTriggerLocks().filter(
+    (entry) => !(entry.key === resolvedKey && entry.ownerId === resolvedOwnerId)
+  );
+  return persistProactiveTriggerLocks(remainingLocks);
+}
+
+function getConversationLatestMessageTimestamp(conversation = null, role = "") {
+  const resolvedRole = String(role || "").trim();
+  const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (resolvedRole && String(message?.role || "").trim() !== resolvedRole) {
+      continue;
+    }
+    const createdAt = Number(message?.createdAt) || 0;
+    if (createdAt > 0) {
+      return createdAt;
+    }
+  }
+  return 0;
+}
+
+function getConversationLatestActivityTimestamp(conversation = null) {
+  return getConversationLatestMessageTimestamp(conversation) || Number(conversation?.updatedAt) || 0;
+}
+
+function getPromptConversationLatestTimestamp(
+  conversation = null,
+  role = "",
+  settings = loadSettings()
+) {
+  const rawTimestamp = role
+    ? getConversationLatestMessageTimestamp(conversation, role)
+    : getConversationLatestActivityTimestamp(conversation);
+  return resolvePromptAdjustedTimestamp(rawTimestamp, settings) || rawTimestamp;
+}
+
+function countConversationMessagesSince(
+  conversation = null,
+  sinceTimestamp = 0,
+  role = "",
+  settings = loadSettings()
+) {
+  const resolvedRole = String(role || "").trim();
+  const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];
+  return messages.filter((message) => {
+    if (resolvedRole && String(message?.role || "").trim() !== resolvedRole) {
+      return false;
+    }
+    const promptTimestamp = resolvePromptAdjustedTimestamp(message?.createdAt, settings);
+    return promptTimestamp >= sinceTimestamp;
+  }).length;
+}
+
+function countConversationTurnsSince(
+  conversation = null,
+  sinceTimestamp = 0,
+  settings = loadSettings()
+) {
+  return collapseConversationMessagesByTurn(conversation?.messages || []).filter((message) => {
+    const promptTimestamp = resolvePromptAdjustedTimestamp(message?.createdAt, settings);
+    return promptTimestamp >= sinceTimestamp;
+  }).length;
+}
+
+function buildConversationRelationshipActivity(
+  conversation = null,
+  settings = loadSettings(),
+  now = getPromptNow(settings)
+) {
+  const nowTimestamp = now.getTime();
+  const sinceTimestamp =
+    nowTimestamp - PROACTIVE_RELATION_ACTIVITY_LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
+  const latestActivityAt = getPromptConversationLatestTimestamp(conversation, "", settings);
+  const recentTurns = countConversationTurnsSince(conversation, sinceTimestamp, settings);
+  const recentUserMessages = countConversationMessagesSince(
+    conversation,
+    sinceTimestamp,
+    "user",
+    settings
+  );
+  const recentAssistantMessages = countConversationMessagesSince(
+    conversation,
+    sinceTimestamp,
+    "assistant",
+    settings
+  );
+  return {
+    latestActivityAt,
+    recentTurns,
+    recentUserMessages,
+    recentAssistantMessages,
+    score:
+      latestActivityAt +
+      recentTurns * 90 * 60 * 1000 +
+      recentUserMessages * 30 * 60 * 1000 +
+      recentAssistantMessages * 20 * 60 * 1000
+  };
+}
+
+function buildProactiveScheduleEventKey(trigger, entry, range) {
+  return [
+    String(trigger?.id || "").trim(),
+    String(entry?.id || "").trim(),
+    String(entry?.scheduleType || "").trim(),
+    String(entry?.date || "").trim(),
+    Number(range?.start?.getTime?.() || 0),
+    Number(range?.end?.getTime?.() || 0)
+  ].join("__");
+}
+
+function hasConversationPendingReplyMessages(conversation = null) {
+  return Boolean(
+    Array.isArray(conversation?.messages) &&
+      conversation.messages.some((message) => message.role === "user" && message.needsReply)
+  );
+}
+
+function hasConversationHistoryForProactiveTrigger(conversation = null) {
+  return Boolean(
+    Array.isArray(conversation?.messages) &&
+      conversation.messages.some((message) => String(message?.text || "").trim())
+  );
+}
+
+function countProactiveTriggerRunsForContactOnDate(
+  triggerId = "",
+  contactId = "",
+  dateValue = "",
+  runs = loadProactiveTriggerRuns()
+) {
+  const resolvedTriggerId = String(triggerId || "").trim();
+  const resolvedContactId = String(contactId || "").trim();
+  const resolvedDateValue = String(dateValue || "").trim();
+  return (Array.isArray(runs) ? runs : []).filter(
+    (entry) =>
+      entry.triggerId === resolvedTriggerId &&
+      entry.contactId === resolvedContactId &&
+      entry.dateValue === resolvedDateValue
+  ).length;
+}
+
+function findLatestProactiveTriggerRunForContact(
+  triggerId = "",
+  contactId = "",
+  runs = loadProactiveTriggerRuns()
+) {
+  const resolvedTriggerId = String(triggerId || "").trim();
+  const resolvedContactId = String(contactId || "").trim();
+  return (
+    (Array.isArray(runs) ? runs : [])
+      .filter(
+        (entry) =>
+          entry.triggerId === resolvedTriggerId &&
+          entry.contactId === resolvedContactId
+      )
+      .sort((left, right) => right.triggeredAt - left.triggeredAt)[0] || null
+  );
+}
+
+function isConversationEligibleForProactiveTrigger(
+  conversation = null,
+  trigger = null,
+  scheduleEvent = null,
+  settings = loadSettings(),
+  now = getPromptNow(settings),
+  runs = loadProactiveTriggerRuns()
+) {
+  const resolvedConversation = conversation && typeof conversation === "object" ? conversation : null;
+  const resolvedTrigger = trigger && typeof trigger === "object" ? trigger : null;
+  const resolvedEvent = scheduleEvent && typeof scheduleEvent === "object" ? scheduleEvent : null;
+  if (!resolvedConversation || !resolvedTrigger || !resolvedEvent) {
+    return false;
+  }
+  const contactId = String(resolvedConversation.contactId || "").trim();
+  if (!contactId || !getConversationAllowAiProactiveMessage(resolvedConversation)) {
+    return false;
+  }
+  if (
+    Array.isArray(resolvedTrigger.contactIds) &&
+    resolvedTrigger.contactIds.length &&
+    !resolvedTrigger.contactIds.includes(contactId)
+  ) {
+    return false;
+  }
+  if (resolvedEvent.excludedContactIds?.has(contactId)) {
+    return false;
+  }
+  if (resolvedTrigger.requireExistingConversation && !hasConversationHistoryForProactiveTrigger(resolvedConversation)) {
+    return false;
+  }
+  if (!getResolvedConversationContact(resolvedConversation)) {
+    return false;
+  }
+  if (hasConversationPendingReplyMessages(resolvedConversation) || isConversationReplyBusy(resolvedConversation.id)) {
+    return false;
+  }
+
+  const nowTimestamp = now.getTime();
+  const latestConversationAt = getPromptConversationLatestTimestamp(
+    resolvedConversation,
+    "",
+    settings
+  );
+  if (
+    resolvedTrigger.skipIfConversationActiveWithinMinutes > 0 &&
+    latestConversationAt > 0 &&
+    nowTimestamp - latestConversationAt <
+      resolvedTrigger.skipIfConversationActiveWithinMinutes * 60 * 1000
+  ) {
+    return false;
+  }
+
+  const latestUserAt = getPromptConversationLatestTimestamp(
+    resolvedConversation,
+    "user",
+    settings
+  );
+  if (
+    resolvedTrigger.skipIfUserSentWithinMinutes > 0 &&
+    latestUserAt > 0 &&
+    nowTimestamp - latestUserAt < resolvedTrigger.skipIfUserSentWithinMinutes * 60 * 1000
+  ) {
+    return false;
+  }
+
+  const latestAssistantAt = getPromptConversationLatestTimestamp(
+    resolvedConversation,
+    "assistant",
+    settings
+  );
+  if (
+    resolvedTrigger.skipIfAssistantSentWithinMinutes > 0 &&
+    latestAssistantAt > 0 &&
+    nowTimestamp - latestAssistantAt < resolvedTrigger.skipIfAssistantSentWithinMinutes * 60 * 1000
+  ) {
+    return false;
+  }
+
+  const latestRun = findLatestProactiveTriggerRunForContact(
+    resolvedTrigger.id,
+    contactId,
+    runs
+  );
+  if (
+    latestRun &&
+    resolvedTrigger.cooldownMinutesPerContact > 0 &&
+    nowTimestamp - latestRun.triggeredAt <
+      resolvedTrigger.cooldownMinutesPerContact * 60 * 1000
+  ) {
+    return false;
+  }
+
+  if (
+    countProactiveTriggerRunsForContactOnDate(
+      resolvedTrigger.id,
+      contactId,
+      formatDateToValue(now),
+      runs
+    ) >= resolvedTrigger.maxTriggersPerContactPerDay
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function buildFinishedUserScheduleEvents(
+  trigger = null,
+  lookbackMinutes = 30,
+  now = getPromptNow(loadSettings())
+) {
+  const resolvedTrigger = trigger && typeof trigger === "object" ? trigger : null;
+  if (!resolvedTrigger || resolvedTrigger.type !== "user_schedule_finished") {
+    return [];
+  }
+  const nowTimestamp = now.getTime();
+  return loadScheduleEntries()
+    .filter((entry) => entry.ownerType === "user")
+    .flatMap((entry) =>
+      buildScheduleOccurrenceWindows(entry, now).map((range) => {
+        const startAt = Number(range?.start?.getTime?.() || 0);
+        const endAt = Number(range?.end?.getTime?.() || 0);
+        const durationMinutes = Math.max(0, Math.round((endAt - startAt) / 60000));
+        return {
+          entry,
+          range,
+          startAt,
+          endAt,
+          durationMinutes,
+          finishedAgoMs: Math.max(0, nowTimestamp - endAt),
+          scheduleEventId: buildProactiveScheduleEventKey(resolvedTrigger, entry, range),
+          excludedContactIds: new Set(
+            (Array.isArray(entry.companionContactIds) ? entry.companionContactIds : [])
+              .map((item) => String(item || "").trim())
+              .filter(Boolean)
+          )
+        };
+      })
+    )
+    .filter(
+      (item) =>
+        item.endAt > 0 &&
+        item.endAt <= nowTimestamp &&
+        item.finishedAgoMs <= Math.max(1, Number(lookbackMinutes) || 0) * 60 * 1000 &&
+        item.durationMinutes >= resolvedTrigger.minDurationMinutes
+    )
+    .sort((left, right) => right.endAt - left.endAt || (right.entry.updatedAt || 0) - (left.entry.updatedAt || 0));
+}
+
+function buildProactiveTriggerRequestPayload(
+  trigger = null,
+  scheduleEvent = null,
+  conversation = null,
+  settings = loadSettings(),
+  now = getPromptNow(settings)
+) {
+  const resolvedConversation = conversation && typeof conversation === "object" ? conversation : null;
+  const latestConversationAt = getPromptConversationLatestTimestamp(
+    resolvedConversation,
+    "",
+    settings
+  );
+  return normalizeProactiveTriggerRequest({
+    triggerId: String(trigger?.id || "").trim(),
+    triggerType: String(trigger?.type || "").trim(),
+    scheduleEventId: String(scheduleEvent?.scheduleEventId || "").trim(),
+    scheduleTitle: String(scheduleEvent?.entry?.title || "").trim() || "这段行程",
+    scheduleDurationMinutes: Math.max(0, Number(scheduleEvent?.durationMinutes) || 0),
+    scheduleDurationText: formatConversationElapsedDuration(
+      Math.max(0, Number(scheduleEvent?.durationMinutes) || 0) * 60 * 1000
+    ),
+    idleGapMs: latestConversationAt > 0 ? Math.max(0, now.getTime() - latestConversationAt) : 0,
+    idleGapText:
+      latestConversationAt > 0
+        ? formatConversationElapsedDuration(Math.max(0, now.getTime() - latestConversationAt))
+        : "一阵子",
+    finishedAgoMs: Math.max(0, Number(scheduleEvent?.finishedAgoMs) || 0),
+    finishedAgoText: formatConversationElapsedDuration(
+      Math.max(0, Number(scheduleEvent?.finishedAgoMs) || 0)
+    ),
+    promptTemplate: String(trigger?.promptTemplate || "").trim(),
+    toneByIdleGap:
+      trigger?.toneByIdleGap && typeof trigger.toneByIdleGap === "object"
+        ? { ...trigger.toneByIdleGap }
+        : {},
+    reasonSummary: String(trigger?.description || "").trim()
+  });
+}
+
+function getEligibleProactiveTriggerCandidates(
+  trigger = null,
+  scheduleEvent = null,
+  settings = loadSettings(),
+  now = getPromptNow(settings),
+  runs = loadProactiveTriggerRuns()
+) {
+  return state.conversations
+    .filter((conversation) =>
+      isConversationEligibleForProactiveTrigger(
+        conversation,
+        trigger,
+        scheduleEvent,
+        settings,
+        now,
+        runs
+      )
+    )
+    .map((conversation) => ({
+      conversation,
+      contact: getResolvedConversationContact(conversation),
+      activity: buildConversationRelationshipActivity(conversation, settings, now)
+    }))
+    .filter((item) => item.contact)
+    .sort((left, right) => {
+      return (
+        right.activity.score - left.activity.score ||
+        right.activity.latestActivityAt - left.activity.latestActivityAt ||
+        right.activity.recentTurns - left.activity.recentTurns ||
+        right.activity.recentUserMessages - left.activity.recentUserMessages ||
+        right.activity.recentAssistantMessages - left.activity.recentAssistantMessages
+      );
+    })
+    .slice(0, Math.max(1, Number(trigger?.maxContactsPerEvent) || 1));
+}
+
+async function maybeRunConfiguredProactiveMessages(options = {}) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  refreshStateFromStorage();
+  const settings = loadSettings();
+  const config = getProactiveMessageConfig();
+  if (!config.enabled || !config.triggers.length) {
+    return false;
+  }
+  const now = getPromptNow(settings);
+  if (isNowWithinProactiveQuietHours(config, now)) {
+    return false;
+  }
+
+  const initialCatchup = Boolean(requestOptions.initialCatchup);
+  const baseRuns = loadProactiveTriggerRuns();
+  for (const trigger of config.triggers) {
+    const lookbackMinutes = initialCatchup
+      ? Math.max(trigger.recentFinishWithinMinutes, config.openPageCatchupLookbackMinutes)
+      : trigger.recentFinishWithinMinutes;
+    const scheduleEvents = buildFinishedUserScheduleEvents(trigger, lookbackMinutes, now).filter(
+      (event) => !hasRecordedProactiveTriggerRun(trigger.id, event.scheduleEventId, baseRuns)
+    );
+    for (const scheduleEvent of scheduleEvents) {
+      const candidates = getEligibleProactiveTriggerCandidates(
+        trigger,
+        scheduleEvent,
+        settings,
+        now,
+        baseRuns
+      );
+      const selectedCandidate = candidates[0] || null;
+      if (!selectedCandidate?.conversation) {
+        continue;
+      }
+      const lockKey = `message_proactive_trigger__${scheduleEvent.scheduleEventId}`;
+      const lockOwnerId = acquireProactiveTriggerLock(lockKey);
+      if (!lockOwnerId) {
+        continue;
+      }
+      try {
+        if (hasRecordedProactiveTriggerRun(trigger.id, scheduleEvent.scheduleEventId)) {
+          continue;
+        }
+        const previousAssistantTimestamp = getConversationLatestMessageTimestamp(
+          selectedCandidate.conversation,
+          "assistant"
+        );
+        await requestConversationReply({
+          conversationId: selectedCandidate.conversation.id,
+          forceDirect: true,
+          suppressUi: isBackgroundMessagesWorker() || document.hidden,
+          proactiveTrigger: buildProactiveTriggerRequestPayload(
+            trigger,
+            scheduleEvent,
+            selectedCandidate.conversation,
+            settings,
+            now
+          )
+        });
+        const updatedConversation = getConversationById(selectedCandidate.conversation.id);
+        const latestAssistantTimestamp = getConversationLatestMessageTimestamp(
+          updatedConversation,
+          "assistant"
+        );
+        if (latestAssistantTimestamp <= previousAssistantTimestamp) {
+          continue;
+        }
+        recordProactiveTriggerRun({
+          triggerId: trigger.id,
+          scheduleEventId: scheduleEvent.scheduleEventId,
+          contactId: String(selectedCandidate.conversation.contactId || "").trim(),
+          conversationId: selectedCandidate.conversation.id,
+          triggeredAt: now.getTime(),
+          dateValue: formatDateToValue(now),
+          scheduleEndedAt: scheduleEvent.endAt,
+          scheduleTitle: String(scheduleEvent.entry?.title || "").trim()
+        });
+        if (!isBackgroundMessagesWorker() && state.activeTab === "chat") {
+          renderMessagesPage();
+        }
+        return true;
+      } catch (_error) {
+      } finally {
+        releaseProactiveTriggerLock(lockKey, lockOwnerId);
+      }
+    }
+  }
+  return false;
+}
+
 function hasReachedAutoScheduleTime(timeText = "", now = new Date()) {
   const normalized = normalizeAutoScheduleTime(timeText);
   if (!normalized) {
@@ -8018,6 +8921,25 @@ function initAutoScheduleClock() {
   autoScheduleTimerId = window.setInterval(() => {
     void maybeRunTimedAutoSchedules();
   }, AUTO_SCHEDULE_TIMER_INTERVAL_MS);
+}
+
+function initProactiveTriggerClock() {
+  if (proactiveTriggerTimerId) {
+    window.clearInterval(proactiveTriggerTimerId);
+  }
+  proactiveTriggerInitialCatchupPending = true;
+  const config = getProactiveMessageConfig();
+  const runScan = () => {
+    const shouldUseCatchup = proactiveTriggerInitialCatchupPending;
+    proactiveTriggerInitialCatchupPending = false;
+    void maybeRunConfiguredProactiveMessages({
+      initialCatchup: shouldUseCatchup
+    });
+  };
+  runScan();
+  proactiveTriggerTimerId = window.setInterval(() => {
+    void maybeRunConfiguredProactiveMessages();
+  }, config.triggerScanIntervalMs || DEFAULT_PROACTIVE_TRIGGER_SCAN_INTERVAL_MS);
 }
 
 function resolvePresencePlaceForPrompt(placeId = "", contactId = "", actor = "user") {
@@ -8150,6 +9072,18 @@ function buildChatRequestInjectedMessages(requestOptions = {}, settings = loadSe
   const resolvedRequestOptions =
     requestOptions && typeof requestOptions === "object" ? requestOptions : {};
   const injectedMessages = [];
+  const proactiveTriggerMessage = buildProactiveTriggerRequestUserMessage(
+    resolvedRequestOptions.proactiveTrigger,
+    resolvedRequestOptions.conversation,
+    settings
+  );
+  if (proactiveTriggerMessage) {
+    injectedMessages.push({
+      role: "user",
+      text: proactiveTriggerMessage,
+      imageDataUrls: []
+    });
+  }
   if (resolvedRequestOptions.continueAssistant) {
     const continuationMessage = buildContinuationRequestUserMessage(
       resolvedRequestOptions.conversation,
@@ -10866,14 +11800,20 @@ async function requestChatReplyText(
     );
     const logBase = applyPrivacyToLogEntry(
       buildMessageApiLogBase(
-        mergedRequestOptions.regenerate ? "chat_reply_regenerate" : "chat_reply",
+        mergedRequestOptions.regenerate
+          ? "chat_reply_regenerate"
+          : mergedRequestOptions.proactiveTrigger
+            ? "chat_reply_proactive"
+            : "chat_reply",
         settings,
         requestEndpoint,
         encodedSystemPrompt,
         requestBody,
         `联系人：${contact.name} · 历史消息 ${history.length} 条${
           mergedRequestOptions.regenerate ? " · 重回" : ""
-        }${summarySuffix}`
+        }${mergedRequestOptions.proactiveTrigger ? " · 主动发起" : ""}${
+          summarySuffix
+        }`
       ),
       privacySession
     );
@@ -14438,6 +15378,10 @@ function getConversationAllowAiPresenceUpdate(conversation = getConversationById
   return Boolean(conversation?.allowAiPresenceUpdate);
 }
 
+function getConversationAllowAiProactiveMessage(conversation = getConversationById()) {
+  return Boolean(conversation?.allowAiProactiveMessage);
+}
+
 function getConversationAllowAiAutoSchedule(conversation = getConversationById()) {
   return Boolean(conversation?.allowAiAutoSchedule);
 }
@@ -14781,6 +15725,15 @@ function setConversationAllowAiPresenceUpdate(enabled = false) {
     return;
   }
   conversation.allowAiPresenceUpdate = Boolean(enabled);
+  persistConversations();
+}
+
+function setConversationAllowAiProactiveMessage(enabled = false) {
+  const conversation = getConversationById();
+  if (!conversation) {
+    return;
+  }
+  conversation.allowAiProactiveMessage = Boolean(enabled);
   persistConversations();
 }
 
@@ -15372,6 +16325,9 @@ function applyContactToForm(contact = null) {
   }
   if (messagesContactModalTitleEl) {
     messagesContactModalTitleEl.textContent = resolvedContact.id ? "编辑联系人" : "新建联系人";
+  }
+  if (messagesContactDeleteSectionEl) {
+    messagesContactDeleteSectionEl.hidden = !resolvedContact.id;
   }
   renderContactEditorAvatarPreview();
   setEditorStatus(messagesContactEditorStatusEl);
@@ -16337,6 +17293,10 @@ function applyChatPromptSettingsToForm(promptSettings) {
     messagesChatAllowAiPresenceUpdateInputEl.checked = getConversationAllowAiPresenceUpdate();
     messagesChatAllowAiPresenceUpdateInputEl.disabled = !Boolean(getConversationById());
   }
+  if (messagesChatAllowAiProactiveMessageInputEl) {
+    messagesChatAllowAiProactiveMessageInputEl.checked = getConversationAllowAiProactiveMessage();
+    messagesChatAllowAiProactiveMessageInputEl.disabled = !Boolean(getConversationById());
+  }
   if (messagesChatAllowAiAutoScheduleInputEl) {
     messagesChatAllowAiAutoScheduleInputEl.checked = getConversationAllowAiAutoSchedule();
     messagesChatAllowAiAutoScheduleInputEl.disabled = !Boolean(getConversationById());
@@ -16834,6 +17794,82 @@ function cleanupScheduleEntriesForDeletedContact(contactId = "", options = {}) {
   };
 }
 
+function cleanupMessageShareInboxForDeletedContact(contactId = "", conversationIds = []) {
+  const resolvedContactId = String(contactId || "").trim();
+  const conversationIdSet = new Set(
+    normalizeObjectArray(conversationIds)
+      .map((conversationId) => String(conversationId || "").trim())
+      .filter(Boolean)
+  );
+  if (!resolvedContactId && !conversationIdSet.size) {
+    return 0;
+  }
+  const inbox = loadMessageShareInbox();
+  if (!inbox.length) {
+    return 0;
+  }
+  const nextInbox = inbox.filter((entry) => {
+    const targetContactId = String(entry?.targetContactId || "").trim();
+    const targetConversationId = String(entry?.targetConversationId || "").trim();
+    return targetContactId !== resolvedContactId && !conversationIdSet.has(targetConversationId);
+  });
+  if (nextInbox.length !== inbox.length) {
+    persistMessageShareInbox(nextInbox);
+  }
+  return inbox.length - nextInbox.length;
+}
+
+function cleanupConversationVideoMediaForDeletedContact(contactId = "") {
+  const resolvedContactId = String(contactId || "").trim();
+  if (!resolvedContactId) {
+    return 0;
+  }
+  const mediaMap = loadConversationVideoMediaMap();
+  if (!Object.prototype.hasOwnProperty.call(mediaMap, resolvedContactId)) {
+    return 0;
+  }
+  delete mediaMap[resolvedContactId];
+  persistConversationVideoMediaMap(mediaMap);
+  return 1;
+}
+
+function cleanupPlotThreadsForDeletedContact(contactId = "") {
+  const resolvedContactId = String(contactId || "").trim();
+  if (!resolvedContactId) {
+    return 0;
+  }
+  const threads = readStoredJson(PLOT_THREADS_KEY, []);
+  if (!Array.isArray(threads) || !threads.length) {
+    return 0;
+  }
+  const nextThreads = threads.filter((thread) => {
+    const participants = Array.isArray(thread?.participants) ? thread.participants : [];
+    return !participants.some((participant) => String(participant?.id || "").trim() === resolvedContactId);
+  });
+  if (nextThreads.length !== threads.length) {
+    safeSetItem(PLOT_THREADS_KEY, JSON.stringify(nextThreads));
+  }
+  return threads.length - nextThreads.length;
+}
+
+function cleanupRaisingRecordsForDeletedContact(contactId = "") {
+  const resolvedContactId = String(contactId || "").trim();
+  if (!resolvedContactId) {
+    return 0;
+  }
+  const records = readStoredJson(RAISING_RECORDS_KEY, []);
+  if (!Array.isArray(records) || !records.length) {
+    return 0;
+  }
+  const nextRecords = records.filter(
+    (record) => String(record?.partnerId || "").trim() !== resolvedContactId
+  );
+  if (nextRecords.length !== records.length) {
+    safeSetItem(RAISING_RECORDS_KEY, JSON.stringify(nextRecords));
+  }
+  return records.length - nextRecords.length;
+}
+
 function deleteConversationContactBundle(contactId = "", options = {}) {
   const resolvedContactId = String(contactId || "").trim();
   if (!resolvedContactId) {
@@ -16847,11 +17883,25 @@ function deleteConversationContactBundle(contactId = "", options = {}) {
     (conversation) => String(conversation.contactId || "").trim() === resolvedContactId
   );
   const conversationIds = conversationsToDelete.map((conversation) => String(conversation.id || "").trim()).filter(Boolean);
+  const activeForegroundTask = state.activeForegroundReplyTaskId
+    ? loadReplyTasks().find((task) => task.id === state.activeForegroundReplyTaskId) || null
+    : null;
   conversationIds.forEach((conversationId) => {
     cancelConversationReplyWork(conversationId, {
       includeErrors: true
     });
+    clearConversationReplyRecovery(conversationId);
+    clearForegroundReplySync(conversationId);
+    delete state.conversationDrafts?.[conversationId];
+    delete state.conversationVisibleCounts?.[conversationId];
   });
+  if (
+    activeForegroundTask &&
+    conversationIds.includes(String(activeForegroundTask.conversationId || "").trim())
+  ) {
+    stopForegroundReplyTaskHeartbeat();
+    state.activeForegroundReplyTaskId = "";
+  }
 
   state.conversations = state.conversations.filter(
     (conversation) => String(conversation.contactId || "").trim() !== resolvedContactId
@@ -16880,14 +17930,41 @@ function deleteConversationContactBundle(contactId = "", options = {}) {
   };
 
   const scheduleCleanup = cleanupScheduleEntriesForDeletedContact(resolvedContactId, requestOptions);
+  const removedShareInboxCount = cleanupMessageShareInboxForDeletedContact(
+    resolvedContactId,
+    conversationIds
+  );
+  const removedVideoMediaCount = cleanupConversationVideoMediaForDeletedContact(resolvedContactId);
+  const removedPlotThreadCount = preserveContact ? 0 : cleanupPlotThreadsForDeletedContact(resolvedContactId);
+  const removedRaisingRecordCount = preserveContact
+    ? 0
+    : cleanupRaisingRecordsForDeletedContact(resolvedContactId);
 
   if (state.activeConversationId && conversationIds.includes(String(state.activeConversationId || "").trim())) {
     closeConversationTransientUi();
     state.activeConversationId = "";
     state.quotedMessageId = "";
   }
+  if (
+    state.pendingAssistantReveal &&
+    conversationIds.includes(String(state.pendingAssistantReveal.conversationId || "").trim())
+  ) {
+    state.pendingAssistantReveal = null;
+  }
+  const activeView = loadActiveConversationView();
+  if (conversationIds.includes(String(activeView.conversationId || "").trim())) {
+    persistActiveConversationView({
+      conversationId: "",
+      visible: false,
+      updatedAt: Date.now()
+    });
+  }
   if (state.memorySelectedContactId === resolvedContactId) {
     state.memorySelectedContactId = "";
+  }
+  if (state.memoryEditingId && !state.memories.some((item) => item.id === state.memoryEditingId)) {
+    state.memoryEditingId = "";
+    state.memoryEditorOpen = false;
   }
   if (!preserveContact && state.contactEditorId === resolvedContactId) {
     state.contactEditorOpen = false;
@@ -16905,7 +17982,11 @@ function deleteConversationContactBundle(contactId = "", options = {}) {
     deletedConversationCount: conversationIds.length,
     deletedMemoryCount,
     removedJournalCount,
-    scheduleCleanup
+    scheduleCleanup,
+    removedShareInboxCount,
+    removedVideoMediaCount,
+    removedPlotThreadCount,
+    removedRaisingRecordCount
   };
 }
 
@@ -16972,6 +18053,74 @@ function handleConversationRowLongPress(conversationId = "") {
       : `${conversationName} 的会话已删除，联系人资料已保留。`,
     "success"
   );
+}
+
+function handleDeleteContactFromEditor() {
+  const contactId = String(state.contactEditorId || "").trim();
+  const contact = contactId ? getContactById(contactId) : null;
+  if (!contact) {
+    setEditorStatus(messagesContactEditorStatusEl, "未找到要删除的联系人。", "error");
+    return;
+  }
+  const contactName = String(contact.name || "这个联系人").trim() || "这个联系人";
+  const scheduleSummary = getDeletedContactScheduleSummary(contactId);
+  const conversationCount = state.conversations.filter(
+    (conversation) => String(conversation.contactId || "").trim() === contactId
+  ).length;
+  const memoryCount = state.memories.filter((item) => item.contactId === contactId).length;
+  const journalCount = state.journalEntries.filter((item) => item.contactId === contactId).length;
+  const confirmed = window.confirm(
+    [
+      `确定删除通讯录联系人「${contactName}」吗？`,
+      "这会删除联系人资料、聊天记录、记忆、日记、该角色自己的日程、地点可见范围、状态与会话缓存。",
+      "如果这个角色只是某个日程的同行人，只会从同行人中移除，不会删除主日程。",
+      conversationCount || memoryCount || journalCount || scheduleSummary.ownedEntries || scheduleSummary.companionEntries
+        ? `当前关联：${conversationCount} 个会话、${memoryCount} 条记忆、${journalCount} 篇日记、${scheduleSummary.ownedEntries} 条角色日程、${scheduleSummary.companionEntries} 条同行日程。`
+        : ""
+    ]
+      .filter(Boolean)
+      .join("\n")
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  const result = deleteConversationContactBundle(contactId, {
+    preserveContact: false,
+    removeRelatedCompanionEntries: false
+  });
+  if (!result) {
+    setEditorStatus(messagesContactEditorStatusEl, "删除联系人失败。", "error");
+    return;
+  }
+
+  setContactEditorOpen(false);
+  renderMessagesPage();
+  if (state.placesManagerOpen) {
+    renderPlacesManager();
+  }
+  if (state.memoryViewerOpen) {
+    renderMemoryViewer();
+  }
+
+  const summaryParts = [
+    "联系人资料已删除",
+    result.deletedConversationCount ? `删除 ${result.deletedConversationCount} 个会话` : "",
+    result.deletedMemoryCount ? `清空 ${result.deletedMemoryCount} 条记忆` : "",
+    result.removedJournalCount ? `删除 ${result.removedJournalCount} 篇日记` : "",
+    result.scheduleCleanup.removedOwnedEntries
+      ? `删除 ${result.scheduleCleanup.removedOwnedEntries} 条角色日程`
+      : "",
+    result.scheduleCleanup.detachedCompanionLinks
+      ? `移除 ${result.scheduleCleanup.detachedCompanionLinks} 个同行关联`
+      : "",
+    result.scheduleCleanup.removedVisibilityRefs
+      ? `移除 ${result.scheduleCleanup.removedVisibilityRefs} 个日程可见关联`
+      : "",
+    result.removedPlotThreadCount ? `删除 ${result.removedPlotThreadCount} 条剧情` : "",
+    result.removedRaisingRecordCount ? `删除 ${result.removedRaisingRecordCount} 条养崽记录` : ""
+  ].filter(Boolean);
+  setMessagesStatus(`${contactName} 已删除：${summaryParts.join("，")}。`, "success");
 }
 
 function cancelConversationListLongPress() {
@@ -17836,6 +18985,10 @@ async function requestConversationReply(options = {}) {
   const isRegenerate = hasRegenerateOption
     ? Boolean(requestOptions.regenerate)
     : Boolean(pendingTask?.regenerate);
+  const proactiveTrigger = !isRegenerate
+    ? normalizeProactiveTriggerRequest(requestOptions.proactiveTrigger)
+    : null;
+  const isProactiveTrigger = Boolean(proactiveTrigger);
   const regenerateInstruction = String(
     hasRegenerateInstructionOption
       ? requestOptions.regenerateInstruction
@@ -17880,7 +19033,7 @@ async function requestConversationReply(options = {}) {
     0,
     Number.parseInt(String(conversation.awarenessCounter || 0), 10) || 0
   );
-  const manualAwarenessTrigger = !isRegenerate
+  const manualAwarenessTrigger = !isRegenerate && !isProactiveTrigger
     ? normalizeManualAwarenessTrigger(contact.awarenessManualTriggerPending)
     : null;
   const hasManualAwarenessTrigger = Boolean(manualAwarenessTrigger?.text);
@@ -17892,6 +19045,7 @@ async function requestConversationReply(options = {}) {
   );
   const hasAwarenessMonitor =
     !isRegenerate &&
+    !isProactiveTrigger &&
     hasConfiguredAwareness(contact) &&
     !Boolean(contact.awarenessHistoryHidden);
   const shouldEvaluateAwareness =
@@ -17939,13 +19093,13 @@ async function requestConversationReply(options = {}) {
       const hasContinuationSource = conversation.messages.some(
         (message) => message.role === "assistant"
       );
-      if (!hasContinuationSource && !shouldInjectAwarenessIntoContents) {
+      if (!hasContinuationSource && !shouldInjectAwarenessIntoContents && !isProactiveTrigger) {
         if (!suppressUi) {
           setMessagesStatus("当前没有待推送到 API 的新消息。");
         }
         return;
       }
-      continueAssistant = !shouldInjectAwarenessIntoContents;
+      continueAssistant = !shouldInjectAwarenessIntoContents && !isProactiveTrigger;
     } else {
       pendingUserMessagesForPrompt = pendingUserMessages.map((message) => ({ ...message }));
       requestedPendingUserMessageIds = pendingUserMessages.map((message) =>
@@ -17961,6 +19115,7 @@ async function requestConversationReply(options = {}) {
   if (
     canUseBackgroundReplyWorker() &&
     !forceDirect &&
+    !isProactiveTrigger &&
     !shouldResumePendingTaskDirectly &&
     !preferDirectVisibleReply
   ) {
@@ -17974,6 +19129,8 @@ async function requestConversationReply(options = {}) {
       setMessagesStatus(
         isRegenerate
           ? "已加入重回队列，后台会继续生成回复。"
+          : isProactiveTrigger
+            ? "已加入主动发起队列，后台会继续生成消息。"
           : continueAssistant
             ? "已加入续写队列，离开 chat 也会继续收消息。"
             : "已加入回复队列，离开 chat 也会继续收消息。",
@@ -18040,7 +19197,13 @@ async function requestConversationReply(options = {}) {
     state.requestingConversationId = conversation.id;
     state.sendingConversationId = conversation.id;
     if (!suppressUi) {
-      setMessagesStatus(isRegenerate ? "正在重新生成回复…" : "正在等待对方回复…");
+      setMessagesStatus(
+        isRegenerate
+          ? "正在重新生成回复…"
+          : isProactiveTrigger
+            ? "正在生成角色主动消息…"
+            : "正在等待对方回复…"
+      );
       renderMessagesPage();
     }
 
@@ -18057,6 +19220,7 @@ async function requestConversationReply(options = {}) {
         awarenessInContents: shouldInjectAwarenessIntoContents,
         pendingUserMessages: pendingUserMessagesForPrompt,
         continueAssistant,
+        proactiveTrigger,
         sceneMode: conversation.sceneMode === "offline" ? "offline" : "online",
         conversation
       }
@@ -18072,7 +19236,7 @@ async function requestConversationReply(options = {}) {
       const requestedPendingUserMessageIdSet = new Set(
         requestedPendingUserMessageIds.filter(Boolean)
       );
-      if (!requestedPendingUserMessageIdSet.size && !continueAssistant) {
+      if (!requestedPendingUserMessageIdSet.size && !continueAssistant && !isProactiveTrigger) {
         return;
       }
       const hasRequestedMessages =
@@ -18214,7 +19378,14 @@ async function requestConversationReply(options = {}) {
       void maybeExtractConversationMemories(latestConversation.id, settings, promptSettings);
     }
     if (!suppressUi) {
-      setMessagesStatus(isRegenerate ? "已重新生成回复。" : "已收到回复。", "success");
+      setMessagesStatus(
+        isRegenerate
+          ? "已重新生成回复。"
+          : isProactiveTrigger
+            ? "已生成角色主动消息。"
+            : "已收到回复。",
+        "success"
+      );
     }
   } catch (error) {
     if (isRegenerate) {
@@ -18234,7 +19405,10 @@ async function requestConversationReply(options = {}) {
       }
     }
     if (!suppressUi) {
-      setMessagesStatus(`回复失败：${error?.message || "请求失败"}`, "error");
+      setMessagesStatus(
+        `${isProactiveTrigger ? "主动消息生成失败" : "回复失败"}：${error?.message || "请求失败"}`,
+        "error"
+      );
     }
     if (suppressUi) {
       throw error;
@@ -18395,6 +19569,7 @@ function initBackgroundMessagesWorker() {
   persistPresenceState();
   persistConversations();
   initAutoScheduleClock();
+  initProactiveTriggerClock();
   window.addEventListener("storage", (event) => {
     const targetKey = String(event?.key || "").trim();
     if (!targetKey) {
@@ -19149,6 +20324,12 @@ function attachEvents() {
     });
   }
 
+  if (messagesContactDeleteBtnEl) {
+    messagesContactDeleteBtnEl.addEventListener("click", () => {
+      handleDeleteContactFromEditor();
+    });
+  }
+
   if (messagesContactAvatarResetBtnEl) {
     messagesContactAvatarResetBtnEl.addEventListener("click", () => {
       state.contactEditorAvatarImage = "";
@@ -19444,6 +20625,9 @@ function attachEvents() {
       state.chatSettingsVideoUserImage = conversation ? getConversationVideoUserImage(conversation) : "";
       setConversationAllowAiPresenceUpdate(
         Boolean(messagesChatAllowAiPresenceUpdateInputEl?.checked)
+      );
+      setConversationAllowAiProactiveMessage(
+        Boolean(messagesChatAllowAiProactiveMessageInputEl?.checked)
       );
       setConversationAutoScheduleSettings(
         Boolean(messagesChatAllowAiAutoScheduleInputEl?.checked),
@@ -20981,6 +22165,7 @@ function init() {
       persistPresenceState();
       persistConversations();
       initAutoScheduleClock();
+      initProactiveTriggerClock();
       initForegroundReplySyncClock();
       renderMessagesPage();
       if (launchView === "memory") {

@@ -327,6 +327,24 @@
           </label>
 
           <p id="messages-contact-editor-status" class="messages-editor-status" aria-live="polite"></p>
+
+          <section id="messages-contact-delete-section" class="messages-form-field" hidden>
+            <div class="messages-form-field__head">
+              <span>危险操作</span>
+            </div>
+            <div class="messages-form-field__actions">
+              <button
+                id="messages-contact-delete-btn"
+                class="messages-text-button messages-text-button--danger"
+                type="button"
+              >
+                删除联系人
+              </button>
+            </div>
+            <small class="messages-form-field__hint">
+              会删除这个角色的聊天、记忆、日记、角色自己的日程与相关缓存；如果 TA 只是某个日程的同行人，只会移除同行人信息，不删除主日程。
+            </small>
+          </section>
         </form>
       </div>
     </section>
@@ -655,6 +673,17 @@
             </div>
             <span class="messages-switch">
               <input id="messages-chat-allow-ai-presence-update-input" type="checkbox" />
+              <span class="messages-switch__slider"></span>
+            </span>
+          </label>
+
+          <label class="messages-toggle-field">
+            <div class="messages-toggle-field__body">
+              <strong>允许角色主动发起消息</strong>
+              <p>开启后，角色可在命中后台触发规则时，主动给你发来一轮新消息。</p>
+            </div>
+            <span class="messages-switch">
+              <input id="messages-chat-allow-ai-proactive-message-input" type="checkbox" />
               <span class="messages-switch__slider"></span>
             </span>
           </label>
@@ -2518,14 +2547,15 @@
     <input id="messages-image-file-input" type="file" accept="image/*" hidden />
 
     <script src="./prompt-config.js?v=20260414-130224"></script>
-    <script src="./privacy-allowlist.js?v=20260403-165212"></script>
-    <script src="./pulse-privacy-cover.js?v=20260403-170109"></script>
+    <script src="./privacy-allowlist.js?v=20260415-144349"></script>
+    <script src="./pulse-privacy-cover.js?v=20260415-144349"></script>
     <script src="./pulse-structured-output.js?v=20260414-130224"></script>
     <script src="./pulse-message-banner.js?v=20260403-165212"></script>
     <script src="./api-log.js?v=20260405-231617"></script>
     <script src="./pulse-api-switcher.js?v=20260414-141318"></script>
     <script src="./messages-awareness-config.js?v=20260403-165212"></script>
     <script src="./messages-memory-retention-config.js?v=20260408-184215"></script>
-    <script src="./messages.js?v=20260414-141318"></script>
+    <script src="./messages-proactive-trigger-config.js?v=20260415-144349"></script>
+    <script src="./messages.js?v=20260415-144349"></script>
   </body>
 </html>

@@ -214,14 +214,17 @@
   }
 
   function readStoredPrivacyAllowlistMetaItems() {
+    const defaultItems = normalizeAllowlistMetaItems(window.PulsePrivacyAllowlistMetaDefaults || []);
     try {
       const raw = window.localStorage?.getItem(PRIVACY_ALLOWLIST_META_KEY);
       if (!raw) {
-        return [];
+        return defaultItems;
       }
-      return normalizeAllowlistMetaItems(JSON.parse(raw));
+      const parsed = JSON.parse(raw);
+      const storedItems = Array.isArray(parsed) ? parsed : [];
+      return normalizeAllowlistMetaItems([...defaultItems, ...storedItems]);
     } catch (_error) {
-      return [];
+      return defaultItems;
     }
   }
 
@@ -239,9 +242,12 @@
 
   function getManualAllowlist(settings = {}) {
     const defaultTerms = normalizeAllowlist(window.PulsePrivacyAllowlistDefaults || []);
-    const customTerms = normalizeAllowlist(settings?.privacyAllowlist || []);
     const storedTerms = readStoredPrivacyAllowlistTerms();
-    return normalizeAllowlist([...defaultTerms, ...storedTerms, ...customTerms]);
+    if (defaultTerms.length || storedTerms.length) {
+      return normalizeAllowlist([...defaultTerms, ...storedTerms]);
+    }
+    const customTerms = normalizeAllowlist(settings?.privacyAllowlist || []);
+    return normalizeAllowlist([...customTerms]);
   }
 
   function getManualIgnorelist(settings = {}) {

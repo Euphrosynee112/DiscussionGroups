@@ -70,7 +70,7 @@
 | 世界观 | `settings.worldview` | 影响论坛相关 prompt 的全局背景语气 | `app.js` |
 | 翻译专用 API | `settings.translationApiEnabled`、`settings.translationApiConfigId` | 决定论坛 / Bubble 翻译是否走独立接口 | `app.js`、`bubble.js` |
 | 摘要专用 API | `settings.summaryApiEnabled`、`settings.summaryApiConfigId` | 决定记忆总结是否走独立接口 | `messages.js` |
-| 隐私白名单 | `settings.privacyAllowlist` | 决定 prompt 编码 / 反解析时哪些名字可直接暴露 | `app.js`、`messages.js`、`schedule.js`、`pulse-privacy-cover.js` |
+| 隐私白名单 | `privacy_allowlist_entries`（云端表）→ 本地 `privacy_allowlist_terms/meta` 镜像 | 决定 prompt 编码 / 反解析时哪些名字可直接暴露 | `privacy-allowlist.js`、`pulse-privacy-cover.js`、`app.js`、`messages.js`、`schedule.js` |
 
 ---
 
