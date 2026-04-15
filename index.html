@@ -721,14 +721,22 @@
             </div>
             <label id="privacy-app-add-group-field" class="home-field home-field--full">
               <span id="privacy-app-add-group-label">同义词分组</span>
-              <input
-                id="privacy-app-add-name-group"
-                type="text"
-                placeholder="例如：term:riize"
-              />
+              <div class="privacy-app-add-group-picker">
+                <select id="privacy-app-add-group-select">
+                  <option value="">新建分组</option>
+                </select>
+                <div id="privacy-app-add-group-input-wrap" class="privacy-app-add-group-picker__custom">
+                  <input
+                    id="privacy-app-add-name-group"
+                    type="text"
+                    placeholder="例如：Jessie / RIIZE"
+                  />
+                </div>
+              </div>
               <span id="privacy-app-add-group-hint" class="home-field-hint">
                 相同普通词别名请使用同一个分组，并共用同一个占位符。
               </span>
+              <span id="privacy-app-add-group-match-hint" class="home-field-hint"></span>
             </label>
             <label class="home-field home-field--full">
               <span>实际占位符</span>

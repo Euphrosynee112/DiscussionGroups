@@ -177,6 +177,9 @@ const privacyAppAddCategorySelectEl = document.querySelector("#privacy-app-add-c
 const privacyAppAddGroupFieldEl = document.querySelector("#privacy-app-add-group-field");
 const privacyAppAddGroupLabelEl = document.querySelector("#privacy-app-add-group-label");
 const privacyAppAddGroupHintEl = document.querySelector("#privacy-app-add-group-hint");
+const privacyAppAddGroupMatchHintEl = document.querySelector("#privacy-app-add-group-match-hint");
+const privacyAppAddGroupSelectEl = document.querySelector("#privacy-app-add-group-select");
+const privacyAppAddGroupInputWrapEl = document.querySelector("#privacy-app-add-group-input-wrap");
 const privacyAppAddNameGroupInputEl = document.querySelector("#privacy-app-add-name-group");
 const privacyAppAddNameLevelFieldEl = document.querySelector("#privacy-app-add-name-level-field");
 const privacyAppAddNameLevelSelectEl = document.querySelector("#privacy-app-add-name-level");
@@ -3881,6 +3884,143 @@ function getDerivedPrivacyAllowlistItemPlaceholder(item = {}, items = [], option
   );
 }
 
+function stripPrivacyAddGroupPrefix(value = "", category = "") {
+  const text = String(value || "").trim();
+  if (!text) {
+    return "";
+  }
+  if (category === "NAME") {
+    return text.replace(/^(?:person|name)\s*:\s*/i, "");
+  }
+  if (category === "TERM") {
+    return text.replace(/^term\s*:\s*/i, "");
+  }
+  return text;
+}
+
+function buildPrivacyAddGroupMatchKey(value = "", category = "") {
+  return stripPrivacyAddGroupPrefix(value, category).trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function getPrivacyAddGroupOptions(
+  category = "",
+  items = homeState.privacyAllowlistItems
+) {
+  const resolvedCategory = normalizePrivacyAllowlistCategory(category);
+  if (!shouldKeepPrivacyGroupId(resolvedCategory)) {
+    return [];
+  }
+  const groupMap = new Map();
+  normalizePrivacyAllowlistItems(items).forEach((item) => {
+    const itemCategory = normalizePrivacyAllowlistCategory(item.category, item.text);
+    if (itemCategory !== resolvedCategory) {
+      return;
+    }
+    const rawGroupId = normalizePrivacyNameGroupId(
+      item.nameGroupId,
+      resolvedCategory === "NAME" ? item.text : ""
+    );
+    if (!rawGroupId) {
+      return;
+    }
+    const existingGroup =
+      groupMap.get(rawGroupId) || {
+        value: rawGroupId,
+        displayName: stripPrivacyAddGroupPrefix(rawGroupId, resolvedCategory) || rawGroupId,
+        texts: new Set(),
+        placeholder: "",
+        placeholdersByLevel: new Map(),
+        levels: new Set(),
+        count: 0
+      };
+    existingGroup.texts.add(String(item.text || "").trim());
+    existingGroup.count += 1;
+    if (resolvedCategory === "NAME") {
+      const level = normalizePrivacyNameAliasLevel(item.nameLevel);
+      existingGroup.levels.add(level);
+      if (!existingGroup.placeholdersByLevel.has(level) && item.placeholder) {
+        existingGroup.placeholdersByLevel.set(level, String(item.placeholder || "").trim().toUpperCase());
+      }
+    } else if (!existingGroup.placeholder && item.placeholder) {
+      existingGroup.placeholder = String(item.placeholder || "").trim().toUpperCase();
+    }
+    groupMap.set(rawGroupId, existingGroup);
+  });
+
+  const nameLevelOrder = ["FULL", "COMMON", "NICK", "PET", "HONOR"];
+  return [...groupMap.values()]
+    .map((item) => {
+      const texts = [...item.texts].filter(Boolean);
+      const levels = [...item.levels].sort(
+        (left, right) => nameLevelOrder.indexOf(left) - nameLevelOrder.indexOf(right)
+      );
+      const previewText = texts.slice(0, 2).join(" / ");
+      const extraCount = Math.max(0, texts.length - 2);
+      const suffix =
+        resolvedCategory === "NAME"
+          ? `${levels.map((level) => getPrivacyNameLevelLabel(level)).join(" / ")}${previewText ? ` · ${previewText}` : ""}`
+          : `${previewText}${extraCount ? ` · +${extraCount}` : ""}`;
+      return {
+        value: item.value,
+        displayName: item.displayName,
+        texts,
+        levels,
+        placeholder: item.placeholder,
+        placeholdersByLevel: item.placeholdersByLevel,
+        matchKey: buildPrivacyAddGroupMatchKey(item.value, resolvedCategory),
+        displayMatchKey: buildPrivacyAddGroupMatchKey(item.displayName, resolvedCategory),
+        label: suffix ? `${item.displayName} · ${suffix}` : item.displayName
+      };
+    })
+    .sort((left, right) => left.displayName.localeCompare(right.displayName, "zh-Hans-CN"));
+}
+
+function findPrivacyAddGroupOption(
+  category = "",
+  options = [],
+  selectedValue = "",
+  typedValue = ""
+) {
+  const rawSelectedValue = String(selectedValue || "").trim();
+  if (rawSelectedValue) {
+    return options.find((item) => item.value === rawSelectedValue) || null;
+  }
+
+  const rawTypedValue = String(typedValue || "").trim();
+  if (!rawTypedValue) {
+    return null;
+  }
+  const exactMatch = options.find((item) => item.value === rawTypedValue);
+  if (exactMatch) {
+    return exactMatch;
+  }
+  const matchKey = buildPrivacyAddGroupMatchKey(rawTypedValue, category);
+  if (!matchKey) {
+    return null;
+  }
+  return (
+    options.find((item) => item.displayMatchKey === matchKey || item.matchKey === matchKey) || null
+  );
+}
+
+function getPrivacyAddGroupMatchHint(option = null, draft = {}) {
+  if (!option) {
+    return "";
+  }
+  const category = normalizePrivacyAllowlistCategory(draft.category, draft.text);
+  if (category === "NAME") {
+    const level = normalizePrivacyNameAliasLevel(draft.nameLevel);
+    const matchedPlaceholder = option.placeholdersByLevel.get(level) || "";
+    const levelSummary = option.levels.map((item) => getPrivacyNameLevelLabel(item)).join(" / ");
+    return matchedPlaceholder
+      ? `已匹配已有分组“${option.displayName}”，当前 ${getPrivacyNameLevelLabel(level)} 层级会复用 ${matchedPlaceholder}。${levelSummary ? `已有层级：${levelSummary}。` : ""}`
+      : `已匹配已有分组“${option.displayName}”，当前 ${getPrivacyNameLevelLabel(level)} 层级暂无现成占位符，会新生成一个。${levelSummary ? `已有层级：${levelSummary}。` : ""}`;
+  }
+  return option.placeholder
+    ? `已匹配已有分组“${option.displayName}”，会复用 ${option.placeholder}。`
+    : `已匹配已有分组“${option.displayName}”。`;
+}
+
 function getDefaultPrivacyAddDraft() {
   return {
     text: "",
@@ -3897,8 +4037,11 @@ function getPrivacyAddDraft() {
     privacyAppAddCategorySelectEl?.value || "TERM",
     text
   );
+  const selectedGroupId = String(privacyAppAddGroupSelectEl?.value || "").trim();
   const nameGroupId = shouldKeepPrivacyGroupId(category)
-    ? normalizePrivacyNameGroupId(privacyAppAddNameGroupInputEl?.value || "")
+    ? normalizePrivacyNameGroupId(
+        selectedGroupId || privacyAppAddNameGroupInputEl?.value || ""
+      )
     : "";
   const nameLevel =
     category === "NAME"
@@ -3941,6 +4084,9 @@ function resetPrivacyAddForm() {
   if (privacyAppAddCategorySelectEl) {
     privacyAppAddCategorySelectEl.value = draft.category;
   }
+  if (privacyAppAddGroupSelectEl) {
+    privacyAppAddGroupSelectEl.value = "";
+  }
   if (privacyAppAddNameGroupInputEl) {
     privacyAppAddNameGroupInputEl.value = draft.nameGroupId;
   }
@@ -3959,6 +4105,15 @@ function syncPrivacyAddForm(options = {}) {
   const showGroupField = shouldKeepPrivacyGroupId(draft.category);
   const showNameLevelField = draft.category === "NAME";
   const isTermGroup = draft.category === "TERM";
+  const customGroupId = normalizePrivacyNameGroupId(privacyAppAddNameGroupInputEl?.value || "");
+  const groupOptions = getPrivacyAddGroupOptions(draft.category, allowlistItems);
+  const matchedGroupOption = findPrivacyAddGroupOption(
+    draft.category,
+    groupOptions,
+    privacyAppAddGroupSelectEl?.value || "",
+    privacyAppAddNameGroupInputEl?.value || ""
+  );
+  const effectiveGroupId = matchedGroupOption?.value || customGroupId;
 
   if (privacyAppAddCategorySelectEl) {
     privacyAppAddCategorySelectEl.value = draft.category;
@@ -3969,24 +4124,60 @@ function syncPrivacyAddForm(options = {}) {
   if (privacyAppAddNameLevelFieldEl) {
     privacyAppAddNameLevelFieldEl.hidden = !showNameLevelField;
   }
+  if (privacyAppAddGroupSelectEl) {
+    const nextValue = matchedGroupOption?.value || "";
+    privacyAppAddGroupSelectEl.innerHTML = [
+      '<option value="">新建分组</option>',
+      ...groupOptions.map(
+        (item) =>
+          `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`
+      )
+    ].join("");
+    privacyAppAddGroupSelectEl.required = false;
+    privacyAppAddGroupSelectEl.value = groupOptions.some((item) => item.value === nextValue)
+      ? nextValue
+      : "";
+    privacyAppAddGroupSelectEl.hidden = !showGroupField;
+  }
+  if (privacyAppAddGroupInputWrapEl) {
+    privacyAppAddGroupInputWrapEl.hidden = !showGroupField || Boolean(matchedGroupOption);
+  }
   if (privacyAppAddGroupLabelEl) {
     privacyAppAddGroupLabelEl.textContent = draft.category === "NAME" ? "同一人分组" : "同义词分组";
   }
   if (privacyAppAddNameGroupInputEl) {
-    privacyAppAddNameGroupInputEl.required = showGroupField;
+    privacyAppAddNameGroupInputEl.required = showGroupField && !matchedGroupOption;
     privacyAppAddNameGroupInputEl.placeholder =
-      draft.category === "NAME" ? "例如：person:jessie" : "例如：term:riize";
+      draft.category === "NAME" ? "例如：Jessie" : "例如：RIIZE";
   }
   if (privacyAppAddGroupHintEl) {
     privacyAppAddGroupHintEl.textContent =
       draft.category === "NAME"
-        ? "同一个人的多个称呼请使用同一个分组；层级差异由“称呼层级”表达。"
+        ? "可先从下拉选择已有的人物分组；没有时再新建。层级差异仍由“称呼层级”表达。"
         : showGroupField
-          ? "相同普通词别名请使用同一个分组，并共用同一个占位符。"
+          ? "可先从下拉选择已有的普通词分组；没有时再新建。同组会共用同一个占位符。"
           : "标题词条不需要额外分组。";
   }
+  if (privacyAppAddGroupMatchHintEl) {
+    privacyAppAddGroupMatchHintEl.hidden = !showGroupField || !matchedGroupOption;
+    privacyAppAddGroupMatchHintEl.textContent = matchedGroupOption
+      ? getPrivacyAddGroupMatchHint(
+          matchedGroupOption,
+          {
+            ...draft,
+            nameGroupId: effectiveGroupId
+          }
+        )
+      : "";
+  }
   if (privacyAppAddPlaceholderInputEl) {
-    privacyAppAddPlaceholderInputEl.value = getPrivacyAddPlaceholderSuggestion(draft, allowlistItems);
+    privacyAppAddPlaceholderInputEl.value = getPrivacyAddPlaceholderSuggestion(
+      {
+        ...draft,
+        nameGroupId: effectiveGroupId
+      },
+      allowlistItems
+    );
   }
   if (privacyAppAddPlaceholderHintEl) {
     privacyAppAddPlaceholderHintEl.textContent = showNameLevelField
@@ -7826,6 +8017,15 @@ function attachHomeSettingsEvents() {
         syncPrivacyAddForm();
       });
     });
+
+  if (privacyAppAddGroupSelectEl) {
+    privacyAppAddGroupSelectEl.addEventListener("change", () => {
+      if (privacyAppAddGroupSelectEl.value && privacyAppAddNameGroupInputEl) {
+        privacyAppAddNameGroupInputEl.value = "";
+      }
+      syncPrivacyAddForm();
+    });
+  }
 
   if (privacyAppAddModalEl) {
     privacyAppAddModalEl.addEventListener("click", (event) => {

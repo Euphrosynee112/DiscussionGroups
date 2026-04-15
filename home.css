@@ -1082,6 +1082,15 @@ button {
   gap: 12px;
 }
 
+.privacy-app-add-group-picker {
+  display: grid;
+  gap: 10px;
+}
+
+.privacy-app-add-group-picker__custom[hidden] {
+  display: none;
+}
+
 .home-time-modal__panel {
   width: min(520px, 100%);
 }
