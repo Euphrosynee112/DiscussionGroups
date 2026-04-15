@@ -5,8 +5,8 @@ const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GROK_MODEL = "grok-4";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 const DEFAULT_TEMPERATURE = 0.85;
-const APP_BUILD_VERSION = "20260415-144349";
-const APP_BUILD_UPDATED_AT = "2026-04-15 14:43:49";
+const APP_BUILD_VERSION = "20260415-145640";
+const APP_BUILD_UPDATED_AT = "2026-04-15 14:56:40";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -1374,6 +1374,7 @@ async function uploadCurrentLocalStorageToCloud() {
     });
     const importedKeys = Number(payload?.importedKeys) || recordKeys.length;
     let syncedAllowlistCount = null;
+    let syncedScanIgnoreCount = null;
     try {
       const syncedItems = await syncPrivacyAllowlistItemsToCloud(loadPrivacyAllowlistItems(), {
         eventSource: "home-cloud-upload"
@@ -1381,10 +1382,17 @@ async function uploadCurrentLocalStorageToCloud() {
       syncedAllowlistCount = Array.isArray(syncedItems) ? syncedItems.length : 0;
     } catch (_allowlistError) {
     }
+    try {
+      const syncedItems = await syncPrivacyIgnorelistItemsToCloud(loadPrivacyIgnorelistItems(), {
+        eventSource: "home-cloud-upload-scan-ignore"
+      });
+      syncedScanIgnoreCount = Array.isArray(syncedItems) ? syncedItems.length : 0;
+    } catch (_ignoreError) {
+    }
     setHomeTransferStatus(
-      syncedAllowlistCount == null
+      syncedAllowlistCount == null && syncedScanIgnoreCount == null
         ? `已上传 ${importedKeys} 项本地缓存到云端数据库。`
-        : `已上传 ${importedKeys} 项本地缓存，并同步 ${syncedAllowlistCount} 条白名单到云端数据库。`,
+        : `已上传 ${importedKeys} 项本地缓存，并同步 ${syncedAllowlistCount ?? 0} 条白名单、${syncedScanIgnoreCount ?? 0} 条扫描排除到云端数据库。`,
       "success"
     );
   } catch (error) {
@@ -1439,6 +1447,7 @@ async function restoreLocalStorageFromCloud() {
     });
 
     let restoredAllowlistCount = null;
+    let restoredScanIgnoreCount = null;
     if (window.PulsePrivacyAllowlistSync?.loadFromCloud) {
       try {
         const cloudItems = await window.PulsePrivacyAllowlistSync.loadFromCloud({
@@ -1451,8 +1460,20 @@ async function restoreLocalStorageFromCloud() {
       } catch (_allowlistError) {
       }
     }
+    if (window.PulsePrivacyAllowlistSync?.loadScanIgnoreFromCloud) {
+      try {
+        const cloudItems = await window.PulsePrivacyAllowlistSync.loadScanIgnoreFromCloud({
+          force: true,
+          emitEvent: false,
+          eventSource: "home-cloud-restore-scan-ignore"
+        });
+        const normalizedCloudItems = applyPrivacyIgnorelistItemsToLocalState(cloudItems);
+        restoredScanIgnoreCount = normalizedCloudItems.length;
+      } catch (_ignoreError) {
+      }
+    }
 
-    if (!restoredKeys.length && restoredAllowlistCount == null) {
+    if (!restoredKeys.length && restoredAllowlistCount == null && restoredScanIgnoreCount == null) {
       setHomeTransferStatus("云端数据库里还没有可恢复的缓存记录。", "");
       return;
     }
@@ -1474,9 +1495,9 @@ async function restoreLocalStorageFromCloud() {
     }
 
     persistHomeSyncFlash(
-      restoredAllowlistCount == null
+      restoredAllowlistCount == null && restoredScanIgnoreCount == null
         ? `已从云端恢复 ${restoredKeys.length} 项缓存，页面已刷新。`
-        : `已从云端恢复 ${restoredKeys.length} 项缓存，并同步 ${restoredAllowlistCount} 条白名单，页面已刷新。`,
+        : `已从云端恢复 ${restoredKeys.length} 项缓存，并同步 ${restoredAllowlistCount ?? 0} 条白名单、${restoredScanIgnoreCount ?? 0} 条扫描排除，页面已刷新。`,
       "success"
     );
     window.location.reload();
@@ -2701,7 +2722,8 @@ function normalizePrivacyIgnorelistItems(items = []) {
   return normalizeObjectArray(items)
     .map((item) => ({
       id: String(item.id || buildPrivacyItemId(item.text || "", "privacy_ignore")).trim(),
-      text: String(item.text || "").trim()
+      text: String(item.text || "").trim(),
+      reason: String(item.reason || "").trim()
     }))
     .filter((item) => {
       if (!item.text || unique.has(item.text)) {
@@ -2713,15 +2735,26 @@ function normalizePrivacyIgnorelistItems(items = []) {
 }
 
 function loadPrivacyIgnorelistItems() {
+  if (window.PulsePrivacyAllowlistSync?.getCachedScanIgnoreItems) {
+    return normalizePrivacyIgnorelistItems(window.PulsePrivacyAllowlistSync.getCachedScanIgnoreItems());
+  }
   return loadStoredPrivacyIgnorelistTerms().map((text) => ({
     id: buildPrivacyItemId(text, "privacy_ignore"),
-    text
+    text,
+    reason: ""
   }));
 }
 
-function persistPrivacyIgnorelistItems(items = []) {
+function applyPrivacyIgnorelistItemsToLocalState(items = []) {
   const normalizedItems = normalizePrivacyIgnorelistItems(items);
-  persistStoredPrivacyIgnorelistTerms(normalizedItems.map((item) => item.text));
+  if (window.PulsePrivacyAllowlistSync?.applyScanIgnoreItemsToLocalCache) {
+    window.PulsePrivacyAllowlistSync.applyScanIgnoreItemsToLocalCache(normalizedItems, {
+      emitEvent: false,
+      eventSource: "home-scan-ignore-local"
+    });
+  } else {
+    persistStoredPrivacyIgnorelistTerms(normalizedItems.map((item) => item.text));
+  }
   homeState.privacyIgnorelistItems = normalizedItems;
   refreshPrivacyRecentHitItems();
   persistPrivacyPendingCandidates(
@@ -2729,6 +2762,27 @@ function persistPrivacyIgnorelistItems(items = []) {
     homeState.privacyAllowlistItems.map((item) => item.text),
     normalizedItems.map((item) => item.text)
   );
+  return normalizedItems;
+}
+
+async function syncPrivacyIgnorelistItemsToCloud(items = [], options = {}) {
+  const normalizedItems = normalizePrivacyIgnorelistItems(items);
+  if (!window.PulsePrivacyAllowlistSync?.replaceScanIgnoreInCloud) {
+    return applyPrivacyIgnorelistItemsToLocalState(normalizedItems);
+  }
+  const syncedItems = await window.PulsePrivacyAllowlistSync.replaceScanIgnoreInCloud(normalizedItems, {
+    emitEvent: false,
+    eventSource: options.eventSource || "home-scan-ignore-save"
+  });
+  return applyPrivacyIgnorelistItemsToLocalState(syncedItems);
+}
+
+async function persistPrivacyIgnorelistItems(items = [], options = {}) {
+  const normalizedItems = applyPrivacyIgnorelistItemsToLocalState(items);
+  if (options.syncCloud === false) {
+    return normalizedItems;
+  }
+  return syncPrivacyIgnorelistItemsToCloud(normalizedItems, options);
 }
 
 function normalizePrivacyRecentHitItems(items = []) {
@@ -3191,8 +3245,8 @@ function renderPrivacyIgnorelistSummary() {
   }
   const items = homeState.privacyIgnorelistItems;
   privacyAppIgnoreSummaryEl.textContent = items.length
-    ? `当前有 ${items.length} 个自动屏蔽排除词；这些词之后不会再被自动隐私覆盖。`
-    : "当前还没有自动屏蔽排除词。若最近命中里有误伤词，可直接加入这里。";
+    ? `当前有 ${items.length} 个扫描排除词；这些词之后不会再进入待确认候选，但不会影响已确认白名单的实际 prompt 屏蔽。`
+    : "当前还没有扫描排除词。若扫描候选里有误伤词，可直接加入这里。";
 }
 
 function renderPrivacyIgnorelistItems() {
@@ -3202,7 +3256,7 @@ function renderPrivacyIgnorelistItems() {
   const items = homeState.privacyIgnorelistItems;
   if (!items.length) {
     privacyAppIgnoreListEl.innerHTML =
-      '<div class="privacy-app__empty">当前还没有自动屏蔽排除词。</div>';
+      '<div class="privacy-app__empty">当前还没有扫描排除词。</div>';
     renderPrivacyIgnorelistSummary();
     return;
   }
@@ -3213,7 +3267,7 @@ function renderPrivacyIgnorelistItems() {
         <section class="home-transfer-group privacy-app-item">
           <div class="privacy-app-item__head privacy-app-item__head--single-action">
             <div class="privacy-app-item__meta">
-              <span class="home-badge">排除</span>
+              <span class="home-badge">扫描排除</span>
             </div>
             <button
               class="home-chip home-chip--danger"
@@ -3231,9 +3285,14 @@ function renderPrivacyIgnorelistItems() {
               value="${escapeHtml(item.text)}"
               data-role="privacy-ignore-text"
               data-item-id="${escapeHtml(item.id)}"
-              placeholder="输入排除词"
+              placeholder="输入扫描排除词"
             />
-            <p class="privacy-app-item__hint">加入这里后，这个词不会再被自动隐私覆盖。</p>
+            <p class="privacy-app-item__hint">加入这里后，这个词不会再进入后续扫描候选；不会影响已确认白名单的实际屏蔽。</p>
+            ${
+              item.reason
+                ? `<p class="privacy-app-item__hint">原因：${escapeHtml(item.reason)}</p>`
+                : ""
+            }
           </div>
         </section>
       `
@@ -3248,7 +3307,7 @@ function renderPrivacyRecentSummary() {
   }
   const total = homeState.privacyRecentHitItems.length;
   privacyAppRecentSummaryEl.textContent = total
-    ? `最近命中了 ${total} 个真实屏蔽词；加入白名单或加入排除后，只会移除对应词，不会整页清空。`
+    ? `最近命中了 ${total} 个真实屏蔽词；加入白名单或加入扫描排除后，只会移除对应词，不会整页清空。`
     : "当前还没有最近实际屏蔽词记录；先触发一次 API 请求再回来查看。";
 }
 
@@ -3295,7 +3354,7 @@ function renderPrivacyRecentHitItems() {
                 data-item-id="${escapeHtml(item.id)}"
                 ${inIgnorelist ? "disabled" : ""}
               >
-                ${inIgnorelist ? "已排除" : "加入排除"}
+                ${inIgnorelist ? "已在扫描排除" : "加入扫描排除"}
               </button>
             </div>
           </div>
@@ -3326,7 +3385,7 @@ function renderPrivacyPendingSummary() {
   }
   const total = homeState.privacyPendingCandidates.length;
   privacyAppPendingSummaryEl.textContent = total
-    ? `当前有 ${total} 个待确认候选词；每条都可以直接加入白名单或删除，确认后会立刻从这里移除。`
+    ? `当前有 ${total} 个待确认候选词；加入白名单才会参与实际 prompt 屏蔽，误伤词可加入扫描排除。`
     : "当前没有待确认候选词；点击上方按钮可重新扫描当前配置。";
 }
 
@@ -3336,7 +3395,7 @@ function renderPrivacyPendingCandidates() {
   }
   if (!homeState.privacyPendingCandidates.length) {
     privacyAppPendingListEl.innerHTML =
-      '<div class="privacy-app__empty">当前没有待确认扫描候选。重新扫描时，已在白名单里的词会自动跳过。</div>';
+      '<div class="privacy-app__empty">当前没有待确认扫描候选。重新扫描时，已在白名单或扫描排除里的词会自动跳过。</div>';
     renderPrivacyPendingSummary();
     return;
   }
@@ -3360,6 +3419,14 @@ function renderPrivacyPendingCandidates() {
                 data-item-id="${escapeHtml(item.id)}"
               >
                 加入白名单
+              </button>
+              <button
+                class="home-chip home-chip--danger"
+                type="button"
+                data-action="ignore-privacy-pending-item"
+                data-item-id="${escapeHtml(item.id)}"
+              >
+                加入扫描排除
               </button>
               <button
                 class="home-chip home-chip--danger"
@@ -3438,6 +3505,13 @@ async function refreshPrivacyAppFromCloud(options = {}) {
         force: true,
         emitEvent: false,
         eventSource: "privacy-refresh"
+      });
+    }
+    if (window.PulsePrivacyAllowlistSync?.loadScanIgnoreFromCloud) {
+      await window.PulsePrivacyAllowlistSync.loadScanIgnoreFromCloud({
+        force: true,
+        emitEvent: false,
+        eventSource: "privacy-scan-ignore-refresh"
       });
     }
     initPrivacyAppState();
@@ -3596,22 +3670,51 @@ async function removePrivacyAllowlistItem(itemId) {
   }
 }
 
-function removePrivacyIgnorelistItem(itemId) {
+async function removePrivacyIgnorelistItem(itemId) {
   homeState.privacyIgnorelistItems = homeState.privacyIgnorelistItems.filter((item) => item.id !== itemId);
-  persistPrivacyIgnorelistItems(homeState.privacyIgnorelistItems);
+  const persistTask = persistPrivacyIgnorelistItems(homeState.privacyIgnorelistItems, {
+    eventSource: "home-scan-ignore-remove"
+  });
   renderPrivacyApp();
-  setPrivacyAppStatus("已从自动屏蔽排除词中删除该词条。", "success");
+  try {
+    await persistTask;
+    setPrivacyAppStatus("已从扫描排除中删除该词条。", "success");
+  } catch (error) {
+    setPrivacyAppStatus(`扫描排除同步失败：${error?.message || "请稍后重试。"}`, "error");
+  }
 }
 
-function addPrivacyIgnorelistItemsByLines(value) {
+async function addPrivacyIgnorelistItemsByLines(value, reason = "") {
+  const values = Array.isArray(value) ? value : [value];
   const nextItems = normalizePrivacyIgnorelistItems([
     ...homeState.privacyIgnorelistItems,
-    ...normalizePrivacyAllowlist(value).map((text) => ({
-      text
-    }))
+    ...values.flatMap((item) => {
+      if (typeof item === "string") {
+        return normalizePrivacyAllowlist(item).map((text) => ({
+          text,
+          reason
+        }));
+      }
+      if (item && typeof item === "object") {
+        const text = String(item.text || "").trim();
+        if (!text) {
+          return [];
+        }
+        return [
+          {
+            text,
+            reason: String(item.reason || reason || "").trim()
+          }
+        ];
+      }
+      return [];
+    })
   ]);
-  persistPrivacyIgnorelistItems(nextItems);
+  const persistTask = persistPrivacyIgnorelistItems(nextItems, {
+    eventSource: "home-scan-ignore-add"
+  });
   renderPrivacyApp();
+  return persistTask;
 }
 
 function removePrivacyPendingItem(itemId) {
@@ -3624,6 +3727,37 @@ function removePrivacyPendingItem(itemId) {
     homeState.privacyIgnorelistItems.map((item) => item.text)
   );
   renderPrivacyPendingCandidates();
+}
+
+async function ignorePrivacyPendingItem(itemId) {
+  const targetItem =
+    homeState.privacyPendingCandidates.find((item) => item.id === itemId) || null;
+  const nextText = String(targetItem?.text || "").trim();
+  if (!nextText) {
+    setPrivacyAppStatus("这个候选词为空，无法加入扫描排除。", "error");
+    return;
+  }
+
+  homeState.privacyPendingCandidates = homeState.privacyPendingCandidates.filter(
+    (item) => item.id !== itemId
+  );
+  try {
+    await addPrivacyIgnorelistItemsByLines([
+      {
+        text: nextText,
+        reason: `扫描误伤：${summarizePrivacyCandidateSources(targetItem?.sources || []) || "未记录来源"}`
+      }
+    ]);
+    persistPrivacyPendingCandidates(
+      homeState.privacyPendingCandidates,
+      homeState.privacyAllowlistItems.map((item) => item.text),
+      homeState.privacyIgnorelistItems.map((item) => item.text)
+    );
+    renderPrivacyApp();
+    setPrivacyAppStatus(`已将“${nextText}”加入扫描排除；后续扫描会跳过它。`, "success");
+  } catch (error) {
+    setPrivacyAppStatus(`扫描排除同步失败：${error?.message || "请稍后重试。"}`, "error");
+  }
 }
 
 async function confirmPrivacyPendingItem(itemId) {
@@ -3687,17 +3821,26 @@ async function addRecentPrivacyHitToAllowlist(itemId) {
   }
 }
 
-function addRecentPrivacyHitToIgnorelist(itemId) {
+async function addRecentPrivacyHitToIgnorelist(itemId) {
   const targetItem = homeState.privacyRecentHitItems.find((item) => item.id === itemId) || null;
   const nextText = String(targetItem?.text || "").trim();
   if (!nextText) {
-    setPrivacyAppStatus("这个最近命中词为空，无法加入排除。", "error");
+    setPrivacyAppStatus("这个最近命中词为空，无法加入扫描排除。", "error");
     return;
   }
-  addPrivacyIgnorelistItemsByLines([nextText]);
-  dismissPrivacyRecentHitItem(itemId);
-  renderPrivacyApp();
-  setPrivacyAppStatus(`已将“${nextText}”加入自动屏蔽排除词。`, "success");
+  try {
+    await addPrivacyIgnorelistItemsByLines([
+      {
+        text: nextText,
+        reason: "来自最近命中手动排除"
+      }
+    ]);
+    dismissPrivacyRecentHitItem(itemId);
+    renderPrivacyApp();
+    setPrivacyAppStatus(`已将“${nextText}”加入扫描排除。`, "success");
+  } catch (error) {
+    setPrivacyAppStatus(`扫描排除同步失败：${error?.message || "请稍后重试。"}`, "error");
+  }
 }
 
 function clearPrivacyRecentHits() {
@@ -3811,17 +3954,22 @@ function handlePrivacyIgnorelistInput(event) {
   homeState.privacyIgnorelistItems = homeState.privacyIgnorelistItems.map((item) =>
     item.id === itemId ? { ...item, text: String(target.value || "") } : item
   );
-  persistPrivacyIgnorelistItems(homeState.privacyIgnorelistItems);
 }
 
-function handlePrivacyIgnorelistChange(event) {
+async function handlePrivacyIgnorelistChange(event) {
   const target = event.target;
   if (!(target instanceof HTMLInputElement) || target.dataset.role !== "privacy-ignore-text") {
     return;
   }
-  persistPrivacyIgnorelistItems(homeState.privacyIgnorelistItems);
   renderPrivacyApp();
-  setPrivacyAppStatus("自动屏蔽排除词修改已生效。", "success");
+  try {
+    await persistPrivacyIgnorelistItems(homeState.privacyIgnorelistItems, {
+      eventSource: "home-scan-ignore-edit"
+    });
+    setPrivacyAppStatus("扫描排除修改已同步到云端。", "success");
+  } catch (error) {
+    setPrivacyAppStatus(`扫描排除同步失败：${error?.message || "请稍后重试。"}`, "error");
+  }
 }
 
 function handlePrivacyRecentHitChange(event) {
@@ -3838,7 +3986,7 @@ function handlePrivacyRecentHitChange(event) {
   );
   if (event.type === "change") {
     renderPrivacyRecentHitItems();
-    setPrivacyAppStatus("最近实际屏蔽词修改已更新，可直接加入白名单或加入排除。", "success");
+    setPrivacyAppStatus("最近实际屏蔽词修改已更新，可直接加入白名单或加入扫描排除。", "success");
   }
 }
 
@@ -3906,6 +4054,8 @@ function handlePrivacyAppClick(event) {
     addRecentPrivacyHitToIgnorelist(itemId);
   } else if (actionEl.dataset.action === "confirm-privacy-pending-item") {
     confirmPrivacyPendingItem(itemId);
+  } else if (actionEl.dataset.action === "ignore-privacy-pending-item") {
+    ignorePrivacyPendingItem(itemId);
   } else if (actionEl.dataset.action === "remove-privacy-pending-item") {
     removePrivacyPendingItem(itemId);
   }
@@ -7366,6 +7516,9 @@ function initHome() {
       refreshPrivacyAppFromStorage();
     });
     window.addEventListener("pulse-privacy-allowlist-updated", () => {
+      refreshPrivacyAppFromStorage({ preserveStatus: true });
+    });
+    window.addEventListener("pulse-privacy-scan-ignore-updated", () => {
       refreshPrivacyAppFromStorage({ preserveStatus: true });
     });
     document.addEventListener("visibilitychange", () => {

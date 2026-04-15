@@ -7,7 +7,6 @@
   const PRIVACY_ALLOWLIST_META_KEY = "x_style_generator_privacy_allowlist_meta_v1";
   const PRIVACY_IGNORELIST_TERMS_KEY = "x_style_generator_privacy_ignorelist_terms_v1";
   const CATEGORY_ORDER = ["NAME", "HANDLE", "ORG", "TITLE", "ADDR", "COORD", "TERM"];
-  const AUTO_MASK_ALLOWED_CATEGORIES = new Set(["NAME", "TITLE", "TERM"]);
   const NAME_ALIAS_LEVELS = ["FULL", "COMMON", "NICK", "PET", "HONOR"];
   const NAME_KEYS = new Set([
     "name",
@@ -262,10 +261,10 @@
     if (!resolvedCategory) {
       return false;
     }
-    if (resolvedSource === "allowlist") {
+    if (resolvedSource === "allowlist" || resolvedSource === "extra") {
       return true;
     }
-    return AUTO_MASK_ALLOWED_CATEGORIES.has(resolvedCategory);
+    return false;
   }
 
   function buildNameGroupKey(nameGroupId = "", fallback = "") {
@@ -299,7 +298,8 @@
     if (!normalized || isDataLikeString(normalized)) {
       return null;
     }
-    if (session.ignoreSet?.has(normalized)) {
+    const resolvedSource = trimText(source).toLowerCase();
+    if (session.ignoreSet?.has(normalized) && !["allowlist", "extra"].includes(resolvedSource)) {
       return null;
     }
 

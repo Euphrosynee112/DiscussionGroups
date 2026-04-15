@@ -6,11 +6,13 @@
   const SETTINGS_KEY = "x_style_generator_settings_v2";
   const PRIVACY_ALLOWLIST_TERMS_KEY = "x_style_generator_privacy_allowlist_terms_v1";
   const PRIVACY_ALLOWLIST_META_KEY = "x_style_generator_privacy_allowlist_meta_v1";
+  const PRIVACY_IGNORELIST_TERMS_KEY = "x_style_generator_privacy_ignorelist_terms_v1";
   const LOCAL_STORAGE_API_BASE_URL = "http://localhost:3000";
   const DEPLOYED_STORAGE_API_BASE_URL = "https://spring-field-3219.fly.dev";
   const NAME_ALIAS_LEVELS = ["FULL", "COMMON", "NICK", "PET", "HONOR"];
   const PRIVACY_ALLOWLIST_CATEGORIES = ["TERM", "TITLE", "NAME"];
   let loadPromise = null;
+  let scanIgnoreLoadPromise = null;
 
   function safeGetItem(key) {
     try {
@@ -140,8 +142,44 @@
     }));
   }
 
+  function normalizePrivacyScanIgnoreItems(items = []) {
+    const list = Array.isArray(items) ? items : [];
+    const result = [];
+    const indexMap = new Map();
+    list.forEach((item) => {
+      const record =
+        typeof item === "string" ? { text: item } : item && typeof item === "object" ? item : null;
+      if (!record) {
+        return;
+      }
+      const text = String(record.text || "").trim();
+      if (!text) {
+        return;
+      }
+      if (indexMap.has(text)) {
+        const existing = result[indexMap.get(text)];
+        const reason = String(record.reason || "").trim();
+        if (!existing.reason && reason) {
+          existing.reason = reason;
+        }
+        return;
+      }
+      indexMap.set(text, result.length);
+      result.push({
+        id: String(record.id || "").trim(),
+        text,
+        reason: String(record.reason || "").trim()
+      });
+    });
+    return result;
+  }
+
   function readStoredPrivacyAllowlistTerms() {
     return normalizePrivacyAllowlist(parseJsonValue(safeGetItem(PRIVACY_ALLOWLIST_TERMS_KEY), []));
+  }
+
+  function readStoredPrivacyScanIgnoreTerms() {
+    return normalizePrivacyAllowlist(parseJsonValue(safeGetItem(PRIVACY_IGNORELIST_TERMS_KEY), []));
   }
 
   function readStoredPrivacyAllowlistMetaItems() {
@@ -175,6 +213,14 @@
           sortOrder: index
         };
       })
+    );
+  }
+
+  function getCachedScanIgnoreItems() {
+    return normalizePrivacyScanIgnoreItems(
+      readStoredPrivacyScanIgnoreTerms().map((text) => ({
+        text
+      }))
     );
   }
 
@@ -215,6 +261,20 @@
     }
   }
 
+  function emitPrivacyScanIgnoreUpdated(items = [], source = "local") {
+    try {
+      window.dispatchEvent(
+        new CustomEvent("pulse-privacy-scan-ignore-updated", {
+          detail: {
+            items,
+            source: String(source || "local").trim() || "local"
+          }
+        })
+      );
+    } catch (_error) {
+    }
+  }
+
   function applyItemsToLocalCache(items = [], options = {}) {
     const normalized = applyItemsToGlobals(items);
     safeSetItem(
@@ -236,6 +296,18 @@
     writePrivacyAllowlistToSettings(normalized);
     if (options.emitEvent !== false) {
       emitPrivacyAllowlistUpdated(normalized, options.eventSource || "local");
+    }
+    return normalized;
+  }
+
+  function applyScanIgnoreItemsToLocalCache(items = [], options = {}) {
+    const normalized = normalizePrivacyScanIgnoreItems(items);
+    safeSetItem(
+      PRIVACY_IGNORELIST_TERMS_KEY,
+      JSON.stringify(normalized.map((item) => item.text))
+    );
+    if (options.emitEvent !== false) {
+      emitPrivacyScanIgnoreUpdated(normalized, options.eventSource || "scan-ignore-local");
     }
     return normalized;
   }
@@ -341,6 +413,50 @@
     });
   }
 
+  async function loadScanIgnoreFromCloud(options = {}) {
+    if (!options.force && scanIgnoreLoadPromise) {
+      return scanIgnoreLoadPromise;
+    }
+
+    const task = (async () => {
+      const payload = await requestPrivacyAllowlistApi("/api/privacy-scan-ignorelist", {
+        method: "GET",
+        cache: "no-store"
+      });
+      return applyScanIgnoreItemsToLocalCache(payload?.items || [], {
+        emitEvent: options.emitEvent !== false,
+        eventSource: options.eventSource || "scan-ignore-cloud"
+      });
+    })();
+
+    scanIgnoreLoadPromise = task
+      .catch((error) => {
+        if (options.throwOnError) {
+          throw error;
+        }
+        return getCachedScanIgnoreItems();
+      })
+      .finally(() => {
+        scanIgnoreLoadPromise = null;
+      });
+
+    return scanIgnoreLoadPromise;
+  }
+
+  async function replaceScanIgnoreInCloud(items = [], options = {}) {
+    const normalized = normalizePrivacyScanIgnoreItems(items);
+    const payload = await requestPrivacyAllowlistApi("/api/privacy-scan-ignorelist", {
+      method: "PUT",
+      body: JSON.stringify({
+        items: normalized
+      })
+    });
+    return applyScanIgnoreItemsToLocalCache(payload?.items || normalized, {
+      emitEvent: options.emitEvent !== false,
+      eventSource: options.eventSource || "scan-ignore-save"
+    });
+  }
+
   const initialItems = applyItemsToGlobals(getCachedItems());
 
   window.PulsePrivacyAllowlistSync = {
@@ -348,10 +464,15 @@
     buildStorageApiUrl,
     normalizePrivacyAllowlist,
     normalizePrivacyAllowlistItems,
+    normalizePrivacyScanIgnoreItems,
     getCachedItems,
+    getCachedScanIgnoreItems,
     applyItemsToLocalCache,
+    applyScanIgnoreItemsToLocalCache,
     loadFromCloud,
-    replaceInCloud
+    replaceInCloud,
+    loadScanIgnoreFromCloud,
+    replaceScanIgnoreInCloud
   };
   window.PulsePrivacyAllowlistDefaults = Object.freeze(initialItems.map((item) => item.text));
   window.PulsePrivacyAllowlistMetaDefaults = Object.freeze(
@@ -366,5 +487,9 @@
   window.PulsePrivacyAllowlistReady = loadFromCloud({
     emitEvent: true,
     eventSource: "cloud-init"
+  });
+  window.PulsePrivacyScanIgnoreReady = loadScanIgnoreFromCloud({
+    emitEvent: true,
+    eventSource: "scan-ignore-cloud-init"
   });
 })();

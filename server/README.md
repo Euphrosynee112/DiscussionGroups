@@ -21,6 +21,8 @@ The app will be available at:
 - `GET /api/health`
 - `GET /api/privacy-allowlist`
 - `PUT /api/privacy-allowlist`
+- `GET /api/privacy-scan-ignorelist`
+- `PUT /api/privacy-scan-ignorelist`
 - `GET /api/storage/bootstrap`
 - `GET /api/storage/:key`
 - `PUT /api/storage/:key`
@@ -49,6 +51,15 @@ On startup, if the table is empty, the server seeds it once from legacy
 - `x_style_generator_privacy_allowlist_meta_v1`
 - `x_style_generator_settings_v2.privacyAllowlist`
 
+## Privacy scan ignore table
+
+The server also maintains `privacy_scan_ignore_entries` for scan-only false positives.
+
+These entries:
+
+- are used to filter scan candidates before they reach the pending-review UI
+- do not block already confirmed allowlist entries from participating in runtime privacy masking
+
 ## Fly.io deployment
 
 Fly Launch can detect the root `Dockerfile`, create the app, and generate `fly.toml`.
@@ -66,3 +77,20 @@ Recommended first deploy flow:
    - `fly deploy`
 
 After deploy, the static pages and API will share the same Fly hostname, which avoids cross-origin issues for the first deployment.
+
+## GitHub Actions auto deploy
+
+This repo also supports automatic deploys from GitHub Actions on every push to `main`
+and via manual `workflow_dispatch`.
+
+Workflow file:
+
+- `.github/workflows/fly-deploy.yml`
+
+Required GitHub repository secret:
+
+- `FLY_API_TOKEN`
+
+Recommended way to create the token for this app:
+
+- `fly tokens create deploy -a spring-field-3219`

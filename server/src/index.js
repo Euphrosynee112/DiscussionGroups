@@ -179,6 +179,50 @@ function mapPrivacyAllowlistRow(row = {}) {
   };
 }
 
+function normalizePrivacyScanIgnoreItems(items = []) {
+  const list = Array.isArray(items) ? items : [];
+  const result = [];
+  const indexMap = new Map();
+
+  list.forEach((item) => {
+    const record =
+      typeof item === "string" ? { text: item } : item && typeof item === "object" ? item : null;
+    if (!record) {
+      return;
+    }
+    const text = String(record.text || "").trim();
+    if (!text) {
+      return;
+    }
+    if (indexMap.has(text)) {
+      const existing = result[indexMap.get(text)];
+      const reason = String(record.reason || "").trim();
+      if (!existing.reason && reason) {
+        existing.reason = reason;
+      }
+      return;
+    }
+    indexMap.set(text, result.length);
+    result.push({
+      id: String(record.id || "").trim(),
+      text,
+      reason: String(record.reason || "").trim()
+    });
+  });
+
+  return result;
+}
+
+function mapPrivacyScanIgnoreRow(row = {}) {
+  return {
+    id: String(row.id || "").trim(),
+    text: String(row.text || "").trim(),
+    reason: String(row.reason || "").trim(),
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null
+  };
+}
+
 function buildPrivacyAllowlistItemsFromLegacyRecords(records = new Map()) {
   const settingsRecord = parseJsonValue(records.get(SETTINGS_KEY), {}) || {};
   const termsRecord = parseJsonValue(records.get(PRIVACY_ALLOWLIST_TERMS_KEY), []);
@@ -222,7 +266,7 @@ async function replacePrivacyAllowlistItemsInDb(db, items = []) {
 
   const nextItems = normalizedItems.map((item, index) => ({
     ...item,
-    id: item.id || existingByText.get(item.text) || randomUUID(),
+    id: existingByText.get(item.text) || item.id || randomUUID(),
     sortOrder: index
   }));
   const keepIds = nextItems.map((item) => item.id);
@@ -281,6 +325,64 @@ async function replacePrivacyAllowlistItemsInDb(db, items = []) {
     order by sort_order asc, updated_at asc, text asc
   `);
   return result.rows.map(mapPrivacyAllowlistRow);
+}
+
+async function replacePrivacyScanIgnoreItemsInDb(db, items = []) {
+  const normalizedItems = normalizePrivacyScanIgnoreItems(items);
+  const existingResult = await db.query(`
+    select id, text
+    from privacy_scan_ignore_entries
+  `);
+  const existingByText = new Map(
+    existingResult.rows.map((row) => [
+      String(row.text || "").trim(),
+      String(row.id || "").trim()
+    ])
+  );
+  const nextItems = normalizedItems.map((item) => ({
+    ...item,
+    id: existingByText.get(item.text) || item.id || randomUUID()
+  }));
+  const keepIds = nextItems.map((item) => item.id);
+
+  if (keepIds.length) {
+    await db.query(
+      `
+        delete from privacy_scan_ignore_entries
+        where id <> all($1::text[])
+      `,
+      [keepIds]
+    );
+  } else {
+    await db.query("delete from privacy_scan_ignore_entries");
+  }
+
+  for (const item of nextItems) {
+    await db.query(
+      `
+        insert into privacy_scan_ignore_entries (
+          id,
+          text,
+          reason,
+          created_at,
+          updated_at
+        )
+        values ($1, $2, $3, now(), now())
+        on conflict (id) do update
+          set text = excluded.text,
+              reason = excluded.reason,
+              updated_at = now()
+      `,
+      [item.id, item.text, item.reason]
+    );
+  }
+
+  const result = await db.query(`
+    select id, text, reason, created_at, updated_at
+    from privacy_scan_ignore_entries
+    order by updated_at desc, text asc
+  `);
+  return result.rows.map(mapPrivacyScanIgnoreRow);
 }
 
 async function ensurePrivacyAllowlistSeeded(db) {
@@ -384,6 +486,19 @@ async function ensureCoreTables() {
   await pool.query(`
     create index if not exists privacy_allowlist_entries_sort_order_idx
       on privacy_allowlist_entries (sort_order asc, updated_at asc);
+  `);
+  await pool.query(`
+    create table if not exists privacy_scan_ignore_entries (
+      id text primary key,
+      text text not null unique,
+      reason text not null default '',
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    );
+  `);
+  await pool.query(`
+    create index if not exists privacy_scan_ignore_entries_text_idx
+      on privacy_scan_ignore_entries (text);
   `);
   return ensurePrivacyAllowlistSeeded(pool);
 }
@@ -514,6 +629,52 @@ app.put("/api/privacy-allowlist", async (request, response) => {
     response
       .status(500)
       .json(createJsonError("Failed to save privacy allowlist.", error?.message));
+  } finally {
+    client.release();
+  }
+});
+
+app.get("/api/privacy-scan-ignorelist", async (_request, response) => {
+  try {
+    const result = await pool.query(`
+      select id, text, reason, created_at, updated_at
+      from privacy_scan_ignore_entries
+      order by updated_at desc, text asc
+    `);
+    response.json({
+      ok: true,
+      items: result.rows.map(mapPrivacyScanIgnoreRow)
+    });
+  } catch (error) {
+    response
+      .status(500)
+      .json(createJsonError("Failed to load privacy scan ignorelist.", error?.message));
+  }
+});
+
+app.put("/api/privacy-scan-ignorelist", async (request, response) => {
+  const body = request.body && typeof request.body === "object" ? request.body : {};
+  const rawItems = Array.isArray(body) ? body : body.items;
+  if (!Array.isArray(rawItems)) {
+    response.status(400).json(createJsonError('Request body must include an "items" array.'));
+    return;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const items = await replacePrivacyScanIgnoreItemsInDb(client, rawItems);
+    await client.query("commit");
+    response.json({
+      ok: true,
+      items,
+      count: items.length
+    });
+  } catch (error) {
+    await client.query("rollback");
+    response
+      .status(500)
+      .json(createJsonError("Failed to save privacy scan ignorelist.", error?.message));
   } finally {
     client.release();
   }
