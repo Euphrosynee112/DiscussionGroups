@@ -648,13 +648,14 @@ function normalizeCustomTabs(tabs = []) {
     return [];
   }
 
-  return tabs
+  const normalizedTabs = tabs
     .map((tab, index) => {
       if (typeof tab === "string") {
         const name = String(tab).trim().slice(0, 20) || "自定义页签";
         return {
           id: `custom_${index}_${hashText(name)}`,
           name,
+          pinned: false,
           audience: "",
           discussionText: "",
           hotTopic: "",
@@ -706,6 +707,7 @@ function normalizeCustomTabs(tabs = []) {
           tab.key ||
           `custom_${index}_${hashText(`${rawName || ""}-${rawDiscussionText || ""}-${rawHotTopic || ""}`)}`,
         name: String(rawName || "自定义页签").trim().slice(0, 20) || "自定义页签",
+        pinned: Boolean(tab.pinned || tab.isPinned || tab.defaultFeed),
         audience: String(rawAudience || "").trim(),
         discussionText: String(rawDiscussionText || "").trim(),
         hotTopic: String(rawHotTopic || "").trim(),
@@ -741,6 +743,7 @@ function normalizeCustomTabs(tabs = []) {
     .map((tab) => ({
       id: tab.id || createCustomTabId(tab.name || "custom"),
       name: String(tab.name || "自定义页签").trim().slice(0, 20) || "自定义页签",
+      pinned: Boolean(tab.pinned),
       audience: String(tab.audience || "").trim(),
       discussionText: String(tab.discussionText || tab.text || "").trim(),
       hotTopic: String(tab.hotTopic || "").trim(),
@@ -752,6 +755,22 @@ function normalizeCustomTabs(tabs = []) {
       insFocusEnabled: Boolean(tab.insFocusEnabled),
       insFocusMinutes: normalizeContextFocusMinutes(tab.insFocusMinutes)
     }));
+  const pinnedTab = normalizedTabs.find((tab) => tab.pinned) || null;
+  if (!pinnedTab) {
+    return normalizedTabs;
+  }
+  return [
+    {
+      ...pinnedTab,
+      pinned: true
+    },
+    ...normalizedTabs
+      .filter((tab) => tab.id !== pinnedTab.id)
+      .map((tab) => ({
+        ...tab,
+        pinned: false
+      }))
+  ];
 }
 
 function normalizeWorldbookCategory(category, index = 0) {
@@ -2310,6 +2329,286 @@ function removePostAcrossViews(postId) {
   persistDiscussions();
 }
 
+function clearPostTranslationLoadingState(postId = "") {
+  const resolvedPostId = String(postId || "").trim();
+  if (!resolvedPostId) {
+    return;
+  }
+  Object.keys(state.translatingPosts).forEach((key) => {
+    if (String(key || "").includes(`::${resolvedPostId}`)) {
+      delete state.translatingPosts[key];
+    }
+  });
+  Object.keys(state.translatingReplies).forEach((key) => {
+    if (String(key || "").includes(`::${resolvedPostId}::`)) {
+      delete state.translatingReplies[key];
+    }
+  });
+}
+
+function normalizeThreadStateForRender(threadState = null) {
+  const source = threadState && typeof threadState === "object" ? threadState : {};
+  return {
+    expanded: Boolean(source.expanded),
+    loading: Boolean(source.loading),
+    replies: Array.isArray(source.replies) ? source.replies : []
+  };
+}
+
+function clearCachedReplyTree(replies = []) {
+  if (!Array.isArray(replies)) {
+    return [];
+  }
+  return replies.reduce((list, reply) => {
+    if (!reply || typeof reply !== "object") {
+      return list;
+    }
+    const cleanedChildren = clearCachedReplyTree(reply.children || []);
+    if (reply.authorOwned) {
+      list.push({
+        ...reply,
+        translationZh: "",
+        expanded: false,
+        loading: false,
+        children: cleanedChildren
+      });
+      return list;
+    }
+    if (cleanedChildren.length) {
+      list.push(...cleanedChildren);
+    }
+    return list;
+  }, []);
+}
+
+function clearCachedThreadState(threadState = null) {
+  const normalized = normalizeThreadStateForRender(threadState);
+  return {
+    ...normalized,
+    expanded: false,
+    loading: false,
+    replies: clearCachedReplyTree(normalized.replies)
+  };
+}
+
+function removeReplyNodeFromTree(replies = [], replyId = "") {
+  const resolvedReplyId = String(replyId || "").trim();
+  const removedIds = [];
+  let removed = false;
+
+  function collectReplyIds(replyNode) {
+    if (!replyNode || typeof replyNode !== "object") {
+      return;
+    }
+    const currentId = String(replyNode.id || "").trim();
+    if (currentId) {
+      removedIds.push(currentId);
+    }
+    (Array.isArray(replyNode.children) ? replyNode.children : []).forEach((child) => {
+      collectReplyIds(child);
+    });
+  }
+
+  const nextReplies = (Array.isArray(replies) ? replies : []).reduce((list, reply) => {
+    if (!reply || typeof reply !== "object") {
+      return list;
+    }
+    if (String(reply.id || "").trim() === resolvedReplyId) {
+      removed = true;
+      collectReplyIds(reply);
+      return list;
+    }
+    const childResult = removeReplyNodeFromTree(reply.children || [], resolvedReplyId);
+    if (childResult.removed) {
+      removed = true;
+      removedIds.push(...childResult.removedIds);
+      list.push({
+        ...reply,
+        children: childResult.replies
+      });
+      return list;
+    }
+    list.push(reply);
+    return list;
+  }, []);
+
+  return {
+    replies: nextReplies,
+    removed,
+    removedIds: [...new Set(removedIds.filter(Boolean))]
+  };
+}
+
+function deleteForumPost(postId, bucketName = state.activeFeed) {
+  const targetPost = findPostById(postId, bucketName);
+  if (!targetPost) {
+    setHomeStatus("未找到要删除的帖子。", "error");
+    return;
+  }
+  const confirmed = window.confirm("确定要删除这条帖子吗？");
+  if (!confirmed) {
+    return;
+  }
+  removePostAcrossViews(postId);
+  clearPostTranslationLoadingState(postId);
+  if (state.homeComposerRepostPostId === String(postId || "").trim()) {
+    clearHomeComposerRepostSource({ preserveContent: true });
+  }
+  if (state.threadModalPostId === String(postId || "").trim()) {
+    setThreadShareModalOpen(false);
+    setThreadModalOpen(false);
+  }
+  renderActiveFeed();
+  renderProfilePage();
+  updateReplyPromptPreview();
+  setHomeStatus("帖子已删除。", "success");
+}
+
+function deleteForumReply(postId, replyId, bucketName = state.threadModalBucket || state.activeFeed) {
+  const rootPost = findPostById(postId, bucketName);
+  if (!rootPost) {
+    setHomeStatus("未找到对应帖子。", "error");
+    return;
+  }
+  const resolvedBucket = resolveThreadBucketName(bucketName, rootPost);
+  const threadState = getPostThreadState(postId, resolvedBucket);
+  if (!threadState?.replies?.length) {
+    setHomeStatus("当前没有可删除的回复。", "error");
+    return;
+  }
+  const confirmed = window.confirm("确定要删除这条回复吗？");
+  if (!confirmed) {
+    return;
+  }
+  const result = removeReplyNodeFromTree(threadState.replies, replyId);
+  if (!result.removed) {
+    setHomeStatus("未找到要删除的回复。", "error");
+    return;
+  }
+  const nextThreadState = {
+    ...normalizeThreadStateForRender(threadState),
+    replies: result.replies,
+    loading: false
+  };
+  getDiscussionBucket(resolvedBucket)[postId] = nextThreadState;
+  syncDiscussionForAuthoredPost(rootPost, resolvedBucket, postId, nextThreadState);
+  result.removedIds.forEach((removedId) => {
+    setReplyTranslating(postId, removedId, resolvedBucket, false);
+  });
+  persistDiscussions();
+  renderActiveFeed();
+  renderProfilePage();
+  if (
+    state.threadModalOpen &&
+    String(state.threadModalPostId || "").trim() === String(postId || "").trim()
+  ) {
+    renderThreadModal();
+  }
+  setHomeStatus("回复已删除。", "success");
+}
+
+function clearCustomTabGeneratedContent(tabId = "") {
+  const resolvedTabId = String(tabId || "").trim();
+  const tab = getCustomTab(resolvedTabId);
+  if (!tab) {
+    setCustomTabFormStatus("未找到对应页签。", "error");
+    return;
+  }
+  const confirmed = window.confirm(
+    `确定清空“${tab.name || "当前页签"}”下的 AI 缓存内容吗？这会删除 AI 生成的主贴、回复和翻译，但会保留用户自己发送的帖子。`
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  const currentFeedPosts = Array.isArray(state.feeds[resolvedTabId]) ? state.feeds[resolvedTabId] : [];
+  const currentFeedPostIds = currentFeedPosts
+    .map((post) => String(post?.id || "").trim())
+    .filter(Boolean);
+  const keptPosts = currentFeedPosts
+    .filter((post) => Boolean(post?.authorOwned))
+    .map((post) => ({
+      ...post,
+      translationZh: "",
+      translatedTags: []
+    }));
+  const keptPostIds = new Set(keptPosts.map((post) => String(post.id || "").trim()).filter(Boolean));
+
+  state.feeds[resolvedTabId] = keptPosts;
+  state.profilePosts = state.profilePosts.map((post) => {
+    if (Boolean(post?.authorOwned) && String(post.feedType || "").trim() === resolvedTabId) {
+      return {
+        ...post,
+        translationZh: "",
+        translatedTags: []
+      };
+    }
+    return post;
+  });
+
+  const nextBucket = {};
+  keptPosts.forEach((post) => {
+    const postId = String(post.id || "").trim();
+    if (!postId) {
+      return;
+    }
+    const sourceThread =
+      getDiscussionBucket(resolvedTabId)[postId] ||
+      getDiscussionBucket("profile")[postId] ||
+      null;
+    const cleanedThreadState = clearCachedThreadState(sourceThread);
+    nextBucket[postId] = cleanedThreadState;
+    if (post.authorOwned) {
+      state.discussions.profile[postId] = cleanedThreadState;
+    }
+  });
+  state.discussions[resolvedTabId] = nextBucket;
+
+  Object.keys(state.discussions.profile || {}).forEach((postId) => {
+    const profilePost = state.profilePosts.find((post) => String(post.id || "").trim() === postId) || null;
+    if (!profilePost || String(profilePost.feedType || "").trim() !== resolvedTabId) {
+      return;
+    }
+    if (!keptPostIds.has(postId)) {
+      delete state.discussions.profile[postId];
+    }
+  });
+
+  currentFeedPostIds.forEach((postId) => {
+    clearPostTranslationLoadingState(postId);
+  });
+  if (
+    state.homeComposerRepostPostId &&
+    currentFeedPostIds.includes(String(state.homeComposerRepostPostId || "").trim()) &&
+    !keptPostIds.has(String(state.homeComposerRepostPostId || "").trim())
+  ) {
+    clearHomeComposerRepostSource({ preserveContent: true });
+  }
+
+  persistProfilePosts(state.profilePosts);
+  persistFeeds(state.feeds);
+  persistDiscussions();
+
+  const currentModalPost = findPostById(state.threadModalPostId, state.threadModalBucket);
+  if (
+    state.threadModalOpen &&
+    String(resolveThreadBucketName(state.threadModalBucket, currentModalPost || {})) === resolvedTabId
+  ) {
+    if (!currentModalPost) {
+      setThreadShareModalOpen(false);
+      setThreadModalOpen(false);
+    } else {
+      renderThreadModal();
+    }
+  }
+
+  renderActiveFeed();
+  renderProfilePage();
+  updateReplyPromptPreview();
+  setCustomTabFormStatus(`已清空“${tab.name || "当前页签"}”下的 AI 缓存内容。`, "success");
+  setHomeStatus(`已清空“${tab.name || "当前页签"}”下的 AI 缓存内容。`, "success");
+}
+
 function openProfilePostEditor(postId) {
   const targetPost = state.profilePosts.find((post) => post.id === postId);
   if (!targetPost) {
@@ -3336,6 +3635,9 @@ function switchTab(tabName) {
   if (nextTab === "profile" && profileScrollEl) {
     profileScrollEl.scrollTop = 0;
   }
+  if (nextTab === "home") {
+    switchHomeFeed(state.customTabs.length ? getDefaultVisibleHomeFeed() : "tags");
+  }
 
   syncTabToLocation(nextTab);
 }
@@ -3703,6 +4005,11 @@ function renderFeedPost(post, bucketName = state.activeFeed) {
               actualBucket
             )}" data-post-id="${escapeHtml(post.id)}">
               转发
+            </button>
+            <button class="action-link" type="button" data-action="delete-forum-post" data-bucket="${escapeHtml(
+              actualBucket
+            )}" data-post-id="${escapeHtml(post.id)}">
+              删除
             </button>
             <span>回复 ${post.replies}</span>
             <span>转发 ${post.reposts}</span>
@@ -4682,6 +4989,11 @@ function renderThreadModalReplyCard(reply, bucketName, postId, depth = 1) {
             }>
               ${translateLabel}
             </button>
+            <button class="action-link" type="button" data-action="delete-forum-reply" data-bucket="${escapeHtml(
+              bucketName
+            )}" data-post-id="${escapeHtml(postId)}" data-reply-id="${escapeHtml(reply.id)}">
+              删除
+            </button>
             <span>回复 ${reply.replies}</span>
             <span>喜欢 ${reply.likes}</span>
           </div>
@@ -4739,6 +5051,9 @@ function renderThreadModalRootPost(post, bucketName, threadState = null) {
           <button class="action-link" type="button" data-action="repost-post" data-bucket="${escapeHtml(
             bucketName
           )}" data-post-id="${escapeHtml(post.id)}">转发</button>
+          <button class="action-link" type="button" data-action="delete-forum-post" data-bucket="${escapeHtml(
+            bucketName
+          )}" data-post-id="${escapeHtml(post.id)}">删除</button>
           <span>回复 ${post.replies}</span>
           <span>转发 ${post.reposts}</span>
           <span>喜欢 ${post.likes}</span>
@@ -5297,6 +5612,24 @@ function deleteCustomTab(tabId) {
   setCustomTabFormStatus("自定义页签已删除。", "success");
 }
 
+function pinCustomTab(tabId) {
+  const resolvedTabId = String(tabId || "").trim();
+  const tab = getCustomTab(resolvedTabId);
+  if (!tab) {
+    return;
+  }
+  if (tab.pinned) {
+    setCustomTabFormStatus(`“${tab.name || "当前页签"}”已置顶。`, "success");
+    return;
+  }
+  const nextTabs = state.customTabs.map((item) => ({
+    ...item,
+    pinned: item.id === resolvedTabId
+  }));
+  commitCustomTabs(nextTabs);
+  setCustomTabFormStatus(`已将“${tab.name || "当前页签"}”设为默认置顶页签。`, "success");
+}
+
 function clearCustomTabDragClasses() {
   if (!customTabsListEl) {
     return;
@@ -5352,13 +5685,19 @@ function renderCustomTabsManager() {
             tab.id
           )}" draggable="true">
             <div>
-              <strong>${escapeHtml(tab.name || "未命名页签")}</strong>
+              <strong>${escapeHtml(tab.name || "未命名页签")}${tab.pinned ? " · 置顶" : ""}</strong>
               <p class="tag-stat-meta">${escapeHtml(snippet)}</p>
             </div>
             <div class="custom-tab-item__actions">
               <button class="ghost-chip" type="button" data-action="edit-custom-tab" data-tab-id="${escapeHtml(
                 tab.id
               )}">编辑</button>
+              <button class="ghost-chip" type="button" data-action="pin-custom-tab" data-tab-id="${escapeHtml(
+                tab.id
+              )}">${tab.pinned ? "已置顶" : "置顶"}</button>
+              <button class="ghost-chip" type="button" data-action="clear-custom-tab-cache" data-tab-id="${escapeHtml(
+                tab.id
+              )}">清缓存</button>
               <button class="ghost-chip ghost-chip--danger" type="button" data-action="delete-custom-tab" data-tab-id="${escapeHtml(
                 tab.id
               )}">删除</button>
@@ -7284,6 +7623,10 @@ function attachEvents() {
       }
       if (action === "edit-custom-tab") {
         startCustomTabEdit(tabId);
+      } else if (action === "pin-custom-tab") {
+        pinCustomTab(tabId);
+      } else if (action === "clear-custom-tab-cache") {
+        clearCustomTabGeneratedContent(tabId);
       } else if (action === "delete-custom-tab") {
         deleteCustomTab(tabId);
       }
@@ -7466,6 +7809,11 @@ function attachEvents() {
         return;
       }
 
+      if (action === "delete-forum-post" && actionEl.dataset.postId) {
+        deleteForumPost(actionEl.dataset.postId, actionEl.dataset.bucket || state.activeFeed);
+        return;
+      }
+
       if (action === "open-thread-modal" && actionEl.dataset.postId) {
         await openThreadModal(
           actionEl.dataset.postId,
@@ -7599,6 +7947,14 @@ function attachEvents() {
         return;
       }
 
+      if (action === "delete-forum-post" && actionEl.dataset.postId) {
+        deleteForumPost(
+          actionEl.dataset.postId,
+          actionEl.dataset.bucket || state.threadModalBucket || state.activeFeed
+        );
+        return;
+      }
+
       if (action === "toggle-reply" && actionEl.dataset.postId && actionEl.dataset.replyId) {
         await toggleNestedReply(
           actionEl.dataset.postId,
@@ -7610,6 +7966,15 @@ function attachEvents() {
 
       if (action === "translate-reply" && actionEl.dataset.postId && actionEl.dataset.replyId) {
         await translateReplyToChinese(
+          actionEl.dataset.postId,
+          actionEl.dataset.replyId,
+          actionEl.dataset.bucket || state.threadModalBucket || state.activeFeed
+        );
+        return;
+      }
+
+      if (action === "delete-forum-reply" && actionEl.dataset.postId && actionEl.dataset.replyId) {
+        deleteForumReply(
           actionEl.dataset.postId,
           actionEl.dataset.replyId,
           actionEl.dataset.bucket || state.threadModalBucket || state.activeFeed
