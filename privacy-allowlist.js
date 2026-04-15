@@ -108,6 +108,28 @@
     return new RegExp(`^__PG_${resolvedCategory}_[A-Z0-9]{8}__$`).test(placeholder);
   }
 
+  function buildPrivacyPlaceholderScope(item = {}) {
+    const category = normalizePrivacyAllowlistCategory(item.category);
+    const text = String(item.text || "").trim();
+    const nameGroupId = shouldKeepPrivacyGroupId(category)
+      ? normalizePrivacyNameGroupId(item.nameGroupId)
+      : "";
+    const nameLevel = category === "NAME" ? normalizePrivacyNameAliasLevel(item.nameLevel) : "COMMON";
+    if (!text) {
+      return "";
+    }
+    if (category === "NAME") {
+      return `NAME:${nameGroupId || text}:${nameLevel}`;
+    }
+    if (category === "TERM") {
+      return `TERM:${nameGroupId || text}`;
+    }
+    if (category === "TITLE") {
+      return `TITLE:${nameGroupId || text}`;
+    }
+    return `${category}:${text}`;
+  }
+
   function buildDefaultPrivacyPlaceholder(options = {}) {
     const category = normalizePrivacyAllowlistCategory(options.category);
     const text = String(options.text || "").trim();
@@ -116,20 +138,74 @@
       : "";
     const nameLevel = category === "NAME" ? normalizePrivacyNameAliasLevel(options.nameLevel) : "COMMON";
     const placeholderKey =
-      category === "NAME"
-        ? `${category}:${nameGroupId || text}:${nameLevel}:${text}`
-        : `${category}:${nameGroupId || text}`;
+      buildPrivacyPlaceholderScope({
+        category,
+        text,
+        nameGroupId,
+        nameLevel
+      }) || `${category}:${text}`;
     const suffix = hashPrivacyPlaceholderKey(placeholderKey);
     return category === "NAME"
       ? `__PG_NAME_${suffix}_${nameLevel}__`
       : `__PG_${category}_${suffix}__`;
   }
 
-  function normalizePrivacyPlaceholder(value = "", options = {}) {
+  function collectPrivacyPlaceholderScopeMap(items = []) {
+    const scopeMap = new Map();
+    const list = Array.isArray(items) ? items : [];
+    list.forEach((item) => {
+      const category = normalizePrivacyAllowlistCategory(item?.category);
+      const placeholder = String(item?.placeholder || "").trim().toUpperCase();
+      const scopeKey = buildPrivacyPlaceholderScope(item);
+      if (
+        !scopeKey ||
+        !placeholder ||
+        scopeMap.has(scopeKey) ||
+        !isValidPrivacyPlaceholder(placeholder, category)
+      ) {
+        return;
+      }
+      scopeMap.set(scopeKey, placeholder);
+    });
+    return scopeMap;
+  }
+
+  function resolveDerivedPrivacyPlaceholder(options = {}, scopeMap = new Map()) {
+    const category = normalizePrivacyAllowlistCategory(options.category);
+    const text = String(options.text || "").trim();
+    const nameGroupId = shouldKeepPrivacyGroupId(category)
+      ? normalizePrivacyNameGroupId(options.nameGroupId, category === "NAME" ? text : "")
+      : "";
+    const nameLevel = category === "NAME" ? normalizePrivacyNameAliasLevel(options.nameLevel) : "COMMON";
+    const scopeKey = buildPrivacyPlaceholderScope({
+      category,
+      text,
+      nameGroupId,
+      nameLevel
+    });
+    if (scopeKey && scopeMap.has(scopeKey)) {
+      return scopeMap.get(scopeKey);
+    }
+    const generated = buildDefaultPrivacyPlaceholder({
+      category,
+      text,
+      nameGroupId,
+      nameLevel
+    });
+    if (scopeKey) {
+      scopeMap.set(scopeKey, generated);
+    }
+    return generated;
+  }
+
+  function normalizePrivacyPlaceholder(value = "", options = {}, scopeMap = null) {
     const category = normalizePrivacyAllowlistCategory(options.category);
     const normalized = String(value || "").trim().toUpperCase();
     if (isValidPrivacyPlaceholder(normalized, category)) {
       return normalized;
+    }
+    if (scopeMap instanceof Map) {
+      return resolveDerivedPrivacyPlaceholder(options, scopeMap);
     }
     return buildDefaultPrivacyPlaceholder(options);
   }
@@ -191,6 +267,7 @@
       result.push(normalized);
     });
 
+    const scopeMap = collectPrivacyPlaceholderScopeMap(result);
     return result.map((item, index) => ({
       ...item,
       nameGroupId: shouldKeepPrivacyGroupId(item.category)
@@ -205,7 +282,7 @@
         text: item.text,
         nameGroupId: item.nameGroupId,
         nameLevel: item.nameLevel
-      }),
+      }, scopeMap),
       sortOrder: index
     }));
   }

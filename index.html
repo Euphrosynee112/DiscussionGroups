@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Pulse Generator v2.0</title>
-    <link rel="stylesheet" href="./home.css?v=20260415-181340" />
+    <link rel="stylesheet" href="./home.css?v=20260415-194250" />
   </head>
   <body>
     <main class="home-scene">
@@ -688,7 +688,7 @@
         <div class="home-settings-modal__body">
           <div class="privacy-app-add-form">
             <p class="home-field-hint">
-              手动新增现在按结构化白名单录入。请先确认词条类型，再填写分组和实际占位符。
+              手动新增现在按结构化白名单录入。请先确认词条类型并填写分组；实际占位符由系统自动复用或生成。
             </p>
             <label class="home-field home-field--full">
               <span>白名单词条</span>
@@ -735,12 +735,13 @@
               <input
                 id="privacy-app-add-placeholder"
                 type="text"
-                placeholder="__PG_TERM_02K7A91X__"
+                placeholder="系统会自动复用或生成 opaque token"
                 autocapitalize="off"
                 spellcheck="false"
+                readonly
               />
               <span id="privacy-app-add-placeholder-hint" class="home-field-hint">
-                建议使用系统生成的占位符；如果手动填写，请保证同组 TERM 使用同一个占位符。
+                系统会先检查云端是否已有相同分组的占位符；有则复用，没有才生成新的。
               </span>
             </label>
           </div>
@@ -777,11 +778,11 @@
     </section>
 
     <script src="./prompt-config.js?v=20260414-130224"></script>
-    <script src="./privacy-allowlist.js?v=20260415-173916"></script>
-    <script src="./pulse-privacy-cover.js?v=20260415-173916"></script>
+    <script src="./privacy-allowlist.js?v=20260415-194250"></script>
+    <script src="./pulse-privacy-cover.js?v=20260415-194250"></script>
     <script src="./pulse-message-banner.js?v=20260403-165212"></script>
     <script src="./api-log.js?v=20260405-231617"></script>
     <script src="./pulse-api-switcher.js?v=20260414-141318"></script>
-    <script src="./home.js?v=20260415-181340"></script>
+    <script src="./home.js?v=20260415-194250"></script>
   </body>
 </html>

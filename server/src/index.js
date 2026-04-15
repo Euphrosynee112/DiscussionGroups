@@ -127,20 +127,74 @@ function buildDefaultPrivacyAllowlistPlaceholder(options = {}) {
     : "";
   const nameLevel = category === "NAME" ? normalizePrivacyAllowlistNameLevel(options.nameLevel) : "COMMON";
   const placeholderKey =
-    category === "NAME"
-      ? `${category}:${nameGroupId || text}:${nameLevel}:${text}`
-      : `${category}:${nameGroupId || text}`;
+    buildPrivacyAllowlistPlaceholderScope({
+      category,
+      text,
+      nameGroupId,
+      nameLevel
+    }) || `${category}:${text}`;
   const suffix = hashPrivacyPlaceholderKey(placeholderKey);
   return category === "NAME"
     ? `__PG_NAME_${suffix}_${nameLevel}__`
     : `__PG_${category}_${suffix}__`;
 }
 
-function normalizePrivacyAllowlistPlaceholder(value = "", options = {}) {
+function collectPrivacyAllowlistPlaceholderScopeMap(items = []) {
+  const scopeMap = new Map();
+  const list = Array.isArray(items) ? items : [];
+  list.forEach((item) => {
+    const category = normalizePrivacyAllowlistCategory(item?.category);
+    const placeholder = trimPrivacyText(item?.placeholder).toUpperCase();
+    const scopeKey = buildPrivacyAllowlistPlaceholderScope(item);
+    if (
+      !scopeKey ||
+      !placeholder ||
+      scopeMap.has(scopeKey) ||
+      !isValidPrivacyAllowlistPlaceholder(placeholder, category)
+    ) {
+      return;
+    }
+    scopeMap.set(scopeKey, placeholder);
+  });
+  return scopeMap;
+}
+
+function resolveDerivedPrivacyAllowlistPlaceholder(options = {}, scopeMap = new Map()) {
+  const category = normalizePrivacyAllowlistCategory(options.category);
+  const text = trimPrivacyText(options.text);
+  const nameGroupId = shouldKeepPrivacyAllowlistGroupId(category)
+    ? normalizePrivacyAllowlistNameGroupId(options.nameGroupId, category === "NAME" ? text : "")
+    : "";
+  const nameLevel = category === "NAME" ? normalizePrivacyAllowlistNameLevel(options.nameLevel) : "COMMON";
+  const scopeKey = buildPrivacyAllowlistPlaceholderScope({
+    category,
+    text,
+    nameGroupId,
+    nameLevel
+  });
+  if (scopeKey && scopeMap.has(scopeKey)) {
+    return scopeMap.get(scopeKey);
+  }
+  const generated = buildDefaultPrivacyAllowlistPlaceholder({
+    category,
+    text,
+    nameGroupId,
+    nameLevel
+  });
+  if (scopeKey) {
+    scopeMap.set(scopeKey, generated);
+  }
+  return generated;
+}
+
+function normalizePrivacyAllowlistPlaceholder(value = "", options = {}, scopeMap = null) {
   const category = normalizePrivacyAllowlistCategory(options.category);
   const normalized = trimPrivacyText(value).toUpperCase();
   if (isValidPrivacyAllowlistPlaceholder(normalized, category)) {
     return normalized;
+  }
+  if (scopeMap instanceof Map) {
+    return resolveDerivedPrivacyAllowlistPlaceholder(options, scopeMap);
   }
   return buildDefaultPrivacyAllowlistPlaceholder(options);
 }
@@ -288,6 +342,7 @@ function normalizePrivacyAllowlistItems(items = []) {
     result.push(normalized);
   });
 
+  const scopeMap = collectPrivacyAllowlistPlaceholderScopeMap(result);
   return result.map((item, index) => ({
     ...item,
     nameGroupId: shouldKeepPrivacyAllowlistGroupId(item.category)
@@ -302,7 +357,7 @@ function normalizePrivacyAllowlistItems(items = []) {
       text: item.text,
       nameGroupId: item.nameGroupId,
       nameLevel: item.nameLevel
-    }),
+    }, scopeMap),
     sortOrder: index
   }));
 }

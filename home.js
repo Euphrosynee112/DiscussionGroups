@@ -5,8 +5,8 @@ const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GROK_MODEL = "grok-4";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 const DEFAULT_TEMPERATURE = 0.85;
-const APP_BUILD_VERSION = "20260415-181340";
-const APP_BUILD_UPDATED_AT = "2026-04-15 18:13:40";
+const APP_BUILD_VERSION = "20260415-194250";
+const APP_BUILD_UPDATED_AT = "2026-04-15 19:42:50";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -4032,7 +4032,7 @@ function setPrivacyAppAddModalOpen(isOpen) {
   }
   if (homeState.privacyAddModalOpen) {
     showHomeLayer(privacyAppAddModalEl, "grid");
-    syncPrivacyAddForm({ forcePlaceholder: true });
+    syncPrivacyAddForm();
     window.setTimeout(() => {
       privacyAppAddTextInputEl?.focus();
     }, 0);
