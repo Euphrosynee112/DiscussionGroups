@@ -5,8 +5,8 @@ const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GROK_MODEL = "grok-4";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 const DEFAULT_TEMPERATURE = 0.85;
-const APP_BUILD_VERSION = "20260415-173916";
-const APP_BUILD_UPDATED_AT = "2026-04-15 17:39:16";
+const APP_BUILD_VERSION = "20260415-181340";
+const APP_BUILD_UPDATED_AT = "2026-04-15 18:13:40";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -172,7 +172,16 @@ const privacyAppAddModalEl = document.querySelector("#privacy-app-add-modal");
 const privacyAppAddCloseBtn = document.querySelector("#privacy-app-add-close-btn");
 const privacyAppAddCancelBtn = document.querySelector("#privacy-app-add-cancel-btn");
 const privacyAppAddApplyBtn = document.querySelector("#privacy-app-add-apply-btn");
-const privacyAppAddTextareaEl = document.querySelector("#privacy-app-add-textarea");
+const privacyAppAddTextInputEl = document.querySelector("#privacy-app-add-text");
+const privacyAppAddCategorySelectEl = document.querySelector("#privacy-app-add-category");
+const privacyAppAddGroupFieldEl = document.querySelector("#privacy-app-add-group-field");
+const privacyAppAddGroupLabelEl = document.querySelector("#privacy-app-add-group-label");
+const privacyAppAddGroupHintEl = document.querySelector("#privacy-app-add-group-hint");
+const privacyAppAddNameGroupInputEl = document.querySelector("#privacy-app-add-name-group");
+const privacyAppAddNameLevelFieldEl = document.querySelector("#privacy-app-add-name-level-field");
+const privacyAppAddNameLevelSelectEl = document.querySelector("#privacy-app-add-name-level");
+const privacyAppAddPlaceholderInputEl = document.querySelector("#privacy-app-add-placeholder");
+const privacyAppAddPlaceholderHintEl = document.querySelector("#privacy-app-add-placeholder-hint");
 let homeBackgroundMessagesFrameEl = null;
 
 const weekdayLabels = [
@@ -3748,6 +3757,159 @@ async function refreshPrivacyAppFromCloud(options = {}) {
   }
 }
 
+function getDefaultPrivacyAddDraft() {
+  return {
+    text: "",
+    category: "TERM",
+    nameGroupId: "",
+    nameLevel: "COMMON",
+    placeholder: ""
+  };
+}
+
+function getPrivacyAddDraft() {
+  const text = String(privacyAppAddTextInputEl?.value || "").trim();
+  const category = normalizePrivacyAllowlistCategory(
+    privacyAppAddCategorySelectEl?.value || "TERM",
+    text
+  );
+  const nameGroupId = shouldKeepPrivacyGroupId(category)
+    ? normalizePrivacyNameGroupId(privacyAppAddNameGroupInputEl?.value || "")
+    : "";
+  const nameLevel =
+    category === "NAME"
+      ? normalizePrivacyNameAliasLevel(privacyAppAddNameLevelSelectEl?.value || "COMMON")
+      : "COMMON";
+  const placeholder = String(privacyAppAddPlaceholderInputEl?.value || "").trim().toUpperCase();
+  return {
+    text,
+    category,
+    nameGroupId,
+    nameLevel,
+    placeholder
+  };
+}
+
+function getPrivacyAddPlaceholderSuggestion(draft = {}) {
+  const text = String(draft.text || "").trim();
+  if (!text) {
+    return "";
+  }
+  return normalizePrivacyPlaceholder("", {
+    category: draft.category,
+    text,
+    nameGroupId: draft.nameGroupId,
+    nameLevel: draft.nameLevel
+  });
+}
+
+function resetPrivacyAddForm() {
+  const draft = getDefaultPrivacyAddDraft();
+  if (privacyAppAddTextInputEl) {
+    privacyAppAddTextInputEl.value = draft.text;
+  }
+  if (privacyAppAddCategorySelectEl) {
+    privacyAppAddCategorySelectEl.value = draft.category;
+  }
+  if (privacyAppAddNameGroupInputEl) {
+    privacyAppAddNameGroupInputEl.value = draft.nameGroupId;
+  }
+  if (privacyAppAddNameLevelSelectEl) {
+    privacyAppAddNameLevelSelectEl.value = draft.nameLevel;
+  }
+  if (privacyAppAddPlaceholderInputEl) {
+    privacyAppAddPlaceholderInputEl.value = draft.placeholder;
+    privacyAppAddPlaceholderInputEl.dataset.autoValue = "";
+    privacyAppAddPlaceholderInputEl.dataset.manualOverride = "false";
+  }
+  syncPrivacyAddForm({ forcePlaceholder: true });
+}
+
+function syncPrivacyAddForm(options = {}) {
+  const draft = getPrivacyAddDraft();
+  const showGroupField = shouldKeepPrivacyGroupId(draft.category);
+  const showNameLevelField = draft.category === "NAME";
+  const isTermGroup = draft.category === "TERM";
+
+  if (privacyAppAddCategorySelectEl) {
+    privacyAppAddCategorySelectEl.value = draft.category;
+  }
+  if (privacyAppAddGroupFieldEl) {
+    privacyAppAddGroupFieldEl.hidden = !showGroupField;
+  }
+  if (privacyAppAddNameLevelFieldEl) {
+    privacyAppAddNameLevelFieldEl.hidden = !showNameLevelField;
+  }
+  if (privacyAppAddGroupLabelEl) {
+    privacyAppAddGroupLabelEl.textContent = draft.category === "NAME" ? "同一人分组" : "同义词分组";
+  }
+  if (privacyAppAddNameGroupInputEl) {
+    privacyAppAddNameGroupInputEl.required = showGroupField;
+    privacyAppAddNameGroupInputEl.placeholder =
+      draft.category === "NAME" ? "例如：person:jessie" : "例如：term:riize";
+  }
+  if (privacyAppAddGroupHintEl) {
+    privacyAppAddGroupHintEl.textContent =
+      draft.category === "NAME"
+        ? "同一个人的多个称呼请使用同一个分组；层级差异由“称呼层级”表达。"
+        : showGroupField
+          ? "相同普通词别名请使用同一个分组，并共用同一个占位符。"
+          : "标题词条不需要额外分组。";
+  }
+  if (privacyAppAddPlaceholderInputEl) {
+    const suggestedPlaceholder = getPrivacyAddPlaceholderSuggestion(draft);
+    const previousAutoValue = privacyAppAddPlaceholderInputEl.dataset.autoValue || "";
+    const currentValue = String(privacyAppAddPlaceholderInputEl.value || "").trim().toUpperCase();
+    const manualOverride = privacyAppAddPlaceholderInputEl.dataset.manualOverride === "true";
+    const shouldUpdatePlaceholder =
+      options.forcePlaceholder === true ||
+      !currentValue ||
+      !manualOverride ||
+      currentValue === previousAutoValue;
+
+    if (shouldUpdatePlaceholder) {
+      privacyAppAddPlaceholderInputEl.value = suggestedPlaceholder;
+      privacyAppAddPlaceholderInputEl.dataset.manualOverride = "false";
+    }
+    privacyAppAddPlaceholderInputEl.dataset.autoValue = suggestedPlaceholder;
+  }
+  if (privacyAppAddPlaceholderHintEl) {
+    privacyAppAddPlaceholderHintEl.textContent = showNameLevelField
+      ? "人名占位符会包含层级后缀，但不会暴露真实名字。建议保留系统生成值。"
+      : isTermGroup
+        ? "同组 TERM 必须共用同一个占位符。系统会自动生成一个不暴露原词的 opaque token。"
+        : "标题占位符会自动生成 opaque token，不会包含真实标题内容。";
+  }
+}
+
+function getPrivacyAddValidationError(item = {}) {
+  const text = String(item.text || "").trim();
+  const category = normalizePrivacyAllowlistCategory(item.category, text);
+  const nameGroupId = shouldKeepPrivacyGroupId(category)
+    ? normalizePrivacyNameGroupId(item.nameGroupId || "")
+    : "";
+  const placeholder = String(item.placeholder || "").trim().toUpperCase();
+
+  if (!text) {
+    return "请先填写白名单词条。";
+  }
+  if (category === "NAME" && !nameGroupId) {
+    return "人名词条必须填写“同一人分组”。";
+  }
+  if (category === "TERM" && !nameGroupId) {
+    return "普通词词条必须填写“同义词分组”。";
+  }
+  if (!placeholder) {
+    return "请确认实际占位符后再保存。";
+  }
+  if (!isValidPrivacyPlaceholder(placeholder, category)) {
+    return category === "NAME"
+      ? "人名占位符格式应为 __PG_NAME_XXXXXXXX_COMMON__ 这一类。"
+      : `请填写合法的 ${category} 占位符，例如 __PG_${category}_XXXXXXXX__。`;
+  }
+  return "";
+}
+
 function setPrivacyAppAddModalOpen(isOpen) {
   homeState.privacyAddModalOpen = Boolean(isOpen);
   if (!privacyAppAddModalEl) {
@@ -3755,14 +3917,13 @@ function setPrivacyAppAddModalOpen(isOpen) {
   }
   if (homeState.privacyAddModalOpen) {
     showHomeLayer(privacyAppAddModalEl, "grid");
+    syncPrivacyAddForm({ forcePlaceholder: true });
     window.setTimeout(() => {
-      privacyAppAddTextareaEl?.focus();
+      privacyAppAddTextInputEl?.focus();
     }, 0);
   } else {
     hideHomeLayer(privacyAppAddModalEl);
-    if (privacyAppAddTextareaEl) {
-      privacyAppAddTextareaEl.value = "";
-    }
+    resetPrivacyAddForm();
   }
   refreshBodyModalState();
 }
@@ -7514,19 +7675,56 @@ function attachHomeSettingsEvents() {
 
   if (privacyAppAddApplyBtn) {
     privacyAppAddApplyBtn.addEventListener("click", async () => {
-      const values = normalizePrivacyAllowlist(privacyAppAddTextareaEl?.value || "");
-      if (!values.length) {
-        setPrivacyAppStatus("请至少填写一个词条后再确认添加。", "error");
+      const draft = getPrivacyAddDraft();
+      const validationError = getPrivacyAddValidationError(draft);
+      if (validationError) {
+        setPrivacyAppStatus(validationError, "error");
         return;
       }
       try {
-        await addPrivacyAllowlistItemsByLines(values, "manual");
+        await addPrivacyAllowlistItemsByLines(
+          [
+            {
+              ...draft,
+              source: "manual"
+            }
+          ],
+          "manual"
+        );
         setPrivacyAppAddModalOpen(false);
-        setPrivacyAppStatus(`已手动加入 ${values.length} 个词条到白名单。`, "success");
+        setPrivacyAppStatus(`已手动加入“${draft.text}”到白名单。`, "success");
       } catch (error) {
         setPrivacyAppStatus(`白名单同步失败：${error?.message || "请稍后重试。"}`, "error");
       }
     });
+  }
+
+  [
+    privacyAppAddTextInputEl,
+    privacyAppAddCategorySelectEl,
+    privacyAppAddNameGroupInputEl,
+    privacyAppAddNameLevelSelectEl
+  ]
+    .filter(Boolean)
+    .forEach((element) => {
+      element.addEventListener("input", () => {
+        syncPrivacyAddForm();
+      });
+      element.addEventListener("change", () => {
+        syncPrivacyAddForm();
+      });
+    });
+
+  if (privacyAppAddPlaceholderInputEl) {
+    const syncPlaceholderOverride = () => {
+      const currentValue = String(privacyAppAddPlaceholderInputEl.value || "").trim().toUpperCase();
+      const autoValue = privacyAppAddPlaceholderInputEl.dataset.autoValue || "";
+      privacyAppAddPlaceholderInputEl.value = currentValue;
+      privacyAppAddPlaceholderInputEl.dataset.manualOverride =
+        currentValue && currentValue !== autoValue ? "true" : "false";
+    };
+    privacyAppAddPlaceholderInputEl.addEventListener("input", syncPlaceholderOverride);
+    privacyAppAddPlaceholderInputEl.addEventListener("change", syncPlaceholderOverride);
   }
 
   if (privacyAppAddModalEl) {
@@ -7774,6 +7972,7 @@ function initHome() {
   hideHomeLayer(homeRulesNegativeModalEl);
   hideHomeLayer(homeBrowserModalEl);
   hideHomeLayer(privacyAppAddModalEl);
+  resetPrivacyAddForm();
   setHomeExportReviewOpen(false);
   setHomeImportReviewOpen(false);
   homeState.settings = loadSettings({ forceActiveConfig: false });

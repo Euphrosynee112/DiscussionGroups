@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Pulse Generator v2.0</title>
-    <link rel="stylesheet" href="./home.css?v=20260414-130808" />
+    <link rel="stylesheet" href="./home.css?v=20260415-181340" />
   </head>
   <body>
     <main class="home-scene">
@@ -686,15 +686,64 @@
           </button>
         </div>
         <div class="home-settings-modal__body">
-          <label class="home-field home-field--full">
-            <span>每行一个词</span>
-            <textarea
-              id="privacy-app-add-textarea"
-              rows="8"
-              placeholder="例如：&#10;Jessie&#10;洁宝&#10;J宝&#10;西米露"
-            ></textarea>
-            <span class="home-field-hint">换行会被识别为不同词条，确认后会直接加入上方白名单预览。</span>
-          </label>
+          <div class="privacy-app-add-form">
+            <p class="home-field-hint">
+              手动新增现在按结构化白名单录入。请先确认词条类型，再填写分组和实际占位符。
+            </p>
+            <label class="home-field home-field--full">
+              <span>白名单词条</span>
+              <input
+                id="privacy-app-add-text"
+                type="text"
+                placeholder="例如：Jessie / 洁宝 / RIIZE / 《GGB》"
+              />
+              <span class="home-field-hint">一次新增一个词条；如需多个别名，请分别新增并填写同一个分组。</span>
+            </label>
+            <div class="privacy-app-add-form__grid">
+              <label class="home-field">
+                <span>类型</span>
+                <select id="privacy-app-add-category">
+                  <option value="TERM">普通词</option>
+                  <option value="TITLE">标题</option>
+                  <option value="NAME">人名</option>
+                </select>
+              </label>
+              <label id="privacy-app-add-name-level-field" class="home-field" hidden>
+                <span>称呼层级</span>
+                <select id="privacy-app-add-name-level">
+                  <option value="FULL">全名</option>
+                  <option value="COMMON" selected>常规</option>
+                  <option value="NICK">昵称</option>
+                  <option value="PET">爱称</option>
+                  <option value="HONOR">称谓</option>
+                </select>
+              </label>
+            </div>
+            <label id="privacy-app-add-group-field" class="home-field home-field--full">
+              <span id="privacy-app-add-group-label">同义词分组</span>
+              <input
+                id="privacy-app-add-name-group"
+                type="text"
+                placeholder="例如：term:riize"
+              />
+              <span id="privacy-app-add-group-hint" class="home-field-hint">
+                相同普通词别名请使用同一个分组，并共用同一个占位符。
+              </span>
+            </label>
+            <label class="home-field home-field--full">
+              <span>实际占位符</span>
+              <input
+                id="privacy-app-add-placeholder"
+                type="text"
+                placeholder="__PG_TERM_02K7A91X__"
+                autocapitalize="off"
+                spellcheck="false"
+              />
+              <span id="privacy-app-add-placeholder-hint" class="home-field-hint">
+                建议使用系统生成的占位符；如果手动填写，请保证同组 TERM 使用同一个占位符。
+              </span>
+            </label>
+          </div>
           <div class="home-config-transfer__actions">
             <button id="privacy-app-add-apply-btn" class="home-primary-button" type="button">
               确认添加
@@ -733,6 +782,6 @@
     <script src="./pulse-message-banner.js?v=20260403-165212"></script>
     <script src="./api-log.js?v=20260405-231617"></script>
     <script src="./pulse-api-switcher.js?v=20260414-141318"></script>
-    <script src="./home.js?v=20260415-173916"></script>
+    <script src="./home.js?v=20260415-181340"></script>
   </body>
 </html>

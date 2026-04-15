@@ -1046,7 +1046,18 @@ button {
 }
 
 .privacy-app-add-modal__panel {
-  width: min(520px, 100%);
+  width: min(640px, 100%);
+}
+
+.privacy-app-add-form {
+  display: grid;
+  gap: 14px;
+}
+
+.privacy-app-add-form__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .home-time-modal__panel {
@@ -1717,6 +1728,10 @@ button {
 
   .privacy-app-item__field {
     gap: 4px;
+  }
+
+  .privacy-app-add-form__grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
