@@ -82,6 +82,58 @@
     );
   }
 
+  function shouldKeepPrivacyGroupId(category = "") {
+    const resolvedCategory = normalizePrivacyAllowlistCategory(category);
+    return resolvedCategory === "NAME" || resolvedCategory === "TERM";
+  }
+
+  function hashPrivacyPlaceholderKey(value = "") {
+    const text = String(value || "");
+    let hash = 0;
+    for (let index = 0; index < text.length; index += 1) {
+      hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+    }
+    return hash.toString(36).toUpperCase().slice(-8).padStart(8, "0");
+  }
+
+  function isValidPrivacyPlaceholder(value = "", category = "") {
+    const resolvedCategory = normalizePrivacyAllowlistCategory(category);
+    const placeholder = String(value || "").trim().toUpperCase();
+    if (!placeholder) {
+      return false;
+    }
+    if (resolvedCategory === "NAME") {
+      return /^__PG_NAME_[A-Z0-9]{8}_(FULL|COMMON|NICK|PET|HONOR)__$/.test(placeholder);
+    }
+    return new RegExp(`^__PG_${resolvedCategory}_[A-Z0-9]{8}__$`).test(placeholder);
+  }
+
+  function buildDefaultPrivacyPlaceholder(options = {}) {
+    const category = normalizePrivacyAllowlistCategory(options.category);
+    const text = String(options.text || "").trim();
+    const nameGroupId = shouldKeepPrivacyGroupId(category)
+      ? normalizePrivacyNameGroupId(options.nameGroupId)
+      : "";
+    const nameLevel = category === "NAME" ? normalizePrivacyNameAliasLevel(options.nameLevel) : "COMMON";
+    const placeholderKey =
+      category === "NAME"
+        ? `${category}:${nameGroupId || text}:${nameLevel}:${text}`
+        : `${category}:${nameGroupId || text}`;
+    const suffix = hashPrivacyPlaceholderKey(placeholderKey);
+    return category === "NAME"
+      ? `__PG_NAME_${suffix}_${nameLevel}__`
+      : `__PG_${category}_${suffix}__`;
+  }
+
+  function normalizePrivacyPlaceholder(value = "", options = {}) {
+    const category = normalizePrivacyAllowlistCategory(options.category);
+    const normalized = String(value || "").trim().toUpperCase();
+    if (isValidPrivacyPlaceholder(normalized, category)) {
+      return normalized;
+    }
+    return buildDefaultPrivacyPlaceholder(options);
+  }
+
   function normalizePrivacyAllowlistItems(items = []) {
     const list = Array.isArray(items) ? items : [];
     const result = [];
@@ -103,14 +155,11 @@
         text,
         source,
         category,
-        nameGroupId:
-          category === "NAME"
-            ? normalizePrivacyNameGroupId(record.nameGroupId, text)
-            : "",
-        nameLevel:
-          category === "NAME"
-            ? normalizePrivacyNameAliasLevel(record.nameLevel)
-            : "COMMON",
+        nameGroupId: shouldKeepPrivacyGroupId(category)
+          ? normalizePrivacyNameGroupId(record.nameGroupId, category === "NAME" ? text : "")
+          : "",
+        nameLevel: category === "NAME" ? normalizePrivacyNameAliasLevel(record.nameLevel) : "COMMON",
+        placeholder: String(record.placeholder || "").trim().toUpperCase(),
         sortOrder: Number.isFinite(Number(record.sortOrder ?? record.sort_order))
           ? Math.max(0, Math.round(Number(record.sortOrder ?? record.sort_order)))
           : result.length
@@ -124,10 +173,16 @@
         if (existing.category === "TERM" && category !== "TERM") {
           existing.category = category;
         }
+        if (shouldKeepPrivacyGroupId(category) && normalized.nameGroupId && !existing.nameGroupId) {
+          existing.nameGroupId = normalized.nameGroupId;
+        }
         if (category === "NAME") {
           existing.category = "NAME";
           existing.nameGroupId = normalizePrivacyNameGroupId(record.nameGroupId, text);
           existing.nameLevel = normalizePrivacyNameAliasLevel(record.nameLevel);
+        }
+        if (!existing.placeholder && normalized.placeholder) {
+          existing.placeholder = normalized.placeholder;
         }
         return;
       }
@@ -138,6 +193,19 @@
 
     return result.map((item, index) => ({
       ...item,
+      nameGroupId: shouldKeepPrivacyGroupId(item.category)
+        ? normalizePrivacyNameGroupId(
+            item.nameGroupId,
+            item.category === "NAME" ? item.text : ""
+          )
+        : "",
+      nameLevel: item.category === "NAME" ? normalizePrivacyNameAliasLevel(item.nameLevel) : "COMMON",
+      placeholder: normalizePrivacyPlaceholder(item.placeholder, {
+        category: item.category,
+        text: item.text,
+        nameGroupId: item.nameGroupId,
+        nameLevel: item.nameLevel
+      }),
       sortOrder: index
     }));
   }
@@ -208,8 +276,9 @@
           text,
           source: matchedMeta?.source || "manual",
           category: matchedMeta?.category || "TERM",
-          nameGroupId: matchedMeta?.nameGroupId || text,
+          nameGroupId: matchedMeta?.nameGroupId || "",
           nameLevel: matchedMeta?.nameLevel || "COMMON",
+          placeholder: matchedMeta?.placeholder || "",
           sortOrder: index
         };
       })
@@ -233,7 +302,8 @@
         source: item.source,
         category: item.category,
         nameGroupId: item.nameGroupId,
-        nameLevel: item.nameLevel
+        nameLevel: item.nameLevel,
+        placeholder: item.placeholder
       }))
     );
     return normalized;
@@ -289,7 +359,8 @@
           source: item.source,
           category: item.category,
           nameGroupId: item.nameGroupId,
-          nameLevel: item.nameLevel
+          nameLevel: item.nameLevel,
+          placeholder: item.placeholder
         }))
       )
     );
@@ -484,7 +555,8 @@
       source: item.source,
       category: item.category,
       nameGroupId: item.nameGroupId,
-      nameLevel: item.nameLevel
+      nameLevel: item.nameLevel,
+      placeholder: item.placeholder
     }))
   );
   window.PulsePrivacyAllowlistReady = loadFromCloud({

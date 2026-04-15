@@ -129,6 +129,67 @@
     return String(value || "").trim();
   }
 
+  function normalizePrivacyPlaceholderCategory(value = "") {
+    const normalized = trimText(value).toUpperCase();
+    return CATEGORY_ORDER.includes(normalized) ? normalized : "TERM";
+  }
+
+  function shouldKeepPrivacyGroupId(category = "") {
+    const resolvedCategory = normalizePrivacyPlaceholderCategory(category);
+    return resolvedCategory === "NAME" || resolvedCategory === "TERM";
+  }
+
+  function hashPrivacyPlaceholderKey(value = "") {
+    const text = String(value || "");
+    let hash = 0;
+    for (let index = 0; index < text.length; index += 1) {
+      hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+    }
+    return hash.toString(36).toUpperCase().slice(-8).padStart(8, "0");
+  }
+
+  function isValidPrivacyPlaceholder(value = "", category = "") {
+    const resolvedCategory = normalizePrivacyPlaceholderCategory(category);
+    const placeholder = trimText(value).toUpperCase();
+    if (!placeholder) {
+      return false;
+    }
+    if (resolvedCategory === "NAME") {
+      return /^__PG_NAME_[A-Z0-9]{8}_(FULL|COMMON|NICK|PET|HONOR)__$/.test(placeholder);
+    }
+    return new RegExp(`^__PG_${resolvedCategory}_[A-Z0-9]{8}__$`).test(placeholder);
+  }
+
+  function buildDefaultPrivacyPlaceholder(options = {}) {
+    const category = normalizePrivacyPlaceholderCategory(options.category);
+    const text = trimText(options.text);
+    const nameGroupId = shouldKeepPrivacyGroupId(category) ? trimText(options.nameGroupId) : "";
+    const nameLevel = category === "NAME" ? normalizeNameAliasLevel(options.nameLevel) : "COMMON";
+    const placeholderKey =
+      category === "NAME"
+        ? `${category}:${nameGroupId || text}:${nameLevel}:${text}`
+        : `${category}:${nameGroupId || text}`;
+    const suffix = hashPrivacyPlaceholderKey(placeholderKey);
+    return category === "NAME"
+      ? `__PG_NAME_${suffix}_${nameLevel}__`
+      : `__PG_${category}_${suffix}__`;
+  }
+
+  function normalizePrivacyPlaceholder(value = "", options = {}) {
+    const category = normalizePrivacyPlaceholderCategory(options.category);
+    const normalized = trimText(value).toUpperCase();
+    if (isValidPrivacyPlaceholder(normalized, category)) {
+      return normalized;
+    }
+    return buildDefaultPrivacyPlaceholder(options);
+  }
+
+  function buildPrivacyAliasGroupKey(category = "", nameGroupId = "", fallback = "") {
+    const resolvedCategory = normalizePrivacyPlaceholderCategory(category);
+    const groupId = trimText(nameGroupId || fallback).toLowerCase();
+    return groupId ? `${resolvedCategory}:${groupId}` : "";
+  }
+
   function truncatePreviewText(value, limit = 52) {
     const text = trimText(value);
     if (text.length <= limit) {
@@ -179,12 +240,23 @@
     return items
       .map((item) => {
         const text = trimText(item?.text);
+        const category = detectCategory(text, item?.category);
+        const nameGroupId = shouldKeepPrivacyGroupId(category)
+          ? trimText(item?.nameGroupId || "")
+          : "";
+        const nameLevel = category === "NAME" ? normalizeNameAliasLevel(item?.nameLevel) : "COMMON";
         return {
           text,
           source: trimText(item?.source) === "scan" ? "scan" : "manual",
-          category: detectCategory(text, item?.category),
-          nameGroupId: trimText(item?.nameGroupId || ""),
-          nameLevel: normalizeNameAliasLevel(item?.nameLevel)
+          category,
+          nameGroupId,
+          nameLevel,
+          placeholder: normalizePrivacyPlaceholder(item?.placeholder, {
+            category,
+            text,
+            nameGroupId,
+            nameLevel
+          })
         };
       })
       .filter((item) => {
@@ -325,31 +397,35 @@
       return session.replacementMap.get(normalized);
     }
 
-    const placeholder =
-      resolvedCategory === "NAME"
-        ? buildNamePlaceholder(session, normalized, {
-            ...(matchedMeta || {}),
-            nameGroupId: trimText(matchedMeta?.nameGroupId || normalized),
-            nameLevel: normalizeNameAliasLevel(matchedMeta?.nameLevel)
-          })
-        : (() => {
-            session.counters[resolvedCategory] = (session.counters[resolvedCategory] || 0) + 1;
-            return `__PG_${resolvedCategory}_${String(
-              session.counters[resolvedCategory]
-            ).padStart(2, "0")}__`;
-          })();
+    const nameGroupId = shouldKeepPrivacyGroupId(resolvedCategory)
+      ? trimText(matchedMeta?.nameGroupId || (resolvedCategory === "NAME" ? normalized : ""))
+      : "";
+    let placeholder = normalizePrivacyPlaceholder(matchedMeta?.placeholder, {
+      category: resolvedCategory,
+      text: normalized,
+      nameGroupId,
+      nameLevel: matchedMeta?.nameLevel
+    });
+    if (resolvedCategory === "TERM" && nameGroupId) {
+      const groupKey = buildPrivacyAliasGroupKey(resolvedCategory, nameGroupId, normalized);
+      const groupedPlaceholder = session.termGroupPlaceholderMap?.get(groupKey);
+      if (groupedPlaceholder) {
+        placeholder = groupedPlaceholder;
+      } else {
+        session.termGroupPlaceholderMap?.set(groupKey, placeholder);
+      }
+    }
     const entry = {
       raw: normalized,
       placeholder,
       category: resolvedCategory,
-      nameGroupId:
-        resolvedCategory === "NAME"
-          ? trimText(matchedMeta?.nameGroupId || normalized)
-          : "",
+      nameGroupId,
       nameLevel: resolvedCategory === "NAME" ? normalizeNameAliasLevel(matchedMeta?.nameLevel) : ""
     };
     session.replacementMap.set(normalized, entry);
-    session.placeholderMap.set(placeholder, entry);
+    if (!session.placeholderMap.has(placeholder)) {
+      session.placeholderMap.set(placeholder, entry);
+    }
     session.replacements.push(entry);
     return entry;
   }
@@ -454,7 +530,7 @@
   function getNamePlaceholderEntityIndex(placeholder = "") {
     const match = String(placeholder || "")
       .trim()
-      .match(/^__PG_NAME_(\d{2})_[A-Z]+(?:_\d{2})?__$/);
+      .match(/^__PG_NAME_([A-Z0-9_]+)_(?:FULL|COMMON|NICK|PET|HONOR)(?:_[A-Z0-9]+)?__$/);
     return match?.[1] || "";
   }
 
@@ -475,18 +551,23 @@
     [...(session?.replacements || [])]
       .filter((entry) => String(entry?.category || "").trim() === "NAME")
       .forEach((entry) => {
-        const entityIndex = getNamePlaceholderEntityIndex(entry?.placeholder);
+        const entityKeys = normalizeAllowlist([
+          getNamePlaceholderEntityIndex(entry?.placeholder),
+          trimText(entry?.nameGroupId)
+        ]);
         const raw = trimText(entry?.raw);
-        if (!entityIndex || !raw) {
+        if (!entityKeys.length || !raw) {
           return;
         }
-        const currentEntry = fallbackMap.get(entityIndex);
-        if (
-          !currentEntry ||
-          getNameFallbackPriority(entry) < getNameFallbackPriority(currentEntry)
-        ) {
-          fallbackMap.set(entityIndex, entry);
-        }
+        entityKeys.forEach((entityIndex) => {
+          const currentEntry = fallbackMap.get(entityIndex);
+          if (
+            !currentEntry ||
+            getNameFallbackPriority(entry) < getNameFallbackPriority(currentEntry)
+          ) {
+            fallbackMap.set(entityIndex, entry);
+          }
+        });
       });
     return new Map(
       [...fallbackMap.entries()].map(([entityIndex, entry]) => [entityIndex, entry.raw])
@@ -510,7 +591,7 @@
       const nameFallbackMap = buildNamePlaceholderFallbackMap(session);
       if (nameFallbackMap.size) {
         decoded = decoded.replace(
-          /__PG_NAME_(\d{2})_[A-Z]+(?:_\d{2})?__/g,
+          /__PG_NAME_([A-Z0-9_]+)_(?:FULL|COMMON|NICK|PET|HONOR)(?:_[A-Z0-9]+)?__/g,
           (match, entityIndex) => nameFallbackMap.get(entityIndex) || match
         );
       }
@@ -560,8 +641,8 @@
     }
     const hasGroupedNames = session.replacements.some((entry) => String(entry?.category || "") === "NAME");
     return hasGroupedNames
-      ? "注意：文中形如 __PG_NAME_01_COMMON__、__PG_NAME_01_NICK__、__PG_TITLE_01__ 的内容是本地匿名占位符。同一个人物会共享同一个 NAME 编号，后缀表示称呼方式与亲疏层级；它们仍然是同一个人。请直接按上下文理解，并保留这些占位符原样输出，不要猜测、补全、替换或搜索真实信息。"
-      : "注意：文中形如 __PG_NAME_01__、__PG_TITLE_01__ 的内容是本地匿名占位符，对应真实人物、作品等敏感信息。请直接按上下文理解，并保留这些占位符原样输出，不要猜测、补全、替换或搜索真实信息。";
+      ? "注意：文中形如 __PG_NAME_XXX_COMMON__、__PG_TERM_XXX__、__PG_TITLE_XXX__ 的内容是本地匿名占位符。NAME 后缀表示称呼方式与亲疏层级；同一 TERM 分组的别名会共用同一个 TERM 占位符。请直接按上下文理解，并保留这些占位符原样输出，不要猜测、补全、替换或搜索真实信息。"
+      : "注意：文中形如 __PG_TERM_XXX__、__PG_TITLE_XXX__ 的内容是本地匿名占位符，对应真实人物、作品等敏感信息。请直接按上下文理解，并保留这些占位符原样输出，不要猜测、补全、替换或搜索真实信息。";
   }
 
   function preparePrompt(value, session) {
@@ -609,6 +690,7 @@
       counters: Object.fromEntries(CATEGORY_ORDER.map((category) => [category, 0])),
       nameEntityMap: new Map(),
       nameLevelVariantCounters: new Map(),
+      termGroupPlaceholderMap: new Map(),
       sourceTexts: [],
       allowlist: [],
       allowlistMetaMap: new Map()
@@ -968,6 +1050,7 @@
       counters: Object.fromEntries(CATEGORY_ORDER.map((category) => [category, 0])),
       nameEntityMap: new Map(),
       nameLevelVariantCounters: new Map(),
+      termGroupPlaceholderMap: new Map(),
       sourceTexts: [],
       allowlist: getManualAllowlist(options.settings),
       allowlistMetaMap: new Map(

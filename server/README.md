@@ -39,10 +39,21 @@ Columns:
 - `text`: allowlist term, unique.
 - `source`: `manual` or `scan`.
 - `category`: `TERM`, `TITLE`, or `NAME`.
-- `name_group_id`: same-person grouping key for `NAME` entries.
-- `name_level`: `FULL`, `COMMON`, `NICK`, `PET`, or `HONOR`.
+- `name_group_id`: grouping key. For `NAME`, this means same person; for `TERM`, this means aliases of the same ordinary term.
+- `name_level`: `FULL`, `COMMON`, `NICK`, `PET`, or `HONOR`. Only `NAME` uses this semantically; `TERM` uses `COMMON`.
+- `placeholder`: explicit prompt placeholder, for example `__PG_TERM_02K7A91X__`. `TERM` entries with the same `name_group_id` must share the same placeholder.
 - `sort_order`: display order used by the frontend.
 - `created_at` / `updated_at`: audit timestamps.
+
+The server adds `placeholder` automatically on startup if the table is older, and
+enforces the placeholder prefix to match `category`:
+
+- `TERM` → `__PG_TERM_...__`
+- `TITLE` → `__PG_TITLE_...__`
+- `NAME` → `__PG_NAME_...__`
+
+The API also rejects saves where one placeholder points to multiple unrelated
+allowlist objects, or where a `TERM` group has inconsistent placeholders.
 
 On startup, if the table is empty, the server seeds it once from legacy
 `storage_records` values:

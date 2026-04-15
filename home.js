@@ -5,8 +5,8 @@ const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GROK_MODEL = "grok-4";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 const DEFAULT_TEMPERATURE = 0.85;
-const APP_BUILD_VERSION = "20260415-162600";
-const APP_BUILD_UPDATED_AT = "2026-04-15 16:26:00";
+const APP_BUILD_VERSION = "20260415-173916";
+const APP_BUILD_UPDATED_AT = "2026-04-15 17:39:16";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -2553,6 +2553,144 @@ function normalizePrivacyNameGroupId(value = "", fallbackText = "") {
   return String(value || "").trim().slice(0, 40) || String(fallbackText || "").trim().slice(0, 40);
 }
 
+function shouldKeepPrivacyGroupId(category = "") {
+  const resolvedCategory = normalizePrivacyAllowlistCategory(category);
+  return resolvedCategory === "NAME" || resolvedCategory === "TERM";
+}
+
+function buildPrivacyPlaceholderSlug(value = "") {
+  const text = String(value || "");
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(36).toUpperCase().slice(-8).padStart(8, "0");
+}
+
+function isValidPrivacyPlaceholder(value = "", category = "") {
+  const resolvedCategory = normalizePrivacyAllowlistCategory(category);
+  const placeholder = String(value || "").trim().toUpperCase();
+  if (!placeholder) {
+    return false;
+  }
+  if (resolvedCategory === "NAME") {
+    return /^__PG_NAME_[A-Z0-9]{8}_(FULL|COMMON|NICK|PET|HONOR)__$/.test(placeholder);
+  }
+  return new RegExp(`^__PG_${resolvedCategory}_[A-Z0-9]{8}__$`).test(placeholder);
+}
+
+function buildDefaultPrivacyPlaceholder(options = {}) {
+  const category = normalizePrivacyAllowlistCategory(options.category, options.text);
+  const text = String(options.text || "").trim();
+  const nameGroupId = shouldKeepPrivacyGroupId(category)
+    ? normalizePrivacyNameGroupId(options.nameGroupId)
+    : "";
+  const nameLevel = category === "NAME" ? normalizePrivacyNameAliasLevel(options.nameLevel) : "COMMON";
+  const placeholderKey =
+    category === "NAME"
+      ? `${category}:${nameGroupId || text}:${nameLevel}:${text}`
+      : `${category}:${nameGroupId || text}`;
+  const suffix = buildPrivacyPlaceholderSlug(placeholderKey);
+  return category === "NAME"
+    ? `__PG_NAME_${suffix}_${nameLevel}__`
+    : `__PG_${category}_${suffix}__`;
+}
+
+function normalizePrivacyPlaceholder(value = "", options = {}) {
+  const category = normalizePrivacyAllowlistCategory(options.category, options.text);
+  const normalized = String(value || "").trim().toUpperCase();
+  if (isValidPrivacyPlaceholder(normalized, category)) {
+    return normalized;
+  }
+  return buildDefaultPrivacyPlaceholder(options);
+}
+
+function buildPrivacyPlaceholderScope(item = {}) {
+  const category = normalizePrivacyAllowlistCategory(item.category, item.text);
+  const text = String(item.text || "").trim();
+  const nameGroupId = shouldKeepPrivacyGroupId(category)
+    ? normalizePrivacyNameGroupId(item.nameGroupId)
+    : "";
+  const nameLevel = category === "NAME" ? normalizePrivacyNameAliasLevel(item.nameLevel) : "COMMON";
+  if (!text) {
+    return "";
+  }
+  if (category === "NAME") {
+    return `NAME:${nameGroupId || text}:${nameLevel}`;
+  }
+  if (category === "TERM") {
+    return `TERM:${nameGroupId || text}`;
+  }
+  if (category === "TITLE") {
+    return `TITLE:${nameGroupId || text}`;
+  }
+  return `${category}:${text}`;
+}
+
+function buildPrivacyAllowlistValidation(items = []) {
+  const placeholderScopeMap = new Map();
+  const termGroupPlaceholderMap = new Map();
+  const itemIssueMap = new Map();
+  const issueMap = new Map();
+
+  function addItemIssue(itemId, key, message) {
+    const resolvedKey = `${itemId || "unknown"}:${key}`;
+    if (!message || issueMap.has(resolvedKey)) {
+      return;
+    }
+    issueMap.set(resolvedKey, message);
+    if (itemId) {
+      const list = itemIssueMap.get(itemId) || [];
+      list.push(message);
+      itemIssueMap.set(itemId, list);
+    }
+  }
+
+  normalizePrivacyAllowlistItems(items).forEach((item) => {
+    const category = normalizePrivacyAllowlistCategory(item.category, item.text);
+    const placeholder = String(item.placeholder || "").trim().toUpperCase();
+    const scopeKey = buildPrivacyPlaceholderScope(item);
+    const nameGroupId = shouldKeepPrivacyGroupId(category)
+      ? normalizePrivacyNameGroupId(item.nameGroupId)
+      : "";
+    if (!item.text || !placeholder || !scopeKey) {
+      return;
+    }
+
+    const existing = placeholderScopeMap.get(placeholder);
+    if (existing && existing.scopeKey !== scopeKey) {
+      const message = `占位符 ${placeholder} 同时映射到了多个白名单对象。`;
+      addItemIssue(item.id, `placeholder:${placeholder}`, message);
+      addItemIssue(existing.id, `placeholder:${placeholder}`, message);
+    } else if (!existing) {
+      placeholderScopeMap.set(placeholder, {
+        id: item.id,
+        scopeKey
+      });
+    }
+
+    if (category === "TERM" && nameGroupId) {
+      const groupKey = `TERM:${nameGroupId}`;
+      const existingPlaceholder = termGroupPlaceholderMap.get(groupKey);
+      if (existingPlaceholder && existingPlaceholder.placeholder !== placeholder) {
+        const message = `普通词分组 ${nameGroupId} 存在多个占位符，应统一成同一个。`;
+        addItemIssue(item.id, `term-group:${groupKey}`, message);
+        addItemIssue(existingPlaceholder.id, `term-group:${groupKey}`, message);
+      } else if (!existingPlaceholder) {
+        termGroupPlaceholderMap.set(groupKey, {
+          id: item.id,
+          placeholder
+        });
+      }
+    }
+  });
+
+  return {
+    issues: [...issueMap.values()],
+    itemIssueMap
+  };
+}
+
 function getPrivacyAllowlistCategoryLabel(category = "") {
   if (category === "NAME") {
     return "人名";
@@ -2629,13 +2767,27 @@ function normalizePrivacyAllowlistMetaItems(value = []) {
   const items = normalizeObjectArray(value);
   const unique = new Set();
   return items
-    .map((item) => ({
-      text: String(item.text || "").trim(),
-      source: normalizePrivacyAllowlistItemSource(item.source),
-      category: normalizePrivacyAllowlistCategory(item.category, item.text),
-      nameGroupId: normalizePrivacyNameGroupId(item.nameGroupId, item.text),
-      nameLevel: normalizePrivacyNameAliasLevel(item.nameLevel)
-    }))
+    .map((item) => {
+      const text = String(item.text || "").trim();
+      const category = normalizePrivacyAllowlistCategory(item.category, text);
+      const nameGroupId = shouldKeepPrivacyGroupId(category)
+        ? normalizePrivacyNameGroupId(item.nameGroupId, category === "NAME" ? text : "")
+        : "";
+      const nameLevel = category === "NAME" ? normalizePrivacyNameAliasLevel(item.nameLevel) : "COMMON";
+      return {
+        text,
+        source: normalizePrivacyAllowlistItemSource(item.source),
+        category,
+        nameGroupId,
+        nameLevel,
+        placeholder: normalizePrivacyPlaceholder(item.placeholder, {
+          category,
+          text,
+          nameGroupId,
+          nameLevel
+        })
+      };
+    })
     .filter((item) => {
       if (!item.text || unique.has(item.text)) {
         return false;
@@ -2876,8 +3028,22 @@ function loadPrivacyAllowlistItems() {
     text,
     source: normalizePrivacyAllowlistItemSource(metaMap.get(text)?.source || "manual"),
     category: normalizePrivacyAllowlistCategory(metaMap.get(text)?.category, text),
-    nameGroupId: normalizePrivacyNameGroupId(metaMap.get(text)?.nameGroupId, text),
-    nameLevel: normalizePrivacyNameAliasLevel(metaMap.get(text)?.nameLevel)
+    nameGroupId: shouldKeepPrivacyGroupId(metaMap.get(text)?.category || "TERM")
+      ? normalizePrivacyNameGroupId(
+          metaMap.get(text)?.nameGroupId,
+          normalizePrivacyAllowlistCategory(metaMap.get(text)?.category, text) === "NAME" ? text : ""
+        )
+      : "",
+    nameLevel:
+      normalizePrivacyAllowlistCategory(metaMap.get(text)?.category, text) === "NAME"
+        ? normalizePrivacyNameAliasLevel(metaMap.get(text)?.nameLevel)
+        : "COMMON",
+    placeholder: normalizePrivacyPlaceholder(metaMap.get(text)?.placeholder, {
+      category: normalizePrivacyAllowlistCategory(metaMap.get(text)?.category, text),
+      text,
+      nameGroupId: metaMap.get(text)?.nameGroupId,
+      nameLevel: metaMap.get(text)?.nameLevel
+    })
   }));
 }
 
@@ -2903,14 +3069,24 @@ function normalizePrivacyAllowlistItems(items = []) {
       return;
     }
     const category = normalizePrivacyAllowlistCategory(item.category, text);
+    const nameGroupId = shouldKeepPrivacyGroupId(category)
+      ? normalizePrivacyNameGroupId(item.nameGroupId, category === "NAME" ? text : "")
+      : "";
+    const nameLevel = category === "NAME" ? normalizePrivacyNameAliasLevel(item.nameLevel) : "COMMON";
     indexMap.set(text, result.length);
     result.push({
       id: String(item.id || buildPrivacyItemId(text, "privacy_allowlist")).trim(),
       text,
       source,
       category,
-      nameGroupId: category === "NAME" ? normalizePrivacyNameGroupId(item.nameGroupId, text) : "",
-      nameLevel: category === "NAME" ? normalizePrivacyNameAliasLevel(item.nameLevel) : "COMMON"
+      nameGroupId,
+      nameLevel,
+      placeholder: normalizePrivacyPlaceholder(item.placeholder, {
+        category,
+        text,
+        nameGroupId,
+        nameLevel
+      })
     });
   });
   return result;
@@ -2977,8 +3153,16 @@ function applyPrivacyAllowlistItemsToLocalState(items = []) {
       text: item.text,
       source: item.source,
       category: normalizePrivacyAllowlistCategory(item.category, item.text),
-      nameGroupId: normalizePrivacyNameGroupId(item.nameGroupId, item.text),
-      nameLevel: normalizePrivacyNameAliasLevel(item.nameLevel)
+      nameGroupId: shouldKeepPrivacyGroupId(item.category)
+        ? normalizePrivacyNameGroupId(item.nameGroupId, item.category === "NAME" ? item.text : "")
+        : "",
+      nameLevel: item.category === "NAME" ? normalizePrivacyNameAliasLevel(item.nameLevel) : "COMMON",
+      placeholder: normalizePrivacyPlaceholder(item.placeholder, {
+        category: item.category,
+        text: item.text,
+        nameGroupId: item.nameGroupId,
+        nameLevel: item.nameLevel
+      })
     }))
   );
   homeState.settings = buildNormalizedSettingsSnapshot(nextSettings, {
@@ -2996,6 +3180,10 @@ function applyPrivacyAllowlistItemsToLocalState(items = []) {
 
 async function syncPrivacyAllowlistItemsToCloud(items = [], options = {}) {
   const normalizedItems = normalizePrivacyAllowlistItems(items);
+  const validation = buildPrivacyAllowlistValidation(normalizedItems);
+  if (validation.issues.length) {
+    throw new Error(validation.issues[0]);
+  }
   if (!window.PulsePrivacyAllowlistSync?.replaceInCloud) {
     return applyPrivacyAllowlistItemsToLocalState(normalizedItems);
   }
@@ -3130,8 +3318,13 @@ function renderPrivacyAllowlistSummary() {
   const manualCount = items.filter((item) => item.source === "manual").length;
   const scanCount = total - manualCount;
   const groupedNameCount = items.filter((item) => item.category === "NAME").length;
+  const groupedTermCount = items.filter((item) => item.category === "TERM" && item.nameGroupId).length;
+  const validation = buildPrivacyAllowlistValidation(items);
+  const issueSuffix = validation.issues.length
+    ? `；发现 ${validation.issues.length} 个占位符问题，请修正后再保存`
+    : "";
   privacyAppWhitelistSummaryEl.textContent = total
-    ? `共 ${total} 个白名单词条，其中手动 ${manualCount} 个、扫描确认 ${scanCount} 个；当前有 ${groupedNameCount} 个人名别称条目。改动会同步到云端白名单表。`
+    ? `共 ${total} 个白名单词条，其中手动 ${manualCount} 个、扫描确认 ${scanCount} 个；当前有 ${groupedNameCount} 个人名别称、${groupedTermCount} 个普通词别称条目${issueSuffix}。改动会同步到云端白名单表。`
     : "当前还没有白名单词条。点击右上角新增，或先扫描配置后确认加入；保存后会直接同步到云端。";
 }
 
@@ -3147,9 +3340,12 @@ function renderPrivacyAllowlistItems() {
     return;
   }
 
+  const validation = buildPrivacyAllowlistValidation(items);
   privacyAppWhitelistListEl.innerHTML = items
-    .map(
-      (item) => `
+    .map((item) => {
+      const itemIssues = validation.itemIssueMap.get(item.id) || [];
+      const showGroupField = item.category === "NAME" || item.category === "TERM";
+      return `
         <section class="home-transfer-group privacy-app-item${
           item.source === "manual" ? " privacy-app-item--manual" : ""
         }">
@@ -3190,50 +3386,74 @@ function renderPrivacyAllowlistItems() {
                 </select>
               </label>
               ${
-                item.category === "NAME"
+                showGroupField
                   ? `
                     <label class="privacy-app-item__field">
-                      <span>同一人分组</span>
+                      <span>${item.category === "NAME" ? "同一人分组" : "同义词分组"}</span>
                       <input
                         class="privacy-app-item__input privacy-app-item__input--compact"
                         type="text"
-                        value="${escapeHtml(item.nameGroupId || item.text)}"
+                        value="${escapeHtml(item.nameGroupId || "")}"
                         data-role="privacy-allowlist-name-group"
                         data-item-id="${escapeHtml(item.id)}"
-                        placeholder="相同分组 = 同一个人"
+                        placeholder="${item.category === "NAME" ? "相同分组 = 同一个人" : "相同分组 = 同一个普通词"}"
                       />
                     </label>
-                    <label class="privacy-app-item__field">
-                      <span>称呼层级</span>
-                      <select
-                        class="privacy-app-item__select"
-                        data-role="privacy-allowlist-name-level"
-                        data-item-id="${escapeHtml(item.id)}"
-                      >
-                        <option value="FULL" ${item.nameLevel === "FULL" ? "selected" : ""}>全名</option>
-                        <option value="COMMON" ${item.nameLevel === "COMMON" ? "selected" : ""}>常规</option>
-                        <option value="NICK" ${item.nameLevel === "NICK" ? "selected" : ""}>昵称</option>
-                        <option value="PET" ${item.nameLevel === "PET" ? "selected" : ""}>爱称</option>
-                        <option value="HONOR" ${item.nameLevel === "HONOR" ? "selected" : ""}>称谓</option>
-                      </select>
-                    </label>
+                    ${
+                      item.category === "NAME"
+                        ? `
+                          <label class="privacy-app-item__field">
+                            <span>称呼层级</span>
+                            <select
+                              class="privacy-app-item__select"
+                              data-role="privacy-allowlist-name-level"
+                              data-item-id="${escapeHtml(item.id)}"
+                            >
+                              <option value="FULL" ${item.nameLevel === "FULL" ? "selected" : ""}>全名</option>
+                              <option value="COMMON" ${item.nameLevel === "COMMON" ? "selected" : ""}>常规</option>
+                              <option value="NICK" ${item.nameLevel === "NICK" ? "selected" : ""}>昵称</option>
+                              <option value="PET" ${item.nameLevel === "PET" ? "selected" : ""}>爱称</option>
+                              <option value="HONOR" ${item.nameLevel === "HONOR" ? "selected" : ""}>称谓</option>
+                            </select>
+                          </label>
+                        `
+                        : ""
+                    }
                   `
                   : ""
               }
+              <label class="privacy-app-item__field">
+                <span>实际占位符</span>
+                <input
+                  class="privacy-app-item__input privacy-app-item__input--compact"
+                  type="text"
+                  value="${escapeHtml(item.placeholder || "")}"
+                  data-role="privacy-allowlist-placeholder"
+                  data-item-id="${escapeHtml(item.id)}"
+                  placeholder="__PG_TERM_XXX__"
+                />
+              </label>
             </div>
             <p class="privacy-app-item__hint">
               ${escapeHtml(
                 item.category === "NAME"
                   ? "同一人物的多个称呼请设置成同一个“同一人分组”；称呼层级会保留亲密度差异。"
+                  : item.category === "TERM" && item.nameGroupId
+                    ? "同一普通词分组会被识别成同一个 TERM，占位符也应该保持一致；没有亲密度层级。"
                   : item.source === "manual"
                     ? "这是手动加入的词条，会在扫描预览中高亮区分。"
                     : "这是从扫描候选确认加入的词条。"
               )}
             </p>
+            ${
+              itemIssues.length
+                ? `<p class="privacy-app-item__hint privacy-app-item__hint--danger">${escapeHtml(itemIssues.join("；"))}</p>`
+                : ""
+            }
           </div>
         </section>
-      `
-    )
+      `;
+    })
     .join("");
 
   renderPrivacyAllowlistSummary();
@@ -3568,8 +3788,14 @@ async function addPrivacyAllowlistItemsByLines(value, source = "manual") {
             text,
             source: normalizePrivacyAllowlistItemSource(item.source || source),
             category: normalizePrivacyAllowlistCategory(item.category, text),
-            nameGroupId: normalizePrivacyNameGroupId(item.nameGroupId, text),
-            nameLevel: normalizePrivacyNameAliasLevel(item.nameLevel)
+            nameGroupId: shouldKeepPrivacyGroupId(normalizePrivacyAllowlistCategory(item.category, text))
+              ? normalizePrivacyNameGroupId(
+                  item.nameGroupId,
+                  normalizePrivacyAllowlistCategory(item.category, text) === "NAME" ? text : ""
+                )
+              : "",
+            nameLevel: normalizePrivacyNameAliasLevel(item.nameLevel),
+            placeholder: String(item.placeholder || "").trim()
           }
         ];
       }
@@ -3855,7 +4081,8 @@ function handlePrivacyAllowlistInput(event) {
     !(target instanceof HTMLInputElement) ||
     ![
       "privacy-allowlist-text",
-      "privacy-allowlist-name-group"
+      "privacy-allowlist-name-group",
+      "privacy-allowlist-placeholder"
     ].includes(target.dataset.role || "")
   ) {
     return;
@@ -3871,7 +4098,16 @@ function handlePrivacyAllowlistInput(event) {
     if (target.dataset.role === "privacy-allowlist-name-group") {
       return {
         ...item,
-        nameGroupId: normalizePrivacyNameGroupId(target.value, item.text)
+        nameGroupId: normalizePrivacyNameGroupId(
+          target.value,
+          item.category === "NAME" ? item.text : ""
+        )
+      };
+    }
+    if (target.dataset.role === "privacy-allowlist-placeholder") {
+      return {
+        ...item,
+        placeholder: String(target.value || "").trim().toUpperCase()
       };
     }
     return { ...item, text: String(target.value || "") };
@@ -3889,7 +4125,8 @@ async function handlePrivacyAllowlistChange(event) {
       "privacy-allowlist-text",
       "privacy-allowlist-name-group",
       "privacy-allowlist-category",
-      "privacy-allowlist-name-level"
+      "privacy-allowlist-name-level",
+      "privacy-allowlist-placeholder"
     ].includes(role)
   ) {
     return;
@@ -3904,14 +4141,22 @@ async function handlePrivacyAllowlistChange(event) {
     }
     if (role === "privacy-allowlist-category") {
       const nextCategory = normalizePrivacyAllowlistCategory(target.value, item.text);
+      const nextGroupId = shouldKeepPrivacyGroupId(nextCategory)
+        ? normalizePrivacyNameGroupId(item.nameGroupId, nextCategory === "NAME" ? item.text : "")
+        : "";
+      const nextNameLevel =
+        nextCategory === "NAME" ? normalizePrivacyNameAliasLevel(item.nameLevel) : "COMMON";
       return {
         ...item,
         category: nextCategory,
-        nameGroupId:
-          nextCategory === "NAME"
-            ? normalizePrivacyNameGroupId(item.nameGroupId, item.text)
-            : "",
-        nameLevel: nextCategory === "NAME" ? normalizePrivacyNameAliasLevel(item.nameLevel) : "COMMON"
+        nameGroupId: nextGroupId,
+        nameLevel: nextNameLevel,
+        placeholder: normalizePrivacyPlaceholder(item.placeholder, {
+          category: nextCategory,
+          text: item.text,
+          nameGroupId: nextGroupId,
+          nameLevel: nextNameLevel
+        })
       };
     }
     if (role === "privacy-allowlist-name-level") {
@@ -3923,12 +4168,32 @@ async function handlePrivacyAllowlistChange(event) {
     if (role === "privacy-allowlist-name-group") {
       return {
         ...item,
-        nameGroupId: normalizePrivacyNameGroupId(target.value, item.text)
+        nameGroupId: normalizePrivacyNameGroupId(
+          target.value,
+          item.category === "NAME" ? item.text : ""
+        )
+      };
+    }
+    if (role === "privacy-allowlist-placeholder") {
+      return {
+        ...item,
+        placeholder: normalizePrivacyPlaceholder(target.value, {
+          category: item.category,
+          text: item.text,
+          nameGroupId: item.nameGroupId,
+          nameLevel: item.nameLevel
+        })
       };
     }
     return {
       ...item,
-      text: String(target.value || "").trim()
+      text: String(target.value || "").trim(),
+      placeholder: normalizePrivacyPlaceholder(item.placeholder, {
+        category: item.category,
+        text: String(target.value || "").trim(),
+        nameGroupId: item.nameGroupId,
+        nameLevel: item.nameLevel
+      })
     };
   });
   renderPrivacyApp();

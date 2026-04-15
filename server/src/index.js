@@ -82,11 +82,141 @@ function normalizePrivacyAllowlistNameLevel(value = "") {
   return PRIVACY_ALLOWLIST_NAME_LEVELS.has(normalized) ? normalized : "COMMON";
 }
 
+function trimPrivacyText(value = "") {
+  return String(value || "").trim();
+}
+
+function shouldKeepPrivacyAllowlistGroupId(category = "") {
+  const resolvedCategory = normalizePrivacyAllowlistCategory(category);
+  return resolvedCategory === "NAME" || resolvedCategory === "TERM";
+}
+
 function normalizePrivacyAllowlistNameGroupId(value = "", fallbackText = "") {
   return (
     String(value || "").trim().slice(0, 40) ||
     String(fallbackText || "").trim().slice(0, 40)
   );
+}
+
+function hashPrivacyPlaceholderKey(value = "") {
+  const text = String(value || "");
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(36).toUpperCase().slice(-8).padStart(8, "0");
+}
+
+function isValidPrivacyAllowlistPlaceholder(value = "", category = "") {
+  const resolvedCategory = normalizePrivacyAllowlistCategory(category);
+  const placeholder = trimPrivacyText(value).toUpperCase();
+  if (!placeholder) {
+    return false;
+  }
+  if (resolvedCategory === "NAME") {
+    return /^__PG_NAME_[A-Z0-9]{8}_(FULL|COMMON|NICK|PET|HONOR)__$/.test(placeholder);
+  }
+  return new RegExp(`^__PG_${resolvedCategory}_[A-Z0-9]{8}__$`).test(placeholder);
+}
+
+function buildDefaultPrivacyAllowlistPlaceholder(options = {}) {
+  const category = normalizePrivacyAllowlistCategory(options.category);
+  const text = trimPrivacyText(options.text);
+  const nameGroupId = shouldKeepPrivacyAllowlistGroupId(category)
+    ? normalizePrivacyAllowlistNameGroupId(options.nameGroupId)
+    : "";
+  const nameLevel = category === "NAME" ? normalizePrivacyAllowlistNameLevel(options.nameLevel) : "COMMON";
+  const placeholderKey =
+    category === "NAME"
+      ? `${category}:${nameGroupId || text}:${nameLevel}:${text}`
+      : `${category}:${nameGroupId || text}`;
+  const suffix = hashPrivacyPlaceholderKey(placeholderKey);
+  return category === "NAME"
+    ? `__PG_NAME_${suffix}_${nameLevel}__`
+    : `__PG_${category}_${suffix}__`;
+}
+
+function normalizePrivacyAllowlistPlaceholder(value = "", options = {}) {
+  const category = normalizePrivacyAllowlistCategory(options.category);
+  const normalized = trimPrivacyText(value).toUpperCase();
+  if (isValidPrivacyAllowlistPlaceholder(normalized, category)) {
+    return normalized;
+  }
+  return buildDefaultPrivacyAllowlistPlaceholder(options);
+}
+
+function buildPrivacyAllowlistPlaceholderScope(item = {}) {
+  const category = normalizePrivacyAllowlistCategory(item.category);
+  const text = trimPrivacyText(item.text);
+  const nameGroupId = shouldKeepPrivacyAllowlistGroupId(category)
+    ? normalizePrivacyAllowlistNameGroupId(item.nameGroupId)
+    : "";
+  const nameLevel = category === "NAME" ? normalizePrivacyAllowlistNameLevel(item.nameLevel) : "COMMON";
+  if (!text) {
+    return "";
+  }
+  if (category === "NAME") {
+    return `NAME:${nameGroupId || text}:${nameLevel}`;
+  }
+  if (category === "TERM") {
+    return `TERM:${nameGroupId || text}`;
+  }
+  if (category === "TITLE") {
+    return `TITLE:${nameGroupId || text}`;
+  }
+  return `${category}:${text}`;
+}
+
+function validatePrivacyAllowlistItems(items = []) {
+  const placeholderScopeMap = new Map();
+  const termGroupPlaceholderMap = new Map();
+  const issueMap = new Map();
+
+  function addIssue(key, message) {
+    if (!key || !message || issueMap.has(key)) {
+      return;
+    }
+    issueMap.set(key, message);
+  }
+
+  items.forEach((item) => {
+    const category = normalizePrivacyAllowlistCategory(item.category);
+    const text = trimPrivacyText(item.text);
+    const placeholder = trimPrivacyText(item.placeholder).toUpperCase();
+    const scopeKey = buildPrivacyAllowlistPlaceholderScope(item);
+    const nameGroupId = shouldKeepPrivacyAllowlistGroupId(category)
+      ? normalizePrivacyAllowlistNameGroupId(item.nameGroupId)
+      : "";
+
+    if (!text || !placeholder || !scopeKey) {
+      return;
+    }
+
+    const existingScope = placeholderScopeMap.get(placeholder);
+    if (existingScope && existingScope !== scopeKey) {
+      addIssue(
+        `placeholder:${placeholder}`,
+        `占位符 ${placeholder} 同时映射到了多个白名单对象，请修正后再保存。`
+      );
+    } else {
+      placeholderScopeMap.set(placeholder, scopeKey);
+    }
+
+    if (category === "TERM" && nameGroupId) {
+      const termGroupKey = `TERM:${nameGroupId}`;
+      const existingPlaceholder = termGroupPlaceholderMap.get(termGroupKey);
+      if (existingPlaceholder && existingPlaceholder !== placeholder) {
+        addIssue(
+          `term-group:${termGroupKey}`,
+          `普通词分组 ${nameGroupId} 存在多个占位符，请统一成同一个占位符后再保存。`
+        );
+      } else {
+        termGroupPlaceholderMap.set(termGroupKey, placeholder);
+      }
+    }
+  });
+
+  return [...issueMap.values()];
 }
 
 function normalizePrivacyAllowlistItems(items = []) {
@@ -113,14 +243,11 @@ function normalizePrivacyAllowlistItems(items = []) {
       text,
       source,
       category,
-      nameGroupId:
-        category === "NAME"
-          ? normalizePrivacyAllowlistNameGroupId(record.nameGroupId, text)
-          : "",
-      nameLevel:
-        category === "NAME"
-          ? normalizePrivacyAllowlistNameLevel(record.nameLevel)
-          : "COMMON",
+      nameGroupId: shouldKeepPrivacyAllowlistGroupId(category)
+        ? normalizePrivacyAllowlistNameGroupId(record.nameGroupId, category === "NAME" ? text : "")
+        : "",
+      nameLevel: category === "NAME" ? normalizePrivacyAllowlistNameLevel(record.nameLevel) : "COMMON",
+      placeholder: trimPrivacyText(record.placeholder).toUpperCase(),
       sortOrder: Number.isFinite(Number(record.sortOrder ?? record.sort_order))
         ? Math.max(0, Math.round(Number(record.sortOrder ?? record.sort_order)))
         : result.length
@@ -134,6 +261,13 @@ function normalizePrivacyAllowlistItems(items = []) {
       if (existing.category === "TERM" && category !== "TERM") {
         existing.category = category;
       }
+      if (
+        shouldKeepPrivacyAllowlistGroupId(category) &&
+        normalized.nameGroupId &&
+        !existing.nameGroupId
+      ) {
+        existing.nameGroupId = normalized.nameGroupId;
+      }
       if (category === "NAME") {
         existing.category = "NAME";
         existing.nameGroupId = normalizePrivacyAllowlistNameGroupId(
@@ -144,6 +278,9 @@ function normalizePrivacyAllowlistItems(items = []) {
       } else if (existing.category !== "NAME" && category === "TITLE") {
         existing.category = "TITLE";
       }
+      if (!existing.placeholder && normalized.placeholder) {
+        existing.placeholder = normalized.placeholder;
+      }
       return;
     }
 
@@ -153,6 +290,19 @@ function normalizePrivacyAllowlistItems(items = []) {
 
   return result.map((item, index) => ({
     ...item,
+    nameGroupId: shouldKeepPrivacyAllowlistGroupId(item.category)
+      ? normalizePrivacyAllowlistNameGroupId(
+          item.nameGroupId,
+          item.category === "NAME" ? item.text : ""
+        )
+      : "",
+    nameLevel: item.category === "NAME" ? normalizePrivacyAllowlistNameLevel(item.nameLevel) : "COMMON",
+    placeholder: normalizePrivacyAllowlistPlaceholder(item.placeholder, {
+      category: item.category,
+      text: item.text,
+      nameGroupId: item.nameGroupId,
+      nameLevel: item.nameLevel
+    }),
     sortOrder: index
   }));
 }
@@ -160,19 +310,23 @@ function normalizePrivacyAllowlistItems(items = []) {
 function mapPrivacyAllowlistRow(row = {}) {
   const text = String(row.text || "").trim();
   const category = normalizePrivacyAllowlistCategory(row.category);
+  const nameGroupId = shouldKeepPrivacyAllowlistGroupId(category)
+    ? normalizePrivacyAllowlistNameGroupId(row.name_group_id, category === "NAME" ? text : "")
+    : "";
+  const nameLevel = category === "NAME" ? normalizePrivacyAllowlistNameLevel(row.name_level) : "COMMON";
   return {
     id: String(row.id || "").trim(),
     text,
     source: normalizePrivacyAllowlistSource(row.source),
     category,
-    nameGroupId:
-      category === "NAME"
-        ? normalizePrivacyAllowlistNameGroupId(row.name_group_id, text)
-        : "",
-    nameLevel:
-      category === "NAME"
-        ? normalizePrivacyAllowlistNameLevel(row.name_level)
-        : "COMMON",
+    nameGroupId,
+    nameLevel,
+    placeholder: normalizePrivacyAllowlistPlaceholder(row.placeholder, {
+      category,
+      text,
+      nameGroupId,
+      nameLevel
+    }),
     sortOrder: Number(row.sort_order) || 0,
     createdAt: row.created_at || null,
     updatedAt: row.updated_at || null
@@ -243,8 +397,9 @@ function buildPrivacyAllowlistItemsFromLegacyRecords(records = new Map()) {
         text,
         source: matchedMeta?.source || "manual",
         category: matchedMeta?.category || "TERM",
-        nameGroupId: matchedMeta?.nameGroupId || text,
+        nameGroupId: matchedMeta?.nameGroupId || "",
         nameLevel: matchedMeta?.nameLevel || "COMMON",
+        placeholder: matchedMeta?.placeholder || "",
         sortOrder: index
       };
     })
@@ -253,6 +408,10 @@ function buildPrivacyAllowlistItemsFromLegacyRecords(records = new Map()) {
 
 async function replacePrivacyAllowlistItemsInDb(db, items = []) {
   const normalizedItems = normalizePrivacyAllowlistItems(items);
+  const validationIssues = validatePrivacyAllowlistItems(normalizedItems);
+  if (validationIssues.length) {
+    throw new Error(validationIssues[0]);
+  }
   const existingResult = await db.query(`
     select id, text
     from privacy_allowlist_entries
@@ -293,17 +452,19 @@ async function replacePrivacyAllowlistItemsInDb(db, items = []) {
           category,
           name_group_id,
           name_level,
+          placeholder,
           sort_order,
           created_at,
           updated_at
         )
-        values ($1, $2, $3, $4, $5, $6, $7, now(), now())
+        values ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
         on conflict (id) do update
           set text = excluded.text,
               source = excluded.source,
               category = excluded.category,
               name_group_id = excluded.name_group_id,
               name_level = excluded.name_level,
+              placeholder = excluded.placeholder,
               sort_order = excluded.sort_order,
               updated_at = now()
       `,
@@ -314,13 +475,14 @@ async function replacePrivacyAllowlistItemsInDb(db, items = []) {
         item.category,
         item.nameGroupId,
         item.nameLevel,
+        item.placeholder,
         item.sortOrder
       ]
     );
   }
 
   const result = await db.query(`
-    select id, text, source, category, name_group_id, name_level, sort_order, created_at, updated_at
+    select id, text, source, category, name_group_id, name_level, placeholder, sort_order, created_at, updated_at
     from privacy_allowlist_entries
     order by sort_order asc, updated_at asc, text asc
   `);
@@ -472,6 +634,7 @@ async function ensureCoreTables() {
       category text not null default 'TERM',
       name_group_id text not null default '',
       name_level text not null default 'COMMON',
+      placeholder text not null default '',
       sort_order integer not null default 0,
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now(),
@@ -482,6 +645,34 @@ async function ensureCoreTables() {
       constraint privacy_allowlist_entries_name_level_check
         check (name_level in ('FULL', 'COMMON', 'NICK', 'PET', 'HONOR'))
     );
+  `);
+  await pool.query(`
+    alter table privacy_allowlist_entries
+    add column if not exists placeholder text not null default '';
+  `);
+  await pool.query(`
+    do $$
+    begin
+      if not exists (
+        select 1
+        from pg_constraint
+        where conname = 'privacy_allowlist_entries_placeholder_check'
+      ) then
+        alter table privacy_allowlist_entries
+        add constraint privacy_allowlist_entries_placeholder_check
+        check (
+          placeholder = ''
+          or (
+            category = 'NAME'
+            and placeholder ~ '^__PG_NAME_[A-Z0-9]{8}_(FULL|COMMON|NICK|PET|HONOR)__$'
+          )
+          or (
+            category in ('TERM', 'TITLE')
+            and placeholder ~ ('^__PG_' || category || '_[A-Z0-9]{8}__$')
+          )
+        );
+      end if;
+    end $$;
   `);
   await pool.query(`
     create index if not exists privacy_allowlist_entries_sort_order_idx
@@ -591,7 +782,7 @@ app.get("/api/privacy-allowlist", async (_request, response) => {
   try {
     await ensurePrivacyAllowlistSeeded(pool);
     const result = await pool.query(`
-      select id, text, source, category, name_group_id, name_level, sort_order, created_at, updated_at
+      select id, text, source, category, name_group_id, name_level, placeholder, sort_order, created_at, updated_at
       from privacy_allowlist_entries
       order by sort_order asc, updated_at asc, text asc
     `);
@@ -627,7 +818,7 @@ app.put("/api/privacy-allowlist", async (request, response) => {
   } catch (error) {
     await client.query("rollback");
     response
-      .status(500)
+      .status(String(error?.message || "").includes("占位符") ? 400 : 500)
       .json(createJsonError("Failed to save privacy allowlist.", error?.message));
   } finally {
     client.release();
