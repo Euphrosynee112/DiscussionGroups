@@ -8863,7 +8863,8 @@ async function maybeRunConfiguredProactiveMessages(options = {}) {
           renderMessagesPage();
         }
         return true;
-      } catch (_error) {
+      } catch (error) {
+        console.error("[Pulse Messages] Proactive trigger failed:", error);
       } finally {
         releaseProactiveTriggerLock(lockKey, lockOwnerId);
       }
@@ -19570,6 +19571,14 @@ function initBackgroundMessagesWorker() {
   persistConversations();
   initAutoScheduleClock();
   initProactiveTriggerClock();
+  window.addEventListener("message", (event) => {
+    if (event.data?.type !== "pulse-generator-proactive-trigger-rescan") {
+      return;
+    }
+    void maybeRunConfiguredProactiveMessages({
+      initialCatchup: Boolean(event.data?.payload?.initialCatchup)
+    });
+  });
   window.addEventListener("storage", (event) => {
     const targetKey = String(event?.key || "").trim();
     if (!targetKey) {
@@ -19593,6 +19602,18 @@ function initBackgroundMessagesWorker() {
     ) {
       refreshStateFromStorage();
       sanitizePresenceStateReferences();
+      if (
+        [
+          SETTINGS_KEY,
+          SCHEDULE_ENTRIES_KEY,
+          MESSAGE_THREADS_KEY,
+          MESSAGE_CONTACTS_KEY
+        ].includes(targetKey)
+      ) {
+        void maybeRunConfiguredProactiveMessages({
+          initialCatchup: targetKey === SETTINGS_KEY || targetKey === SCHEDULE_ENTRIES_KEY
+        });
+      }
     }
   });
   window.setTimeout(() => {

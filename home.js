@@ -5971,6 +5971,29 @@ function saveHomeManualTimeSettings(nextManualTimeSettings, options = {}) {
   }
 }
 
+function requestBackgroundProactiveTriggerRescan(options = {}) {
+  const payload =
+    options && typeof options === "object"
+      ? {
+          initialCatchup: Boolean(options.initialCatchup),
+          reason: String(options.reason || "").trim()
+        }
+      : {
+          initialCatchup: false,
+          reason: ""
+        };
+  try {
+    homeBackgroundMessagesFrameEl?.contentWindow?.postMessage(
+      {
+        type: "pulse-generator-proactive-trigger-rescan",
+        payload
+      },
+      "*"
+    );
+  } catch (_error) {
+  }
+}
+
 function commitHomeManualTimeFromControls(options = {}) {
   const nextEnabled = Boolean(homeTimeEnabledEl?.checked);
   const nextValue = String(homeTimeInputEl?.value || "").trim();
@@ -5989,6 +6012,10 @@ function commitHomeManualTimeFromControls(options = {}) {
       statusTone: options.statusTone || "success"
     }
   );
+  requestBackgroundProactiveTriggerRescan({
+    initialCatchup: true,
+    reason: "manual-time-updated"
+  });
   return true;
 }
 
