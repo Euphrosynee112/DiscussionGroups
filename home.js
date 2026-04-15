@@ -14,6 +14,9 @@ const PROFILE_KEY = "x_style_generator_profile_v1";
 const PROFILE_POSTS_KEY = "x_style_generator_profile_posts_v1";
 const DISCUSSIONS_KEY = "x_style_generator_discussions_v1";
 const DIRECT_MESSAGES_KEY = "x_style_generator_direct_messages_v1";
+const BUBBLE_ROOMS_KEY = "x_style_generator_bubble_rooms_v1";
+const BUBBLE_THREADS_KEY = "x_style_generator_bubble_threads_v1";
+const BUBBLE_FAN_DETAILS_KEY = "x_style_generator_bubble_fan_details_v1";
 const PLOT_THREADS_KEY = "x_style_generator_plot_threads_v1";
 const WORLD_BOOKS_KEY = "x_style_generator_message_worldbooks_v1";
 const MESSAGE_CONTACTS_KEY = "x_style_generator_message_contacts_v1";
@@ -38,10 +41,35 @@ const TRANSFER_SCHEDULE_USER_ITEM_ID = "__schedule_owner__user";
 const TRANSFER_SCHEDULE_CONTACT_ITEM_PREFIX = "__schedule_owner__contact:";
 const TRANSFER_FORUM_FEED_POSTS_PREFIX = "__forum_feed_posts__:";
 const TRANSFER_FORUM_PROFILE_POSTS_ITEM_ID = "__forum_profile_posts__";
-const STORAGE_KEY_PREFIX = "x_style_generator_";
 const HOME_SYNC_FLASH_KEY = "pulse_home_cloud_sync_flash_v1";
 const LOCAL_STORAGE_API_BASE_URL = "http://localhost:3000";
 const DEPLOYED_STORAGE_API_BASE_URL = "https://spring-field-3219.fly.dev";
+const CLOUD_SYNC_STORAGE_KEYS = [
+  SETTINGS_KEY,
+  POSTS_KEY,
+  REFRESH_KEY,
+  PROFILE_KEY,
+  PROFILE_POSTS_KEY,
+  DISCUSSIONS_KEY,
+  DIRECT_MESSAGES_KEY,
+  BUBBLE_ROOMS_KEY,
+  BUBBLE_THREADS_KEY,
+  BUBBLE_FAN_DETAILS_KEY,
+  PLOT_THREADS_KEY,
+  WORLD_BOOKS_KEY,
+  MESSAGE_CONTACTS_KEY,
+  MESSAGE_THREADS_KEY,
+  MESSAGE_MEMORIES_KEY,
+  SCHEDULE_ENTRIES_KEY,
+  MESSAGE_COMMON_PLACES_KEY,
+  MESSAGE_PRESENCE_STATE_KEY,
+  PRIVACY_ALLOWLIST_META_KEY,
+  PRIVACY_PENDING_SCAN_KEY,
+  PRIVACY_ALLOWLIST_TERMS_KEY,
+  PRIVACY_IGNORELIST_TERMS_KEY,
+  PRIVACY_RECENT_HITS_SINCE_KEY,
+  PRIVACY_RECENT_HITS_DISMISSED_KEY
+];
 
 const homeSceneEl = document.querySelector(".home-scene");
 const phoneDateEl = document.querySelector("#phone-date");
@@ -1267,49 +1295,7 @@ function setHomeCloudSyncPending(isPending) {
 }
 
 function getManagedStorageKeys() {
-  const keys = new Set([
-    SETTINGS_KEY,
-    POSTS_KEY,
-    REFRESH_KEY,
-    PROFILE_KEY,
-    PROFILE_POSTS_KEY,
-    DISCUSSIONS_KEY,
-    DIRECT_MESSAGES_KEY,
-    PLOT_THREADS_KEY,
-    WORLD_BOOKS_KEY,
-    MESSAGE_CONTACTS_KEY,
-    MESSAGE_THREADS_KEY,
-    MESSAGE_MEMORIES_KEY,
-    SCHEDULE_ENTRIES_KEY,
-    MESSAGE_COMMON_PLACES_KEY,
-    MESSAGE_PRESENCE_STATE_KEY,
-    PRIVACY_ALLOWLIST_META_KEY,
-    PRIVACY_PENDING_SCAN_KEY,
-    PRIVACY_ALLOWLIST_TERMS_KEY,
-    PRIVACY_IGNORELIST_TERMS_KEY,
-    PRIVACY_RECENT_HITS_SINCE_KEY,
-    PRIVACY_RECENT_HITS_DISMISSED_KEY
-  ]);
-
-  try {
-    const keyCount = Number(window.localStorage?.length || 0);
-    for (let index = 0; index < keyCount; index += 1) {
-      const key = String(window.localStorage.key(index) || "").trim();
-      if (key.startsWith(STORAGE_KEY_PREFIX)) {
-        keys.add(key);
-      }
-    }
-  } catch (_error) {
-  }
-
-  Object.keys(memoryStorage).forEach((key) => {
-    const normalizedKey = String(key || "").trim();
-    if (normalizedKey.startsWith(STORAGE_KEY_PREFIX)) {
-      keys.add(normalizedKey);
-    }
-  });
-
-  return [...keys];
+  return [...new Set(CLOUD_SYNC_STORAGE_KEYS.map((key) => String(key || "").trim()).filter(Boolean))];
 }
 
 function parseStoredSnapshotValue(rawValue) {
