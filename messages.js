@@ -44,6 +44,15 @@ const DEFAULT_MEMORY_SUMMARY_INTERVAL_ROUNDS = 10;
 const MAX_MEMORY_SUMMARY_INTERVAL_ROUNDS = 100;
 const DEFAULT_CORE_MEMORY_THRESHOLD = 80;
 const DEFAULT_SCENE_MEMORY_THRESHOLD = 65;
+const ACTIVE_CORE_PROMPT_MEMORY_LIMIT = 6;
+const ACTIVE_SCENE_PROMPT_MEMORY_LIMIT = 6;
+const FAINT_CORE_PROMPT_MEMORY_LIMIT = 2;
+const FAINT_SCENE_PROMPT_MEMORY_LIMIT = 2;
+const DORMANT_CORE_PROMPT_MEMORY_LIMIT = 1;
+const DORMANT_SCENE_PROMPT_MEMORY_LIMIT = 1;
+const PROMPT_MEMORY_CUE_MESSAGE_LIMIT = 8;
+const PROMPT_MEMORY_CUE_TERM_MIN_LENGTH = 2;
+const PROMPT_MEMORY_RECALL_CUE_TERM_LIMIT = 4;
 const DEFAULT_CONTEXT_FOCUS_MINUTES = 60;
 const MAX_CONTEXT_FOCUS_MINUTES = 1440;
 const DEFAULT_AUTO_SCHEDULE_DAYS = 3;
@@ -977,6 +986,434 @@ function setCachedCloudMemoriesForContact(contactId = "", items = []) {
     updatedAt: Date.now()
   });
   return normalizedItems;
+}
+
+function patchCachedCloudMemoryItem(contactId = "", item = {}, runtimeState = null) {
+  const resolvedContactId = String(contactId || item.contactId || item.contact_id || "").trim();
+  if (!resolvedContactId) {
+    return null;
+  }
+  const cachedItems = Array.isArray(getCachedCloudMemoriesForContact(resolvedContactId)?.items)
+    ? [...getCachedCloudMemoriesForContact(resolvedContactId).items]
+    : [];
+  const resolvedItemId = String(item.id || "").trim();
+  if (!resolvedItemId) {
+    return null;
+  }
+  const nextItems = cachedItems.map((existingItem) =>
+    String(existingItem?.id || "").trim() === resolvedItemId
+      ? {
+          ...existingItem,
+          ...item,
+          runtimeState:
+            runtimeState && typeof runtimeState === "object"
+              ? runtimeState
+              : item.runtimeState && typeof item.runtimeState === "object"
+                ? item.runtimeState
+                : existingItem.runtimeState || null
+        }
+      : existingItem
+  );
+  setCachedCloudMemoriesForContact(resolvedContactId, nextItems);
+  return nextItems.find((existingItem) => String(existingItem?.id || "").trim() === resolvedItemId) || null;
+}
+
+function buildLocalMemoryPromptBundle(contact, promptSettings) {
+  const memories = getMemoriesForContact(contact?.id || "");
+  if (!memories.length) {
+    return {
+      core: "",
+      scene: "",
+      usedCloudMemories: []
+    };
+  }
+
+  const resolvedSettings = normalizeMessagePromptSettings(promptSettings);
+  const coreMemories = memories
+    .filter(
+      (item) => item.type === "core" && item.importance >= resolvedSettings.coreMemoryThreshold
+    )
+    .slice(0, 8);
+  const sceneMemories = memories
+    .filter(
+      (item) => item.type === "scene" && item.importance >= resolvedSettings.sceneMemoryThreshold
+    )
+    .slice(0, 10);
+
+  return {
+    core: coreMemories.length
+      ? [
+          "这些核心记忆会持续影响你当下的情绪走向、判断和对用户的态度，请像真的记得它们一样自然体现：",
+          ...coreMemories.map(
+            (item) => `- 重要度 ${item.importance}/100：${String(item.content || "").trim()}`
+          )
+        ].join("\n")
+      : "",
+    scene: sceneMemories.length
+      ? [
+          "这些情景记忆只在聊天内容自然相关时再想起来，不必刻意提前提起：",
+          ...sceneMemories.map(
+            (item) => `- 重要度 ${item.importance}/100：${String(item.content || "").trim()}`
+          )
+        ].join("\n")
+      : "",
+    usedCloudMemories: []
+  };
+}
+
+function getCloudMemoryRuntimeState(item = {}) {
+  const runtimeState =
+    item.runtimeState && typeof item.runtimeState === "object"
+      ? item.runtimeState
+      : item.runtime_state && typeof item.runtime_state === "object"
+        ? item.runtime_state
+        : null;
+  return runtimeState || {};
+}
+
+function getCloudMemoryPromptKind(item = {}) {
+  const memoryType = String(item.memoryType || item.memory_type || "").trim().toLowerCase();
+  return memoryType === "scene" ? "scene" : "core";
+}
+
+function getCloudMemoryPromptText(item = {}) {
+  const resolvedStatus = String(item.status || "").trim().toLowerCase();
+  if (resolvedStatus === "faint") {
+    return String(item.summaryFaint || item.summary_faint || item.summaryShort || item.canonicalText || "").trim();
+  }
+  return String(item.summaryShort || item.summary_short || item.canonicalText || "").trim();
+}
+
+function buildPromptMemoryCueContext(options = {}) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const historyMessages = Array.isArray(requestOptions.history) ? requestOptions.history : [];
+  const pendingUserMessages = Array.isArray(requestOptions.pendingUserMessages)
+    ? requestOptions.pendingUserMessages
+    : [];
+  const recentMessages = historyMessages.slice(-PROMPT_MEMORY_CUE_MESSAGE_LIMIT);
+  const fragments = []
+    .concat(recentMessages)
+    .concat(pendingUserMessages)
+    .map((message) => String(message?.text || "").trim())
+    .filter(Boolean);
+  if (requestOptions.triggeredAwareness?.text) {
+    fragments.push(String(requestOptions.triggeredAwareness.text || "").trim());
+  }
+  const joinedText = fragments.join("\n");
+  return {
+    text: joinedText,
+    normalizedText: canonicalizeMemoryContent(joinedText)
+  };
+}
+
+function getCloudMemoryCueTerms(item = {}) {
+  const rawTerms = []
+    .concat(Array.isArray(item.keywords) ? item.keywords : [])
+    .concat(Array.isArray(item.entityRefs) ? item.entityRefs : [])
+    .map((term) => String(term || "").trim())
+    .filter(Boolean);
+  const unique = [];
+  rawTerms.forEach((term) => {
+    const normalized = canonicalizeMemoryContent(term);
+    if (!normalized || normalized.length < PROMPT_MEMORY_CUE_TERM_MIN_LENGTH) {
+      return;
+    }
+    if (unique.some((entry) => entry.normalized === normalized)) {
+      return;
+    }
+    unique.push({
+      original: term,
+      normalized
+    });
+  });
+  return unique;
+}
+
+function scoreCloudMemoryCueMatch(item = {}, cueContext = null) {
+  const normalizedCueText = String(cueContext?.normalizedText || "").trim();
+  const cueTerms = getCloudMemoryCueTerms(item);
+  if (!normalizedCueText || !cueTerms.length) {
+    return {
+      score: 0,
+      matchedTerms: []
+    };
+  }
+  const matchedTerms = cueTerms.filter((term) => normalizedCueText.includes(term.normalized));
+  if (!matchedTerms.length) {
+    return {
+      score: 0,
+      matchedTerms: []
+    };
+  }
+  const totalMatchedLength = matchedTerms.reduce(
+    (total, term) => total + Math.min(12, term.normalized.length),
+    0
+  );
+  const longestMatchedLength = Math.max(...matchedTerms.map((term) => term.normalized.length));
+  const hitRatio = matchedTerms.length / Math.max(1, Math.min(3, cueTerms.length));
+  const densityScore = Math.min(1, totalMatchedLength / 18);
+  const strongestTermScore = Math.min(1, longestMatchedLength / 6);
+  return {
+    score: clampNumber(0.45 * hitRatio + 0.35 * densityScore + 0.2 * strongestTermScore, 0, 1),
+    matchedTerms: matchedTerms
+      .map((term) => term.original)
+      .filter(Boolean)
+      .slice(0, PROMPT_MEMORY_RECALL_CUE_TERM_LIMIT)
+  };
+}
+
+function getCloudMemoryPromptPriority(candidate = {}) {
+  const activationScore = clampNumber(candidate.activationScore, 0, 1);
+  const stabilityScore = clampNumber(candidate.stabilityScore, 0, 1);
+  const cueScore = clampNumber(candidate.cueScore, 0, 1);
+  const importanceScore = clampNumber(candidate.importance, 0, 100) / 100;
+  const updatedAtMs = Number(candidate.updatedAtMs) || 0;
+  return (
+    activationScore * 100 +
+    stabilityScore * 40 +
+    cueScore * 25 +
+    importanceScore * 20 +
+    Math.min(10, updatedAtMs / (24 * 60 * 60 * 1000 * 30))
+  );
+}
+
+function formatCloudPromptMemoryLine(candidate = {}) {
+  return `- 重要度 ${candidate.importance}/100：${String(candidate.promptText || "").trim()}`;
+}
+
+function buildCloudPromptMemorySection(
+  title = "",
+  activeEntries = [],
+  faintEntries = [],
+  dormantEntries = []
+) {
+  const sections = [String(title || "").trim()].filter(Boolean);
+  if (activeEntries.length) {
+    sections.push(
+      [
+        "你清楚记得的部分：",
+        ...activeEntries.map((entry) => formatCloudPromptMemoryLine(entry))
+      ].join("\n")
+    );
+  }
+  if (faintEntries.length) {
+    sections.push(
+      [
+        "你隐约还有印象的部分：",
+        ...faintEntries.map((entry) => formatCloudPromptMemoryLine(entry))
+      ].join("\n")
+    );
+  }
+  if (dormantEntries.length) {
+    sections.push(
+      [
+        "这次因为当前话题线索被勾起的旧印象：",
+        ...dormantEntries.map((entry) => formatCloudPromptMemoryLine(entry))
+      ].join("\n")
+    );
+  }
+  return sections.length > 1 ? sections.join("\n") : "";
+}
+
+function buildMemoryPromptBundle(contact, promptSettings, options = {}) {
+  const resolvedContactId = String(contact?.id || "").trim();
+  if (!resolvedContactId) {
+    return {
+      core: "",
+      scene: "",
+      usedCloudMemories: []
+    };
+  }
+
+  const localFallbackBundle = buildLocalMemoryPromptBundle(contact, promptSettings);
+  const cachedCloudItems = Array.isArray(getCachedCloudMemoriesForContact(resolvedContactId)?.items)
+    ? getCachedCloudMemoriesForContact(resolvedContactId).items
+    : null;
+  if (!cachedCloudItems || !cachedCloudItems.length) {
+    return localFallbackBundle;
+  }
+
+  const resolvedSettings = normalizeMessagePromptSettings(promptSettings);
+  const cueContext = buildPromptMemoryCueContext(options);
+  const candidates = cachedCloudItems
+    .filter((item) => ["active", "faint", "dormant"].includes(String(item.status || "").trim().toLowerCase()))
+    .map((item) => {
+      const runtimeState = getCloudMemoryRuntimeState(item);
+      const promptKind = getCloudMemoryPromptKind(item);
+      const cueMatch = scoreCloudMemoryCueMatch(item, cueContext);
+      const importance = clampNumber(
+        Number(item.baseImportance ?? item.base_importance ?? 0) || 0,
+        0,
+        100
+      );
+      return {
+        item,
+        id: String(item.id || "").trim(),
+        contactId: String(item.contactId || item.contact_id || resolvedContactId).trim(),
+        promptKind,
+        status: String(item.status || "").trim().toLowerCase() || "active",
+        promptText: getCloudMemoryPromptText(item),
+        importance,
+        activationScore: clampNumber(
+          Number(runtimeState.activationScore ?? runtimeState.activation_score ?? 0) || 0,
+          0,
+          1
+        ),
+        stabilityScore: clampNumber(
+          Number(runtimeState.stabilityScore ?? runtimeState.stability_score ?? 0) || 0,
+          0,
+          1
+        ),
+        cueThreshold: clampNumber(
+          Number(runtimeState.cueRecallThreshold ?? runtimeState.cue_recall_threshold ?? 0.55) || 0.55,
+          0,
+          1
+        ),
+        cueScore: cueMatch.score,
+        matchedCueTerms: cueMatch.matchedTerms,
+        updatedAtMs:
+          Date.parse(item.updatedAt || item.updated_at || item.lastObservedAt || item.last_observed_at || "") ||
+          0
+      };
+    })
+    .filter((entry) => entry.id && entry.promptText)
+    .filter((entry) =>
+      entry.importance >=
+      (entry.promptKind === "scene"
+        ? resolvedSettings.sceneMemoryThreshold
+        : resolvedSettings.coreMemoryThreshold)
+    )
+    .map((entry) => ({
+      ...entry,
+      promptPriority: getCloudMemoryPromptPriority(entry)
+    }));
+
+  if (!candidates.length) {
+    return localFallbackBundle;
+  }
+
+  function pickCandidates(promptKind, status, limit) {
+    return candidates
+      .filter((entry) => entry.promptKind === promptKind && entry.status === status)
+      .filter((entry) => status !== "dormant" || entry.cueScore >= entry.cueThreshold)
+      .sort(
+        (left, right) =>
+          right.promptPriority - left.promptPriority ||
+          right.activationScore - left.activationScore ||
+          right.importance - left.importance ||
+          right.stabilityScore - left.stabilityScore ||
+          right.updatedAtMs - left.updatedAtMs
+      )
+      .slice(0, limit);
+  }
+
+  const coreActive = pickCandidates("core", "active", ACTIVE_CORE_PROMPT_MEMORY_LIMIT);
+  const coreFaint = pickCandidates("core", "faint", FAINT_CORE_PROMPT_MEMORY_LIMIT);
+  const coreDormant = pickCandidates("core", "dormant", DORMANT_CORE_PROMPT_MEMORY_LIMIT);
+  const sceneActive = pickCandidates("scene", "active", ACTIVE_SCENE_PROMPT_MEMORY_LIMIT);
+  const sceneFaint = pickCandidates("scene", "faint", FAINT_SCENE_PROMPT_MEMORY_LIMIT);
+  const sceneDormant = pickCandidates("scene", "dormant", DORMANT_SCENE_PROMPT_MEMORY_LIMIT);
+
+  const coreContext = buildCloudPromptMemorySection(
+    "这些核心记忆会持续影响你当下的情绪走向、判断和对用户的态度，请像真的记得它们一样自然体现：",
+    coreActive,
+    coreFaint,
+    coreDormant
+  );
+  const sceneContext = buildCloudPromptMemorySection(
+    "这些情景记忆只在聊天内容自然相关时再想起来，不必刻意提前提起：",
+    sceneActive,
+    sceneFaint,
+    sceneDormant
+  );
+
+  const rawRecallBaseBoost = Number(getMemoryDecayConfig().recovery.promptRecallActivationBoost);
+  const recallBaseBoost = clampNumber(
+    Number.isFinite(rawRecallBaseBoost) ? rawRecallBaseBoost : 0.08,
+    0,
+    1
+  );
+  const usedCloudMemories = Array.from(
+    new Map(
+      []
+        .concat(coreActive, coreFaint, coreDormant, sceneActive, sceneFaint, sceneDormant)
+        .map((entry) => [
+          entry.id,
+          {
+            id: entry.id,
+            contactId: entry.contactId,
+            status: entry.status,
+            recalledScore:
+              entry.status === "dormant"
+                ? Math.max(entry.cueScore, entry.cueThreshold)
+                : Math.max(entry.activationScore, entry.cueScore),
+            activationBoost:
+              entry.status === "active"
+                ? recallBaseBoost * 0.4
+                : entry.status === "faint"
+                  ? recallBaseBoost * 0.75
+                  : recallBaseBoost,
+            cueTerms: entry.matchedCueTerms
+          }
+        ])
+    ).values()
+  );
+
+  return {
+    core: coreContext || localFallbackBundle.core,
+    scene: sceneContext || localFallbackBundle.scene,
+    usedCloudMemories
+  };
+}
+
+async function markPromptBundleMemoriesRecalled(bundle = null, options = {}) {
+  const usedCloudMemories = Array.isArray(bundle?.usedCloudMemories) ? bundle.usedCloudMemories : [];
+  if (!usedCloudMemories.length) {
+    return [];
+  }
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const batchId = `prompt_recall_${Date.now()}_${hashText(
+    usedCloudMemories.map((item) => item.id).join("_")
+  )}`;
+  const settled = await Promise.allSettled(
+    usedCloudMemories.map(async (memory) => {
+      const payload = await requestMessagesStorageApi(`/api/memory/items/${memory.id}/recall`, {
+        method: "POST",
+        body: JSON.stringify({
+          actorType: "system",
+          actorRef: "messages_prompt_builder",
+          sourceKind: "prompt",
+          sourceRef: {
+            contactId: requestOptions.contactId || memory.contactId || "",
+            conversationId: requestOptions.conversationId || "",
+            proactiveTrigger: Boolean(requestOptions.proactiveTrigger),
+            regenerate: Boolean(requestOptions.regenerate)
+          },
+          reasonCode: "prompt_memory_used",
+          batchId,
+          usedInPrompt: true,
+          recalledScore: clampNumber(memory.recalledScore, 0, 1),
+          activationBoost: clampNumber(memory.activationBoost, 0, 1),
+          cueTerms: Array.isArray(memory.cueTerms) ? memory.cueTerms : []
+        })
+      });
+      patchCachedCloudMemoryItem(
+        memory.contactId || requestOptions.contactId || "",
+        {
+          ...(payload?.item || {}),
+          runtimeState: payload?.runtimeState || null
+        },
+        payload?.runtimeState || null
+      );
+      return payload;
+    })
+  );
+  settled.forEach((result) => {
+    if (result.status === "rejected") {
+      console.warn("[Messages] Failed to write prompt memory recall:", result.reason);
+    }
+  });
+  return settled;
 }
 
 function mapCloudMemoryItemToPromptEntry(item = {}) {
@@ -5110,54 +5547,315 @@ function normalizeMessageMemory(memory, index = 0) {
   };
 }
 
-function getMemoryRetentionConfig() {
+function getMemoryDecayConfig() {
   const fallback = {
-    dayBoundaryMode: "exclude_target_day",
-    scene: {
-      meetsThresholdRetentionDays: 7,
-      belowThresholdRetentionDays: 3
+    meta: {
+      algorithmVersion: "v1",
+      profile: "balanced"
     },
-    core: {
-      meetsThresholdRetentionDays: 365000,
-      belowThresholdRetentionDays: 30
+    statusThresholds: {
+      activeMinActivation: 0.58,
+      faintMinActivation: 0.22,
+      faintMinImpression: 0.18,
+      dormantMinImpression: 0.08,
+      dormantMinStability: 0.28,
+      archivedMaxActivation: 0.12,
+      archivedMaxImpression: 0.08,
+      archivedMinInactiveDays: 45
+    },
+    halfLifeDays: {
+      relationship: 18,
+      preference: 21,
+      habit: 18,
+      constraint: 21,
+      fact: 12,
+      event: 8,
+      scene: 4,
+      default: 10
+    },
+    typeBias: {
+      relationship: 0.12,
+      preference: 0.15,
+      habit: 0.1,
+      constraint: 0.1,
+      fact: 0.03,
+      event: 0,
+      scene: -0.08,
+      default: 0
+    },
+    formula: {
+      targetStabilityBase: 0.18,
+      targetStabilityImportanceWeight: 0.22,
+      targetStabilityConfidenceWeight: 0.18,
+      targetStabilityEmotionWeight: 0.16,
+      targetStabilityReinforceWeight: 0.18,
+      impressionFloorBase: 0.04,
+      impressionFloorImportanceWeight: 0.18,
+      impressionFloorEmotionWeight: 0.14,
+      impressionFloorReinforceWeight: 0.16,
+      coldPenaltyStartDays: 30,
+      coldPenaltyWindowDays: 60,
+      coldPenaltyMax: 0.25,
+      recallBurstBase: 0.1,
+      recallBurstHalfLifeDays: 2,
+      stabilityDriftRecent: 0.0008,
+      stabilityDriftCold: 0.0025,
+      stabilityRecentWindowDays: 14,
+      cueThresholdBase: 0.55,
+      cueThresholdPositiveBiasBonus: 0.1
+    },
+    recovery: {
+      explicitReinforceActivationBase: 0.28,
+      explicitReinforceActivationImportanceWeight: 0.1,
+      explicitReinforceStabilityBase: 0.06,
+      explicitReinforceStabilityEmotionWeight: 0.04,
+      promptRecallActivationBoost: 0.08,
+      promptRecallStabilityBoost: 0.015,
+      promptRecallMaxRecoveredStatus: "faint"
+    },
+    legacyLocalRetentionBridge: {
+      dayBoundaryMode: "exclude_target_day",
+      scene: {
+        meetsThresholdRetentionDays: 7,
+        belowThresholdRetentionDays: 3
+      },
+      core: {
+        meetsThresholdRetentionDays: 365000,
+        belowThresholdRetentionDays: 30
+      }
     }
   };
   const source =
-    window.PulseMemoryRetentionConfig && typeof window.PulseMemoryRetentionConfig === "object"
-      ? window.PulseMemoryRetentionConfig
+    window.PulseMemoryDecayConfig && typeof window.PulseMemoryDecayConfig === "object"
+      ? window.PulseMemoryDecayConfig
       : fallback;
-  const normalizeDays = (value, fallbackValue) =>
+  const normalizeNumber = (value, fallbackValue) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : fallbackValue;
+  };
+  const normalizePositiveInteger = (value, fallbackValue) =>
     Math.max(1, Number.parseInt(String(value ?? fallbackValue), 10) || fallbackValue);
+  const normalizeStatus = (value, fallbackValue) => {
+    const normalized = String(value || "").trim().toLowerCase();
+    return ["active", "faint", "dormant", "archived", "superseded"].includes(normalized)
+      ? normalized
+      : fallbackValue;
+  };
   return {
-    dayBoundaryMode:
-      String(source.dayBoundaryMode || fallback.dayBoundaryMode).trim() ||
-      fallback.dayBoundaryMode,
-    scene: {
-      meetsThresholdRetentionDays: normalizeDays(
-        source?.scene?.meetsThresholdRetentionDays,
-        fallback.scene.meetsThresholdRetentionDays
+    meta: {
+      algorithmVersion:
+        String(source?.meta?.algorithmVersion || fallback.meta.algorithmVersion).trim() ||
+        fallback.meta.algorithmVersion,
+      profile: String(source?.meta?.profile || fallback.meta.profile).trim() || fallback.meta.profile
+    },
+    statusThresholds: {
+      activeMinActivation: normalizeNumber(
+        source?.statusThresholds?.activeMinActivation,
+        fallback.statusThresholds.activeMinActivation
       ),
-      belowThresholdRetentionDays: normalizeDays(
-        source?.scene?.belowThresholdRetentionDays,
-        fallback.scene.belowThresholdRetentionDays
+      faintMinActivation: normalizeNumber(
+        source?.statusThresholds?.faintMinActivation,
+        fallback.statusThresholds.faintMinActivation
+      ),
+      faintMinImpression: normalizeNumber(
+        source?.statusThresholds?.faintMinImpression,
+        fallback.statusThresholds.faintMinImpression
+      ),
+      dormantMinImpression: normalizeNumber(
+        source?.statusThresholds?.dormantMinImpression,
+        fallback.statusThresholds.dormantMinImpression
+      ),
+      dormantMinStability: normalizeNumber(
+        source?.statusThresholds?.dormantMinStability,
+        fallback.statusThresholds.dormantMinStability
+      ),
+      archivedMaxActivation: normalizeNumber(
+        source?.statusThresholds?.archivedMaxActivation,
+        fallback.statusThresholds.archivedMaxActivation
+      ),
+      archivedMaxImpression: normalizeNumber(
+        source?.statusThresholds?.archivedMaxImpression,
+        fallback.statusThresholds.archivedMaxImpression
+      ),
+      archivedMinInactiveDays: normalizePositiveInteger(
+        source?.statusThresholds?.archivedMinInactiveDays,
+        fallback.statusThresholds.archivedMinInactiveDays
       )
     },
-    core: {
-      meetsThresholdRetentionDays: normalizeDays(
-        source?.core?.meetsThresholdRetentionDays,
-        fallback.core.meetsThresholdRetentionDays
+    halfLifeDays: {
+      relationship: normalizePositiveInteger(
+        source?.halfLifeDays?.relationship,
+        fallback.halfLifeDays.relationship
       ),
-      belowThresholdRetentionDays: normalizeDays(
-        source?.core?.belowThresholdRetentionDays,
-        fallback.core.belowThresholdRetentionDays
+      preference: normalizePositiveInteger(
+        source?.halfLifeDays?.preference,
+        fallback.halfLifeDays.preference
+      ),
+      habit: normalizePositiveInteger(source?.halfLifeDays?.habit, fallback.halfLifeDays.habit),
+      constraint: normalizePositiveInteger(
+        source?.halfLifeDays?.constraint,
+        fallback.halfLifeDays.constraint
+      ),
+      fact: normalizePositiveInteger(source?.halfLifeDays?.fact, fallback.halfLifeDays.fact),
+      event: normalizePositiveInteger(source?.halfLifeDays?.event, fallback.halfLifeDays.event),
+      scene: normalizePositiveInteger(source?.halfLifeDays?.scene, fallback.halfLifeDays.scene),
+      default: normalizePositiveInteger(source?.halfLifeDays?.default, fallback.halfLifeDays.default)
+    },
+    typeBias: {
+      relationship: normalizeNumber(source?.typeBias?.relationship, fallback.typeBias.relationship),
+      preference: normalizeNumber(source?.typeBias?.preference, fallback.typeBias.preference),
+      habit: normalizeNumber(source?.typeBias?.habit, fallback.typeBias.habit),
+      constraint: normalizeNumber(source?.typeBias?.constraint, fallback.typeBias.constraint),
+      fact: normalizeNumber(source?.typeBias?.fact, fallback.typeBias.fact),
+      event: normalizeNumber(source?.typeBias?.event, fallback.typeBias.event),
+      scene: normalizeNumber(source?.typeBias?.scene, fallback.typeBias.scene),
+      default: normalizeNumber(source?.typeBias?.default, fallback.typeBias.default)
+    },
+    formula: {
+      targetStabilityBase: normalizeNumber(
+        source?.formula?.targetStabilityBase,
+        fallback.formula.targetStabilityBase
+      ),
+      targetStabilityImportanceWeight: normalizeNumber(
+        source?.formula?.targetStabilityImportanceWeight,
+        fallback.formula.targetStabilityImportanceWeight
+      ),
+      targetStabilityConfidenceWeight: normalizeNumber(
+        source?.formula?.targetStabilityConfidenceWeight,
+        fallback.formula.targetStabilityConfidenceWeight
+      ),
+      targetStabilityEmotionWeight: normalizeNumber(
+        source?.formula?.targetStabilityEmotionWeight,
+        fallback.formula.targetStabilityEmotionWeight
+      ),
+      targetStabilityReinforceWeight: normalizeNumber(
+        source?.formula?.targetStabilityReinforceWeight,
+        fallback.formula.targetStabilityReinforceWeight
+      ),
+      impressionFloorBase: normalizeNumber(
+        source?.formula?.impressionFloorBase,
+        fallback.formula.impressionFloorBase
+      ),
+      impressionFloorImportanceWeight: normalizeNumber(
+        source?.formula?.impressionFloorImportanceWeight,
+        fallback.formula.impressionFloorImportanceWeight
+      ),
+      impressionFloorEmotionWeight: normalizeNumber(
+        source?.formula?.impressionFloorEmotionWeight,
+        fallback.formula.impressionFloorEmotionWeight
+      ),
+      impressionFloorReinforceWeight: normalizeNumber(
+        source?.formula?.impressionFloorReinforceWeight,
+        fallback.formula.impressionFloorReinforceWeight
+      ),
+      coldPenaltyStartDays: normalizePositiveInteger(
+        source?.formula?.coldPenaltyStartDays,
+        fallback.formula.coldPenaltyStartDays
+      ),
+      coldPenaltyWindowDays: normalizePositiveInteger(
+        source?.formula?.coldPenaltyWindowDays,
+        fallback.formula.coldPenaltyWindowDays
+      ),
+      coldPenaltyMax: normalizeNumber(
+        source?.formula?.coldPenaltyMax,
+        fallback.formula.coldPenaltyMax
+      ),
+      recallBurstBase: normalizeNumber(
+        source?.formula?.recallBurstBase,
+        fallback.formula.recallBurstBase
+      ),
+      recallBurstHalfLifeDays: normalizePositiveInteger(
+        source?.formula?.recallBurstHalfLifeDays,
+        fallback.formula.recallBurstHalfLifeDays
+      ),
+      stabilityDriftRecent: normalizeNumber(
+        source?.formula?.stabilityDriftRecent,
+        fallback.formula.stabilityDriftRecent
+      ),
+      stabilityDriftCold: normalizeNumber(
+        source?.formula?.stabilityDriftCold,
+        fallback.formula.stabilityDriftCold
+      ),
+      stabilityRecentWindowDays: normalizePositiveInteger(
+        source?.formula?.stabilityRecentWindowDays,
+        fallback.formula.stabilityRecentWindowDays
+      ),
+      cueThresholdBase: normalizeNumber(
+        source?.formula?.cueThresholdBase,
+        fallback.formula.cueThresholdBase
+      ),
+      cueThresholdPositiveBiasBonus: normalizeNumber(
+        source?.formula?.cueThresholdPositiveBiasBonus,
+        fallback.formula.cueThresholdPositiveBiasBonus
       )
+    },
+    recovery: {
+      explicitReinforceActivationBase: normalizeNumber(
+        source?.recovery?.explicitReinforceActivationBase,
+        fallback.recovery.explicitReinforceActivationBase
+      ),
+      explicitReinforceActivationImportanceWeight: normalizeNumber(
+        source?.recovery?.explicitReinforceActivationImportanceWeight,
+        fallback.recovery.explicitReinforceActivationImportanceWeight
+      ),
+      explicitReinforceStabilityBase: normalizeNumber(
+        source?.recovery?.explicitReinforceStabilityBase,
+        fallback.recovery.explicitReinforceStabilityBase
+      ),
+      explicitReinforceStabilityEmotionWeight: normalizeNumber(
+        source?.recovery?.explicitReinforceStabilityEmotionWeight,
+        fallback.recovery.explicitReinforceStabilityEmotionWeight
+      ),
+      promptRecallActivationBoost: normalizeNumber(
+        source?.recovery?.promptRecallActivationBoost,
+        fallback.recovery.promptRecallActivationBoost
+      ),
+      promptRecallStabilityBoost: normalizeNumber(
+        source?.recovery?.promptRecallStabilityBoost,
+        fallback.recovery.promptRecallStabilityBoost
+      ),
+      promptRecallMaxRecoveredStatus: normalizeStatus(
+        source?.recovery?.promptRecallMaxRecoveredStatus,
+        fallback.recovery.promptRecallMaxRecoveredStatus
+      )
+    },
+    legacyLocalRetentionBridge: {
+      dayBoundaryMode:
+        String(
+          source?.legacyLocalRetentionBridge?.dayBoundaryMode ||
+            fallback.legacyLocalRetentionBridge.dayBoundaryMode
+        ).trim() || fallback.legacyLocalRetentionBridge.dayBoundaryMode,
+      scene: {
+        meetsThresholdRetentionDays: normalizePositiveInteger(
+          source?.legacyLocalRetentionBridge?.scene?.meetsThresholdRetentionDays,
+          fallback.legacyLocalRetentionBridge.scene.meetsThresholdRetentionDays
+        ),
+        belowThresholdRetentionDays: normalizePositiveInteger(
+          source?.legacyLocalRetentionBridge?.scene?.belowThresholdRetentionDays,
+          fallback.legacyLocalRetentionBridge.scene.belowThresholdRetentionDays
+        )
+      },
+      core: {
+        meetsThresholdRetentionDays: normalizePositiveInteger(
+          source?.legacyLocalRetentionBridge?.core?.meetsThresholdRetentionDays,
+          fallback.legacyLocalRetentionBridge.core.meetsThresholdRetentionDays
+        ),
+        belowThresholdRetentionDays: normalizePositiveInteger(
+          source?.legacyLocalRetentionBridge?.core?.belowThresholdRetentionDays,
+          fallback.legacyLocalRetentionBridge.core.belowThresholdRetentionDays
+        )
+      }
     }
   };
 }
 
+function getLegacyLocalMemoryRetentionConfig() {
+  return getMemoryDecayConfig().legacyLocalRetentionBridge;
+}
+
 function getMemoryRetentionDays(memory, promptSettings = loadSettings().messagePromptSettings) {
   const entry = normalizeMessageMemory(memory);
-  const retentionConfig = getMemoryRetentionConfig();
+  const retentionConfig = getLegacyLocalMemoryRetentionConfig();
   const resolvedPromptSettings = normalizeMessagePromptSettings(promptSettings);
   const threshold =
     entry.type === "core"
@@ -6979,43 +7677,10 @@ function buildWorldbookContext(promptSettings) {
 }
 
 function buildMemoryPromptContexts(contact, promptSettings) {
-  const memories = getPreferredPromptMemoriesForContact(contact?.id || "");
-  if (!memories.length) {
-    return {
-      core: "",
-      scene: ""
-    };
-  }
-
-  const resolvedSettings = normalizeMessagePromptSettings(promptSettings);
-  const coreMemories = memories
-    .filter(
-      (item) => item.type === "core" && item.importance >= resolvedSettings.coreMemoryThreshold
-    )
-    .slice(0, 8);
-  const sceneMemories = memories
-    .filter(
-      (item) => item.type === "scene" && item.importance >= resolvedSettings.sceneMemoryThreshold
-    )
-    .slice(0, 10);
-
+  const bundle = buildMemoryPromptBundle(contact, promptSettings);
   return {
-    core: coreMemories.length
-      ? [
-          "这些核心记忆会持续影响你当下的情绪走向、判断和对用户的态度，请像真的记得它们一样自然体现：",
-          ...coreMemories.map(
-            (item) => `- 重要度 ${item.importance}/100：${String(item.content || "").trim()}`
-          )
-        ].join("\n")
-      : "",
-    scene: sceneMemories.length
-      ? [
-          "这些情景记忆只在聊天内容自然相关时再想起来，不必刻意提前提起：",
-          ...sceneMemories.map(
-            (item) => `- 重要度 ${item.importance}/100：${String(item.content || "").trim()}`
-          )
-        ].join("\n")
-      : ""
+    core: bundle.core || "",
+    scene: bundle.scene || ""
   };
 }
 
@@ -9722,7 +10387,17 @@ function buildConversationSystemPrompt(
   const isVoiceCallMode = activeCallMode === "voice";
   const isVideoCallMode = activeCallMode === "video";
   const isCallMode = Boolean(activeCallMode);
-  const memoryContexts = buildMemoryPromptContexts(contact, promptSettings);
+  const memoryPromptBundle =
+    requestOptions.memoryPromptBundle && typeof requestOptions.memoryPromptBundle === "object"
+      ? requestOptions.memoryPromptBundle
+      : buildMemoryPromptBundle(contact, promptSettings, {
+          ...requestOptions,
+          history
+        });
+  const memoryContexts = {
+    core: memoryPromptBundle.core || "",
+    scene: memoryPromptBundle.scene || ""
+  };
   const presenceContext = buildPresencePromptContext(contact, requestOptions.conversation);
   const worldbookContext = buildWorldbookContext(promptSettings);
   const hotTopicsContext = buildHotTopicsContext(settings, promptSettings);
@@ -12620,13 +13295,20 @@ async function requestChatReplyText(
           contractName: "",
           contract: null
         };
+    const memoryPromptBundle = buildMemoryPromptBundle(contact, resolvedPromptSettings, {
+      ...mergedRequestOptions,
+      history
+    });
     const systemPrompt = buildConversationSystemPrompt(
       profile,
       contact,
       settings,
       resolvedPromptSettings,
       history,
-      mergedRequestOptions
+      {
+        ...mergedRequestOptions,
+        memoryPromptBundle
+      }
     );
     const privacySession = createPrivacySession({
       settings,
@@ -12864,6 +13546,12 @@ async function requestChatReplyText(
         )
       });
       logged = true;
+      void markPromptBundleMemoriesRecalled(memoryPromptBundle, {
+        contactId: contact.id,
+        conversationId: mergedRequestOptions.conversation?.id || "",
+        proactiveTrigger: mergedRequestOptions.proactiveTrigger,
+        regenerate: mergedRequestOptions.regenerate
+      });
       return {
         text: cleanedEncodedMessage,
         privacySession,

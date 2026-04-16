@@ -34,8 +34,65 @@ The app will be available at:
 - `POST /api/memory/items/:id/reinforce`
 - `POST /api/memory/items/:id/recall`
 - `GET /api/memory/items/:id/events`
+- `POST /api/memory/recompute`
 - `POST /api/memory/merge`
 - `POST /api/memory/import`
+
+## Shared memory decay config
+
+Memory decay product constants now live in the repo root file:
+
+- `messages-memory-decay-config.js`
+
+The browser loads this file directly through `window.PulseMemoryDecayConfig`.
+The Node backend also reads the same file and normalizes it on demand, so new
+memory runtime defaults no longer rely on a separate hardcoded constant set.
+
+Current server-side usage:
+
+- initialize `memory_runtime_state` defaults when a memory item is created
+- use the shared `algorithmVersion`, type bias, half-life, and threshold values
+
+## Manual memory decay recompute
+
+You can manually trigger decay recompute without a scheduled worker:
+
+- `POST /api/memory/recompute`
+
+Supported request body fields:
+
+- `memoryId`: recompute a single memory item
+- `contactId`: recompute memories for one contact
+- `dryRun`: when `true`, return the projected changes without writing the database
+- `limit`: cap batch size for `contactId` or due-scan runs
+
+When neither `memoryId` nor `contactId` is provided, the server recomputes the
+next due batch using `memory_runtime_state.next_decay_at`.
+
+## Automatic memory decay worker
+
+The Node backend now starts a lightweight in-process memory decay worker when
+`DATABASE_URL` is configured.
+
+Default behavior:
+
+- starts 30 seconds after the server connects to Postgres
+- scans every 15 minutes
+- recomputes up to 50 due memories per batch
+- only scans memories where `memory_runtime_state.next_decay_at` is due or missing
+- skips `archived` and `superseded` memories
+- uses a Postgres advisory lock so multiple server instances do not run the same
+  scheduled batch at the same time
+
+Useful environment variables:
+
+- `MEMORY_DECAY_WORKER_ENABLED=false`: disable the worker
+- `MEMORY_DECAY_WORKER_INTERVAL_MS=900000`: override scan interval
+- `MEMORY_DECAY_WORKER_START_DELAY_MS=30000`: override initial delay
+- `MEMORY_DECAY_WORKER_BATCH_SIZE=50`: override due batch size
+
+`GET /api/health` includes `memoryDecayWorker` status so local and Fly checks can
+confirm whether the worker is enabled, running, and when it last executed.
 
 ## Storage business backup tables
 

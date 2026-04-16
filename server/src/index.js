@@ -5,12 +5,36 @@ const cors = require("cors");
 const dotenv = require("dotenv");
 const express = require("express");
 const { Pool } = require("pg");
+const { getMemoryDecayConfig } = require("./memoryDecayConfig");
 
 dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 const PORT = Number.parseInt(String(process.env.PORT || "3000"), 10) || 3000;
 const DATABASE_URL = String(process.env.DATABASE_URL || "").trim();
 const STATIC_ROOT = path.resolve(__dirname, "..", "..");
+const MEMORY_DECAY_WORKER_ENABLED = normalizeBooleanEnv(
+  process.env.MEMORY_DECAY_WORKER_ENABLED,
+  true
+);
+const MEMORY_DECAY_WORKER_INTERVAL_MS = clampIntegerEnv(
+  process.env.MEMORY_DECAY_WORKER_INTERVAL_MS,
+  15 * 60 * 1000,
+  60 * 1000,
+  24 * 60 * 60 * 1000
+);
+const MEMORY_DECAY_WORKER_START_DELAY_MS = clampIntegerEnv(
+  process.env.MEMORY_DECAY_WORKER_START_DELAY_MS,
+  30 * 1000,
+  0,
+  60 * 60 * 1000
+);
+const MEMORY_DECAY_WORKER_BATCH_SIZE = clampIntegerEnv(
+  process.env.MEMORY_DECAY_WORKER_BATCH_SIZE,
+  50,
+  1,
+  200
+);
+const MEMORY_DECAY_WORKER_LOCK_ID = 2026041601;
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -154,6 +178,26 @@ const STORAGE_DOCUMENT_DEFINITIONS = new Map([
   ]
 ]);
 
+function normalizeBooleanEnv(value, fallback = false) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return Boolean(fallback);
+  }
+  if (["1", "true", "yes", "on", "enabled"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off", "disabled"].includes(normalized)) {
+    return false;
+  }
+  return Boolean(fallback);
+}
+
+function clampIntegerEnv(value, fallback, min, max) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  const resolved = Number.isFinite(parsed) ? parsed : fallback;
+  return Math.min(max, Math.max(min, resolved));
+}
+
 function createPoolConfig(connectionString = "") {
   const normalized = String(connectionString || "").trim();
   if (!normalized) {
@@ -169,6 +213,13 @@ function createPoolConfig(connectionString = "") {
 
 const poolConfig = createPoolConfig(DATABASE_URL);
 const pool = poolConfig ? new Pool(poolConfig) : null;
+let memoryDecayWorkerTimer = null;
+let memoryDecayWorkerStartTimer = null;
+let memoryDecayWorkerRunning = false;
+let memoryDecayWorkerNextRunAt = null;
+let memoryDecayWorkerLastRun = null;
+let memoryDecayWorkerLastSummary = null;
+let memoryDecayWorkerLastError = "";
 
 function parseJsonValue(value, fallback = null) {
   if (value == null) {
@@ -2783,6 +2834,93 @@ function createMemorySnapshot(row = {}) {
   };
 }
 
+function clampMemoryScore(value, min = 0, max = 1, fallback = min) {
+  return Math.min(max, Math.max(min, normalizeFiniteNumber(value, fallback)));
+}
+
+function resolveTimestampDate(value, fallback = null) {
+  if (!value) {
+    return fallback;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? fallback : date;
+}
+
+function getDaysSinceTimestamp(value, now = new Date()) {
+  const resolvedDate = resolveTimestampDate(value, null);
+  if (!resolvedDate) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return Math.max(0, (now.getTime() - resolvedDate.getTime()) / (24 * 60 * 60 * 1000));
+}
+
+function buildNextMemoryDecayAt(now = new Date()) {
+  return new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
+}
+
+function getMemoryDecayStatusFromScores(decayConfig = {}, scores = {}, item = {}, now = new Date()) {
+  const activationScore = clampMemoryScore(scores.activationScore, 0, 1, 0);
+  const impressionFloor = clampMemoryScore(scores.impressionFloor, 0, 1, 0);
+  const stabilityScore = clampMemoryScore(scores.stabilityScore, 0, 1, 0);
+  const daysSinceLastObserved = getDaysSinceTimestamp(
+    item.lastObservedAt || item.lastReinforcedAt || item.lastRecalledAt || item.firstObservedAt,
+    now
+  );
+  const thresholds = decayConfig.statusThresholds || {};
+  if (activationScore >= normalizeFiniteNumber(thresholds.activeMinActivation, 0.58)) {
+    return "active";
+  }
+  if (
+    activationScore >= normalizeFiniteNumber(thresholds.faintMinActivation, 0.22) ||
+    impressionFloor >= normalizeFiniteNumber(thresholds.faintMinImpression, 0.18)
+  ) {
+    return "faint";
+  }
+  if (
+    impressionFloor >= normalizeFiniteNumber(thresholds.dormantMinImpression, 0.08) ||
+    stabilityScore >= normalizeFiniteNumber(thresholds.dormantMinStability, 0.28)
+  ) {
+    return "dormant";
+  }
+  const shouldArchive =
+    activationScore < normalizeFiniteNumber(thresholds.archivedMaxActivation, 0.12) &&
+    impressionFloor < normalizeFiniteNumber(thresholds.archivedMaxImpression, 0.08) &&
+    daysSinceLastObserved >= normalizePositiveIntegerValue(thresholds.archivedMinInactiveDays, 45);
+  if (shouldArchive) {
+    return "archived";
+  }
+  return "archived";
+}
+
+function buildMemoryDecayDebugPayload(item = {}, runtimeState = {}, result = {}, now = new Date()) {
+  const derived = result?.derived || {};
+  return {
+    algorithmVersion: result?.runtimeState?.algorithmVersion || runtimeState?.algorithmVersion || "v1",
+    computedAt: now.toISOString(),
+    memoryType: item.memoryType || "",
+    statusBefore: item.status || "",
+    statusAfter: result?.status || item.status || "",
+    importanceScore: normalizeFiniteNumber(derived.importanceScore, 0),
+    confidenceScore: normalizeFiniteNumber(derived.confidenceScore, 0),
+    emotionScore: normalizeFiniteNumber(derived.emotionScore, 0),
+    reinforceScore: normalizeFiniteNumber(derived.reinforceScore, 0),
+    typeBias: normalizeFiniteNumber(derived.typeBias, 0),
+    halfLifeDays: normalizeFiniteNumber(derived.halfLifeDays, 0),
+    daysSinceLastObserved: normalizeFiniteNumber(derived.daysSinceLastObserved, 0),
+    daysSinceLastReinforced: normalizeFiniteNumber(derived.daysSinceLastReinforced, 0),
+    daysSinceLastRecalled: normalizeFiniteNumber(derived.daysSinceLastRecalled, 0),
+    previousRuntime: runtimeState
+      ? {
+          activationScore: normalizeFiniteNumber(runtimeState.activationScore, 0),
+          stabilityScore: normalizeFiniteNumber(runtimeState.stabilityScore, 0),
+          impressionFloor: normalizeFiniteNumber(runtimeState.impressionFloor, 0),
+          decayRate: normalizeFiniteNumber(runtimeState.decayRate, 0),
+          cueRecallThreshold: normalizeFiniteNumber(runtimeState.cueRecallThreshold, 0)
+        }
+      : null
+  };
+}
+
 function normalizeMemoryItemInput(input = {}, fallback = {}) {
   const source = input && typeof input === "object" ? input : {};
   const fallbackItem = fallback && typeof fallback === "object" ? fallback : {};
@@ -2918,25 +3056,770 @@ function normalizeMemoryItemInput(input = {}, fallback = {}) {
 }
 
 function buildInitialMemoryRuntimeState(item = {}) {
+  const decayConfig = getMemoryDecayConfig();
   const importanceScore = normalizeScoreNumber(item.baseImportance, 0.5);
   const confidenceScore = normalizeScoreNumber(item.confidence, 0.7);
   const emotionScore = normalizeScoreNumber(item.emotionIntensity ?? 0, 0);
-  const activationScore = Math.min(
-    1,
-    Math.max(0.05, importanceScore * 0.55 + confidenceScore * 0.25 + emotionScore * 0.2)
-  );
+  const reinforceScore = getMemoryReinforceScore(item.reinforceCount);
+  const typeBias = getMemoryDecayTypeBias(decayConfig, item.memoryType);
+  const positiveTypeBias = Math.max(0, typeBias);
+  const positiveBiasScale = getMemoryPositiveTypeBiasScale(decayConfig, positiveTypeBias);
   const stabilityScore = Math.min(
+    0.95,
+    Math.max(
+      0.05,
+      decayConfig.formula.targetStabilityBase +
+        importanceScore * decayConfig.formula.targetStabilityImportanceWeight +
+        confidenceScore * decayConfig.formula.targetStabilityConfidenceWeight +
+        emotionScore * decayConfig.formula.targetStabilityEmotionWeight +
+        reinforceScore * decayConfig.formula.targetStabilityReinforceWeight +
+        typeBias
+    )
+  );
+  const impressionFloorBase = Math.min(
+    0.65,
+    Math.max(
+      0,
+      decayConfig.formula.impressionFloorBase +
+        importanceScore * decayConfig.formula.impressionFloorImportanceWeight +
+        emotionScore * decayConfig.formula.impressionFloorEmotionWeight +
+        reinforceScore * decayConfig.formula.impressionFloorReinforceWeight +
+        positiveTypeBias
+    )
+  );
+  const resolvedStatus = normalizeMemoryStatus(item.status, "active");
+  const impressionFloor =
+    resolvedStatus === "faint"
+      ? Math.max(decayConfig.statusThresholds.faintMinImpression, impressionFloorBase)
+      : resolvedStatus === "dormant"
+        ? Math.max(
+            decayConfig.statusThresholds.dormantMinImpression,
+            Math.min(decayConfig.statusThresholds.faintMinImpression - 0.01, impressionFloorBase)
+          )
+        : impressionFloorBase;
+  const activationSeed = Math.min(
     1,
-    Math.max(0.05, importanceScore * 0.4 + confidenceScore * 0.35 + emotionScore * 0.25)
+    Math.max(
+      decayConfig.statusThresholds.archivedMaxActivation,
+      importanceScore * decayConfig.statusThresholds.activeMinActivation +
+        confidenceScore * decayConfig.formula.targetStabilityConfidenceWeight +
+        emotionScore * decayConfig.formula.targetStabilityEmotionWeight +
+        reinforceScore * decayConfig.formula.targetStabilityReinforceWeight +
+        positiveTypeBias * decayConfig.formula.cueThresholdPositiveBiasBonus
+    )
+  );
+  const activationScore =
+    resolvedStatus === "active"
+      ? Math.max(decayConfig.statusThresholds.activeMinActivation, activationSeed)
+      : resolvedStatus === "faint"
+        ? Math.min(
+            decayConfig.statusThresholds.activeMinActivation - 0.01,
+            Math.max(decayConfig.statusThresholds.faintMinActivation, activationSeed)
+          )
+        : resolvedStatus === "dormant"
+          ? Math.min(
+              decayConfig.statusThresholds.faintMinActivation - 0.01,
+              Math.max(decayConfig.statusThresholds.archivedMaxActivation, activationSeed)
+            )
+          : Math.min(decayConfig.statusThresholds.archivedMaxActivation, activationSeed);
+  const halfLifeDays = getMemoryHalfLifeDays(decayConfig, item.memoryType);
+  const decayRate = Math.max(
+    0.01,
+    (Math.log(2) / Math.max(1, halfLifeDays)) *
+      Math.min(
+        1.2,
+        Math.max(
+          0.15,
+          1 - 0.45 * stabilityScore - 0.2 * emotionScore - 0.15 * importanceScore - 0.1 * reinforceScore
+        )
+      )
   );
   return {
     activationScore,
     stabilityScore,
-    impressionFloor: item.status === "faint" ? 0.2 : Math.min(0.25, importanceScore * 0.25),
-    decayRate: Math.max(0.01, 0.18 - stabilityScore * 0.1),
-    cueRecallThreshold: item.status === "dormant" ? 0.7 : 0.55,
-    algorithmVersion: "v1"
+    impressionFloor,
+    decayRate,
+    cueRecallThreshold: Math.min(
+      0.85,
+      Math.max(
+        0.35,
+        decayConfig.formula.cueThresholdBase -
+          positiveBiasScale * decayConfig.formula.cueThresholdPositiveBiasBonus +
+          (resolvedStatus === "dormant" ? 0.05 : 0)
+      )
+    ),
+    nextDecayAt: buildNextMemoryDecayAt(),
+    algorithmVersion: decayConfig.meta.algorithmVersion
   };
+}
+
+function getMemoryReinforceScore(value = 0) {
+  const reinforceCount = Math.max(0, normalizePositiveIntegerValue(value, 0));
+  return Math.min(1, Math.max(0, Math.log1p(reinforceCount) / Math.log(6)));
+}
+
+function getMemoryDecayTypeBias(decayConfig = {}, memoryType = "") {
+  const normalizedType = String(memoryType || "").trim().toLowerCase();
+  const fallback = normalizeFiniteNumber(decayConfig?.typeBias?.default, 0);
+  return normalizeFiniteNumber(decayConfig?.typeBias?.[normalizedType], fallback);
+}
+
+function getMemoryHalfLifeDays(decayConfig = {}, memoryType = "") {
+  const normalizedType = String(memoryType || "").trim().toLowerCase();
+  const fallback = Math.max(1, normalizePositiveIntegerValue(decayConfig?.halfLifeDays?.default, 10));
+  return Math.max(1, normalizePositiveIntegerValue(decayConfig?.halfLifeDays?.[normalizedType], fallback));
+}
+
+function getMemoryPositiveTypeBiasScale(decayConfig = {}, positiveTypeBias = 0) {
+  const positiveBiasValues = Object.values(decayConfig?.typeBias || {})
+    .map((value) => normalizeFiniteNumber(value, 0))
+    .filter((value) => value > 0);
+  const maxPositiveBias = positiveBiasValues.length ? Math.max(...positiveBiasValues) : 0.01;
+  return Math.min(1, Math.max(0, normalizeFiniteNumber(positiveTypeBias, 0) / maxPositiveBias));
+}
+
+function recomputeMemoryRuntimeState(item = {}, runtimeState = null, options = {}) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const decayConfig = requestOptions.decayConfig || getMemoryDecayConfig();
+  const now = requestOptions.now instanceof Date ? requestOptions.now : new Date();
+  const resolvedItem = item && typeof item === "object" ? item : {};
+  const previousRuntime =
+    runtimeState && typeof runtimeState === "object"
+      ? runtimeState
+      : buildInitialMemoryRuntimeState(resolvedItem);
+  const importanceScore = normalizeScoreNumber(resolvedItem.baseImportance, 0.5);
+  const confidenceScore = normalizeScoreNumber(resolvedItem.confidence, 0.7);
+  const emotionScore = normalizeScoreNumber(resolvedItem.emotionIntensity ?? 0, 0);
+  const reinforceScore = getMemoryReinforceScore(resolvedItem.reinforceCount);
+  const typeBias = getMemoryDecayTypeBias(decayConfig, resolvedItem.memoryType);
+  const positiveTypeBias = Math.max(0, typeBias);
+  const positiveBiasScale = getMemoryPositiveTypeBiasScale(decayConfig, positiveTypeBias);
+  const daysSinceLastObserved = getDaysSinceTimestamp(
+    resolvedItem.lastObservedAt || resolvedItem.firstObservedAt,
+    now
+  );
+  const daysSinceLastReinforced = getDaysSinceTimestamp(
+    resolvedItem.lastReinforcedAt || resolvedItem.lastObservedAt || resolvedItem.firstObservedAt,
+    now
+  );
+  const daysSinceLastRecalled = getDaysSinceTimestamp(resolvedItem.lastRecalledAt, now);
+  const deltaDays = Math.max(
+    0,
+    Math.min(
+      365,
+      getDaysSinceTimestamp(
+        previousRuntime?.lastComputedAt || previousRuntime?.updatedAt || resolvedItem.updatedAt || resolvedItem.createdAt,
+        now
+      )
+    )
+  );
+  const stabilityFloor = clampMemoryScore(0.08 + 0.12 * importanceScore + positiveTypeBias * 0.6, 0.05, 0.55, 0.05);
+  const targetStability = clampMemoryScore(
+    decayConfig.formula.targetStabilityBase +
+      importanceScore * decayConfig.formula.targetStabilityImportanceWeight +
+      confidenceScore * decayConfig.formula.targetStabilityConfidenceWeight +
+      emotionScore * decayConfig.formula.targetStabilityEmotionWeight +
+      reinforceScore * decayConfig.formula.targetStabilityReinforceWeight +
+      typeBias,
+    0.05,
+    0.95,
+    previousRuntime?.stabilityScore ?? 0.05
+  );
+  const impressionTarget = clampMemoryScore(
+    decayConfig.formula.impressionFloorBase +
+      importanceScore * decayConfig.formula.impressionFloorImportanceWeight +
+      emotionScore * decayConfig.formula.impressionFloorEmotionWeight +
+      reinforceScore * decayConfig.formula.impressionFloorReinforceWeight +
+      positiveTypeBias,
+    0,
+    0.65,
+    previousRuntime?.impressionFloor ?? 0
+  );
+  const coldPenaltyRatio =
+    daysSinceLastReinforced === Number.POSITIVE_INFINITY
+      ? 1
+      : (daysSinceLastReinforced - decayConfig.formula.coldPenaltyStartDays) /
+        Math.max(1, decayConfig.formula.coldPenaltyWindowDays);
+  const coldPenalty = clampMemoryScore(
+    coldPenaltyRatio * decayConfig.formula.coldPenaltyMax,
+    0,
+    decayConfig.formula.coldPenaltyMax,
+    0
+  );
+  const impressionFloor = clampMemoryScore(
+    Math.max(0, impressionTarget - coldPenalty),
+    0,
+    0.65,
+    previousRuntime?.impressionFloor ?? 0
+  );
+  const halfLifeDays = getMemoryHalfLifeDays(decayConfig, resolvedItem.memoryType);
+  const decayRate = Math.max(
+    0.01,
+    (Math.log(2) / Math.max(1, halfLifeDays)) *
+      clampMemoryScore(
+        1 -
+          0.45 * clampMemoryScore(previousRuntime?.stabilityScore, 0, 1, targetStability) -
+          0.2 * emotionScore -
+          0.15 * importanceScore -
+          0.1 * reinforceScore,
+        0.15,
+        1.2,
+        1
+      )
+  );
+  const previousActivation = clampMemoryScore(previousRuntime?.activationScore, 0, 1, impressionFloor);
+  const activationBase =
+    impressionFloor + (previousActivation - impressionFloor) * Math.exp(-decayRate * deltaDays);
+  const recallBurst =
+    daysSinceLastRecalled <= 7
+      ? decayConfig.formula.recallBurstBase *
+        Math.pow(0.5, daysSinceLastRecalled / Math.max(1, decayConfig.formula.recallBurstHalfLifeDays))
+      : 0;
+  const activationScore = clampMemoryScore(
+    Math.max(impressionFloor, activationBase + recallBurst),
+    0,
+    1,
+    previousActivation
+  );
+  const stabilityDrift =
+    daysSinceLastReinforced <= decayConfig.formula.stabilityRecentWindowDays
+      ? decayConfig.formula.stabilityDriftRecent
+      : decayConfig.formula.stabilityDriftCold;
+  const stabilityScore = clampMemoryScore(
+    clampMemoryScore(previousRuntime?.stabilityScore, 0, 1, targetStability) +
+      0.12 * (targetStability - clampMemoryScore(previousRuntime?.stabilityScore, 0, 1, targetStability)) -
+      stabilityDrift * deltaDays,
+    stabilityFloor,
+    1,
+    targetStability
+  );
+  const cueRecallThreshold = clampMemoryScore(
+    decayConfig.formula.cueThresholdBase -
+      positiveBiasScale * decayConfig.formula.cueThresholdPositiveBiasBonus,
+    0.35,
+    0.85,
+    previousRuntime?.cueRecallThreshold ?? decayConfig.formula.cueThresholdBase
+  );
+  const nextStatus = getMemoryDecayStatusFromScores(
+    decayConfig,
+    {
+      activationScore,
+      impressionFloor,
+      stabilityScore
+    },
+    resolvedItem,
+    now
+  );
+  const runtimeResult = {
+    memoryItemId: resolvedItem.id || previousRuntime?.memoryItemId || "",
+    activationScore,
+    stabilityScore,
+    impressionFloor,
+    decayRate,
+    cueRecallThreshold,
+    lastComputedAt: now.toISOString(),
+    lastDecayAt: now.toISOString(),
+    nextDecayAt: buildNextMemoryDecayAt(now),
+    lastRecalledScore:
+      previousRuntime?.lastRecalledScore == null
+        ? null
+        : normalizeFiniteNumber(previousRuntime.lastRecalledScore, 0),
+    algorithmVersion: decayConfig.meta.algorithmVersion,
+    debugPayload: {}
+  };
+  const decayDeltas = {
+    activationScore: {
+      from: clampMemoryScore(previousRuntime?.activationScore, 0, 1, 0),
+      to: activationScore
+    },
+    stabilityScore: {
+      from: clampMemoryScore(previousRuntime?.stabilityScore, 0, 1, 0),
+      to: stabilityScore
+    },
+    impressionFloor: {
+      from: clampMemoryScore(previousRuntime?.impressionFloor, 0, 1, 0),
+      to: impressionFloor
+    },
+    decayRate: {
+      from: Math.max(0, normalizeFiniteNumber(previousRuntime?.decayRate, 0)),
+      to: decayRate
+    },
+    cueRecallThreshold: {
+      from: clampMemoryScore(previousRuntime?.cueRecallThreshold, 0, 1, 0),
+      to: cueRecallThreshold
+    }
+  };
+  const hasMeaningfulDecayChange =
+    Math.abs(decayDeltas.activationScore.to - decayDeltas.activationScore.from) >= 0.03 ||
+    Math.abs(decayDeltas.stabilityScore.to - decayDeltas.stabilityScore.from) >= 0.02 ||
+    Math.abs(decayDeltas.impressionFloor.to - decayDeltas.impressionFloor.from) >= 0.02 ||
+    String(previousRuntime?.algorithmVersion || "").trim() !== runtimeResult.algorithmVersion;
+  const result = {
+    runtimeState: runtimeResult,
+    status: nextStatus,
+    changes: {
+      decay: decayDeltas,
+      status: {
+        from: normalizeMemoryStatus(resolvedItem.status, "active"),
+        to: nextStatus
+      }
+    },
+    flags: {
+      hasMeaningfulDecayChange,
+      statusChanged: normalizeMemoryStatus(resolvedItem.status, "active") !== nextStatus
+    },
+    derived: {
+      importanceScore,
+      confidenceScore,
+      emotionScore,
+      reinforceScore,
+      typeBias,
+      halfLifeDays,
+      daysSinceLastObserved: Number.isFinite(daysSinceLastObserved) ? daysSinceLastObserved : null,
+      daysSinceLastReinforced: Number.isFinite(daysSinceLastReinforced) ? daysSinceLastReinforced : null,
+      daysSinceLastRecalled: Number.isFinite(daysSinceLastRecalled) ? daysSinceLastRecalled : null,
+      deltaDays
+    }
+  };
+  result.runtimeState.debugPayload = buildMemoryDecayDebugPayload(
+    resolvedItem,
+    previousRuntime,
+    result,
+    now
+  );
+  return result;
+}
+
+async function applyMemoryDecayRecomputeInDb(db, memoryId = "", options = {}) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const loaded = await loadMemoryItemWithRuntime(db, memoryId);
+  if (!loaded?.item?.id) {
+    return null;
+  }
+  const now = requestOptions.now instanceof Date ? requestOptions.now : new Date();
+  const batchId = normalizeOptionalText(requestOptions.batchId) || randomUUID();
+  const actorType = requestOptions.actorType || "node_backend";
+  const actorRef = requestOptions.actorRef;
+  const sourceKind = requestOptions.sourceKind || "memory_decay_recompute";
+  const reasonCode = requestOptions.reasonCode || "manual_memory_recompute";
+  const sourceRef = normalizeJsonObjectValue(requestOptions.sourceRef, {});
+  const beforeItem = loaded.item;
+  const beforeRuntime = loaded.runtimeState || buildInitialMemoryRuntimeState(beforeItem);
+  const recomputed = recomputeMemoryRuntimeState(beforeItem, beforeRuntime, {
+    now,
+    decayConfig: requestOptions.decayConfig
+  });
+  const result = {
+    memoryId: beforeItem.id,
+    contactId: beforeItem.contactId,
+    dryRun: Boolean(requestOptions.dryRun),
+    before: {
+      item: beforeItem,
+      runtimeState: beforeRuntime
+    },
+    after: {
+      item: {
+        ...beforeItem,
+        status: recomputed.status,
+        archivedAt:
+          recomputed.status === "archived"
+            ? beforeItem.archivedAt || now.toISOString()
+            : recomputed.status !== beforeItem.status
+              ? null
+              : beforeItem.archivedAt
+      },
+      runtimeState: recomputed.runtimeState
+    },
+    changes: recomputed.changes,
+    events: [],
+    wouldWriteEvents: []
+  };
+  if (recomputed.flags.hasMeaningfulDecayChange) {
+    result.wouldWriteEvents.push("decayed");
+  }
+  if (recomputed.flags.statusChanged) {
+    result.wouldWriteEvents.push("status_changed");
+  }
+  if (requestOptions.dryRun) {
+    return result;
+  }
+
+  let runtimeRow = null;
+  if (loaded.runtimeState?.memoryItemId) {
+    const runtimeUpdateResult = await db.query(
+      `
+        update memory_runtime_state
+        set activation_score = $2,
+            stability_score = $3,
+            impression_floor = $4,
+            decay_rate = $5,
+            cue_recall_threshold = $6,
+            last_computed_at = $7,
+            last_decay_at = $8,
+            next_decay_at = $9,
+            algorithm_version = $10,
+            debug_payload = $11::jsonb,
+            updated_at = now()
+        where memory_item_id = $1
+        returning *
+      `,
+      [
+        beforeItem.id,
+        recomputed.runtimeState.activationScore,
+        recomputed.runtimeState.stabilityScore,
+        recomputed.runtimeState.impressionFloor,
+        recomputed.runtimeState.decayRate,
+        recomputed.runtimeState.cueRecallThreshold,
+        recomputed.runtimeState.lastComputedAt,
+        recomputed.runtimeState.lastDecayAt,
+        recomputed.runtimeState.nextDecayAt,
+        recomputed.runtimeState.algorithmVersion,
+        JSON.stringify(recomputed.runtimeState.debugPayload || {})
+      ]
+    );
+    runtimeRow = runtimeUpdateResult.rows[0] || null;
+  } else {
+    const runtimeInsertResult = await db.query(
+      `
+        insert into memory_runtime_state (
+          memory_item_id,
+          activation_score,
+          stability_score,
+          impression_floor,
+          decay_rate,
+          cue_recall_threshold,
+          last_computed_at,
+          last_decay_at,
+          next_decay_at,
+          algorithm_version,
+          debug_payload,
+          created_at,
+          updated_at
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, now(), now())
+        returning *
+      `,
+      [
+        beforeItem.id,
+        recomputed.runtimeState.activationScore,
+        recomputed.runtimeState.stabilityScore,
+        recomputed.runtimeState.impressionFloor,
+        recomputed.runtimeState.decayRate,
+        recomputed.runtimeState.cueRecallThreshold,
+        recomputed.runtimeState.lastComputedAt,
+        recomputed.runtimeState.lastDecayAt,
+        recomputed.runtimeState.nextDecayAt,
+        recomputed.runtimeState.algorithmVersion,
+        JSON.stringify(recomputed.runtimeState.debugPayload || {})
+      ]
+    );
+    runtimeRow = runtimeInsertResult.rows[0] || null;
+  }
+  let itemRow = null;
+  if (recomputed.flags.statusChanged) {
+    const archivedAt =
+      recomputed.status === "archived"
+        ? beforeItem.archivedAt || now.toISOString()
+        : recomputed.status !== beforeItem.status
+          ? null
+          : beforeItem.archivedAt;
+    const itemUpdateResult = await db.query(
+      `
+        update memory_items
+        set status = $2,
+            status_changed_at = now(),
+            archived_at = $3,
+            updated_at = now()
+        where id = $1
+        returning *
+      `,
+      [beforeItem.id, recomputed.status, archivedAt]
+    );
+    itemRow = itemUpdateResult.rows[0] || null;
+  } else {
+    const itemLoaded = await db.query("select * from memory_items where id = $1 limit 1", [beforeItem.id]);
+    itemRow = itemLoaded.rows[0] || null;
+  }
+
+  if (recomputed.flags.hasMeaningfulDecayChange) {
+    result.events.push(
+      await insertMemoryEvent(db, {
+        memoryItemId: beforeItem.id,
+        contactId: beforeItem.contactId,
+        eventType: "decayed",
+        actorType,
+        actorRef,
+        sourceKind,
+        sourceRef,
+        reasonCode,
+        deltaPayload: {
+          runtime: recomputed.changes.decay,
+          deltaDays: recomputed.derived.deltaDays
+        },
+        batchId,
+        note: requestOptions.note
+      })
+    );
+  }
+  if (recomputed.flags.statusChanged) {
+    result.events.push(
+      await insertMemoryEvent(db, {
+        memoryItemId: beforeItem.id,
+        contactId: beforeItem.contactId,
+        eventType: "status_changed",
+        actorType,
+        actorRef,
+        sourceKind,
+        sourceRef,
+        reasonCode,
+        deltaPayload: {
+          status: {
+            from: beforeItem.status,
+            to: recomputed.status
+          }
+        },
+        beforeSnapshot: createMemorySnapshot({
+          ...beforeItem,
+          contact_id: beforeItem.contactId,
+          scope_type: beforeItem.scopeType,
+          source_conversation_id: beforeItem.sourceConversationId,
+          memory_type: beforeItem.memoryType,
+          memory_subtype: beforeItem.memorySubtype,
+          semantic_key: beforeItem.semanticKey,
+          canonical_text: beforeItem.canonicalText,
+          summary_short: beforeItem.summaryShort,
+          summary_faint: beforeItem.summaryFaint,
+          base_importance: beforeItem.baseImportance,
+          confidence: beforeItem.confidence,
+          status: beforeItem.status,
+          emotion_intensity: beforeItem.emotionIntensity,
+          emotion_profile: beforeItem.emotionProfile,
+          interaction_tendency: beforeItem.interactionTendency,
+          emotion_summary: beforeItem.emotionSummary,
+          first_observed_at: beforeItem.firstObservedAt,
+          last_observed_at: beforeItem.lastObservedAt,
+          last_reinforced_at: beforeItem.lastReinforcedAt,
+          last_recalled_at: beforeItem.lastRecalledAt
+        }),
+        afterSnapshot: createMemorySnapshot(itemRow),
+        batchId,
+        note: requestOptions.note
+      })
+    );
+  }
+  result.after = {
+    item: mapMemoryItemRow(itemRow),
+    runtimeState: mapMemoryRuntimeStateRow(runtimeRow)
+  };
+  return result;
+}
+
+function getMemoryDecayWorkerStatus() {
+  return {
+    enabled: Boolean(pool && MEMORY_DECAY_WORKER_ENABLED),
+    configuredEnabled: MEMORY_DECAY_WORKER_ENABLED,
+    running: memoryDecayWorkerRunning,
+    intervalMs: MEMORY_DECAY_WORKER_INTERVAL_MS,
+    startDelayMs: MEMORY_DECAY_WORKER_START_DELAY_MS,
+    batchSize: MEMORY_DECAY_WORKER_BATCH_SIZE,
+    nextRunAt: memoryDecayWorkerNextRunAt,
+    lastRunAt: memoryDecayWorkerLastRun,
+    lastSummary: memoryDecayWorkerLastSummary,
+    lastError: memoryDecayWorkerLastError
+  };
+}
+
+async function tryAcquireMemoryDecayWorkerLock(db) {
+  const result = await db.query("select pg_try_advisory_lock($1::bigint) as locked", [
+    MEMORY_DECAY_WORKER_LOCK_ID
+  ]);
+  return Boolean(result.rows[0]?.locked);
+}
+
+async function releaseMemoryDecayWorkerLock(db) {
+  try {
+    await db.query("select pg_advisory_unlock($1::bigint)", [MEMORY_DECAY_WORKER_LOCK_ID]);
+  } catch (_error) {
+  }
+}
+
+async function loadDueMemoryDecayIds(db, limit = MEMORY_DECAY_WORKER_BATCH_SIZE) {
+  const result = await db.query(
+    `
+      select i.id
+      from memory_items i
+      left join memory_runtime_state r on r.memory_item_id = i.id
+      where (r.next_decay_at is null or r.next_decay_at <= now())
+        and i.status <> 'archived'
+        and i.status <> 'superseded'
+      order by coalesce(r.next_decay_at, i.updated_at) asc, i.updated_at desc
+      limit $1
+    `,
+    [limit]
+  );
+  return result.rows.map((row) => row.id).filter(Boolean);
+}
+
+async function runMemoryDecayWorkerOnce(options = {}) {
+  if (!pool || !MEMORY_DECAY_WORKER_ENABLED) {
+    return {
+      skipped: true,
+      reason: !pool ? "database_unavailable" : "worker_disabled"
+    };
+  }
+  if (memoryDecayWorkerRunning) {
+    return {
+      skipped: true,
+      reason: "already_running"
+    };
+  }
+
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const limit = clampIntegerEnv(
+    requestOptions.limit,
+    MEMORY_DECAY_WORKER_BATCH_SIZE,
+    1,
+    200
+  );
+  const client = await pool.connect();
+  const now = new Date();
+  const batchId = randomUUID();
+  let lockAcquired = false;
+  let transactionStarted = false;
+  memoryDecayWorkerRunning = true;
+  memoryDecayWorkerLastRun = now.toISOString();
+  memoryDecayWorkerLastError = "";
+
+  try {
+    lockAcquired = await tryAcquireMemoryDecayWorkerLock(client);
+    if (!lockAcquired) {
+      const summary = {
+        skipped: true,
+        reason: "lock_not_acquired",
+        processedCount: 0,
+        batchId,
+        finishedAt: new Date().toISOString()
+      };
+      memoryDecayWorkerLastSummary = summary;
+      return summary;
+    }
+
+    await client.query("begin");
+    transactionStarted = true;
+    const ids = await loadDueMemoryDecayIds(client, limit);
+    const results = [];
+    for (const id of ids) {
+      const recomputed = await applyMemoryDecayRecomputeInDb(client, id, {
+        dryRun: false,
+        now,
+        batchId,
+        actorType: "node_backend",
+        actorRef: "memory_decay_worker",
+        sourceKind: "memory_decay_worker",
+        reasonCode: "scheduled_due_decay",
+        sourceRef: {
+          trigger: "scheduled_due_scan",
+          workerIntervalMs: MEMORY_DECAY_WORKER_INTERVAL_MS,
+          workerBatchSize: limit
+        },
+        note: "Scheduled memory decay recompute."
+      });
+      if (recomputed) {
+        results.push(recomputed);
+      }
+    }
+    await client.query("commit");
+    transactionStarted = false;
+
+    const summary = {
+      skipped: false,
+      batchId,
+      requestedCount: ids.length,
+      processedCount: results.length,
+      statusChangedCount: results.filter(
+        (item) => item.changes?.status?.from && item.changes?.status?.from !== item.changes?.status?.to
+      ).length,
+      decayedEventCount: results.filter((item) => item.wouldWriteEvents.includes("decayed")).length,
+      finishedAt: new Date().toISOString()
+    };
+    memoryDecayWorkerLastSummary = summary;
+    if (ids.length || requestOptions.logEmptyRun) {
+      console.log("[Pulse Server] Memory decay worker run completed.", summary);
+    }
+    return summary;
+  } catch (error) {
+    if (transactionStarted) {
+      try {
+        await client.query("rollback");
+      } catch (_rollbackError) {
+      }
+    }
+    memoryDecayWorkerLastError = error?.message || "Unknown memory decay worker error";
+    memoryDecayWorkerLastSummary = {
+      skipped: false,
+      batchId,
+      error: memoryDecayWorkerLastError,
+      finishedAt: new Date().toISOString()
+    };
+    console.error("[Pulse Server] Memory decay worker failed:", error);
+    throw error;
+  } finally {
+    if (lockAcquired) {
+      await releaseMemoryDecayWorkerLock(client);
+    }
+    client.release();
+    memoryDecayWorkerRunning = false;
+  }
+}
+
+function scheduleNextMemoryDecayWorkerRun(delayMs) {
+  memoryDecayWorkerNextRunAt = new Date(Date.now() + Math.max(0, delayMs)).toISOString();
+}
+
+function startMemoryDecayWorker() {
+  if (!pool || !MEMORY_DECAY_WORKER_ENABLED) {
+    if (!MEMORY_DECAY_WORKER_ENABLED) {
+      console.log("[Pulse Server] Memory decay worker is disabled.");
+    }
+    return;
+  }
+  if (memoryDecayWorkerTimer || memoryDecayWorkerStartTimer) {
+    return;
+  }
+
+  const runScheduledDecay = () => {
+    scheduleNextMemoryDecayWorkerRun(MEMORY_DECAY_WORKER_INTERVAL_MS);
+    void runMemoryDecayWorkerOnce().catch(() => {
+    });
+  };
+
+  scheduleNextMemoryDecayWorkerRun(MEMORY_DECAY_WORKER_START_DELAY_MS);
+  memoryDecayWorkerStartTimer = setTimeout(() => {
+    memoryDecayWorkerStartTimer = null;
+    runScheduledDecay();
+    memoryDecayWorkerTimer = setInterval(runScheduledDecay, MEMORY_DECAY_WORKER_INTERVAL_MS);
+    if (typeof memoryDecayWorkerTimer.unref === "function") {
+      memoryDecayWorkerTimer.unref();
+    }
+  }, MEMORY_DECAY_WORKER_START_DELAY_MS);
+  if (typeof memoryDecayWorkerStartTimer.unref === "function") {
+    memoryDecayWorkerStartTimer.unref();
+  }
+  console.log(
+    `[Pulse Server] Memory decay worker scheduled every ${MEMORY_DECAY_WORKER_INTERVAL_MS}ms.`
+  );
+}
+
+function stopMemoryDecayWorker() {
+  if (memoryDecayWorkerStartTimer) {
+    clearTimeout(memoryDecayWorkerStartTimer);
+    memoryDecayWorkerStartTimer = null;
+  }
+  if (memoryDecayWorkerTimer) {
+    clearInterval(memoryDecayWorkerTimer);
+    memoryDecayWorkerTimer = null;
+  }
+  memoryDecayWorkerNextRunAt = null;
 }
 
 async function insertMemoryEvent(db, options = {}) {
@@ -3136,12 +4019,13 @@ async function createMemoryItemInDb(db, rawItem = {}, options = {}) {
         decay_rate,
         cue_recall_threshold,
         last_computed_at,
+        next_decay_at,
         algorithm_version,
         debug_payload,
         created_at,
         updated_at
       )
-      values ($1, $2, $3, $4, $5, $6, now(), $7, $8::jsonb, now(), now())
+      values ($1, $2, $3, $4, $5, $6, now(), $7, $8, $9::jsonb, now(), now())
       returning *
     `,
     [
@@ -3151,6 +4035,7 @@ async function createMemoryItemInDb(db, rawItem = {}, options = {}) {
       normalizeFiniteNumber(runtime.impressionFloor ?? runtime.impression_floor, 0),
       normalizeFiniteNumber(runtime.decayRate ?? runtime.decay_rate, 0),
       normalizeFiniteNumber(runtime.cueRecallThreshold ?? runtime.cue_recall_threshold, 0),
+      normalizeTimestampValue(runtime.nextDecayAt ?? runtime.next_decay_at, buildNextMemoryDecayAt()),
       String(runtime.algorithmVersion || runtime.algorithm_version || "v1").trim() || "v1",
       JSON.stringify(normalizeJsonObjectValue(runtime.debugPayload || runtime.debug_payload, {}))
     ]
@@ -3730,7 +4615,8 @@ app.get("/api/health", async (_request, response) => {
     await pool.query("select 1 as ok");
     response.json({
       ok: true,
-      database: "connected"
+      database: "connected",
+      memoryDecayWorker: getMemoryDecayWorkerStatus()
     });
   } catch (error) {
     response
@@ -4519,6 +5405,147 @@ app.get("/api/memory/items/:id/events", async (request, response) => {
   }
 });
 
+app.post("/api/memory/recompute", async (request, response) => {
+  const body = request.body && typeof request.body === "object" ? request.body : {};
+  const memoryId = normalizeMemoryUuid(body.memoryId || body.memory_id);
+  const contactId = normalizeOptionalText(body.contactId || body.contact_id);
+  const dryRun = Boolean(body.dryRun ?? body.dry_run);
+  const includeArchived = Boolean(body.includeArchived ?? body.include_archived);
+  const includeSuperseded = Boolean(body.includeSuperseded ?? body.include_superseded);
+  const limit = Math.min(
+    200,
+    Math.max(1, Number.parseInt(String(body.limit || "50"), 10) || 50)
+  );
+  const client = await pool.connect();
+  try {
+    if (!dryRun) {
+      await client.query("begin");
+    }
+    const ids = [];
+    if (memoryId) {
+      const existingResult = await client.query("select id from memory_items where id = $1 limit 1", [memoryId]);
+      existingResult.rows.forEach((row) => {
+        if (row.id) {
+          ids.push(row.id);
+        }
+      });
+    } else if (contactId) {
+      const params = [contactId, limit];
+      const clauses = ["i.contact_id = $1"];
+      if (!includeArchived) {
+        clauses.push(`i.status <> 'archived'`);
+      }
+      if (!includeSuperseded) {
+        clauses.push(`i.status <> 'superseded'`);
+      }
+      const result = await client.query(
+        `
+          select i.id
+          from memory_items i
+          left join memory_runtime_state r on r.memory_item_id = i.id
+          where ${clauses.join(" and ")}
+          order by coalesce(r.next_decay_at, i.updated_at) asc, i.updated_at desc
+          limit $2
+        `,
+        params
+      );
+      result.rows.forEach((row) => {
+        if (row.id) {
+          ids.push(row.id);
+        }
+      });
+    } else {
+      const params = [limit];
+      const clauses = ["(r.next_decay_at is null or r.next_decay_at <= now())"];
+      if (!includeArchived) {
+        clauses.push(`i.status <> 'archived'`);
+      }
+      if (!includeSuperseded) {
+        clauses.push(`i.status <> 'superseded'`);
+      }
+      const result = await client.query(
+        `
+          select i.id
+          from memory_items i
+          left join memory_runtime_state r on r.memory_item_id = i.id
+          where ${clauses.join(" and ")}
+          order by coalesce(r.next_decay_at, i.updated_at) asc, i.updated_at desc
+          limit $1
+        `,
+        params
+      );
+      result.rows.forEach((row) => {
+        if (row.id) {
+          ids.push(row.id);
+        }
+      });
+    }
+
+    if (memoryId && !ids.length) {
+      if (!dryRun) {
+        await client.query("rollback");
+      }
+      response.status(404).json(createJsonError("Memory item was not found."));
+      return;
+    }
+
+    const batchId = randomUUID();
+    const now = new Date();
+    const results = [];
+    for (const id of ids) {
+      const recomputed = await applyMemoryDecayRecomputeInDb(client, id, {
+        dryRun,
+        now,
+        batchId,
+        actorType: body.actorType || "node_backend",
+        actorRef: body.actorRef,
+        sourceKind: body.sourceKind || "memory_decay_manual",
+        reasonCode: body.reasonCode || "manual_memory_recompute",
+        sourceRef: {
+          trigger: memoryId ? "memory_id" : contactId ? "contact_id" : "due_scan",
+          requestedMemoryId: memoryId || "",
+          requestedContactId: contactId || "",
+          dryRun
+        },
+        note: body.note
+      });
+      if (recomputed) {
+        results.push(recomputed);
+      }
+    }
+
+    if (!dryRun) {
+      await client.query("commit");
+    }
+
+    response.json({
+      ok: true,
+      dryRun,
+      batchId,
+      summary: {
+        requestedCount: ids.length,
+        processedCount: results.length,
+        updatedCount: dryRun
+          ? results.filter((item) => item.wouldWriteEvents.length > 0).length
+          : results.length,
+        statusChangedCount: results.filter(
+          (item) => item.changes?.status?.from && item.changes?.status?.from !== item.changes?.status?.to
+        ).length,
+        decayedEventCount: results.filter((item) => item.wouldWriteEvents.includes("decayed")).length,
+        policyAppliedCount: 0
+      },
+      results
+    });
+  } catch (error) {
+    if (!dryRun) {
+      await client.query("rollback");
+    }
+    response.status(500).json(createJsonError("Failed to recompute memory decay.", error?.message));
+  } finally {
+    client.release();
+  }
+});
+
 app.post("/api/memory/merge", async (request, response) => {
   const body = request.body && typeof request.body === "object" ? request.body : {};
   const batch = normalizeMemoryMergeBatchInput(body);
@@ -4748,6 +5775,7 @@ async function startServer() {
       if (seededCount > 0) {
         console.log(`[Pulse Server] Seeded ${seededCount} privacy allowlist entries from legacy storage.`);
       }
+      startMemoryDecayWorker();
     } else {
       console.warn("[Pulse Server] DATABASE_URL is not set. Storage APIs will be unavailable.");
     }
@@ -4761,5 +5789,24 @@ async function startServer() {
     process.exit(1);
   }
 }
+
+function handleShutdownSignal(signal) {
+  stopMemoryDecayWorker();
+  console.log(`[Pulse Server] Received ${signal}, shutting down.`);
+  if (!pool) {
+    process.exit(0);
+    return;
+  }
+  pool
+    .end()
+    .catch(() => {
+    })
+    .finally(() => {
+      process.exit(0);
+    });
+}
+
+process.once("SIGTERM", () => handleShutdownSignal("SIGTERM"));
+process.once("SIGINT", () => handleShutdownSignal("SIGINT"));
 
 startServer();
