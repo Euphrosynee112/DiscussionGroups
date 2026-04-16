@@ -1729,6 +1729,7 @@ function enqueueReplyTask(conversationId = "", options = {}) {
       (task) =>
         task.conversationId === resolvedConversationId &&
         task.regenerate === Boolean(requestOptions.regenerate) &&
+        task.awarenessImmediateTrigger === Boolean(requestOptions.awarenessImmediateTrigger) &&
         task.status !== "error"
     ) || null;
   if (existingTask) {
@@ -1739,6 +1740,7 @@ function enqueueReplyTask(conversationId = "", options = {}) {
     conversationId: resolvedConversationId,
     regenerate: Boolean(requestOptions.regenerate),
     regenerateInstruction: String(requestOptions.regenerateInstruction || "").trim(),
+    awarenessImmediateTrigger: Boolean(requestOptions.awarenessImmediateTrigger),
     status: "pending",
     createdAt: Date.now(),
     updatedAt: Date.now()
@@ -4147,6 +4149,7 @@ function normalizeReplyTask(task, index = 0) {
     conversationId: String(source.conversationId || "").trim(),
     regenerate: Boolean(source.regenerate),
     regenerateInstruction: String(source.regenerateInstruction || "").trim(),
+    awarenessImmediateTrigger: Boolean(source.awarenessImmediateTrigger),
     status,
     errorMessage: String(source.errorMessage || "").trim(),
     startedAt: Number(source.startedAt) || 0,
@@ -20087,7 +20090,12 @@ async function requestConversationReply(options = {}) {
       const requestedPendingUserMessageIdSet = new Set(
         requestedPendingUserMessageIds.filter(Boolean)
       );
-      if (!requestedPendingUserMessageIdSet.size && !continueAssistant && !isProactiveTrigger) {
+      if (
+        !requestedPendingUserMessageIdSet.size &&
+        !continueAssistant &&
+        !isProactiveTrigger &&
+        !shouldInjectAwarenessIntoContents
+      ) {
         return;
       }
       const hasRequestedMessages =
@@ -20346,7 +20354,8 @@ async function resumePendingReplyTaskForConversation(
   const hasRegenerateSource = Boolean(
     pendingTask.regenerate && getLatestAssistantReplyBatch(conversation)
   );
-  if (!conversation || (!hasPendingUserMessages && !hasRegenerateSource)) {
+  const hasImmediateAwareness = Boolean(pendingTask.awarenessImmediateTrigger);
+  if (!conversation || (!hasPendingUserMessages && !hasRegenerateSource && !hasImmediateAwareness)) {
     removeReplyTask(pendingTask.id);
     syncSendingConversationStateFromReplyTasks();
     return false;
@@ -20360,7 +20369,8 @@ async function resumePendingReplyTaskForConversation(
       conversationId: resolvedConversationId,
       forceDirect: true,
       regenerate: pendingTask.regenerate,
-      regenerateInstruction: pendingTask.regenerateInstruction
+      regenerateInstruction: pendingTask.regenerateInstruction,
+      awarenessImmediateTrigger: pendingTask.awarenessImmediateTrigger
     });
     return true;
   } finally {
@@ -20393,6 +20403,7 @@ async function pumpBackgroundReplyTasks() {
       conversationId: nextTask.conversationId,
       regenerate: nextTask.regenerate,
       regenerateInstruction: nextTask.regenerateInstruction,
+      awarenessImmediateTrigger: nextTask.awarenessImmediateTrigger,
       forceDirect: true,
       suppressUi: true
     });
@@ -20436,6 +20447,20 @@ function initBackgroundMessagesWorker() {
     }
     if (targetKey === MESSAGE_REPLY_TASKS_KEY) {
       void pumpBackgroundReplyTasks();
+      return;
+    }
+    if (targetKey === MESSAGE_MEMORIES_KEY) {
+      refreshStateFromStorage();
+      const memoryContactIds = Array.from(
+        new Set(
+          (state.memories || [])
+            .map((item) => String(item?.contactId || "").trim())
+            .filter(Boolean)
+        )
+      );
+      memoryContactIds.forEach((contactId) => {
+        void syncMissingLocalMemoriesForContact(contactId);
+      });
       return;
     }
     if (

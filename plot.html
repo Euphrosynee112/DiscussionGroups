@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <title>Pulse Generator · 剧情</title>
-    <link rel="stylesheet" href="./plot.css?v=20260408-130816" />
+    <link rel="stylesheet" href="./plot.css?v=20260416-151500" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -217,10 +217,192 @@
       </div>
     </section>
 
+    <section id="plot-message-edit-modal" class="plot-modal" hidden aria-hidden="true">
+      <div class="plot-modal__backdrop" data-close-plot-message-edit-modal></div>
+      <div
+        class="plot-modal__panel plot-modal__panel--compact"
+        role="dialog"
+        aria-modal="true"
+        aria-label="编辑剧情正文"
+      >
+        <div class="plot-modal__head">
+          <div>
+            <p class="plot-modal__eyebrow">Edit Story</p>
+            <h2 class="plot-modal__title">编辑剧情正文</h2>
+          </div>
+          <button
+            id="plot-message-edit-close-btn"
+            class="plot-modal__close"
+            type="button"
+            aria-label="关闭剧情正文编辑"
+          >
+            ×
+          </button>
+        </div>
+
+        <form id="plot-message-edit-form" class="plot-create-form">
+          <section class="plot-section">
+            <div class="plot-section__head">
+              <div>
+                <h3>剧情正文</h3>
+                <p>保存后，后续续写会基于你改好的内容继续推进。</p>
+              </div>
+            </div>
+            <label class="plot-create-form__field">
+              <textarea
+                id="plot-message-edit-input"
+                rows="10"
+                placeholder="在这里修改剧情正文"
+              ></textarea>
+            </label>
+          </section>
+
+          <p id="plot-message-edit-status" class="plot-modal__status" aria-live="polite"></p>
+
+          <div class="plot-modal__actions">
+            <button
+              id="plot-message-edit-cancel-btn"
+              class="plot-modal__button plot-modal__button--ghost"
+              type="button"
+            >
+              取消
+            </button>
+            <button id="plot-message-edit-save-btn" class="plot-modal__button" type="submit">
+              保存
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section id="plot-summary-modal" class="plot-modal" hidden aria-hidden="true">
+      <div class="plot-modal__backdrop" data-close-plot-summary-modal></div>
+      <div
+        class="plot-modal__panel plot-modal__panel--compact"
+        role="dialog"
+        aria-modal="true"
+        aria-label="剧情总结"
+      >
+        <div class="plot-modal__head">
+          <div>
+            <p class="plot-modal__eyebrow">Story Summary</p>
+            <h2 class="plot-modal__title">总结剧情</h2>
+          </div>
+          <button
+            id="plot-summary-close-btn"
+            class="plot-modal__close"
+            type="button"
+            aria-label="关闭剧情总结"
+          >
+            ×
+          </button>
+        </div>
+
+        <form id="plot-summary-form" class="plot-create-form">
+          <section class="plot-section">
+            <div class="plot-section__head">
+              <div>
+                <h3>保存目标</h3>
+                <p>会保存到记忆中的情景记忆，仅支持保存到参与剧情的角色。</p>
+              </div>
+            </div>
+            <label class="plot-select-field">
+              <span>保存到角色</span>
+              <select id="plot-summary-contact-select"></select>
+            </label>
+          </section>
+
+          <section class="plot-section">
+            <div class="plot-section__head">
+              <div>
+                <h3>情景记忆文本</h3>
+                <p>你可以直接修改总结后的文本，再决定是否保存和触发察觉。</p>
+              </div>
+            </div>
+            <label class="plot-create-form__field">
+              <textarea
+                id="plot-summary-content-input"
+                rows="7"
+                placeholder="总结后的情景记忆会显示在这里"
+              ></textarea>
+            </label>
+          </section>
+
+          <section class="plot-section">
+            <div class="plot-section__head">
+              <div>
+                <h3>情绪倾向</h3>
+                <p>若勾选“保存后立刻察觉”，这里会作为察觉的情绪补充。</p>
+              </div>
+            </div>
+            <label class="plot-create-form__field">
+              <textarea
+                id="plot-summary-emotion-input"
+                rows="3"
+                placeholder="例如：这段剧情会让她明显放松下来，也更愿意主动靠近。"
+              ></textarea>
+            </label>
+          </section>
+
+          <section class="plot-section">
+            <div class="plot-section__head">
+              <div>
+                <h3>重要性</h3>
+              </div>
+            </div>
+            <label class="plot-select-field">
+              <span>重要性</span>
+              <input
+                id="plot-summary-importance-input"
+                type="number"
+                min="0"
+                max="100"
+                step="1"
+                placeholder="0-100"
+              />
+            </label>
+            <label class="plot-toggle-row">
+              <input id="plot-summary-awareness-input" type="checkbox" />
+              <span>保存后立刻察觉并触发消息回复</span>
+            </label>
+          </section>
+
+          <p id="plot-summary-status" class="plot-modal__status" aria-live="polite"></p>
+
+          <div class="plot-modal__actions">
+            <button
+              id="plot-summary-cancel-btn"
+              class="plot-modal__button plot-modal__button--ghost"
+              type="button"
+            >
+              取消
+            </button>
+            <button id="plot-summary-save-btn" class="plot-modal__button" type="submit">
+              保存
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section
+      id="plot-summary-loading-overlay"
+      class="plot-loading-cover"
+      hidden
+      aria-hidden="true"
+      aria-live="polite"
+    >
+      <div class="plot-loading-cover__panel">
+        <span class="plot-loading-cover__spinner" aria-hidden="true"></span>
+        <p>正在总结剧情中……</p>
+      </div>
+    </section>
+
     <script src="./privacy-allowlist.js?v=20260415-173916"></script>
     <script src="./pulse-privacy-cover.js?v=20260415-173916"></script>
+    <script src="./pulse-structured-output.js?v=20260414-130224"></script>
     <script src="./api-log.js?v=20260408-170500"></script>
     <script src="./pulse-api-switcher.js?v=20260414-141318"></script>
-    <script src="./plot.js?v=20260414-141318"></script>
+    <script src="./plot.js?v=20260416-151500"></script>
   </body>
 </html>

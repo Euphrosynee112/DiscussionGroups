@@ -211,8 +211,6 @@ input {
 
 .plot-thread-card {
   width: 100%;
-  padding: 16px;
-  text-align: left;
   border-radius: 24px;
   border: 1px solid rgba(255, 255, 255, 0.8);
   background:
@@ -220,7 +218,40 @@ input {
     rgba(255, 255, 255, 0.7);
   box-shadow: var(--plot-shadow-md);
   display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.plot-thread-card__main {
+  width: 100%;
+  display: grid;
   gap: 12px;
+  text-align: left;
+}
+
+.plot-thread-card__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.plot-thread-card__action {
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(140, 111, 84, 0.1);
+  color: var(--plot-accent-strong);
+  font-size: 12px;
+}
+
+.plot-thread-card__action:disabled {
+  opacity: 0.52;
+}
+
+.plot-thread-card__action--danger {
+  background: rgba(160, 70, 70, 0.1);
+  color: #9d4e4e;
 }
 
 .plot-thread-card__top {
@@ -297,7 +328,7 @@ input {
 .plot-bubble {
   max-width: min(86%, 320px);
   border-radius: 24px;
-  padding: 10px 14px;
+  padding: 8px 14px 9px;
   box-shadow: var(--plot-shadow-sm);
   white-space: pre-wrap;
   word-break: break-word;
@@ -324,13 +355,34 @@ input {
   color: rgba(36, 26, 18, 0.62);
 }
 
+.plot-bubble__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 3px;
+}
+
 .plot-bubble__role {
   display: block;
-  margin-bottom: 4px;
   font-size: 11px;
   letter-spacing: 0.04em;
   color: inherit;
   opacity: 0.64;
+}
+
+.plot-bubble__action {
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(140, 111, 84, 0.1);
+  color: var(--plot-accent-strong);
+  font-size: 11px;
+}
+
+.plot-bubble__text {
+  min-width: 0;
 }
 
 .plot-detail-participants {
@@ -628,6 +680,50 @@ input {
   resize: vertical;
 }
 
+.plot-select-field {
+  display: grid;
+  gap: 8px;
+}
+
+.plot-select-field span {
+  font-size: 12px;
+  color: var(--plot-muted);
+}
+
+.plot-select-field select,
+.plot-select-field input {
+  width: 100%;
+  min-height: 44px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  color: var(--plot-text);
+}
+
+.plot-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.plot-toggle-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--plot-accent);
+  flex: 0 0 auto;
+}
+
+.plot-modal__panel--compact {
+  max-height: min(82vh, 760px);
+}
+
 .plot-modal__status {
   min-height: 18px;
   margin: 0;
@@ -657,6 +753,46 @@ input {
 .plot-modal__button--ghost {
   background: rgba(255, 255, 255, 0.66);
   color: var(--plot-text);
+}
+
+.plot-loading-cover {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--plot-text);
+}
+
+.plot-loading-cover__panel {
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+  padding: 28px;
+  text-align: center;
+}
+
+.plot-loading-cover__panel p {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  color: rgba(36, 26, 18, 0.72);
+}
+
+.plot-loading-cover__spinner {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: 3px solid rgba(140, 111, 84, 0.16);
+  border-top-color: rgba(140, 111, 84, 0.82);
+  animation: plot-loading-spin 0.9s linear infinite;
+}
+
+@keyframes plot-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (max-width: 860px) {
