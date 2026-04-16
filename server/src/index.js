@@ -12,8 +12,29 @@ const PORT = Number.parseInt(String(process.env.PORT || "3000"), 10) || 3000;
 const DATABASE_URL = String(process.env.DATABASE_URL || "").trim();
 const STATIC_ROOT = path.resolve(__dirname, "..", "..");
 const SETTINGS_KEY = "x_style_generator_settings_v2";
+const POSTS_KEY = "x_style_generator_posts_v2";
+const REFRESH_KEY = "x_style_generator_refresh_v2";
+const PROFILE_KEY = "x_style_generator_profile_v1";
+const PROFILE_POSTS_KEY = "x_style_generator_profile_posts_v1";
+const DISCUSSIONS_KEY = "x_style_generator_discussions_v1";
+const DIRECT_MESSAGES_KEY = "x_style_generator_direct_messages_v1";
+const BUBBLE_ROOMS_KEY = "x_style_generator_bubble_rooms_v1";
+const BUBBLE_THREADS_KEY = "x_style_generator_bubble_threads_v1";
+const BUBBLE_FAN_DETAILS_KEY = "x_style_generator_bubble_fan_details_v1";
+const PLOT_THREADS_KEY = "x_style_generator_plot_threads_v1";
+const WORLD_BOOKS_KEY = "x_style_generator_message_worldbooks_v1";
+const MESSAGE_CONTACTS_KEY = "x_style_generator_message_contacts_v1";
+const MESSAGE_THREADS_KEY = "x_style_generator_message_threads_v1";
+const MESSAGE_MEMORIES_KEY = "x_style_generator_message_memories_v1";
+const SCHEDULE_ENTRIES_KEY = "x_style_generator_schedule_entries_v1";
+const MESSAGE_COMMON_PLACES_KEY = "x_style_generator_common_places_v1";
+const MESSAGE_PRESENCE_STATE_KEY = "x_style_generator_presence_state_v1";
 const PRIVACY_ALLOWLIST_TERMS_KEY = "x_style_generator_privacy_allowlist_terms_v1";
 const PRIVACY_ALLOWLIST_META_KEY = "x_style_generator_privacy_allowlist_meta_v1";
+const PRIVACY_PENDING_SCAN_KEY = "x_style_generator_privacy_scan_pending_v1";
+const PRIVACY_IGNORELIST_TERMS_KEY = "x_style_generator_privacy_ignorelist_terms_v1";
+const PRIVACY_RECENT_HITS_SINCE_KEY = "x_style_generator_privacy_recent_hits_since_v1";
+const PRIVACY_RECENT_HITS_DISMISSED_KEY = "x_style_generator_privacy_recent_hits_dismissed_v1";
 const PRIVACY_ALLOWLIST_SOURCES = new Set(["manual", "scan"]);
 const PRIVACY_ALLOWLIST_CATEGORIES = new Set(["TERM", "TITLE", "NAME"]);
 const PRIVACY_ALLOWLIST_NAME_LEVELS = new Set(["FULL", "COMMON", "NICK", "PET", "HONOR"]);
@@ -33,6 +54,105 @@ const MEMORY_EVENT_TYPES = new Set([
   "imported"
 ]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const DEFAULT_STORAGE_OWNER_ID = "default";
+const STORAGE_DOCUMENT_DEFINITIONS = new Map([
+  [
+    POSTS_KEY,
+    {
+      docType: "forum_posts",
+      docKey: "feed",
+      title: "论坛首页帖子"
+    }
+  ],
+  [
+    REFRESH_KEY,
+    {
+      docType: "refresh_state",
+      docKey: "main",
+      title: "刷新状态"
+    }
+  ],
+  [
+    PROFILE_POSTS_KEY,
+    {
+      docType: "forum_profile_posts",
+      docKey: "self",
+      title: "个人主页帖子"
+    }
+  ],
+  [
+    DISCUSSIONS_KEY,
+    {
+      docType: "forum_discussions",
+      docKey: "main",
+      title: "论坛讨论串"
+    }
+  ],
+  [
+    DIRECT_MESSAGES_KEY,
+    {
+      docType: "direct_messages",
+      docKey: "main",
+      title: "论坛私信"
+    }
+  ],
+  [
+    BUBBLE_ROOMS_KEY,
+    {
+      docType: "bubble_rooms",
+      docKey: "main",
+      title: "泡泡房间"
+    }
+  ],
+  [
+    BUBBLE_THREADS_KEY,
+    {
+      docType: "bubble_threads",
+      docKey: "main",
+      title: "泡泡话题"
+    }
+  ],
+  [
+    BUBBLE_FAN_DETAILS_KEY,
+    {
+      docType: "bubble_fan_details",
+      docKey: "main",
+      title: "泡泡粉丝详情"
+    }
+  ],
+  [
+    PLOT_THREADS_KEY,
+    {
+      docType: "plot_threads",
+      docKey: "main",
+      title: "剧情线程"
+    }
+  ],
+  [
+    PRIVACY_PENDING_SCAN_KEY,
+    {
+      docType: "privacy_pending_scan",
+      docKey: "main",
+      title: "隐私待处理词条"
+    }
+  ],
+  [
+    PRIVACY_RECENT_HITS_SINCE_KEY,
+    {
+      docType: "privacy_recent_hits_since",
+      docKey: "main",
+      title: "隐私最近命中起点"
+    }
+  ],
+  [
+    PRIVACY_RECENT_HITS_DISMISSED_KEY,
+    {
+      docType: "privacy_recent_hits_dismissed",
+      docKey: "main",
+      title: "隐私最近命中忽略"
+    }
+  ]
+]);
 
 function createPoolConfig(connectionString = "") {
   const normalized = String(connectionString || "").trim();
@@ -158,6 +278,1020 @@ function previewStorageValue(value, maxLength = 220) {
     return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
   } catch (_error) {
     return "";
+  }
+}
+
+function stringifyJsonb(value) {
+  return JSON.stringify(value ?? null);
+}
+
+function toStorageText(value = "", fallback = "") {
+  const text = value == null ? "" : String(value).trim();
+  return text || fallback;
+}
+
+function toStorageInteger(value, fallback = 0) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function toStorageFiniteNumber(value, fallback = 0) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function toStorageBoolean(value) {
+  return Boolean(value);
+}
+
+function toClientTimestamp(value = null) {
+  if (value == null || value === "") {
+    return null;
+  }
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    const date = new Date(numeric);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  const parsed = Date.parse(String(value));
+  if (!Number.isNaN(parsed)) {
+    return new Date(parsed);
+  }
+  return null;
+}
+
+function getPayloadUpdatedAt(value) {
+  if (Array.isArray(value)) {
+    return value.reduce((latest, item) => {
+      const updatedAt = Number(item?.updatedAt || item?.updated_at || item?.createdAt || item?.created_at || 0);
+      return Number.isFinite(updatedAt) ? Math.max(latest, updatedAt) : latest;
+    }, 0);
+  }
+  if (value && typeof value === "object") {
+    return Number(value.updatedAt || value.updated_at || value.createdAt || value.created_at || 0) || 0;
+  }
+  return 0;
+}
+
+function toClientTimestampFromPayload(value) {
+  return toClientTimestamp(getPayloadUpdatedAt(value));
+}
+
+function toDateText(value = "", fallback = null) {
+  const text = String(value || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return text;
+  }
+  return fallback;
+}
+
+function toTimeText(value = "") {
+  const text = String(value || "").trim();
+  const match = text.match(/^(\d{2}):(\d{2})(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?$/i);
+  if (!match) {
+    return null;
+  }
+  return `${match[1]}:${match[2]}`;
+}
+
+function normalizeSnapshotArray(value) {
+  return Array.isArray(value) ? value.filter((item) => item && typeof item === "object") : [];
+}
+
+function normalizeSnapshotObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function addTableWriteSummary(summary, tableName = "", rowCount = 0) {
+  if (!tableName) {
+    return;
+  }
+  const existing = summary.find((item) => item.tableName === tableName);
+  if (existing) {
+    existing.rowCount += rowCount;
+    return;
+  }
+  summary.push({
+    tableName,
+    rowCount
+  });
+}
+
+async function ensureBusinessSnapshotTables(db) {
+  await db.query(`
+    create table if not exists app_settings (
+      owner_id text primary key,
+      forum_settings jsonb not null default '{}'::jsonb,
+      prompt_rules jsonb not null default '{}'::jsonb,
+      negative_prompt_constraints jsonb not null default '[]'::jsonb,
+      api_state jsonb not null default '{}'::jsonb,
+      api_secrets jsonb not null default '{}'::jsonb,
+      chat_global_settings jsonb not null default '{}'::jsonb,
+      message_prompt_settings jsonb not null default '{}'::jsonb,
+      bubble_mount_settings jsonb not null default '{}'::jsonb,
+      privacy_state jsonb not null default '{}'::jsonb,
+      metadata jsonb not null default '{}'::jsonb,
+      client_updated_at timestamptz,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    );
+  `);
+  await db.query(`
+    create table if not exists app_api_configs (
+      owner_id text not null,
+      id text not null,
+      name text not null default '',
+      mode text not null default '',
+      endpoint text not null default '',
+      model text not null default '',
+      temperature double precision not null default 0,
+      token text not null default '',
+      is_current boolean not null default false,
+      metadata jsonb not null default '{}'::jsonb,
+      client_updated_at timestamptz,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (owner_id, id)
+    );
+  `);
+  await db.query(`
+    create table if not exists app_profiles (
+      owner_id text primary key,
+      forum_profile jsonb not null default '{}'::jsonb,
+      chat_profile jsonb not null default '{}'::jsonb,
+      client_updated_at timestamptz,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    );
+  `);
+  await db.query(`
+    create table if not exists app_documents (
+      owner_id text not null,
+      doc_type text not null,
+      doc_key text not null,
+      title text not null default '',
+      content_jsonb jsonb not null default '{}'::jsonb,
+      client_updated_at timestamptz,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (owner_id, doc_type, doc_key)
+    );
+  `);
+  await db.query(`
+    create table if not exists chat_contacts (
+      owner_id text not null,
+      id text not null,
+      name text not null default '',
+      avatar_image_url text not null default '',
+      avatar_text text not null default '',
+      persona_prompt text not null default '',
+      special_user_persona text not null default '',
+      awareness_state jsonb not null default '{}'::jsonb,
+      payload_jsonb jsonb not null default '{}'::jsonb,
+      client_updated_at timestamptz,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (owner_id, id)
+    );
+  `);
+  await db.query(`
+    create table if not exists chat_conversations (
+      owner_id text not null,
+      id text not null,
+      contact_id text not null default '',
+      conversation_key text not null default '',
+      contact_name_snapshot text not null default '',
+      contact_avatar_image_snapshot text not null default '',
+      contact_avatar_text_snapshot text not null default '',
+      prompt_settings_jsonb jsonb not null default '{}'::jsonb,
+      scene_mode text not null default '',
+      allow_ai_presence_update boolean not null default false,
+      allow_ai_proactive_message boolean not null default false,
+      allow_ai_auto_schedule boolean not null default false,
+      auto_schedule_days integer not null default 0,
+      auto_schedule_time text not null default '',
+      auto_schedule_last_run_date text not null default '',
+      voice_call_state_jsonb jsonb not null default '{}'::jsonb,
+      reply_context_version integer not null default 0,
+      memory_summary_counter integer not null default 0,
+      memory_summary_last_message_count integer not null default 0,
+      last_message_at timestamptz,
+      last_message_id text,
+      payload_jsonb jsonb not null default '{}'::jsonb,
+      client_updated_at timestamptz,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (owner_id, id)
+    );
+  `);
+  await db.query(`
+    create table if not exists chat_messages (
+      owner_id text not null,
+      id text not null,
+      conversation_id text not null default '',
+      contact_id text not null default '',
+      sender_role text not null default '',
+      message_type text not null default '',
+      text_content text not null default '',
+      needs_reply boolean not null default false,
+      message_seq bigint not null default 0,
+      status text not null default '',
+      payload_jsonb jsonb not null default '{}'::jsonb,
+      client_created_at timestamptz,
+      client_updated_at timestamptz,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (owner_id, id)
+    );
+  `);
+  await db.query(`
+    create table if not exists chat_journals (
+      owner_id text not null,
+      id text not null,
+      contact_id text not null default '',
+      contact_name_snapshot text not null default '',
+      conversation_id text not null default '',
+      entry_date date not null,
+      weather text not null default '',
+      content text not null default '',
+      payload_jsonb jsonb not null default '{}'::jsonb,
+      client_updated_at timestamptz,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (owner_id, id)
+    );
+  `);
+  await db.query(`
+    create table if not exists schedule_entries (
+      owner_id text not null,
+      id text not null,
+      title text not null default '',
+      schedule_type text not null default '',
+      owner_type text not null default '',
+      owner_contact_id text not null default '',
+      companion_includes_user boolean not null default false,
+      companion_contact_ids_jsonb jsonb not null default '[]'::jsonb,
+      visibility_mode text not null default '',
+      visible_contact_ids_jsonb jsonb not null default '[]'::jsonb,
+      place_id text not null default '',
+      entry_date date not null,
+      start_time time,
+      end_time time,
+      invite_decisions_jsonb jsonb not null default '{}'::jsonb,
+      payload_jsonb jsonb not null default '{}'::jsonb,
+      client_updated_at timestamptz,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (owner_id, id)
+    );
+  `);
+  await db.query(`
+    create table if not exists common_places (
+      owner_id text not null,
+      id text not null,
+      name text not null default '',
+      place_type text not null default '',
+      aliases_jsonb jsonb not null default '[]'::jsonb,
+      traits_text text not null default '',
+      visibility_mode text not null default '',
+      visible_contact_ids_jsonb jsonb not null default '[]'::jsonb,
+      last_used_at timestamptz,
+      payload_jsonb jsonb not null default '{}'::jsonb,
+      client_updated_at timestamptz,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (owner_id, id)
+    );
+  `);
+  await db.query(`
+    create table if not exists presence_states (
+      owner_id text not null,
+      id text not null,
+      scope_type text not null default '',
+      contact_id text,
+      presence_type text not null default '',
+      place_id text not null default '',
+      from_place_id text not null default '',
+      to_place_id text not null default '',
+      payload_jsonb jsonb not null default '{}'::jsonb,
+      client_updated_at timestamptz,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (owner_id, id)
+    );
+  `);
+  await db.query(`
+    create table if not exists worldbook_categories (
+      owner_id text not null,
+      id text not null,
+      name text not null default '',
+      sort_order integer not null default 0,
+      payload_jsonb jsonb not null default '{}'::jsonb,
+      client_updated_at timestamptz,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (owner_id, id)
+    );
+  `);
+  await db.query(`
+    create table if not exists worldbook_entries (
+      owner_id text not null,
+      id text not null,
+      category_id text,
+      name text not null default '',
+      text_content text not null default '',
+      sort_order integer not null default 0,
+      payload_jsonb jsonb not null default '{}'::jsonb,
+      client_updated_at timestamptz,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (owner_id, id)
+    );
+  `);
+}
+
+function buildAppSettingsSnapshot(settings = {}) {
+  const source = normalizeSnapshotObject(settings);
+  const apiConfigs = Array.isArray(source.apiConfigs) ? source.apiConfigs : [];
+  const apiConfigTokenMap = Object.fromEntries(
+    apiConfigs
+      .map((item) => [toStorageText(item?.id), toStorageText(item?.token)])
+      .filter(([id, token]) => id && token)
+  );
+  const reservedKeys = new Set([
+    "apiConfigs",
+    "activeApiConfigId",
+    "mode",
+    "endpoint",
+    "model",
+    "temperature",
+    "token",
+    "translationApiEnabled",
+    "translationApiConfigId",
+    "summaryApiEnabled",
+    "summaryApiConfigId",
+    "floatingApiSwitcherEnabled",
+    "promptRules",
+    "negativePromptConstraints",
+    "chatGlobalSettings",
+    "messagePromptSettings",
+    "bubbleMountSettings",
+    "privacyCoverEnabled",
+    "privacyAllowlist"
+  ]);
+  const metadata = Object.fromEntries(
+    Object.entries(source).filter(([key]) => !reservedKeys.has(key))
+  );
+  return {
+    forumSettings: {
+      worldview: toStorageText(source.worldview),
+      homeCount: source.homeCount ?? "",
+      replyCount: source.replyCount ?? "",
+      customTabs: Array.isArray(source.customTabs) ? source.customTabs : []
+    },
+    promptRules: normalizeSnapshotObject(source.promptRules),
+    negativePromptConstraints: Array.isArray(source.negativePromptConstraints)
+      ? source.negativePromptConstraints
+      : [],
+    apiState: {
+      mode: toStorageText(source.mode),
+      endpoint: toStorageText(source.endpoint),
+      model: toStorageText(source.model),
+      temperature: toStorageFiniteNumber(source.temperature, 0),
+      activeApiConfigId: toStorageText(source.activeApiConfigId),
+      translationApiEnabled: toStorageBoolean(source.translationApiEnabled),
+      translationApiConfigId: toStorageText(source.translationApiConfigId),
+      summaryApiEnabled: toStorageBoolean(source.summaryApiEnabled),
+      summaryApiConfigId: toStorageText(source.summaryApiConfigId),
+      floatingApiSwitcherEnabled: toStorageBoolean(source.floatingApiSwitcherEnabled)
+    },
+    apiSecrets: {
+      currentToken: toStorageText(source.token),
+      apiConfigTokens: apiConfigTokenMap
+    },
+    chatGlobalSettings: normalizeSnapshotObject(source.chatGlobalSettings),
+    messagePromptSettings: normalizeSnapshotObject(source.messagePromptSettings),
+    bubbleMountSettings: normalizeSnapshotObject(source.bubbleMountSettings),
+    privacyState: {
+      privacyCoverEnabled: source.privacyCoverEnabled !== false,
+      privacyAllowlist: Array.isArray(source.privacyAllowlist) ? source.privacyAllowlist : []
+    },
+    metadata
+  };
+}
+
+async function replaceAppSettingsSnapshot(db, valueJson, ownerId, tableWrites) {
+  const settings = normalizeSnapshotObject(valueJson);
+  const snapshot = buildAppSettingsSnapshot(settings);
+  await db.query(
+    `
+      insert into app_settings (
+        owner_id,
+        forum_settings,
+        prompt_rules,
+        negative_prompt_constraints,
+        api_state,
+        api_secrets,
+        chat_global_settings,
+        message_prompt_settings,
+        bubble_mount_settings,
+        privacy_state,
+        metadata,
+        client_updated_at,
+        created_at,
+        updated_at
+      )
+      values ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, $12, now(), now())
+      on conflict (owner_id) do update
+        set forum_settings = excluded.forum_settings,
+            prompt_rules = excluded.prompt_rules,
+            negative_prompt_constraints = excluded.negative_prompt_constraints,
+            api_state = excluded.api_state,
+            api_secrets = excluded.api_secrets,
+            chat_global_settings = excluded.chat_global_settings,
+            message_prompt_settings = excluded.message_prompt_settings,
+            bubble_mount_settings = excluded.bubble_mount_settings,
+            privacy_state = excluded.privacy_state,
+            metadata = excluded.metadata,
+            client_updated_at = excluded.client_updated_at,
+            updated_at = now()
+    `,
+    [
+      ownerId,
+      stringifyJsonb(snapshot.forumSettings),
+      stringifyJsonb(snapshot.promptRules),
+      stringifyJsonb(snapshot.negativePromptConstraints),
+      stringifyJsonb(snapshot.apiState),
+      stringifyJsonb(snapshot.apiSecrets),
+      stringifyJsonb(snapshot.chatGlobalSettings),
+      stringifyJsonb(snapshot.messagePromptSettings),
+      stringifyJsonb(snapshot.bubbleMountSettings),
+      stringifyJsonb(snapshot.privacyState),
+      stringifyJsonb(snapshot.metadata),
+      toClientTimestampFromPayload(settings)
+    ]
+  );
+  addTableWriteSummary(tableWrites, "app_settings", 1);
+
+  const apiConfigs = Array.isArray(settings.apiConfigs) ? settings.apiConfigs : [];
+  await db.query("delete from app_api_configs where owner_id = $1", [ownerId]);
+  for (const [index, config] of apiConfigs.entries()) {
+    const source = normalizeSnapshotObject(config);
+    const id = toStorageText(source.id, `api_config_${index + 1}`);
+    await db.query(
+      `
+        insert into app_api_configs (
+          owner_id,
+          id,
+          name,
+          mode,
+          endpoint,
+          model,
+          temperature,
+          token,
+          is_current,
+          metadata,
+          client_updated_at,
+          created_at,
+          updated_at
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, now(), now())
+      `,
+      [
+        ownerId,
+        id,
+        toStorageText(source.name, `接口配置 ${index + 1}`),
+        toStorageText(source.mode),
+        toStorageText(source.endpoint),
+        toStorageText(source.model),
+        toStorageFiniteNumber(source.temperature, 0),
+        toStorageText(source.token),
+        id === toStorageText(settings.activeApiConfigId),
+        stringifyJsonb(source),
+        toClientTimestamp(source.updatedAt)
+      ]
+    );
+  }
+  addTableWriteSummary(tableWrites, "app_api_configs", apiConfigs.length);
+}
+
+async function replaceAppProfileSnapshot(db, valueJson, ownerId, tableWrites) {
+  const profile = normalizeSnapshotObject(valueJson);
+  const chatProfile = {
+    username: toStorageText(profile.chatUsername || profile.username),
+    userId: toStorageText(profile.chatUserId || profile.userId),
+    avatarImage: toStorageText(profile.chatAvatarImage || profile.avatarImage),
+    personaPrompt: toStorageText(profile.chatPersonaPrompt || profile.personaPrompt),
+    chatProfileInitialized: toStorageBoolean(profile.chatProfileInitialized)
+  };
+  await db.query(
+    `
+      insert into app_profiles (
+        owner_id,
+        forum_profile,
+        chat_profile,
+        client_updated_at,
+        created_at,
+        updated_at
+      )
+      values ($1, $2::jsonb, $3::jsonb, $4, now(), now())
+      on conflict (owner_id) do update
+        set forum_profile = excluded.forum_profile,
+            chat_profile = excluded.chat_profile,
+            client_updated_at = excluded.client_updated_at,
+            updated_at = now()
+    `,
+    [
+      ownerId,
+      stringifyJsonb(profile),
+      stringifyJsonb(chatProfile),
+      toClientTimestampFromPayload(profile)
+    ]
+  );
+  addTableWriteSummary(tableWrites, "app_profiles", 1);
+}
+
+async function upsertAppDocumentSnapshot(db, storageKey, valueJson, ownerId, tableWrites) {
+  const definition = STORAGE_DOCUMENT_DEFINITIONS.get(storageKey);
+  if (!definition) {
+    return;
+  }
+  await db.query(
+    `
+      insert into app_documents (
+        owner_id,
+        doc_type,
+        doc_key,
+        title,
+        content_jsonb,
+        client_updated_at,
+        created_at,
+        updated_at
+      )
+      values ($1, $2, $3, $4, $5::jsonb, $6, now(), now())
+      on conflict (owner_id, doc_type, doc_key) do update
+        set title = excluded.title,
+            content_jsonb = excluded.content_jsonb,
+            client_updated_at = excluded.client_updated_at,
+            updated_at = now()
+    `,
+    [
+      ownerId,
+      definition.docType,
+      definition.docKey,
+      definition.title,
+      stringifyJsonb(valueJson),
+      toClientTimestampFromPayload(valueJson)
+    ]
+  );
+  addTableWriteSummary(tableWrites, "app_documents", 1);
+}
+
+async function replaceChatContactsSnapshot(db, valueJson, ownerId, tableWrites) {
+  const contacts = normalizeSnapshotArray(valueJson);
+  await db.query("delete from chat_contacts where owner_id = $1", [ownerId]);
+  for (const [index, contact] of contacts.entries()) {
+    const id = toStorageText(contact.id, `contact_${index + 1}`);
+    const awarenessState = {
+      awarenessTitle: toStorageText(contact.awarenessTitle),
+      awarenessText: toStorageText(contact.awarenessText),
+      awarenessEmotionShift: toStorageText(contact.awarenessEmotionShift),
+      awarenessSensitivity: contact.awarenessSensitivity ?? null,
+      awarenessConsumed: toStorageBoolean(contact.awarenessConsumed),
+      awarenessResolvedState: toStorageText(contact.awarenessResolvedState),
+      awarenessHistoryHidden: toStorageBoolean(contact.awarenessHistoryHidden),
+      awarenessCheckCount: toStorageInteger(contact.awarenessCheckCount, 0),
+      awarenessTriggerCount: toStorageInteger(contact.awarenessTriggerCount, 0),
+      awarenessLastCheckedAt: Number(contact.awarenessLastCheckedAt) || 0,
+      awarenessLastTriggeredAt: Number(contact.awarenessLastTriggeredAt) || 0,
+      awarenessHistory: Array.isArray(contact.awarenessHistory) ? contact.awarenessHistory : [],
+      awarenessManualTriggerPending: contact.awarenessManualTriggerPending || null
+    };
+    await db.query(
+      `
+        insert into chat_contacts (
+          owner_id,
+          id,
+          name,
+          avatar_image_url,
+          avatar_text,
+          persona_prompt,
+          special_user_persona,
+          awareness_state,
+          payload_jsonb,
+          client_updated_at,
+          created_at,
+          updated_at
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, now(), now())
+      `,
+      [
+        ownerId,
+        id,
+        toStorageText(contact.name, `联系人 ${index + 1}`),
+        toStorageText(contact.avatarImage),
+        toStorageText(contact.avatarText),
+        toStorageText(contact.personaPrompt),
+        toStorageText(contact.specialUserPersona),
+        stringifyJsonb(awarenessState),
+        stringifyJsonb(contact),
+        toClientTimestamp(contact.updatedAt || contact.createdAt)
+      ]
+    );
+  }
+  addTableWriteSummary(tableWrites, "chat_contacts", contacts.length);
+}
+
+function getConversationLastMessage(conversation = {}) {
+  const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
+  return messages.length ? messages[messages.length - 1] : null;
+}
+
+async function replaceChatThreadsSnapshot(db, valueJson, ownerId, tableWrites) {
+  const conversations = normalizeSnapshotArray(valueJson);
+  await db.query("delete from chat_messages where owner_id = $1", [ownerId]);
+  await db.query("delete from chat_conversations where owner_id = $1", [ownerId]);
+
+  let messageCount = 0;
+  for (const [conversationIndex, conversation] of conversations.entries()) {
+    const conversationId = toStorageText(conversation.id, `conversation_${conversationIndex + 1}`);
+    const contactId = toStorageText(conversation.contactId);
+    const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
+    const lastMessage = getConversationLastMessage(conversation);
+    await db.query(
+      `
+        insert into chat_conversations (
+          owner_id,
+          id,
+          contact_id,
+          conversation_key,
+          contact_name_snapshot,
+          contact_avatar_image_snapshot,
+          contact_avatar_text_snapshot,
+          prompt_settings_jsonb,
+          scene_mode,
+          allow_ai_presence_update,
+          allow_ai_proactive_message,
+          allow_ai_auto_schedule,
+          auto_schedule_days,
+          auto_schedule_time,
+          auto_schedule_last_run_date,
+          voice_call_state_jsonb,
+          reply_context_version,
+          memory_summary_counter,
+          memory_summary_last_message_count,
+          last_message_at,
+          last_message_id,
+          payload_jsonb,
+          client_updated_at,
+          created_at,
+          updated_at
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17, $18, $19, $20, $21, $22::jsonb, $23, now(), now())
+      `,
+      [
+        ownerId,
+        conversationId,
+        contactId,
+        `${contactId || "contact"}:${conversationId}`,
+        toStorageText(conversation.contactNameSnapshot),
+        toStorageText(conversation.contactAvatarImageSnapshot),
+        toStorageText(conversation.contactAvatarTextSnapshot),
+        stringifyJsonb(normalizeSnapshotObject(conversation.promptSettings)),
+        toStorageText(conversation.sceneMode, "online"),
+        toStorageBoolean(conversation.allowAiPresenceUpdate),
+        toStorageBoolean(conversation.allowAiProactiveMessage),
+        toStorageBoolean(conversation.allowAiAutoSchedule),
+        toStorageInteger(conversation.autoScheduleDays, 0),
+        toStorageText(conversation.autoScheduleTime),
+        toStorageText(conversation.autoScheduleLastRunDate),
+        stringifyJsonb(normalizeSnapshotObject(conversation.voiceCallState)),
+        toStorageInteger(conversation.replyContextVersion, 0),
+        toStorageInteger(conversation.memorySummaryCounter, 0),
+        toStorageInteger(conversation.memorySummaryLastMessageCount, 0),
+        toClientTimestamp(lastMessage?.createdAt || conversation.updatedAt),
+        lastMessage ? toStorageText(lastMessage.id) : null,
+        stringifyJsonb(conversation),
+        toClientTimestamp(conversation.updatedAt)
+      ]
+    );
+
+    for (const [messageIndex, message] of messages.entries()) {
+      const messageId = toStorageText(
+        message?.id,
+        `${conversationId}_message_${messageIndex + 1}`
+      );
+      await db.query(
+        `
+          insert into chat_messages (
+            owner_id,
+            id,
+            conversation_id,
+            contact_id,
+            sender_role,
+            message_type,
+            text_content,
+            needs_reply,
+            message_seq,
+            status,
+            payload_jsonb,
+            client_created_at,
+            client_updated_at,
+            created_at,
+            updated_at
+          )
+          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, now(), now())
+        `,
+        [
+          ownerId,
+          messageId,
+          conversationId,
+          contactId,
+          toStorageText(message?.role, "user"),
+          toStorageText(message?.messageType, "text"),
+          toStorageText(message?.text),
+          toStorageBoolean(message?.needsReply),
+          messageIndex + 1,
+          toStorageText(message?.status, "active"),
+          stringifyJsonb(message),
+          toClientTimestamp(message?.createdAt),
+          toClientTimestamp(message?.updatedAt || message?.createdAt)
+        ]
+      );
+      messageCount += 1;
+    }
+  }
+  addTableWriteSummary(tableWrites, "chat_conversations", conversations.length);
+  addTableWriteSummary(tableWrites, "chat_messages", messageCount);
+}
+
+async function replaceScheduleEntriesSnapshot(db, valueJson, ownerId, tableWrites) {
+  const entries = normalizeSnapshotArray(valueJson);
+  await db.query("delete from schedule_entries where owner_id = $1", [ownerId]);
+  let savedCount = 0;
+  for (const [index, entry] of entries.entries()) {
+    const id = toStorageText(entry.id, `schedule_${index + 1}`);
+    const entryDate = toDateText(entry.date) || new Date().toISOString().slice(0, 10);
+    await db.query(
+      `
+        insert into schedule_entries (
+          owner_id,
+          id,
+          title,
+          schedule_type,
+          owner_type,
+          owner_contact_id,
+          companion_includes_user,
+          companion_contact_ids_jsonb,
+          visibility_mode,
+          visible_contact_ids_jsonb,
+          place_id,
+          entry_date,
+          start_time,
+          end_time,
+          invite_decisions_jsonb,
+          payload_jsonb,
+          client_updated_at,
+          created_at,
+          updated_at
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb, $11, $12, $13, $14, $15::jsonb, $16::jsonb, $17, now(), now())
+      `,
+      [
+        ownerId,
+        id,
+        toStorageText(entry.title, `日程 ${index + 1}`),
+        toStorageText(entry.scheduleType, "day"),
+        toStorageText(entry.ownerType, "user"),
+        toStorageText(entry.ownerId),
+        toStorageBoolean(entry.companionIncludesUser),
+        stringifyJsonb(Array.isArray(entry.companionContactIds) ? entry.companionContactIds : []),
+        toStorageText(entry.visibilityMode, "all"),
+        stringifyJsonb(Array.isArray(entry.visibleContactIds) ? entry.visibleContactIds : []),
+        toStorageText(entry.placeId),
+        entryDate,
+        toTimeText(entry.startTime),
+        toTimeText(entry.endTime),
+        stringifyJsonb(normalizeSnapshotObject(entry.inviteDecisions)),
+        stringifyJsonb(entry),
+        toClientTimestamp(entry.updatedAt || entry.createdAt)
+      ]
+    );
+    savedCount += 1;
+  }
+  addTableWriteSummary(tableWrites, "schedule_entries", savedCount);
+}
+
+async function replaceCommonPlacesSnapshot(db, valueJson, ownerId, tableWrites) {
+  const places = normalizeSnapshotArray(valueJson);
+  await db.query("delete from common_places where owner_id = $1", [ownerId]);
+  for (const [index, place] of places.entries()) {
+    await db.query(
+      `
+        insert into common_places (
+          owner_id,
+          id,
+          name,
+          place_type,
+          aliases_jsonb,
+          traits_text,
+          visibility_mode,
+          visible_contact_ids_jsonb,
+          last_used_at,
+          payload_jsonb,
+          client_updated_at,
+          created_at,
+          updated_at
+        )
+        values ($1, $2, $3, $4, $5::jsonb, $6, $7, $8::jsonb, $9, $10::jsonb, $11, now(), now())
+      `,
+      [
+        ownerId,
+        toStorageText(place.id, `common_place_${index + 1}`),
+        toStorageText(place.name, `常用地点 ${index + 1}`),
+        toStorageText(place.type || place.placeType, "other"),
+        stringifyJsonb(Array.isArray(place.aliases) ? place.aliases : []),
+        toStorageText(place.traitsText || place.specialText || place.description),
+        toStorageText(place.visibilityMode, "self"),
+        stringifyJsonb(Array.isArray(place.visibleContactIds) ? place.visibleContactIds : []),
+        toClientTimestamp(place.lastUsedAt),
+        stringifyJsonb(place),
+        toClientTimestamp(place.updatedAt || place.createdAt)
+      ]
+    );
+  }
+  addTableWriteSummary(tableWrites, "common_places", places.length);
+}
+
+function buildPresenceRows(valueJson) {
+  const source = normalizeSnapshotObject(valueJson);
+  const rows = [];
+  rows.push({
+    id: "user_global",
+    scopeType: "user_global",
+    contactId: null,
+    payload: normalizeSnapshotObject(source.userGlobal)
+  });
+  Object.entries(normalizeSnapshotObject(source.userByContact)).forEach(([contactId, payload]) => {
+    const resolvedContactId = toStorageText(contactId);
+    if (!resolvedContactId) {
+      return;
+    }
+    rows.push({
+      id: `user_by_contact:${resolvedContactId}`,
+      scopeType: "user_by_contact",
+      contactId: resolvedContactId,
+      payload: normalizeSnapshotObject(payload)
+    });
+  });
+  Object.entries(normalizeSnapshotObject(source.contacts)).forEach(([contactId, payload]) => {
+    const resolvedContactId = toStorageText(contactId);
+    if (!resolvedContactId) {
+      return;
+    }
+    rows.push({
+      id: `contact:${resolvedContactId}`,
+      scopeType: "contact",
+      contactId: resolvedContactId,
+      payload: normalizeSnapshotObject(payload)
+    });
+  });
+  return rows;
+}
+
+async function replacePresenceSnapshot(db, valueJson, ownerId, tableWrites) {
+  const rows = buildPresenceRows(valueJson);
+  await db.query("delete from presence_states where owner_id = $1", [ownerId]);
+  for (const row of rows) {
+    await db.query(
+      `
+        insert into presence_states (
+          owner_id,
+          id,
+          scope_type,
+          contact_id,
+          presence_type,
+          place_id,
+          from_place_id,
+          to_place_id,
+          payload_jsonb,
+          client_updated_at,
+          created_at,
+          updated_at
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, now(), now())
+      `,
+      [
+        ownerId,
+        row.id,
+        row.scopeType,
+        row.contactId,
+        toStorageText(row.payload.presenceType, "at_place"),
+        toStorageText(row.payload.placeId),
+        toStorageText(row.payload.fromPlaceId),
+        toStorageText(row.payload.toPlaceId),
+        stringifyJsonb(row.payload),
+        toClientTimestamp(row.payload.updatedAt)
+      ]
+    );
+  }
+  addTableWriteSummary(tableWrites, "presence_states", rows.length);
+}
+
+async function replaceWorldbooksSnapshot(db, valueJson, ownerId, tableWrites) {
+  const source = normalizeSnapshotObject(valueJson);
+  const categories = normalizeSnapshotArray(source.categories);
+  const entries = normalizeSnapshotArray(source.entries);
+  await db.query("delete from worldbook_entries where owner_id = $1", [ownerId]);
+  await db.query("delete from worldbook_categories where owner_id = $1", [ownerId]);
+  for (const [index, category] of categories.entries()) {
+    await db.query(
+      `
+        insert into worldbook_categories (
+          owner_id,
+          id,
+          name,
+          sort_order,
+          payload_jsonb,
+          client_updated_at,
+          created_at,
+          updated_at
+        )
+        values ($1, $2, $3, $4, $5::jsonb, $6, now(), now())
+      `,
+      [
+        ownerId,
+        toStorageText(category.id, `worldbook_category_${index + 1}`),
+        toStorageText(category.name, `分类 ${index + 1}`),
+        index,
+        stringifyJsonb(category),
+        toClientTimestamp(category.updatedAt || category.createdAt)
+      ]
+    );
+  }
+  for (const [index, entry] of entries.entries()) {
+    await db.query(
+      `
+        insert into worldbook_entries (
+          owner_id,
+          id,
+          category_id,
+          name,
+          text_content,
+          sort_order,
+          payload_jsonb,
+          client_updated_at,
+          created_at,
+          updated_at
+        )
+        values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, now(), now())
+      `,
+      [
+        ownerId,
+        toStorageText(entry.id, `worldbook_entry_${index + 1}`),
+        toStorageText(entry.categoryId) || null,
+        toStorageText(entry.name, `世界书 ${index + 1}`),
+        toStorageText(entry.text),
+        index,
+        stringifyJsonb(entry),
+        toClientTimestamp(entry.updatedAt || entry.createdAt)
+      ]
+    );
+  }
+  addTableWriteSummary(tableWrites, "worldbook_categories", categories.length);
+  addTableWriteSummary(tableWrites, "worldbook_entries", entries.length);
+}
+
+async function mirrorStorageItemToBusinessTables(db, item, tableWrites, ownerId = DEFAULT_STORAGE_OWNER_ID) {
+  const storageKey = String(item?.key || "").trim();
+  const valueJson = item?.valueJson;
+  switch (storageKey) {
+    case SETTINGS_KEY:
+      await replaceAppSettingsSnapshot(db, valueJson, ownerId, tableWrites);
+      return;
+    case PROFILE_KEY:
+      await replaceAppProfileSnapshot(db, valueJson, ownerId, tableWrites);
+      return;
+    case MESSAGE_CONTACTS_KEY:
+      await replaceChatContactsSnapshot(db, valueJson, ownerId, tableWrites);
+      return;
+    case MESSAGE_THREADS_KEY:
+      await replaceChatThreadsSnapshot(db, valueJson, ownerId, tableWrites);
+      return;
+    case WORLD_BOOKS_KEY:
+      await replaceWorldbooksSnapshot(db, valueJson, ownerId, tableWrites);
+      return;
+    case SCHEDULE_ENTRIES_KEY:
+      await replaceScheduleEntriesSnapshot(db, valueJson, ownerId, tableWrites);
+      return;
+    case MESSAGE_COMMON_PLACES_KEY:
+      await replaceCommonPlacesSnapshot(db, valueJson, ownerId, tableWrites);
+      return;
+    case MESSAGE_PRESENCE_STATE_KEY:
+      await replacePresenceSnapshot(db, valueJson, ownerId, tableWrites);
+      return;
+    default:
+      await upsertAppDocumentSnapshot(db, storageKey, valueJson, ownerId, tableWrites);
   }
 }
 
@@ -1082,6 +2216,7 @@ async function ensureCoreTables() {
     create index if not exists privacy_scan_ignore_entries_text_idx
       on privacy_scan_ignore_entries (text);
   `);
+  await ensureBusinessSnapshotTables(pool);
   await ensureMemoryTables(pool);
   return ensurePrivacyAllowlistSeeded(pool);
 }
@@ -2721,6 +3856,7 @@ app.post("/api/storage/import", async (request, response) => {
   let currentItem = null;
   let currentItemIndex = -1;
   const sanitizedKeys = [];
+  const dataTableWrites = [];
   try {
     await client.query("begin");
     await client.query(
@@ -2763,6 +3899,14 @@ app.post("/api/storage/import", async (request, response) => {
       if (result.rows[0]?.key) {
         savedKeys.push(result.rows[0].key);
       }
+      await mirrorStorageItemToBusinessTables(
+        client,
+        {
+          ...item,
+          valueJson: sanitizedValueJson
+        },
+        dataTableWrites
+      );
     }
 
     await client.query(
@@ -2779,7 +3923,8 @@ app.post("/api/storage/import", async (request, response) => {
           requestedKeys: items.length,
           importedKeys: savedKeys.length,
           keys: savedKeys,
-          sanitizedKeys
+          sanitizedKeys,
+          dataTableWrites
         })
       ]
     );
@@ -2790,7 +3935,8 @@ app.post("/api/storage/import", async (request, response) => {
       migrationRunId: runId,
       importedKeys: savedKeys.length,
       keys: savedKeys,
-      sanitizedKeys
+      sanitizedKeys,
+      dataTableWrites
     });
   } catch (error) {
     await client.query("rollback");
@@ -2814,7 +3960,8 @@ app.post("/api/storage/import", async (request, response) => {
             failedSource: currentItem?.source || "",
             failedValueType: describeStorageValue(currentItem?.valueJson),
             failedValuePreview: previewStorageValue(currentItem?.valueJson),
-            sanitizedKeys
+            sanitizedKeys,
+            dataTableWrites
           }),
           error?.message || "Unknown import error"
         ]

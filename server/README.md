@@ -37,6 +37,40 @@ The app will be available at:
 - `POST /api/memory/merge`
 - `POST /api/memory/import`
 
+## Storage business backup tables
+
+`POST /api/storage/import` still writes the full browser cache snapshot into
+`storage_records`. It also mirrors non-memory and non-allowlist cache keys into
+business tables so the cloud backup has both forms:
+
+- JSON backup: `storage_records`
+- Business table backup: `app_*`, `chat_*`, `schedule_entries`, `common_places`,
+  `presence_states`, and `worldbook_*`
+
+The first business-table version uses `owner_id = 'default'` because the app is
+currently single-user. It writes structured columns for common query fields and
+keeps the original object in `payload_jsonb` / `content_jsonb` as a lossless
+fallback.
+
+Current mapping:
+
+- Settings: `app_settings`, `app_api_configs`
+- Profile: `app_profiles`
+- Contacts: `chat_contacts`
+- Chat threads: `chat_conversations`, `chat_messages`
+- Schedule: `schedule_entries`
+- Common places: `common_places`
+- Presence state: `presence_states`
+- Worldbooks: `worldbook_categories`, `worldbook_entries`
+- Forum, bubble, plot, and privacy runtime leftovers: `app_documents`
+
+Memory, privacy allowlist, and scan-ignore terms keep using their dedicated
+tables instead of this generic document fallback:
+
+- `memory_items`, `memory_runtime_state`, `memory_events`
+- `privacy_allowlist_entries`
+- `privacy_scan_ignore_entries`
+
 ## Privacy allowlist table
 
 The server now maintains privacy allowlist entries in `privacy_allowlist_entries`.
