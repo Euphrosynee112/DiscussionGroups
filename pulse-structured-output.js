@@ -152,6 +152,267 @@
         };
       }
     },
+    memory_extract_v2: {
+      name: "memory_extract_v2",
+      deepseekMaxTokens: 2200,
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          items: {
+            type: "array",
+            description: "Candidate memories extracted from the recent conversation window.",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                action: {
+                  type: "string",
+                  enum: ["create", "reinforce", "supersede", "ignore"],
+                  description: "Suggested action for the merge layer."
+                },
+                memory_type: {
+                  type: "string",
+                  description: "Suggested memory type such as relationship, preference, fact, scene, habit, event, or constraint."
+                },
+                memory_subtype: {
+                  type: "string",
+                  description: "Optional subtype for narrower categorization."
+                },
+                semantic_key: {
+                  type: "string",
+                  description: "Optional semantic key for stable merge matching."
+                },
+                canonical_text: {
+                  type: "string",
+                  description: "Neutral, stable memory wording."
+                },
+                summary_short: {
+                  type: "string",
+                  description: "Short prompt-ready summary for active recall."
+                },
+                summary_faint: {
+                  type: "string",
+                  description: "Blurred or vague prompt-ready summary for faint recall."
+                },
+                base_importance: {
+                  type: "integer",
+                  minimum: 0,
+                  maximum: 100,
+                  description: "Importance score from 0 to 100."
+                },
+                confidence: {
+                  type: "number",
+                  minimum: 0,
+                  maximum: 1,
+                  description: "Confidence score from 0 to 1."
+                },
+                keywords: {
+                  type: "array",
+                  items: {
+                    type: "string"
+                  }
+                },
+                entity_refs: {
+                  type: "array",
+                  items: {
+                    anyOf: [{ type: "string" }, { type: "object" }]
+                  }
+                },
+                emotion_intensity: {
+                  type: "number",
+                  minimum: 0,
+                  maximum: 1
+                },
+                emotion_profile: {
+                  type: "object",
+                  additionalProperties: {
+                    type: "number"
+                  }
+                },
+                interaction_tendency: {
+                  type: "object",
+                  additionalProperties: {
+                    type: "number"
+                  }
+                },
+                emotion_summary: {
+                  type: "string"
+                },
+                source_excerpt: {
+                  type: "string"
+                },
+                target_memory_ref: {
+                  type: "string",
+                  description: "Existing memory id when the candidate reinforces or supersedes a known memory."
+                },
+                reason_note: {
+                  type: "string",
+                  description: "Short explanation of why this candidate should be merged that way."
+                }
+              },
+              required: ["action", "reason_note"]
+            }
+          }
+        },
+        required: ["items"]
+      },
+      promptHint: [
+        "请只返回 json，不要解释，不要 markdown。",
+        'json 示例：{"items":[{"action":"create","memory_type":"relationship","canonical_text":"她会在你说到公开关系时明显紧张。","summary_short":"她对公开关系这件事会紧张。","summary_faint":"你隐约记得她对公开关系有些顾虑。","base_importance":82,"confidence":0.84,"keywords":["公开关系","紧张"],"entity_refs":[],"emotion_intensity":0.58,"emotion_profile":{"紧张":0.74},"interaction_tendency":{"回避":0.46},"emotion_summary":"这件事会让她下意识紧张。","source_excerpt":"她说现在公开会有点慌。","reason_note":"这会持续影响她对亲密关系推进的反应。"}]}'
+      ].join("\n"),
+      repairExample: {
+        items: [
+          {
+            action: "create",
+            memory_type: "relationship",
+            canonical_text: "她会在你说到公开关系时明显紧张。",
+            summary_short: "她对公开关系这件事会紧张。",
+            summary_faint: "你隐约记得她对公开关系有些顾虑。",
+            base_importance: 82,
+            confidence: 0.84,
+            keywords: ["公开关系", "紧张"],
+            entity_refs: [],
+            emotion_intensity: 0.58,
+            emotion_profile: {
+              紧张: 0.74
+            },
+            interaction_tendency: {
+              回避: 0.46
+            },
+            emotion_summary: "这件事会让她下意识紧张。",
+            source_excerpt: "她说现在公开会有点慌。",
+            reason_note: "这会持续影响她对亲密关系推进的反应。"
+          }
+        ]
+      },
+      normalize(value) {
+        const source = Array.isArray(value) ? { items: value } : normalizeObjectValue(value);
+        if (!source) {
+          return null;
+        }
+        const rawItems = Array.isArray(source.items)
+          ? source.items
+          : Array.isArray(source.memories)
+            ? source.memories
+            : null;
+        if (!Array.isArray(rawItems)) {
+          return null;
+        }
+        const items = rawItems
+          .map((item) => {
+            const normalized = normalizeObjectValue(item);
+            if (!normalized) {
+              return null;
+            }
+            const action = String(normalized.action || "").trim().toLowerCase() || "create";
+            const canonicalText = String(
+              normalized.canonical_text ||
+                normalized.canonicalText ||
+                normalized.content ||
+                normalized.text ||
+                normalized.memory ||
+                normalized.summary ||
+                ""
+            ).trim();
+            const summaryShort = String(
+              normalized.summary_short || normalized.summaryShort || canonicalText
+            ).trim();
+            const reasonNote = String(
+              normalized.reason_note || normalized.reasonNote || ""
+            ).trim();
+            if (!["create", "reinforce", "supersede", "ignore"].includes(action)) {
+              return null;
+            }
+            if (action !== "ignore" && !canonicalText) {
+              return null;
+            }
+            if (!reasonNote) {
+              return null;
+            }
+            return {
+              action,
+              memory_type: String(
+                normalized.memory_type ||
+                  normalized.memoryType ||
+                  normalized.type ||
+                  normalized.kind ||
+                  normalized.category ||
+                  "fact"
+              )
+                .trim()
+                .toLowerCase(),
+              memory_subtype: String(
+                normalized.memory_subtype || normalized.memorySubtype || ""
+              ).trim(),
+              semantic_key: String(
+                normalized.semantic_key || normalized.semanticKey || ""
+              ).trim(),
+              canonical_text: canonicalText,
+              summary_short: summaryShort,
+              summary_faint: String(
+                normalized.summary_faint || normalized.summaryFaint || ""
+              ).trim(),
+              base_importance: clampInteger(
+                normalized.base_importance ??
+                  normalized.baseImportance ??
+                  normalized.importance ??
+                  normalized.score ??
+                  normalized.weight,
+                0,
+                100
+              ),
+              confidence: clampNumber(
+                normalized.confidence == null ? 0.72 : normalized.confidence,
+                0,
+                1
+              ),
+              keywords: Array.isArray(normalized.keywords)
+                ? normalized.keywords
+                    .map((entry) => String(entry || "").trim())
+                    .filter(Boolean)
+                : [],
+              entity_refs: Array.isArray(normalized.entity_refs)
+                ? normalized.entity_refs
+                : Array.isArray(normalized.entityRefs)
+                ? normalized.entityRefs
+                : [],
+              emotion_intensity:
+                normalized.emotion_intensity == null && normalized.emotionIntensity == null
+                  ? null
+                  : clampNumber(
+                      normalized.emotion_intensity ?? normalized.emotionIntensity,
+                      0,
+                      1
+                    ),
+              emotion_profile: normalizeObjectValue(
+                normalized.emotion_profile || normalized.emotionProfile
+              ) || {},
+              interaction_tendency: normalizeObjectValue(
+                normalized.interaction_tendency || normalized.interactionTendency
+              ) || {},
+              emotion_summary: String(
+                normalized.emotion_summary || normalized.emotionSummary || ""
+              ).trim(),
+              source_excerpt: String(
+                normalized.source_excerpt || normalized.sourceExcerpt || ""
+              ).trim(),
+              target_memory_ref: String(
+                normalized.target_memory_ref ||
+                  normalized.targetMemoryRef ||
+                  normalized.target_memory_id ||
+                  normalized.targetMemoryId ||
+                  ""
+              ).trim(),
+              reason_note: reasonNote
+            };
+          })
+          .filter(Boolean);
+        return {
+          items
+        };
+      }
+    },
     auto_schedule_fill_v1: {
       name: "auto_schedule_fill_v1",
       deepseekMaxTokens: 2200,
@@ -331,6 +592,14 @@
 
   function clampInteger(value, min, max) {
     const parsed = Number.parseInt(String(value ?? ""), 10);
+    if (!Number.isFinite(parsed)) {
+      return min;
+    }
+    return Math.max(min, Math.min(max, parsed));
+  }
+
+  function clampNumber(value, min, max) {
+    const parsed = Number(value);
     if (!Number.isFinite(parsed)) {
       return min;
     }

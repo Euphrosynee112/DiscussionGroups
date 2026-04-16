@@ -664,11 +664,17 @@
           createTemplateItem("avoid_noise", "避免普通闲聊", "不要把普通闲聊、礼貌回应、表层信息重复写成核心记忆。")
         ],
         output_standard: [
-          createTemplateItem("json_format", "JSON 格式", "输出必须是 JSON，对象格式固定为：{\"memories\":[{\"type\":\"core|scene\",\"content\":\"...\",\"importance\":1-100}]}"),
-          createTemplateItem("importance_rule", "重要度", "importance 使用整数。1 越低越不重要，100 越重要。"),
-          createTemplateItem("content_tone", "表述语气", "memory content 请尽量使用客观、克制、委婉的描述，只写能从对话稳定归纳出的信息，不夸大，不下过重判断。"),
-          createTemplateItem("avoid_ambiguous_words", "避免歧义词", "避免使用容易引起歧义、刺激感过强、带明显定性或压迫感的表达；如需表达相关含义，请改写成更中性、温和的说法。"),
-          createTemplateItem("max_count", "数量限制", "最多输出 6 条；如果没有值得保留的内容，就输出 {\"memories\":[]}。"),
+          createTemplateItem("json_format", "JSON 格式", "输出必须是 JSON，对象格式固定为：{\"items\":[...]}。每条 item 表示一条候选记忆，而不是最终数据库记录。"),
+          createTemplateItem("action_rule", "动作字段", "action 只能是 create / reinforce / supersede / ignore。语义重复、只是再次确认时优先 reinforce；新事实替代旧事实时用 supersede；没有留存价值时用 ignore。"),
+          createTemplateItem("target_rule", "命中旧记忆", "如果你明确命中某条已有记忆，请把那条记忆的 memory_id 填进 target_memory_ref。尤其是 reinforce / supersede，优先给 target_memory_ref。"),
+          createTemplateItem("type_rule", "类型字段", "memory_type 优先使用 relationship / preference / fact / event / scene / habit / constraint。memory_subtype 可选，只在你很明确时填写。"),
+          createTemplateItem("content_tone", "表述语气", "canonical_text 和 summary_short 请尽量使用客观、克制、委婉的描述，只写能从对话稳定归纳出的信息，不夸大，不下过重判断。"),
+          createTemplateItem("faint_rule", "模糊记忆", "summary_faint 要写成“隐约记得”的版本，比 summary_short 更模糊、更像残留印象。"),
+          createTemplateItem("importance_rule", "重要度与置信度", "base_importance 使用 0~100 整数；confidence 使用 0~1 小数。"),
+          createTemplateItem("emotion_rule", "情绪字段", "如果这条记忆带有持续情绪影响，可以填写 emotion_intensity、emotion_profile、interaction_tendency、emotion_summary；没有就留空或给空对象。"),
+          createTemplateItem("reason_rule", "原因说明", "reason_note 必填，用一句短话说明为什么建议这样处理。"),
+          createTemplateItem("ignore_rule", "ignore 规则", "如果 action = ignore，就只保留必要字段：action、reason_note；不要为了凑字段硬写内容。"),
+          createTemplateItem("max_count", "数量限制", "最多输出 5 条；如果没有值得保留的内容，就输出 {\"items\":[]}。"),
           createTemplateItem("plain_json", "纯 JSON", "不要输出 markdown，不要代码块，不要解释，不要额外字段。")
         ]
       }

@@ -10131,18 +10131,45 @@ function buildMemorySummaryTranscript(messages = []) {
 }
 
 function buildExistingMemoryDigest(contactId = "") {
-  const memories = getPreferredPromptMemoriesForContact(contactId).slice(0, 16);
-  if (!memories.length) {
-    return "暂无已有记忆。";
+  const resolvedContactId = String(contactId || "").trim();
+  if (!resolvedContactId) {
+    return "[]";
   }
-  return memories
-    .map(
-      (item) =>
-        `- [${item.type === "core" ? "核心" : "情景"} ${item.importance}/100] ${String(
-          item.content || ""
-        ).trim()}`
-    )
-    .join("\n");
+  const cachedCloudItems = Array.isArray(getCachedCloudMemoriesForContact(resolvedContactId)?.items)
+    ? getCachedCloudMemoriesForContact(resolvedContactId).items
+    : [];
+  const cloudReferenceItems = cachedCloudItems
+    .filter((item) => ["active", "faint", "dormant"].includes(String(item.status || "").trim().toLowerCase()))
+    .slice(0, 12)
+    .map((item) => ({
+      memory_id: String(item.id || "").trim(),
+      status: String(item.status || "").trim().toLowerCase() || "active",
+      memory_type: String(item.memoryType || item.memory_type || "").trim() || "relationship",
+      semantic_key: String(item.semanticKey || "").trim(),
+      summary_short: String(item.summaryShort || item.canonicalText || "").trim(),
+      canonical_text: String(item.canonicalText || item.summaryShort || "").trim()
+    }))
+    .filter((item) => item.memory_id && item.summary_short);
+  if (cloudReferenceItems.length) {
+    return JSON.stringify(cloudReferenceItems, null, 2);
+  }
+
+  const fallbackMemories = getPreferredPromptMemoriesForContact(resolvedContactId).slice(0, 12);
+  if (!fallbackMemories.length) {
+    return "[]";
+  }
+  return JSON.stringify(
+    fallbackMemories.map((item) => ({
+      memory_id: String(item.id || "").trim(),
+      status: "active",
+      memory_type: item.type === "scene" ? "scene" : "relationship",
+      semantic_key: "",
+      summary_short: String(item.content || "").trim(),
+      canonical_text: String(item.content || "").trim()
+    })),
+    null,
+    2
+  );
 }
 
 function buildMemorySummarySystemPrompt(profile, contact) {
@@ -10473,38 +10500,269 @@ function parseVideoCallEventPayload(value) {
   return parseConversationCallEventPayload(value, "video");
 }
 
-function parseMemorySummaryPayload(payload, contactId = "") {
+function normalizeMemoryExtractionAction(value = "", fallback = "create") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["create", "reinforce", "supersede", "ignore"].includes(normalized)) {
+    return normalized;
+  }
+  return ["create", "reinforce", "supersede", "ignore"].includes(String(fallback || "").trim().toLowerCase())
+    ? String(fallback || "").trim().toLowerCase()
+    : "create";
+}
+
+function normalizeMemoryExtractionScore(value, fallback = 0) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  const normalized = numeric > 1 ? numeric / 100 : numeric;
+  return Math.min(1, Math.max(0, normalized));
+}
+
+function normalizeMemoryExtractionTextArray(value, fallback = []) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) =>
+        item && typeof item === "object" ? item : String(item || "").trim()
+      )
+      .filter((item) => (typeof item === "string" ? Boolean(item) : Boolean(item)));
+  }
+  const text = String(value || "").trim();
+  return text ? [text] : fallback;
+}
+
+function normalizeMemoryExtractionScoreMap(value, fallback = {}) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  if (!source) {
+    return fallback;
+  }
+  const next = {};
+  Object.entries(source).forEach(([key, rawValue]) => {
+    const normalizedKey = String(key || "").trim();
+    if (!normalizedKey) {
+      return;
+    }
+    next[normalizedKey] = normalizeMemoryExtractionScore(rawValue, 0);
+  });
+  return Object.keys(next).length ? next : fallback;
+}
+
+function buildDefaultFaintMemorySummary(summaryShort = "", canonicalText = "") {
+  const sourceText = String(summaryShort || canonicalText || "").trim();
+  if (!sourceText) {
+    return "";
+  }
+  const shortenedText = sourceText.length > 48 ? `${sourceText.slice(0, 48)}…` : sourceText;
+  return `你隐约记得：${shortenedText}`;
+}
+
+function normalizeExtractedMemoryCandidate(item = {}, index = 0, contactId = "") {
+  const source = item && typeof item === "object" ? item : {};
+  const canonicalText = String(
+    source.canonicalText ||
+      source.canonical_text ||
+      source.content ||
+      source.text ||
+      source.memory ||
+      source.summary ||
+      ""
+  ).trim();
+  const summaryShort = String(
+    source.summaryShort || source.summary_short || canonicalText
+  ).trim();
+  const summaryFaint = String(source.summaryFaint || source.summary_faint || "").trim();
+  return {
+    action: normalizeMemoryExtractionAction(source.action, canonicalText ? "create" : "ignore"),
+    contactId: String(contactId || source.contactId || source.contact_id || "").trim(),
+    memoryType: String(
+      source.memoryType || source.memory_type || source.type || source.kind || source.category || "fact"
+    )
+      .trim()
+      .toLowerCase(),
+    memorySubtype: String(source.memorySubtype || source.memory_subtype || "").trim(),
+    semanticKey: String(source.semanticKey || source.semantic_key || "").trim(),
+    canonicalText,
+    summaryShort,
+    summaryFaint: summaryFaint || buildDefaultFaintMemorySummary(summaryShort, canonicalText),
+    baseImportance: clampNumber(
+      Math.round(
+        Number(
+          source.baseImportance ?? source.base_importance ?? source.importance ?? source.score ?? source.weight ?? 50
+        ) || 50
+      ),
+      0,
+      100
+    ),
+    confidence: normalizeMemoryExtractionScore(
+      source.confidence ?? source.confidence_score ?? source.confidenceScore,
+      0.72
+    ),
+    keywords: normalizeMemoryExtractionTextArray(source.keywords, []),
+    entityRefs: normalizeMemoryExtractionTextArray(
+      source.entityRefs || source.entity_refs,
+      []
+    ),
+    emotionIntensity:
+      source.emotionIntensity == null && source.emotion_intensity == null
+        ? null
+        : normalizeMemoryExtractionScore(source.emotionIntensity ?? source.emotion_intensity, 0),
+    emotionProfile: normalizeMemoryExtractionScoreMap(
+      source.emotionProfile || source.emotion_profile,
+      {}
+    ),
+    interactionTendency: normalizeMemoryExtractionScoreMap(
+      source.interactionTendency || source.interaction_tendency,
+      {}
+    ),
+    emotionSummary: String(source.emotionSummary || source.emotion_summary || "").trim(),
+    sourceExcerpt: String(source.sourceExcerpt || source.source_excerpt || "").trim(),
+    targetMemoryRef: String(
+      source.targetMemoryRef || source.target_memory_ref || source.targetMemoryId || source.target_memory_id || ""
+    ).trim(),
+    reasonNote: String(source.reasonNote || source.reason_note || "").trim(),
+    metadata: source.metadata && typeof source.metadata === "object" && !Array.isArray(source.metadata)
+      ? source.metadata
+      : {},
+    localId: `memory_extract_candidate_${Date.now()}_${index}_${hashText(
+      `${contactId}-${canonicalText}-${summaryShort}-${index}`
+    )}`
+  };
+}
+
+function buildMemoryExtractionSourceRef(conversation = null, messages = [], options = {}) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const normalizedMessages = Array.isArray(messages) ? messages.filter(Boolean) : [];
+  const firstMessage = normalizedMessages[0] || null;
+  const lastMessage = normalizedMessages[normalizedMessages.length - 1] || null;
+  return {
+    conversationId: String(conversation?.id || requestOptions.conversationId || "").trim(),
+    contactId: String(conversation?.contactId || requestOptions.contactId || "").trim(),
+    messageCount: normalizedMessages.length,
+    firstMessageAt: Number(firstMessage?.createdAt) || 0,
+    lastMessageAt: Number(lastMessage?.createdAt) || 0,
+    extractionMode: String(requestOptions.extractionMode || "").trim(),
+    startIndex: Number(requestOptions.startIndex) || 0,
+    endIndex:
+      Number(requestOptions.endIndex) ||
+      (Number(requestOptions.startIndex) || 0) + normalizedMessages.length
+  };
+}
+
+function parseMemorySummaryPayload(payload, contactId = "", options = {}) {
+  const requestOptions = options && typeof options === "object" ? options : {};
   const parsed =
-    (payload && typeof payload === "object" && Array.isArray(payload.memories) ? payload : null) ||
+    (payload &&
+    typeof payload === "object" &&
+    (Array.isArray(payload.items) || Array.isArray(payload.memories))
+      ? payload
+      : null) ||
     parseJsonLikeContent(payload) ||
     parseJsonLikeContent(resolveMessage(payload));
 
   const rawMemories = Array.isArray(parsed)
     ? parsed
+    : Array.isArray(parsed?.items)
+    ? parsed.items
     : Array.isArray(parsed?.memories)
     ? parsed.memories
     : [];
 
-  return rawMemories
-    .map((item, index) =>
-      normalizeMessageMemory(
-        {
-          id: `message_memory_${Date.now()}_${index}_${hashText(
-            `${contactId}-${item?.content || item?.text || item?.memory || ""}`
-          )}`,
-          contactId,
-          type: item?.type || item?.memoryType || item?.kind || item?.category,
-          content: item?.content || item?.text || item?.memory || item?.summary,
-          importance: item?.importance || item?.score || item?.weight,
-          source: "summary",
-          createdAt: Date.now(),
-          updatedAt: Date.now()
-        },
-        index
+  return {
+    batchRef:
+      String(parsed?.batchRef || parsed?.batch_ref || "").trim() ||
+      `memory_extract_${Date.now()}_${hashText(`${contactId}-${rawMemories.length}`)}`,
+    contactId: String(contactId || parsed?.contactId || parsed?.contact_id || "").trim(),
+    sourceRef:
+      parsed?.sourceRef && typeof parsed.sourceRef === "object"
+        ? parsed.sourceRef
+        : parsed?.source_ref && typeof parsed.source_ref === "object"
+        ? parsed.source_ref
+        : requestOptions.sourceRef || {},
+    items: rawMemories
+      .map((item, index) => normalizeExtractedMemoryCandidate(item, index, contactId))
+      .filter((item) =>
+        item.action === "ignore"
+          ? Boolean(item.reasonNote)
+          : Boolean(item.contactId && item.canonicalText)
       )
-    )
-    .filter((item) => item.contactId && item.content)
-    .slice(0, 6);
+      .slice(0, 5)
+  };
+}
+
+function syncLocalMemoriesFromCloudContact(contactId = "", cloudItems = []) {
+  const resolvedContactId = String(contactId || "").trim();
+  if (!resolvedContactId) {
+    return [];
+  }
+  const promptEntries = (Array.isArray(cloudItems) ? cloudItems : [])
+    .filter((item) => ["active", "faint", "dormant"].includes(String(item.status || "").trim().toLowerCase()))
+    .map((item) => mapCloudMemoryItemToPromptEntry(item))
+    .filter((item) => item.contactId === resolvedContactId && item.content);
+  const otherEntries = (state.memories || []).filter((item) => item.contactId !== resolvedContactId);
+  state.memories = mergeMemories(otherEntries, promptEntries);
+  persistMessageMemories();
+  return promptEntries;
+}
+
+async function mergeExtractedMemoryBatchToCloud(contact, extractionBatch = {}, options = {}) {
+  const resolvedContactId = String(contact?.id || extractionBatch?.contactId || "").trim();
+  if (!resolvedContactId) {
+    throw new Error("缺少角色 ID，无法写入记忆。");
+  }
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const batch =
+    extractionBatch && typeof extractionBatch === "object"
+      ? extractionBatch
+      : parseMemorySummaryPayload(extractionBatch, resolvedContactId, requestOptions);
+  const normalizedBatch = {
+    batchRef:
+      String(batch.batchRef || batch.batch_ref || "").trim() ||
+      `memory_extract_${Date.now()}_${hashText(resolvedContactId)}`,
+    contactId: resolvedContactId,
+    sourceRef:
+      batch.sourceRef && typeof batch.sourceRef === "object"
+        ? batch.sourceRef
+        : batch.source_ref && typeof batch.source_ref === "object"
+        ? batch.source_ref
+        : requestOptions.sourceRef || {},
+    items: (Array.isArray(batch.items) ? batch.items : [])
+      .map((item, index) => normalizeExtractedMemoryCandidate(item, index, resolvedContactId))
+      .filter((item) =>
+        item.action === "ignore" ? Boolean(item.reasonNote) : Boolean(item.canonicalText)
+      )
+  };
+  if (!normalizedBatch.items.length) {
+    return {
+      ok: true,
+      batchId: normalizedBatch.batchRef,
+      summary: {
+        requestedCount: 0,
+        createdCount: 0,
+        reinforcedCount: 0,
+        supersededCount: 0,
+        ignoredCount: 0,
+        appliedCount: 0
+      },
+      results: []
+    };
+  }
+  await ensureCloudMemoriesReady(resolvedContactId, {
+    importLocalFallback: true
+  });
+  const payload = await requestMessagesStorageApi("/api/memory/merge", {
+    method: "POST",
+    body: JSON.stringify({
+      ...normalizedBatch,
+      actorType: requestOptions.actorType || "frontend",
+      sourceKind: requestOptions.sourceKind || "memory_extract",
+      reasonCode: requestOptions.reasonCode || "memory_summary_extract"
+    })
+  });
+  const refreshedCloudItems = await fetchCloudMemoriesForContact(resolvedContactId, {
+    force: true
+  });
+  syncLocalMemoriesFromCloudContact(resolvedContactId, refreshedCloudItems);
+  return payload;
 }
 
 async function requestMemorySummaryItems(
@@ -10512,19 +10770,21 @@ async function requestMemorySummaryItems(
   profile,
   contact,
   messages = [],
-  promptSettings = {}
+  promptSettings = {},
+  options = {}
 ) {
+  const requestOptions = options && typeof options === "object" ? options : {};
   const apiSettings = resolveDedicatedApiSettings(settings, "summaryApiEnabled", "summaryApiConfigId");
   const requestEndpoint = validateApiSettings(apiSettings, "记忆总结");
   const transcript = buildMemorySummaryTranscript(messages);
   const systemPrompt = buildMemorySummarySystemPrompt(profile, contact);
   const structuredOutputContext = createStructuredOutputContext(
     apiSettings,
-    "memory_extract_v1"
+    "memory_extract_v2"
   );
   const userInstruction = appendStructuredOutputPromptHint(
     [
-      "已有记忆（用于去重；如果语义重复，请不要重新生成）：",
+      "已有记忆参考（如果语义重复，请优先输出 reinforce；如果新事实取代旧事实，请输出 supersede；明确命中某条时请填写 target_memory_ref）：",
       buildExistingMemoryDigest(contact.id),
       "",
       "需要整理的新对话：",
@@ -10628,7 +10888,9 @@ async function requestMemorySummaryItems(
     }
 
     const memoryItems = decodeValueWithPrivacy(
-      parseMemorySummaryPayload(structuredPayload || repairResult?.payload || payload, contact.id),
+      parseMemorySummaryPayload(structuredPayload || repairResult?.payload || payload, contact.id, {
+        sourceRef: requestOptions.sourceRef || {}
+      }),
       privacySession
     );
     appendApiLog({
@@ -10642,7 +10904,7 @@ async function requestMemorySummaryItems(
       originalResponseText: repairResult ? rawResponse : "",
       originalResponseBody: repairResult ? payload : null,
       summary: encodeTextWithPrivacy(
-        `联系人：${contact.name} · 已提取 ${memoryItems.length} 条记忆`,
+        `联系人：${contact.name} · 已提取 ${memoryItems.items.length} 条候选记忆`,
         privacySession
       )
     });
@@ -10660,27 +10922,41 @@ async function requestMemorySummaryItems(
   }
 }
 
-function applyExtractedMemoryItems(contact, memoryItems = [], options = {}) {
+async function applyExtractedMemoryItems(contact, memoryItems = [], options = {}) {
   const requestOptions = options && typeof options === "object" ? options : {};
-  const nextMemoryItems = Array.isArray(memoryItems) ? memoryItems.filter(Boolean) : [];
-  if (nextMemoryItems.length) {
-    state.memories = mergeMemories(state.memories, nextMemoryItems);
-    persistMessageMemories();
-    void syncLocalMemoryEntriesToCloud(nextMemoryItems, {
-      summaryFaint: "你隐约对这件事有一点印象。",
+  const extractionBatch = parseMemorySummaryPayload(memoryItems, String(contact?.id || "").trim(), {
+    sourceRef: requestOptions.sourceRef || {}
+  });
+  let mergeResult = {
+    summary: {
+      requestedCount: extractionBatch.items.length,
+      appliedCount: 0,
+      createdCount: 0,
+      reinforcedCount: 0,
+      supersededCount: 0,
+      ignoredCount: extractionBatch.items.length
+    }
+  };
+  if (extractionBatch.items.length) {
+    mergeResult = await mergeExtractedMemoryBatchToCloud(contact, extractionBatch, {
+      sourceRef: extractionBatch.sourceRef,
+      sourceKind: "memory_extract",
       reasonCode: "memory_summary_extract"
     });
   }
+  const appliedCount = Number(mergeResult?.summary?.appliedCount) || 0;
   if (state.memoryViewerOpen) {
     renderMemoryViewer();
     if (state.memorySelectedContactId === String(contact?.id || "").trim()) {
       const successMessage =
         requestOptions.successMessage ||
-        `已为 ${contact?.name || "该角色"} 提取 ${nextMemoryItems.length} 条记忆。`;
+        (appliedCount > 0
+          ? `已为 ${contact?.name || "该角色"} 写入 ${appliedCount} 条记忆（新建 ${mergeResult?.summary?.createdCount || 0} / 强化 ${mergeResult?.summary?.reinforcedCount || 0} / 覆盖 ${mergeResult?.summary?.supersededCount || 0}）。`
+          : `已为 ${contact?.name || "该角色"} 完成记忆提取，但没有新增可写入的记忆。`);
       setMemoryStatus(successMessage, "success");
     }
   }
-  return nextMemoryItems.length;
+  return appliedCount;
 }
 
 function selectConversationHistory(messages = [], historyRounds = DEFAULT_MESSAGE_HISTORY_ROUNDS) {
@@ -10759,18 +11035,21 @@ async function runManualConversationMemorySummary(roundCountInput = "", preferre
   await ensureCloudMemoriesReady(contact.id, {
     importLocalFallback: true
   });
+  const sourceRef = buildMemoryExtractionSourceRef(conversation, messagesToSummarize, {
+    extractionMode: "manual_summary"
+  });
   const memoryItems = await requestMemorySummaryItems(
     settings,
     state.profile,
     contact,
     messagesToSummarize,
-    promptSettings
+    promptSettings,
+    {
+      sourceRef
+    }
   );
-  const extractedCount = applyExtractedMemoryItems(contact, memoryItems, {
-    successMessage:
-      memoryItems.length > 0
-        ? `已为 ${contact.name} 总结最近 ${rounds} 轮，并提取 ${memoryItems.length} 条记忆。`
-        : `已为 ${contact.name} 总结最近 ${rounds} 轮，但没有提取出新的记忆。`
+  const extractedCount = await applyExtractedMemoryItems(contact, memoryItems, {
+    sourceRef
   });
   return {
     contact,
@@ -12538,15 +12817,23 @@ async function maybeExtractConversationMemories(conversationId, settings, prompt
   }
 
   try {
+    const sourceRef = buildMemoryExtractionSourceRef(conversation, messagesToSummarize, {
+      extractionMode: "auto_summary",
+      startIndex,
+      endIndex: conversation.messages.length
+    });
     const memoryItems = await requestMemorySummaryItems(
       settings,
       state.profile,
       contact,
       messagesToSummarize,
-      resolvedPromptSettings
+      resolvedPromptSettings,
+      {
+        sourceRef
+      }
     );
-    applyExtractedMemoryItems(contact, memoryItems, {
-      successMessage: `已为 ${contact.name} 提取 ${memoryItems.length} 条记忆。`
+    await applyExtractedMemoryItems(contact, memoryItems, {
+      sourceRef
     });
     const latestConversation = getConversationById(conversationId);
     if (!latestConversation) {

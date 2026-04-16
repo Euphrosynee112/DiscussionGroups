@@ -19,6 +19,7 @@ const PRIVACY_ALLOWLIST_CATEGORIES = new Set(["TERM", "TITLE", "NAME"]);
 const PRIVACY_ALLOWLIST_NAME_LEVELS = new Set(["FULL", "COMMON", "NICK", "PET", "HONOR"]);
 const MEMORY_SCOPE_TYPES = new Set(["contact", "global", "thread", "scene"]);
 const MEMORY_STATUSES = new Set(["active", "faint", "dormant", "archived", "superseded"]);
+const MEMORY_EXTRACTION_ACTIONS = new Set(["create", "reinforce", "supersede", "ignore"]);
 const MEMORY_EVENT_TYPES = new Set([
   "created",
   "observed",
@@ -1080,6 +1081,14 @@ function normalizeMemoryType(value = "", fallback = "fact") {
   return normalized || fallback;
 }
 
+function normalizeMemoryExtractionAction(value = "", fallback = "create") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (MEMORY_EXTRACTION_ACTIONS.has(normalized)) {
+    return normalized;
+  }
+  return MEMORY_EXTRACTION_ACTIONS.has(fallback) ? fallback : "create";
+}
+
 function normalizeJsonObjectValue(value, fallback = {}) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : fallback;
 }
@@ -1097,6 +1106,30 @@ function normalizeJsonArrayValue(value, fallback = []) {
 function normalizeFiniteNumber(value, fallback = 0) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function clampIntegerValue(value, min = 0, max = 100, fallback = 0) {
+  const numeric = Math.round(normalizeFiniteNumber(value, fallback));
+  return Math.min(max, Math.max(min, numeric));
+}
+
+function normalizeConfidenceValue(value, fallback = 0.7) {
+  const numeric = normalizeFiniteNumber(value, fallback);
+  const normalized = numeric > 1 ? numeric / 100 : numeric;
+  return Math.min(1, Math.max(0, normalized));
+}
+
+function normalizeScoreMap(value, fallback = {}) {
+  const source = normalizeJsonObjectValue(value, {});
+  const next = {};
+  Object.entries(source).forEach(([key, rawValue]) => {
+    const normalizedKey = String(key || "").trim();
+    if (!normalizedKey) {
+      return;
+    }
+    next[normalizedKey] = normalizeConfidenceValue(rawValue, 0);
+  });
+  return Object.keys(next).length ? next : fallback;
 }
 
 function normalizeScoreNumber(value, fallback = 0) {
@@ -1129,6 +1162,194 @@ function hashMemoryText(value = "") {
     hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
   }
   return hash.toString(36);
+}
+
+function canonicalizeMemoryCompareText(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[，。！？、,.!?；;:“”"'（）()【】\[\]《》<>—\-]/g, "");
+}
+
+function memoryTextsLookSimilar(left = "", right = "") {
+  const leftText = canonicalizeMemoryCompareText(left);
+  const rightText = canonicalizeMemoryCompareText(right);
+  if (!leftText || !rightText) {
+    return false;
+  }
+  if (leftText === rightText) {
+    return true;
+  }
+  const shorter = leftText.length <= rightText.length ? leftText : rightText;
+  const longer = shorter === leftText ? rightText : leftText;
+  return shorter.length >= 8 && longer.includes(shorter);
+}
+
+function choosePreferredMemoryText(current = "", incoming = "") {
+  const currentText = String(current || "").trim();
+  const incomingText = String(incoming || "").trim();
+  if (!incomingText) {
+    return currentText;
+  }
+  if (!currentText) {
+    return incomingText;
+  }
+  if (!memoryTextsLookSimilar(currentText, incomingText)) {
+    return currentText;
+  }
+  return currentText.length >= incomingText.length ? currentText : incomingText;
+}
+
+function mergeUniqueJsonArray(existing = [], incoming = []) {
+  const seen = new Set();
+  const merged = [];
+  [...normalizeJsonArrayValue(existing, []), ...normalizeJsonArrayValue(incoming, [])].forEach((item) => {
+    const key =
+      item && typeof item === "object"
+        ? JSON.stringify(item)
+        : String(item || "").trim();
+    if (!key || seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    merged.push(item && typeof item === "string" ? key : item);
+  });
+  return merged;
+}
+
+function mergeScoreMapsMax(existing = {}, incoming = {}) {
+  const current = normalizeScoreMap(existing, {});
+  const next = normalizeScoreMap(incoming, {});
+  const merged = { ...current };
+  Object.entries(next).forEach(([key, value]) => {
+    merged[key] = Math.max(normalizeConfidenceValue(merged[key], 0), normalizeConfidenceValue(value, 0));
+  });
+  return merged;
+}
+
+function normalizeMemoryCandidateInput(input = {}, fallback = {}) {
+  const source = input && typeof input === "object" ? input : {};
+  const fallbackItem = fallback && typeof fallback === "object" ? fallback : {};
+  const action = normalizeMemoryExtractionAction(
+    getInputValue(source, "action", "action") ?? fallbackItem.action,
+    fallbackItem.action || "create"
+  );
+  const memoryType = normalizeMemoryType(
+    getInputValue(source, "memoryType", "memory_type") ??
+      getInputValue(source, "type", "kind") ??
+      fallbackItem.memoryType,
+    fallbackItem.memoryType || "fact"
+  );
+  const canonicalText = normalizeRequiredText(
+    getInputValue(source, "canonicalText", "canonical_text") ??
+      source.content ??
+      source.text ??
+      source.memory ??
+      source.summary ??
+      fallbackItem.canonicalText
+  );
+  const summaryShort =
+    normalizeRequiredText(
+      getInputValue(source, "summaryShort", "summary_short") ?? fallbackItem.summaryShort
+    ) || canonicalText;
+  const summaryFaint = normalizeRequiredText(
+    getInputValue(source, "summaryFaint", "summary_faint") ?? fallbackItem.summaryFaint
+  );
+  const semanticKey = normalizeRequiredText(
+    getInputValue(source, "semanticKey", "semantic_key") ?? fallbackItem.semanticKey
+  );
+  const baseImportance = clampIntegerValue(
+    getInputValue(source, "baseImportance", "base_importance") ??
+      source.importance ??
+      source.score ??
+      source.weight ??
+      fallbackItem.baseImportance,
+    0,
+    100,
+    fallbackItem.baseImportance ?? 50
+  );
+  const confidence = normalizeConfidenceValue(
+    getInputValue(source, "confidence", "confidence") ??
+      source.confidenceScore ??
+      source.confidence_score ??
+      fallbackItem.confidence,
+    fallbackItem.confidence ?? 0.7
+  );
+  const targetMemoryRef = normalizeOptionalText(
+    getInputValue(source, "targetMemoryRef", "target_memory_ref") ??
+      source.targetMemoryId ??
+      source.target_memory_id ??
+      fallbackItem.targetMemoryRef
+  );
+  return {
+    action,
+    memoryType,
+    memorySubtype: normalizeOptionalText(
+      getInputValue(source, "memorySubtype", "memory_subtype") ?? fallbackItem.memorySubtype
+    ),
+    semanticKey,
+    canonicalText,
+    summaryShort,
+    summaryFaint,
+    baseImportance,
+    confidence,
+    keywords: normalizeJsonArrayValue(getInputValue(source, "keywords", "keywords"), fallbackItem.keywords || []),
+    entityRefs: normalizeJsonArrayValue(
+      getInputValue(source, "entityRefs", "entity_refs"),
+      fallbackItem.entityRefs || []
+    ),
+    emotionIntensity:
+      getInputValue(source, "emotionIntensity", "emotion_intensity") == null
+        ? fallbackItem.emotionIntensity ?? null
+        : normalizeConfidenceValue(getInputValue(source, "emotionIntensity", "emotion_intensity"), 0),
+    emotionProfile: normalizeScoreMap(
+      getInputValue(source, "emotionProfile", "emotion_profile"),
+      fallbackItem.emotionProfile || {}
+    ),
+    interactionTendency: normalizeScoreMap(
+      getInputValue(source, "interactionTendency", "interaction_tendency"),
+      fallbackItem.interactionTendency || {}
+    ),
+    emotionSummary: normalizeRequiredText(
+      getInputValue(source, "emotionSummary", "emotion_summary") ?? fallbackItem.emotionSummary
+    ),
+    sourceExcerpt: normalizeOptionalText(
+      getInputValue(source, "sourceExcerpt", "source_excerpt") ?? fallbackItem.sourceExcerpt
+    ),
+    targetMemoryRef,
+    reasonNote: normalizeOptionalText(
+      getInputValue(source, "reasonNote", "reason_note") ?? fallbackItem.reasonNote
+    ),
+    metadata: normalizeJsonObjectValue(getInputValue(source, "metadata", "metadata"), {})
+  };
+}
+
+function normalizeMemoryMergeBatchInput(payload = {}) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const contactId = normalizeRequiredText(
+    getInputValue(source, "contactId", "contact_id") ?? source.contact
+  );
+  const rawItems = Array.isArray(source.items)
+    ? source.items
+    : Array.isArray(source.memories)
+      ? source.memories
+      : Array.isArray(source)
+        ? source
+        : [];
+  return {
+    batchRef:
+      normalizeRequiredText(getInputValue(source, "batchRef", "batch_ref")) || randomUUID(),
+    contactId,
+    sourceRef: normalizeJsonObjectValue(getInputValue(source, "sourceRef", "source_ref"), {}),
+    items: rawItems
+      .map((item) => normalizeMemoryCandidateInput(item))
+      .filter((item) =>
+        item.action === "ignore"
+          ? Boolean(item.reasonNote)
+          : Boolean(contactId && (item.canonicalText || item.targetMemoryRef || item.semanticKey))
+      )
+      .slice(0, 8)
+  };
 }
 
 function mapMemoryItemRow(row = {}) {
@@ -1625,6 +1846,437 @@ async function createMemoryItemInDb(db, rawItem = {}, options = {}) {
     item: mapMemoryItemRow(savedItem),
     runtimeState: mapMemoryRuntimeStateRow(runtimeResult.rows[0]),
     event
+  };
+}
+
+async function findMemoryItemRowById(db, id = "", contactId = "") {
+  const normalizedId = normalizeMemoryUuid(id);
+  const resolvedContactId = normalizeRequiredText(contactId);
+  if (!normalizedId) {
+    return null;
+  }
+  const result = await db.query(
+    `
+      select *
+      from memory_items
+      where id = $1
+        and ($2 = '' or contact_id = $2)
+      limit 1
+    `,
+    [normalizedId, resolvedContactId]
+  );
+  return result.rows[0] || null;
+}
+
+async function resolveMemoryMergeTargetRow(db, batch = {}, candidate = {}) {
+  const contactId = normalizeRequiredText(batch.contactId);
+  if (!contactId) {
+    return null;
+  }
+  const directTarget = await findMemoryItemRowById(db, candidate.targetMemoryRef, contactId);
+  if (directTarget) {
+    return directTarget;
+  }
+  const semanticKey = normalizeRequiredText(candidate.semanticKey);
+  if (semanticKey) {
+    const semanticResult = await db.query(
+      `
+        select *
+        from memory_items
+        where contact_id = $1
+          and semantic_key = $2
+        order by updated_at desc
+        limit 1
+      `,
+      [contactId, semanticKey]
+    );
+    if (semanticResult.rows.length) {
+      return semanticResult.rows[0];
+    }
+  }
+  const candidateText = normalizeRequiredText(
+    candidate.canonicalText || candidate.summaryShort || candidate.summaryFaint
+  );
+  if (!candidateText) {
+    return null;
+  }
+  const searchResult = await db.query(
+    `
+      select *
+      from memory_items
+      where contact_id = $1
+        and status <> 'superseded'
+      order by updated_at desc
+      limit 120
+    `,
+    [contactId]
+  );
+  const preferredType = normalizeMemoryType(candidate.memoryType || "fact");
+  const typedRows = searchResult.rows.filter(
+    (row) => normalizeMemoryType(row.memory_type || "fact") === preferredType
+  );
+  const rowsToCheck = typedRows.length ? typedRows : searchResult.rows;
+  return (
+    rowsToCheck.find((row) =>
+      memoryTextsLookSimilar(
+        candidateText,
+        row.canonical_text || row.summary_short || row.summary_faint || ""
+      )
+    ) || null
+  );
+}
+
+function buildMemoryItemPayloadFromCandidate(candidate = {}, fallbackItem = {}, options = {}) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const sourceRef = normalizeJsonObjectValue(requestOptions.sourceRef, {});
+  const observedAt =
+    normalizeTimestampValue(
+      sourceRef.lastMessageAt || sourceRef.last_message_at || sourceRef.observedAt || sourceRef.observed_at
+    ) || new Date().toISOString();
+  const fallbackMetadata = normalizeJsonObjectValue(fallbackItem.metadata, {});
+  return {
+    contactId: fallbackItem.contactId || requestOptions.contactId || "",
+    scopeType: fallbackItem.scopeType || "contact",
+    sourceConversationId:
+      fallbackItem.sourceConversationId ||
+      normalizeOptionalText(sourceRef.conversationId || sourceRef.conversation_id),
+    memoryType: candidate.memoryType || fallbackItem.memoryType || "fact",
+    memorySubtype: candidate.memorySubtype || fallbackItem.memorySubtype || "",
+    semanticKey: candidate.semanticKey || fallbackItem.semanticKey || "",
+    canonicalText:
+      candidate.canonicalText ||
+      candidate.summaryShort ||
+      fallbackItem.canonicalText ||
+      fallbackItem.summaryShort ||
+      "",
+    summaryShort:
+      candidate.summaryShort ||
+      candidate.canonicalText ||
+      fallbackItem.summaryShort ||
+      fallbackItem.canonicalText ||
+      "",
+    summaryFaint: candidate.summaryFaint || fallbackItem.summaryFaint || "",
+    keywords: mergeUniqueJsonArray(fallbackItem.keywords || [], candidate.keywords || []),
+    entityRefs: mergeUniqueJsonArray(fallbackItem.entityRefs || [], candidate.entityRefs || []),
+    baseImportance: Math.max(
+      clampIntegerValue(fallbackItem.baseImportance, 0, 100, 0),
+      clampIntegerValue(candidate.baseImportance, 0, 100, 0)
+    ),
+    confidence: Math.max(
+      normalizeConfidenceValue(fallbackItem.confidence, 0),
+      normalizeConfidenceValue(candidate.confidence, 0)
+    ),
+    firstObservedAt: fallbackItem.firstObservedAt || observedAt,
+    lastObservedAt: observedAt,
+    emotionIntensity:
+      fallbackItem.emotionIntensity == null && candidate.emotionIntensity == null
+        ? null
+        : Math.max(
+            normalizeConfidenceValue(fallbackItem.emotionIntensity, 0),
+            normalizeConfidenceValue(candidate.emotionIntensity, 0)
+          ),
+    emotionProfile: mergeScoreMapsMax(fallbackItem.emotionProfile || {}, candidate.emotionProfile || {}),
+    interactionTendency: mergeScoreMapsMax(
+      fallbackItem.interactionTendency || {},
+      candidate.interactionTendency || {}
+    ),
+    emotionSummary: candidate.emotionSummary || fallbackItem.emotionSummary || "",
+    metadata: {
+      ...fallbackMetadata,
+      ...normalizeJsonObjectValue(candidate.metadata, {}),
+      lastMergeAction: candidate.action || "",
+      ...(candidate.reasonNote ? { lastReasonNote: candidate.reasonNote } : {}),
+      ...(candidate.sourceExcerpt ? { lastSourceExcerpt: candidate.sourceExcerpt } : {}),
+      ...(requestOptions.batchRef ? { lastMergeBatchRef: requestOptions.batchRef } : {})
+    }
+  };
+}
+
+async function reinforceMemoryItemInDb(db, existingRow = {}, candidate = {}, options = {}) {
+  const existingItem = mapMemoryItemRow(existingRow);
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const batchRef = normalizeOptionalText(requestOptions.batchRef);
+  const sourceRef = normalizeJsonObjectValue(requestOptions.sourceRef, {});
+  const actorType = requestOptions.actorType || "node_backend";
+  const actorRef = requestOptions.actorRef;
+  const sourceKind = requestOptions.sourceKind || "memory_extract";
+  const reasonCode = requestOptions.reasonCode || "memory_extract_reinforce";
+  const observedAt =
+    normalizeTimestampValue(
+      sourceRef.lastMessageAt || sourceRef.last_message_at || sourceRef.observedAt || sourceRef.observed_at
+    ) || new Date().toISOString();
+  const nextStatus = existingItem.status === "superseded" ? existingItem.status : "active";
+  const nextPayload = buildMemoryItemPayloadFromCandidate(candidate, existingItem, requestOptions);
+  const updateResult = await db.query(
+    `
+      update memory_items
+      set canonical_text = $2,
+          summary_short = $3,
+          summary_faint = $4,
+          keywords = $5::jsonb,
+          entity_refs = $6::jsonb,
+          base_importance = $7,
+          confidence = $8,
+          status = $9,
+          status_changed_at = case when status <> $9 then now() else status_changed_at end,
+          last_observed_at = $10,
+          last_reinforced_at = now(),
+          reinforce_count = reinforce_count + 1,
+          emotion_intensity = $11,
+          emotion_profile = $12::jsonb,
+          interaction_tendency = $13::jsonb,
+          emotion_summary = $14,
+          metadata = $15::jsonb,
+          updated_at = now()
+      where id = $1
+      returning *
+    `,
+    [
+      existingItem.id,
+      choosePreferredMemoryText(existingItem.canonicalText, nextPayload.canonicalText),
+      choosePreferredMemoryText(existingItem.summaryShort || existingItem.canonicalText, nextPayload.summaryShort),
+      nextPayload.summaryFaint || existingItem.summaryFaint || "",
+      JSON.stringify(nextPayload.keywords),
+      JSON.stringify(nextPayload.entityRefs),
+      nextPayload.baseImportance,
+      nextPayload.confidence,
+      nextStatus,
+      observedAt,
+      nextPayload.emotionIntensity,
+      JSON.stringify(nextPayload.emotionProfile),
+      JSON.stringify(nextPayload.interactionTendency),
+      nextPayload.emotionSummary,
+      JSON.stringify(nextPayload.metadata)
+    ]
+  );
+  const updatedRow = updateResult.rows[0];
+  const runtimeResult = await db.query(
+    `
+      update memory_runtime_state
+      set activation_score = least(1, activation_score + $2),
+          stability_score = least(1, stability_score + $3),
+          updated_at = now()
+      where memory_item_id = $1
+      returning *
+    `,
+    [
+      existingItem.id,
+      normalizeFiniteNumber(requestOptions.activationBoost, 0.12),
+      normalizeFiniteNumber(requestOptions.stabilityBoost, 0.04)
+    ]
+  );
+  const events = [];
+  events.push(
+    await insertMemoryEvent(db, {
+      memoryItemId: updatedRow.id,
+      contactId: updatedRow.contact_id,
+      eventType: "observed",
+      actorType,
+      actorRef,
+      sourceKind,
+      sourceRef,
+      reasonCode,
+      deltaPayload: {
+        candidateAction: candidate.action,
+        sourceExcerpt: candidate.sourceExcerpt || "",
+        targetMemoryRef: candidate.targetMemoryRef || existingItem.id
+      },
+      batchId: batchRef,
+      note: candidate.reasonNote
+    })
+  );
+  events.push(
+    await insertMemoryEvent(db, {
+      memoryItemId: updatedRow.id,
+      contactId: updatedRow.contact_id,
+      eventType: "reinforced",
+      actorType,
+      actorRef,
+      sourceKind,
+      sourceRef,
+      reasonCode,
+      deltaPayload: {
+        reinforceCount: {
+          from: existingItem.reinforceCount,
+          to: existingItem.reinforceCount + 1
+        },
+        candidateAction: candidate.action
+      },
+      batchId: batchRef,
+      note: candidate.reasonNote
+    })
+  );
+  if (updatedRow.status !== existingRow.status) {
+    events.push(
+      await insertMemoryEvent(db, {
+        memoryItemId: updatedRow.id,
+        contactId: updatedRow.contact_id,
+        eventType: "status_changed",
+        actorType,
+        actorRef,
+        sourceKind,
+        sourceRef,
+        reasonCode,
+        deltaPayload: {
+          status: {
+            from: existingRow.status,
+            to: updatedRow.status
+          }
+        },
+        batchId: batchRef,
+        note: candidate.reasonNote
+      })
+    );
+  }
+  return {
+    matchedMemoryId: existingItem.id,
+    item: mapMemoryItemRow(updatedRow),
+    runtimeState: mapMemoryRuntimeStateRow(runtimeResult.rows[0]),
+    events
+  };
+}
+
+async function supersedeMemoryItemInDb(db, existingRow = {}, candidate = {}, options = {}) {
+  const existingItem = mapMemoryItemRow(existingRow);
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const batchRef = normalizeOptionalText(requestOptions.batchRef);
+  const sourceRef = normalizeJsonObjectValue(requestOptions.sourceRef, {});
+  const actorType = requestOptions.actorType || "node_backend";
+  const actorRef = requestOptions.actorRef;
+  const sourceKind = requestOptions.sourceKind || "memory_extract";
+  const reasonCode = requestOptions.reasonCode || "memory_extract_supersede";
+  const payloadItem = buildMemoryItemPayloadFromCandidate(candidate, existingItem, requestOptions);
+  const created = await createMemoryItemInDb(
+    db,
+    {
+      ...payloadItem,
+      contactId: existingItem.contactId
+    },
+    {
+      eventType: "created",
+      actorType,
+      actorRef,
+      sourceKind,
+      sourceRef,
+      reasonCode,
+      batchId: batchRef,
+      note: candidate.reasonNote
+    }
+  );
+  const updateResult = await db.query(
+    `
+      update memory_items
+      set status = 'superseded',
+          status_changed_at = now(),
+          superseded_by = $2,
+          updated_at = now()
+      where id = $1
+      returning *
+    `,
+    [existingItem.id, created.item.id]
+  );
+  const updatedPreviousRow = updateResult.rows[0];
+  const events = [];
+  events.push(
+    await insertMemoryEvent(db, {
+      memoryItemId: updatedPreviousRow.id,
+      contactId: updatedPreviousRow.contact_id,
+      eventType: "superseded",
+      actorType,
+      actorRef,
+      sourceKind,
+      sourceRef,
+      reasonCode,
+      deltaPayload: {
+        supersededBy: created.item.id,
+        candidateAction: candidate.action
+      },
+      batchId: batchRef,
+      note: candidate.reasonNote
+    })
+  );
+  if (existingRow.status !== "superseded") {
+    events.push(
+      await insertMemoryEvent(db, {
+        memoryItemId: updatedPreviousRow.id,
+        contactId: updatedPreviousRow.contact_id,
+        eventType: "status_changed",
+        actorType,
+        actorRef,
+        sourceKind,
+        sourceRef,
+        reasonCode,
+        deltaPayload: {
+          status: {
+            from: existingRow.status,
+            to: "superseded"
+          }
+        },
+        batchId: batchRef,
+        note: candidate.reasonNote
+      })
+    );
+  }
+  return {
+    matchedMemoryId: existingItem.id,
+    previousItem: mapMemoryItemRow(updatedPreviousRow),
+    item: created.item,
+    runtimeState: created.runtimeState,
+    events: [created.event, ...events]
+  };
+}
+
+async function applyMemoryMergeCandidateInDb(db, batch = {}, candidate = {}, options = {}) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const resolvedCandidate = normalizeMemoryCandidateInput(candidate);
+  if (resolvedCandidate.action === "ignore") {
+    return {
+      requestedAction: "ignore",
+      resolvedAction: "ignore",
+      reason: resolvedCandidate.reasonNote || "ignored_by_extractor"
+    };
+  }
+  const targetRow = await resolveMemoryMergeTargetRow(db, batch, resolvedCandidate);
+  if (resolvedCandidate.action === "supersede" && targetRow) {
+    const result = await supersedeMemoryItemInDb(db, targetRow, resolvedCandidate, requestOptions);
+    return {
+      requestedAction: resolvedCandidate.action,
+      resolvedAction: "supersede",
+      ...result
+    };
+  }
+  if ((resolvedCandidate.action === "reinforce" || resolvedCandidate.action === "create") && targetRow) {
+    const result = await reinforceMemoryItemInDb(db, targetRow, resolvedCandidate, requestOptions);
+    return {
+      requestedAction: resolvedCandidate.action,
+      resolvedAction: "reinforce",
+      ...result
+    };
+  }
+  const createPayload = buildMemoryItemPayloadFromCandidate(resolvedCandidate, {}, requestOptions);
+  const created = await createMemoryItemInDb(
+    db,
+    {
+      ...createPayload,
+      contactId: batch.contactId
+    },
+    {
+      eventType: "created",
+      actorType: requestOptions.actorType || "node_backend",
+      actorRef: requestOptions.actorRef,
+      sourceKind: requestOptions.sourceKind || "memory_extract",
+      sourceRef: requestOptions.sourceRef,
+      reasonCode: requestOptions.reasonCode || "memory_extract_create",
+      batchId: requestOptions.batchRef,
+      note: resolvedCandidate.reasonNote
+    }
+  );
+  return {
+    requestedAction: resolvedCandidate.action,
+    resolvedAction: "create",
+    item: created.item,
+    runtimeState: created.runtimeState,
+    events: [created.event]
   };
 }
 
@@ -2490,6 +3142,76 @@ app.get("/api/memory/items/:id/events", async (request, response) => {
     });
   } catch (error) {
     response.status(500).json(createJsonError("Failed to load memory events.", error?.message));
+  }
+});
+
+app.post("/api/memory/merge", async (request, response) => {
+  const body = request.body && typeof request.body === "object" ? request.body : {};
+  const batch = normalizeMemoryMergeBatchInput(body);
+  if (!batch.contactId) {
+    response.status(400).json(createJsonError("contactId is required for memory merge."));
+    return;
+  }
+  if (!batch.items.length) {
+    response.status(400).json(createJsonError("No memory candidates were provided."));
+    return;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const results = [];
+    const touchedMemoryIds = new Set();
+    for (const item of batch.items) {
+      const result = await applyMemoryMergeCandidateInDb(client, batch, item, {
+        batchRef: batch.batchRef,
+        sourceRef: batch.sourceRef,
+        actorType: body.actorType || "frontend",
+        actorRef: body.actorRef,
+        sourceKind: body.sourceKind || "memory_extract",
+        reasonCode: body.reasonCode || "memory_extract_merge"
+      });
+      results.push(result);
+      if (result.item?.id) {
+        touchedMemoryIds.add(result.item.id);
+      }
+      if (result.previousItem?.id) {
+        touchedMemoryIds.add(result.previousItem.id);
+      }
+    }
+    const touchedItems = [];
+    for (const memoryId of touchedMemoryIds) {
+      const loaded = await loadMemoryItemWithRuntime(client, memoryId);
+      if (loaded) {
+        touchedItems.push(loaded);
+      }
+    }
+    await client.query("commit");
+    response.json({
+      ok: true,
+      batchId: batch.batchRef,
+      contactId: batch.contactId,
+      sourceRef: batch.sourceRef,
+      summary: {
+        requestedCount: batch.items.length,
+        createdCount: results.filter((item) => item.resolvedAction === "create").length,
+        reinforcedCount: results.filter((item) => item.resolvedAction === "reinforce").length,
+        supersededCount: results.filter((item) => item.resolvedAction === "supersede").length,
+        ignoredCount: results.filter((item) => item.resolvedAction === "ignore").length,
+        appliedCount: results.filter((item) =>
+          ["create", "reinforce", "supersede"].includes(String(item.resolvedAction || "").trim())
+        ).length
+      },
+      results,
+      items: touchedItems.map((entry) => ({
+        item: entry.item,
+        runtimeState: entry.runtimeState
+      }))
+    });
+  } catch (error) {
+    await client.query("rollback");
+    response.status(500).json(createJsonError("Failed to merge memory candidates.", error?.message));
+  } finally {
+    client.release();
   }
 });
 

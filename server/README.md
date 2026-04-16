@@ -34,6 +34,7 @@ The app will be available at:
 - `POST /api/memory/items/:id/reinforce`
 - `POST /api/memory/items/:id/recall`
 - `GET /api/memory/items/:id/events`
+- `POST /api/memory/merge`
 - `POST /api/memory/import`
 
 ## Privacy allowlist table
