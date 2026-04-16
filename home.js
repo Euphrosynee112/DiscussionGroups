@@ -5,8 +5,8 @@ const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GROK_MODEL = "grok-4";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 const DEFAULT_TEMPERATURE = 0.85;
-const APP_BUILD_VERSION = "20260416-191200";
-const APP_BUILD_UPDATED_AT = "2026-04-16 19:12:00";
+const APP_BUILD_VERSION = "20260416-194800";
+const APP_BUILD_UPDATED_AT = "2026-04-16 19:48:00";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -288,7 +288,19 @@ function safeSetItem(key, value) {
   memoryStorage[key] = value;
   try {
     window.localStorage.setItem(key, value);
+    return true;
   } catch (_error) {
+    return false;
+  }
+}
+
+function safeRemoveItem(key) {
+  delete memoryStorage[key];
+  try {
+    window.localStorage.removeItem(key);
+    return true;
+  } catch (_error) {
+    return false;
   }
 }
 
@@ -1455,16 +1467,48 @@ async function restoreLocalStorageFromCloud() {
   try {
     const payload = await requestHomeStorageApi("/api/storage/bootstrap");
     const records = Array.isArray(payload?.records) ? payload.records : [];
+    const keysToClear = [...new Set([...getManagedStorageKeys(), ...records.map((record) => String(record?.key || "").trim()).filter(Boolean)])];
     const restoredKeys = [];
+    const failedKeys = [];
+    const pendingStorageEvents = [];
+
+    if (records.length) {
+      keysToClear.forEach((key) => {
+        if (!key) {
+          return;
+        }
+        safeRemoveItem(key);
+      });
+    }
+
     records.forEach((record) => {
       const key = String(record?.key || "").trim();
       if (!key) {
         return;
       }
       const nextValue = serializeCloudSnapshotValue(record?.value_json);
-      safeSetItem(key, nextValue);
-      dispatchSyntheticStorageEvent(key, nextValue);
+      const persisted = safeSetItem(key, nextValue);
+      if (!persisted) {
+        failedKeys.push(key);
+        return;
+      }
+      pendingStorageEvents.push({
+        key,
+        value: nextValue
+      });
       restoredKeys.push(key);
+    });
+
+    if (failedKeys.length) {
+      throw new Error(
+        `以下缓存写入浏览器失败：${failedKeys.slice(0, 6).join("、")}${
+          failedKeys.length > 6 ? ` 等 ${failedKeys.length} 项` : ""
+        }。请先清理本地缓存后重试。`
+      );
+    }
+
+    pendingStorageEvents.forEach(({ key, value }) => {
+      dispatchSyntheticStorageEvent(key, value);
     });
 
     let restoredAllowlistCount = null;
