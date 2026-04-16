@@ -1712,7 +1712,7 @@ function readFileAsDataUrl(file) {
 function readAvatarAsDataUrl(file, options = {}) {
   const avatarOptions = options && typeof options === "object" ? options : {};
   const maxSide = Math.max(avatarOptions.maxSide || 420, 180);
-  const quality = Math.min(0.92, Math.max(0.68, Number(avatarOptions.quality) || 0.8));
+  const quality = Math.min(0.88, Math.max(0.42, Number(avatarOptions.quality) || 0.72));
   if (!file || !String(file.type || "").startsWith("image/")) {
     return readFileAsDataUrl(file);
   }
@@ -2671,7 +2671,18 @@ async function handleProfileImageUpload(file, targetKey, successMessage) {
   }
 
   try {
-    const dataUrl = await readAvatarAsDataUrl(file);
+    const dataUrl = await readAvatarAsDataUrl(
+      file,
+      targetKey === "avatarImage"
+        ? {
+            maxSide: 192,
+            quality: 0.64
+          }
+        : {
+            maxSide: 1280,
+            quality: 0.82
+          }
+    );
     state.profile = {
       ...getCurrentProfile(),
       [targetKey]: dataUrl
@@ -4593,7 +4604,14 @@ function buildDiscussionSharePayload(post, bucketName = state.threadModalBucket 
 
 function loadMessageShareInbox() {
   const parsed = readStoredJson(MESSAGE_SHARE_INBOX_KEY, []);
-  return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item === "object") : [];
+  return Array.isArray(parsed)
+    ? parsed
+        .filter((item) => item && typeof item === "object")
+        .map((item) => ({
+          ...item,
+          targetAvatarImageSnapshot: ""
+        }))
+    : [];
 }
 
 function persistMessageShareInbox(entries = []) {
@@ -4694,7 +4712,6 @@ function shareCurrentThreadToChat(targetConversationId = "", targetContactId = "
     targetConversationId: String(target.conversationId || "").trim(),
     targetContactId: String(target.contactId || "").trim(),
     targetNameSnapshot: target.name,
-    targetAvatarImageSnapshot: target.avatarImage || "",
     targetAvatarTextSnapshot: target.avatarText || "",
     payload
   });

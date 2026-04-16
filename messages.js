@@ -3497,7 +3497,7 @@ function getAwarenessSensitivityProbability(value = "") {
 function readAvatarAsDataUrl(file, options = {}) {
   const avatarOptions = options && typeof options === "object" ? options : {};
   const maxSide = Math.max(avatarOptions.maxSide || 420, 180);
-  const quality = Math.min(0.92, Math.max(0.68, Number(avatarOptions.quality) || 0.8));
+  const quality = Math.min(0.88, Math.max(0.42, Number(avatarOptions.quality) || 0.72));
   if (!file || !String(file.type || "").startsWith("image/")) {
     return readFileAsDataUrl(file);
   }
@@ -5982,9 +5982,7 @@ function normalizeMessageShareInboxEntry(entry, index = 0) {
     targetConversationId,
     targetContactId,
     targetNameSnapshot: String(source.targetNameSnapshot || source.contactNameSnapshot || "").trim(),
-    targetAvatarImageSnapshot: String(
-      source.targetAvatarImageSnapshot || source.contactAvatarImageSnapshot || ""
-    ).trim(),
+    targetAvatarImageSnapshot: "",
     targetAvatarTextSnapshot: String(
       source.targetAvatarTextSnapshot || source.contactAvatarTextSnapshot || ""
     ).trim(),
@@ -21162,8 +21160,8 @@ function attachEvents() {
       }
       try {
         state.profileEditorAvatarImage = await readAvatarAsDataUrl(file, {
-          maxSide: 260,
-          quality: 0.72
+          maxSide: 192,
+          quality: 0.64
         });
         renderProfileEditorAvatarPreview();
         setEditorStatus(messagesProfileEditorStatusEl, "头像图片已更新。", "success");
@@ -21249,8 +21247,8 @@ function attachEvents() {
       }
       try {
         state.contactEditorAvatarImage = await readAvatarAsDataUrl(file, {
-          maxSide: 240,
-          quality: 0.7
+          maxSide: 192,
+          quality: 0.64
         });
         renderContactEditorAvatarPreview();
         setEditorStatus(messagesContactEditorStatusEl, "头像图片已更新。", "success");
