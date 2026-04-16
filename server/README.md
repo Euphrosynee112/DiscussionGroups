@@ -27,6 +27,14 @@ The app will be available at:
 - `GET /api/storage/:key`
 - `PUT /api/storage/:key`
 - `POST /api/storage/import`
+- `GET /api/memory/items`
+- `GET /api/memory/items/:id`
+- `POST /api/memory/items`
+- `PATCH /api/memory/items/:id`
+- `POST /api/memory/items/:id/reinforce`
+- `POST /api/memory/items/:id/recall`
+- `GET /api/memory/items/:id/events`
+- `POST /api/memory/import`
 
 ## Privacy allowlist table
 

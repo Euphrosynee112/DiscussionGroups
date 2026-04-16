@@ -61,6 +61,8 @@ const FOREGROUND_REPLY_SYNC_GRACE_MS = 8000;
 const ASSISTANT_REPLY_REVEAL_INTERVAL_MS = 2000;
 const REPLY_TASK_HEARTBEAT_MS = 4000;
 const REPLY_TASK_STALE_MS = 30000;
+const LOCAL_STORAGE_API_BASE_URL = "http://localhost:3000";
+const DEPLOYED_STORAGE_API_BASE_URL = "https://spring-field-3219.fly.dev";
 const CONVERSATION_RENDER_BATCH_SIZE = 50;
 const CONVERSATION_SOFT_MESSAGE_LIMIT = 240;
 const CONVERSATION_MIN_MESSAGE_LIMIT = 80;
@@ -644,6 +646,9 @@ let foregroundReplyTaskHeartbeatStop = () => {};
 const proactiveTriggerWorkerInstanceId = `proactive_worker_${Date.now()}_${Math.random()
   .toString(36)
   .slice(2, 8)}`;
+const memoryCloudCacheByContact = new Map();
+const memoryCloudInflightByContact = new Map();
+let memoryCloudBootstrapStarted = false;
 
 const state = {
   profile: { ...DEFAULT_PROFILE },
@@ -893,6 +898,388 @@ function safeSetItem(key, value) {
   } catch (_error) {
     return false;
   }
+}
+
+function resolveMessagesStorageApiBaseUrl() {
+  const injectedBaseUrl = String(
+    window.PULSE_STORAGE_API_BASE_URL || window.PULSE_API_BASE_URL || ""
+  ).trim();
+  if (injectedBaseUrl) {
+    return injectedBaseUrl.replace(/\/+$/, "");
+  }
+
+  const origin = String(window.location?.origin || "").trim();
+  const protocol = String(window.location?.protocol || "").trim().toLowerCase();
+  const hostname = String(window.location?.hostname || "").trim().toLowerCase();
+
+  if (!origin || origin === "null" || protocol === "file:") {
+    return DEPLOYED_STORAGE_API_BASE_URL;
+  }
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return LOCAL_STORAGE_API_BASE_URL;
+  }
+  return origin.replace(/\/+$/, "");
+}
+
+function buildMessagesStorageApiUrl(pathname = "/api/health") {
+  const baseUrl = resolveMessagesStorageApiBaseUrl();
+  return new URL(String(pathname || "").replace(/^\/+/, ""), `${baseUrl}/`).toString();
+}
+
+async function requestMessagesStorageApi(pathname, options = {}) {
+  const response = await fetch(buildMessagesStorageApiUrl(pathname), {
+    ...options,
+    headers: {
+      Accept: "application/json",
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.headers || {})
+    }
+  });
+
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch (_error) {
+  }
+
+  if (!response.ok || payload?.ok === false) {
+    throw new Error(
+      String(payload?.error || payload?.details || `请求失败（HTTP ${response.status || 500}）。`).trim()
+    );
+  }
+
+  return payload;
+}
+
+function buildMemoryCloudSemanticKey(entry = {}) {
+  return `legacy:${String(entry.id || "").trim()}`;
+}
+
+function getCachedCloudMemoriesForContact(contactId = "") {
+  const resolvedContactId = String(contactId || "").trim();
+  if (!resolvedContactId) {
+    return null;
+  }
+  return memoryCloudCacheByContact.get(resolvedContactId) || null;
+}
+
+function setCachedCloudMemoriesForContact(contactId = "", items = []) {
+  const resolvedContactId = String(contactId || "").trim();
+  if (!resolvedContactId) {
+    return [];
+  }
+  const normalizedItems = Array.isArray(items) ? items.filter(Boolean) : [];
+  memoryCloudCacheByContact.set(resolvedContactId, {
+    items: normalizedItems,
+    updatedAt: Date.now()
+  });
+  return normalizedItems;
+}
+
+function mapCloudMemoryItemToPromptEntry(item = {}) {
+  const resolvedStatus = String(item.status || "").trim().toLowerCase();
+  const memoryType = String(item.memoryType || item.memory_type || "").trim().toLowerCase();
+  const content =
+    resolvedStatus === "faint"
+      ? String(item.summaryFaint || item.summaryShort || item.canonicalText || "").trim()
+      : String(item.summaryShort || item.canonicalText || "").trim();
+  return normalizeMessageMemory(
+    {
+      id: String(item.id || "").trim(),
+      contactId: String(item.contactId || item.contact_id || "").trim(),
+      type: memoryType === "scene" ? "scene" : "core",
+      content,
+      importance: Number(item.baseImportance ?? item.base_importance ?? 0) || 0,
+      source: "summary",
+      createdAt: Date.parse(item.createdAt || item.created_at || "") || Date.now(),
+      updatedAt: Date.parse(item.updatedAt || item.updated_at || "") || Date.now()
+    },
+    0
+  );
+}
+
+function findCloudMemoryItemByLocalEntry(contactId = "", entry = {}) {
+  const cached = getCachedCloudMemoriesForContact(contactId);
+  const items = Array.isArray(cached?.items) ? cached.items : [];
+  const semanticKey = buildMemoryCloudSemanticKey(entry);
+  return (
+    items.find((item) => String(item.semanticKey || "").trim() === semanticKey) ||
+    items.find((item) => String(item.metadata?.localMemoryId || "").trim() === String(entry.id || "").trim()) ||
+    items.find((item) => String(item.metadata?.legacyId || "").trim() === String(entry.id || "").trim()) ||
+    items.find((item) =>
+      memoryLooksSimilar(
+        String(item.canonicalText || item.summaryShort || "").trim(),
+        String(entry.content || "").trim()
+      )
+    ) ||
+    null
+  );
+}
+
+function buildCloudMemoryPayloadFromLocalEntry(entry = {}, options = {}) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  return {
+    id: String(entry.id || "").trim(),
+    contactId: String(entry.contactId || "").trim(),
+    memoryType: entry.type === "scene" ? "scene" : "relationship",
+    memorySubtype:
+      entry.type === "scene"
+        ? "legacy_scene"
+        : entry.source === "manual"
+        ? "manual_core"
+        : "summary_core",
+    semanticKey: buildMemoryCloudSemanticKey(entry),
+    canonicalText: String(entry.content || "").trim(),
+    summaryShort: String(entry.content || "").trim(),
+    summaryFaint: String(requestOptions.summaryFaint || "").trim(),
+    baseImportance: Number(entry.importance || 0) || DEFAULT_SCENE_MEMORY_THRESHOLD,
+    confidence: entry.source === "manual" ? 0.92 : 0.78,
+    firstObservedAt: Number(entry.createdAt) || Date.now(),
+    lastObservedAt: Number(entry.updatedAt) || Number(entry.createdAt) || Date.now(),
+    metadata: {
+      localMemoryId: String(entry.id || "").trim(),
+      localMemoryType: String(entry.type || "").trim(),
+      localMemorySource: String(entry.source || "").trim(),
+      importedFromLocalCache: true
+    }
+  };
+}
+
+async function fetchCloudMemoriesForContact(contactId = "", options = {}) {
+  const resolvedContactId = String(contactId || "").trim();
+  if (!resolvedContactId) {
+    return [];
+  }
+  const requestOptions = options && typeof options === "object" ? options : {};
+  if (!requestOptions.force) {
+    const cached = getCachedCloudMemoriesForContact(resolvedContactId);
+    if (cached) {
+      return Array.isArray(cached.items) ? cached.items : [];
+    }
+  }
+  const payload = await requestMessagesStorageApi(
+    `/api/memory/items?contactId=${encodeURIComponent(resolvedContactId)}&status=all&limit=200`
+  );
+  return setCachedCloudMemoriesForContact(resolvedContactId, Array.isArray(payload?.items) ? payload.items : []);
+}
+
+async function importLocalMemoriesToCloud(contactId = "", entries = []) {
+  const resolvedContactId = String(contactId || "").trim();
+  const normalizedEntries = (Array.isArray(entries) ? entries : [])
+    .map((item, index) => normalizeMessageMemory(item, index))
+    .filter((item) => item.contactId === resolvedContactId && item.content);
+  if (!resolvedContactId || !normalizedEntries.length) {
+    return null;
+  }
+  await requestMessagesStorageApi("/api/memory/import", {
+    method: "POST",
+    body: JSON.stringify({
+      contactId: resolvedContactId,
+      items: normalizedEntries.map((entry) => buildCloudMemoryPayloadFromLocalEntry(entry))
+    })
+  });
+  return fetchCloudMemoriesForContact(resolvedContactId, { force: true });
+}
+
+async function ensureCloudMemoriesReady(contactId = "", options = {}) {
+  const resolvedContactId = String(contactId || "").trim();
+  if (!resolvedContactId) {
+    return [];
+  }
+  const requestOptions = options && typeof options === "object" ? options : {};
+  if (!requestOptions.force) {
+    const cached = getCachedCloudMemoriesForContact(resolvedContactId);
+    if (cached) {
+      return Array.isArray(cached.items) ? cached.items : [];
+    }
+  }
+  if (memoryCloudInflightByContact.has(resolvedContactId)) {
+    return memoryCloudInflightByContact.get(resolvedContactId);
+  }
+  const task = (async () => {
+    try {
+      let cloudItems = await fetchCloudMemoriesForContact(resolvedContactId, {
+        force: Boolean(requestOptions.force)
+      });
+      const localEntries = getMemoriesForContact(resolvedContactId);
+      if (!cloudItems.length && requestOptions.importLocalFallback !== false && localEntries.length) {
+        cloudItems = (await importLocalMemoriesToCloud(resolvedContactId, localEntries)) || [];
+      }
+      return Array.isArray(cloudItems) ? cloudItems : [];
+    } catch (error) {
+      console.warn("[Messages] Failed to load cloud memories:", error);
+      return [];
+    } finally {
+      memoryCloudInflightByContact.delete(resolvedContactId);
+    }
+  })();
+  memoryCloudInflightByContact.set(resolvedContactId, task);
+  return task;
+}
+
+async function syncLocalMemoryEntryToCloud(entry = {}, options = {}) {
+  const resolvedEntry = normalizeMessageMemory(entry);
+  if (!resolvedEntry.contactId || !resolvedEntry.content) {
+    return null;
+  }
+  const requestOptions = options && typeof options === "object" ? options : {};
+  try {
+    await ensureCloudMemoriesReady(resolvedEntry.contactId, {
+      importLocalFallback: false
+    });
+    const existingCloudItem = findCloudMemoryItemByLocalEntry(resolvedEntry.contactId, resolvedEntry);
+    const payloadItem = buildCloudMemoryPayloadFromLocalEntry(resolvedEntry, requestOptions);
+    const payload = existingCloudItem
+      ? await requestMessagesStorageApi(`/api/memory/items/${encodeURIComponent(existingCloudItem.id)}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            item: payloadItem,
+            sourceKind: "local_cache_sync",
+            reasonCode: "local_memory_upsert"
+          })
+        })
+      : await requestMessagesStorageApi("/api/memory/items", {
+          method: "POST",
+          body: JSON.stringify({
+            item: payloadItem,
+            sourceKind: "local_cache_sync",
+            reasonCode: "local_memory_create"
+          })
+        });
+    const nextCloudItems = Array.isArray(getCachedCloudMemoriesForContact(resolvedEntry.contactId)?.items)
+      ? [...getCachedCloudMemoriesForContact(resolvedEntry.contactId).items]
+      : [];
+    const nextCloudItem = payload?.item || null;
+    if (nextCloudItem?.id) {
+      const existingIndex = nextCloudItems.findIndex((item) => item.id === nextCloudItem.id);
+      if (existingIndex >= 0) {
+        nextCloudItems[existingIndex] = nextCloudItem;
+      } else {
+        nextCloudItems.unshift(nextCloudItem);
+      }
+      setCachedCloudMemoriesForContact(resolvedEntry.contactId, nextCloudItems);
+    }
+    return payload;
+  } catch (error) {
+    console.warn("[Messages] Failed to sync local memory entry to cloud:", error);
+    return null;
+  }
+}
+
+async function syncLocalMemoryEntriesToCloud(entries = [], options = {}) {
+  const normalizedEntries = (Array.isArray(entries) ? entries : []).filter(Boolean);
+  for (const entry of normalizedEntries) {
+    await syncLocalMemoryEntryToCloud(entry, options);
+  }
+}
+
+async function syncMissingLocalMemoriesForContact(contactId = "") {
+  const resolvedContactId = String(contactId || "").trim();
+  if (!resolvedContactId) {
+    return [];
+  }
+  const localEntries = getMemoriesForContact(resolvedContactId);
+  if (!localEntries.length) {
+    return [];
+  }
+  await ensureCloudMemoriesReady(resolvedContactId, {
+    importLocalFallback: true
+  });
+  const missingEntries = localEntries.filter((entry, index) => {
+    const normalizedEntry = normalizeMessageMemory(entry, index);
+    if (!normalizedEntry.contactId || !normalizedEntry.content) {
+      return false;
+    }
+    return !findCloudMemoryItemByLocalEntry(resolvedContactId, normalizedEntry);
+  });
+  if (!missingEntries.length) {
+    return [];
+  }
+  await syncLocalMemoryEntriesToCloud(missingEntries);
+  return missingEntries;
+}
+
+async function archiveLocalMemoryInCloud(entry = {}, options = {}) {
+  const resolvedEntry = normalizeMessageMemory(entry);
+  if (!resolvedEntry.contactId || !resolvedEntry.id) {
+    return null;
+  }
+  const requestOptions = options && typeof options === "object" ? options : {};
+  try {
+    await ensureCloudMemoriesReady(resolvedEntry.contactId, {
+      importLocalFallback: false
+    });
+    const existingCloudItem = findCloudMemoryItemByLocalEntry(resolvedEntry.contactId, resolvedEntry);
+    if (!existingCloudItem?.id) {
+      return null;
+    }
+    const payload = await requestMessagesStorageApi(
+      `/api/memory/items/${encodeURIComponent(existingCloudItem.id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          item: {
+            status: "archived",
+            archivedAt: Date.now(),
+            metadata: {
+              ...(existingCloudItem.metadata || {}),
+              localMemoryArchived: true,
+              localMemoryArchivedAt: Date.now()
+            }
+          },
+          sourceKind: "local_cache_sync",
+          reasonCode: requestOptions.reasonCode || "local_memory_delete"
+        })
+      }
+    );
+    const cached = Array.isArray(getCachedCloudMemoriesForContact(resolvedEntry.contactId)?.items)
+      ? getCachedCloudMemoriesForContact(resolvedEntry.contactId).items.map((item) =>
+          item.id === payload?.item?.id ? payload.item : item
+        )
+      : [];
+    setCachedCloudMemoriesForContact(resolvedEntry.contactId, cached);
+    return payload;
+  } catch (error) {
+    console.warn("[Messages] Failed to archive local memory in cloud:", error);
+    return null;
+  }
+}
+
+function getPreferredPromptMemoriesForContact(contactId = "") {
+  const resolvedContactId = String(contactId || "").trim();
+  if (!resolvedContactId) {
+    return [];
+  }
+  const localEntries = getMemoriesForContact(resolvedContactId);
+  const cached = getCachedCloudMemoriesForContact(resolvedContactId);
+  const cloudItems = Array.isArray(cached?.items) ? cached.items : null;
+  if (!cloudItems) {
+    return localEntries;
+  }
+  const promptCloudEntries = cloudItems
+    .filter((item) => ["active", "faint", "dormant"].includes(String(item.status || "").trim().toLowerCase()))
+    .map((item) => mapCloudMemoryItemToPromptEntry(item))
+    .filter((item) => item.contactId && item.content);
+  return mergeMemories(promptCloudEntries, localEntries);
+}
+
+function scheduleMemoryCloudBootstrapSync() {
+  if (memoryCloudBootstrapStarted) {
+    return;
+  }
+  memoryCloudBootstrapStarted = true;
+  window.setTimeout(async () => {
+    const contactIds = Array.from(
+      new Set(
+        (state.memories || [])
+          .map((item) => String(item.contactId || "").trim())
+          .filter(Boolean)
+      )
+    );
+    for (const contactId of contactIds) {
+      await syncMissingLocalMemoriesForContact(contactId);
+    }
+  }, 120);
 }
 
 function loadReplyTasks() {
@@ -6476,7 +6863,7 @@ function buildWorldbookContext(promptSettings) {
 }
 
 function buildMemoryPromptContexts(contact, promptSettings) {
-  const memories = getMemoriesForContact(contact?.id || "");
+  const memories = getPreferredPromptMemoriesForContact(contact?.id || "");
   if (!memories.length) {
     return {
       core: "",
@@ -9744,7 +10131,7 @@ function buildMemorySummaryTranscript(messages = []) {
 }
 
 function buildExistingMemoryDigest(contactId = "") {
-  const memories = getMemoriesForContact(contactId).slice(0, 16);
+  const memories = getPreferredPromptMemoriesForContact(contactId).slice(0, 16);
   if (!memories.length) {
     return "暂无已有记忆。";
   }
@@ -10279,6 +10666,10 @@ function applyExtractedMemoryItems(contact, memoryItems = [], options = {}) {
   if (nextMemoryItems.length) {
     state.memories = mergeMemories(state.memories, nextMemoryItems);
     persistMessageMemories();
+    void syncLocalMemoryEntriesToCloud(nextMemoryItems, {
+      summaryFaint: "你隐约对这件事有一点印象。",
+      reasonCode: "memory_summary_extract"
+    });
   }
   if (state.memoryViewerOpen) {
     renderMemoryViewer();
@@ -10365,6 +10756,9 @@ async function runManualConversationMemorySummary(roundCountInput = "", preferre
 
   const settings = loadSettings();
   const promptSettings = normalizeMessagePromptSettings(settings.messagePromptSettings);
+  await ensureCloudMemoriesReady(contact.id, {
+    importLocalFallback: true
+  });
   const memoryItems = await requestMemorySummaryItems(
     settings,
     state.profile,
@@ -12118,6 +12512,9 @@ async function maybeExtractConversationMemories(conversationId, settings, prompt
   if (!contact) {
     return;
   }
+  await ensureCloudMemoriesReady(contact.id, {
+    importLocalFallback: true
+  });
 
   const normalizedLastMessageCount = normalizeConversationMemorySummaryCursor(
     conversation.memorySummaryLastMessageCount,
@@ -17269,6 +17666,9 @@ function saveManualCoreMemory(draft = {}) {
   });
   state.memories = mergeMemories(state.memories, [entry]);
   persistMessageMemories();
+  void syncLocalMemoryEntryToCloud(entry, {
+    reasonCode: "manual_memory_create"
+  });
   resolveSelectedMemoryContactId(contactId);
   renderMemoryViewer();
   return entry;
@@ -17299,6 +17699,9 @@ function saveMemoryEntryDraft(draft = {}) {
   const remainingMemories = state.memories.filter((item) => item.id !== editingEntry.id);
   state.memories = mergeMemories(remainingMemories, [updatedEntry]);
   persistMessageMemories();
+  void syncLocalMemoryEntryToCloud(updatedEntry, {
+    reasonCode: "manual_memory_edit"
+  });
   resolveSelectedMemoryContactId(contactId);
   renderMemoryViewer();
   return updatedEntry;
@@ -17311,6 +17714,9 @@ function deleteMemoryEntry(memoryId = "") {
   }
   state.memories = state.memories.filter((item) => item.id !== entry.id);
   persistMessageMemories();
+  void archiveLocalMemoryInCloud(entry, {
+    reasonCode: "manual_memory_delete"
+  });
   if (state.memoryEditingId === entry.id) {
     state.memoryEditingId = "";
     if (state.memoryEditorOpen) {
@@ -19103,6 +19509,9 @@ async function requestConversationReply(options = {}) {
   const settings = loadSettings();
   const promptSettings = getConversationPromptSettings(conversation, settings.messagePromptSettings);
   state.chatPromptSettings = promptSettings;
+  await ensureCloudMemoriesReady(contact.id, {
+    importLocalFallback: true
+  });
   let history = [];
   let removedReplyBatch = [];
   const currentAwarenessCounter = Math.max(
@@ -19726,6 +20135,7 @@ function refreshStateFromStorage() {
   sanitizePresenceStateReferences();
   syncSendingConversationStateFromReplyTasks();
   persistContacts();
+  scheduleMemoryCloudBootstrapSync();
 }
 
 function primeForegroundReplySync(

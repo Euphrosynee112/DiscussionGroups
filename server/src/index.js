@@ -17,6 +17,21 @@ const PRIVACY_ALLOWLIST_META_KEY = "x_style_generator_privacy_allowlist_meta_v1"
 const PRIVACY_ALLOWLIST_SOURCES = new Set(["manual", "scan"]);
 const PRIVACY_ALLOWLIST_CATEGORIES = new Set(["TERM", "TITLE", "NAME"]);
 const PRIVACY_ALLOWLIST_NAME_LEVELS = new Set(["FULL", "COMMON", "NICK", "PET", "HONOR"]);
+const MEMORY_SCOPE_TYPES = new Set(["contact", "global", "thread", "scene"]);
+const MEMORY_STATUSES = new Set(["active", "faint", "dormant", "archived", "superseded"]);
+const MEMORY_EVENT_TYPES = new Set([
+  "created",
+  "observed",
+  "reinforced",
+  "recalled",
+  "decayed",
+  "status_changed",
+  "superseded",
+  "edited",
+  "policy_applied",
+  "imported"
+]);
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function createPoolConfig(connectionString = "") {
   const normalized = String(connectionString || "").trim();
@@ -657,6 +672,229 @@ async function ensurePrivacyAllowlistSeeded(db) {
   return items.length;
 }
 
+async function ensureMemoryTables(db) {
+  await db.query(`
+    create table if not exists memory_items (
+      id uuid primary key,
+      contact_id text not null,
+      scope_type text not null default 'contact',
+      source_conversation_id text,
+      memory_type text not null,
+      memory_subtype text,
+      semantic_key text,
+      canonical_text text not null,
+      summary_short text not null default '',
+      summary_faint text not null default '',
+      keywords jsonb not null default '[]'::jsonb,
+      entity_refs jsonb not null default '[]'::jsonb,
+      base_importance double precision not null default 0,
+      confidence double precision not null default 0,
+      status text not null default 'active',
+      status_changed_at timestamptz not null default now(),
+      first_observed_at timestamptz not null default now(),
+      last_observed_at timestamptz not null default now(),
+      last_reinforced_at timestamptz,
+      last_recalled_at timestamptz,
+      reinforce_count integer not null default 0,
+      recall_count integer not null default 0,
+      emotion_intensity double precision,
+      emotion_profile jsonb not null default '{}'::jsonb,
+      interaction_tendency jsonb not null default '{}'::jsonb,
+      emotion_summary text not null default '',
+      arousal_level double precision,
+      archived_at timestamptz,
+      superseded_by uuid,
+      metadata jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      constraint memory_items_scope_type_check
+        check (scope_type in ('contact', 'global', 'thread', 'scene')),
+      constraint memory_items_status_check
+        check (status in ('active', 'faint', 'dormant', 'archived', 'superseded')),
+      constraint memory_items_reinforce_count_check
+        check (reinforce_count >= 0),
+      constraint memory_items_recall_count_check
+        check (recall_count >= 0),
+      constraint memory_items_superseded_fk
+        foreign key (superseded_by) references memory_items (id) on delete set null
+    );
+  `);
+  await db.query(`
+    create index if not exists memory_items_contact_status_idx
+      on memory_items (contact_id, status, updated_at desc);
+  `);
+  await db.query(`
+    create index if not exists memory_items_contact_type_status_idx
+      on memory_items (contact_id, memory_type, status, updated_at desc);
+  `);
+  await db.query(`
+    create index if not exists memory_items_semantic_key_idx
+      on memory_items (contact_id, semantic_key)
+      where semantic_key is not null and semantic_key <> '';
+  `);
+  await db.query(`
+    create index if not exists memory_items_superseded_by_idx
+      on memory_items (superseded_by)
+      where superseded_by is not null;
+  `);
+  await db.query(`
+    create table if not exists memory_runtime_state (
+      memory_item_id uuid primary key,
+      activation_score double precision not null default 0,
+      stability_score double precision not null default 0,
+      impression_floor double precision not null default 0,
+      decay_rate double precision not null default 0,
+      cue_recall_threshold double precision not null default 0,
+      last_computed_at timestamptz not null default now(),
+      last_decay_at timestamptz,
+      next_decay_at timestamptz,
+      last_recalled_score double precision,
+      algorithm_version text not null default 'v1',
+      debug_payload jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      constraint memory_runtime_state_memory_item_fk
+        foreign key (memory_item_id) references memory_items (id) on delete cascade
+    );
+  `);
+  await db.query(`
+    create index if not exists memory_runtime_state_next_decay_idx
+      on memory_runtime_state (next_decay_at asc)
+      where next_decay_at is not null;
+  `);
+  await db.query(`
+    create table if not exists memory_events (
+      id uuid primary key,
+      memory_item_id uuid not null,
+      contact_id text not null,
+      event_type text not null,
+      event_time timestamptz not null default now(),
+      actor_type text not null,
+      actor_ref text,
+      source_kind text,
+      source_ref jsonb not null default '{}'::jsonb,
+      reason_code text,
+      delta_payload jsonb not null default '{}'::jsonb,
+      before_snapshot jsonb,
+      after_snapshot jsonb,
+      batch_id text,
+      note text,
+      metadata jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now(),
+      constraint memory_events_event_type_check
+        check (
+          event_type in (
+            'created',
+            'observed',
+            'reinforced',
+            'recalled',
+            'decayed',
+            'status_changed',
+            'superseded',
+            'edited',
+            'policy_applied',
+            'imported'
+          )
+        ),
+      constraint memory_events_memory_item_fk
+        foreign key (memory_item_id) references memory_items (id) on delete cascade
+    );
+  `);
+  await db.query(`
+    create index if not exists memory_events_memory_item_time_idx
+      on memory_events (memory_item_id, event_time desc, created_at desc);
+  `);
+  await db.query(`
+    create index if not exists memory_events_contact_time_idx
+      on memory_events (contact_id, event_time desc, created_at desc);
+  `);
+  await db.query(`
+    create index if not exists memory_events_type_time_idx
+      on memory_events (event_type, event_time desc, created_at desc);
+  `);
+  await db.query(`
+    create index if not exists memory_events_batch_idx
+      on memory_events (batch_id)
+      where batch_id is not null and batch_id <> '';
+  `);
+  await db.query(`
+    create table if not exists memory_policies (
+      id uuid primary key,
+      policy_name text not null,
+      policy_scope text not null,
+      contact_id text,
+      memory_type text,
+      memory_subtype text,
+      memory_item_id uuid,
+      policy_kind text not null,
+      policy_payload jsonb not null default '{}'::jsonb,
+      is_enabled boolean not null default true,
+      priority integer not null default 0,
+      effective_from timestamptz,
+      effective_to timestamptz,
+      reason_note text,
+      metadata jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      constraint memory_policies_scope_check
+        check (
+          policy_scope in (
+            'global',
+            'contact',
+            'memory_type',
+            'contact_memory_type',
+            'item'
+          )
+        ),
+      constraint memory_policies_kind_check
+        check (
+          policy_kind in (
+            'decay_multiplier',
+            'stability_bonus',
+            'impression_floor_min',
+            'cue_threshold_adjustment',
+            'prompt_boost',
+            'prompt_suppress',
+            'status_lock',
+            'never_archive'
+          )
+        ),
+      constraint memory_policies_effective_window_check
+        check (
+          effective_to is null
+          or effective_from is null
+          or effective_to >= effective_from
+        ),
+      constraint memory_policies_memory_item_fk
+        foreign key (memory_item_id) references memory_items (id) on delete cascade
+    );
+  `);
+  await db.query(`
+    create index if not exists memory_policies_enabled_idx
+      on memory_policies (is_enabled, updated_at desc);
+  `);
+  await db.query(`
+    create index if not exists memory_policies_contact_enabled_idx
+      on memory_policies (contact_id, is_enabled, updated_at desc)
+      where contact_id is not null and contact_id <> '';
+  `);
+  await db.query(`
+    create index if not exists memory_policies_type_enabled_idx
+      on memory_policies (memory_type, memory_subtype, is_enabled, updated_at desc)
+      where memory_type is not null and memory_type <> '';
+  `);
+  await db.query(`
+    create index if not exists memory_policies_item_enabled_idx
+      on memory_policies (memory_item_id, is_enabled, updated_at desc)
+      where memory_item_id is not null;
+  `);
+  await db.query(`
+    create index if not exists memory_policies_effective_window_idx
+      on memory_policies (effective_from, effective_to)
+      where is_enabled = true;
+  `);
+}
+
 async function ensureCoreTables() {
   if (!pool) {
     return 0;
@@ -746,6 +984,7 @@ async function ensureCoreTables() {
     create index if not exists privacy_scan_ignore_entries_text_idx
       on privacy_scan_ignore_entries (text);
   `);
+  await ensureMemoryTables(pool);
   return ensurePrivacyAllowlistSeeded(pool);
 }
 
@@ -780,6 +1019,703 @@ function normalizeStorageImportItems(payload = {}) {
         key: normalizedKey,
         valueJson,
         source: "browser"
+      };
+    })
+    .filter(Boolean);
+}
+
+function getInputValue(source = {}, camelKey = "", snakeKey = "") {
+  if (Object.prototype.hasOwnProperty.call(source, camelKey)) {
+    return source[camelKey];
+  }
+  if (snakeKey && Object.prototype.hasOwnProperty.call(source, snakeKey)) {
+    return source[snakeKey];
+  }
+  return undefined;
+}
+
+function normalizeMemoryUuid(value = "") {
+  const text = String(value || "").trim();
+  return UUID_PATTERN.test(text) ? text : "";
+}
+
+function normalizeOptionalText(value = "") {
+  const text = String(value || "").trim();
+  return text || null;
+}
+
+function normalizeRequiredText(value = "") {
+  return String(value || "").trim();
+}
+
+function normalizeMemoryScopeType(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return MEMORY_SCOPE_TYPES.has(normalized) ? normalized : "contact";
+}
+
+function normalizeMemoryStatus(value = "", fallback = "active") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (MEMORY_STATUSES.has(normalized)) {
+    return normalized;
+  }
+  return MEMORY_STATUSES.has(fallback) ? fallback : "active";
+}
+
+function normalizeMemoryEventType(value = "", fallback = "created") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (MEMORY_EVENT_TYPES.has(normalized)) {
+    return normalized;
+  }
+  return MEMORY_EVENT_TYPES.has(fallback) ? fallback : "created";
+}
+
+function normalizeMemoryType(value = "", fallback = "fact") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "core") {
+    return "relationship";
+  }
+  if (normalized === "scene") {
+    return "scene";
+  }
+  return normalized || fallback;
+}
+
+function normalizeJsonObjectValue(value, fallback = {}) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : fallback;
+}
+
+function normalizeJsonArrayValue(value, fallback = []) {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return normalizeTextArray(value);
+  }
+  return fallback;
+}
+
+function normalizeFiniteNumber(value, fallback = 0) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function normalizeScoreNumber(value, fallback = 0) {
+  const numeric = normalizeFiniteNumber(value, fallback);
+  const normalized = numeric > 1 ? numeric / 100 : numeric;
+  return Math.min(1, Math.max(0, normalized));
+}
+
+function normalizePositiveIntegerValue(value, fallback = 0) {
+  const numeric = Math.floor(normalizeFiniteNumber(value, fallback));
+  return numeric >= 0 ? numeric : fallback;
+}
+
+function normalizeTimestampValue(value, fallback = null) {
+  if (value == null || value === "") {
+    return fallback;
+  }
+  const numeric = Number(value);
+  const date = Number.isFinite(numeric) && numeric > 0 ? new Date(numeric) : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return fallback;
+  }
+  return date.toISOString();
+}
+
+function hashMemoryText(value = "") {
+  const text = String(value || "");
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(36);
+}
+
+function mapMemoryItemRow(row = {}) {
+  return {
+    id: String(row.id || "").trim(),
+    contactId: String(row.contact_id || "").trim(),
+    scopeType: normalizeMemoryScopeType(row.scope_type),
+    sourceConversationId: row.source_conversation_id || "",
+    memoryType: String(row.memory_type || "").trim(),
+    memorySubtype: row.memory_subtype || "",
+    semanticKey: row.semantic_key || "",
+    canonicalText: String(row.canonical_text || "").trim(),
+    summaryShort: String(row.summary_short || "").trim(),
+    summaryFaint: String(row.summary_faint || "").trim(),
+    keywords: Array.isArray(row.keywords) ? row.keywords : [],
+    entityRefs: Array.isArray(row.entity_refs) ? row.entity_refs : [],
+    baseImportance: normalizeFiniteNumber(row.base_importance, 0),
+    confidence: normalizeFiniteNumber(row.confidence, 0),
+    status: normalizeMemoryStatus(row.status),
+    statusChangedAt: row.status_changed_at || null,
+    firstObservedAt: row.first_observed_at || null,
+    lastObservedAt: row.last_observed_at || null,
+    lastReinforcedAt: row.last_reinforced_at || null,
+    lastRecalledAt: row.last_recalled_at || null,
+    reinforceCount: normalizePositiveIntegerValue(row.reinforce_count, 0),
+    recallCount: normalizePositiveIntegerValue(row.recall_count, 0),
+    emotionIntensity:
+      row.emotion_intensity == null ? null : normalizeFiniteNumber(row.emotion_intensity, 0),
+    emotionProfile: normalizeJsonObjectValue(row.emotion_profile, {}),
+    interactionTendency: normalizeJsonObjectValue(row.interaction_tendency, {}),
+    emotionSummary: String(row.emotion_summary || "").trim(),
+    arousalLevel: row.arousal_level == null ? null : normalizeFiniteNumber(row.arousal_level, 0),
+    archivedAt: row.archived_at || null,
+    supersededBy: row.superseded_by || null,
+    metadata: normalizeJsonObjectValue(row.metadata, {}),
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null
+  };
+}
+
+function mapMemoryRuntimeStateRow(row = {}) {
+  if (!row || typeof row !== "object" || !row.memory_item_id) {
+    return null;
+  }
+  return {
+    memoryItemId: String(row.memory_item_id || "").trim(),
+    activationScore: normalizeFiniteNumber(row.activation_score, 0),
+    stabilityScore: normalizeFiniteNumber(row.stability_score, 0),
+    impressionFloor: normalizeFiniteNumber(row.impression_floor, 0),
+    decayRate: normalizeFiniteNumber(row.decay_rate, 0),
+    cueRecallThreshold: normalizeFiniteNumber(row.cue_recall_threshold, 0),
+    lastComputedAt: row.last_computed_at || null,
+    lastDecayAt: row.last_decay_at || null,
+    nextDecayAt: row.next_decay_at || null,
+    lastRecalledScore:
+      row.last_recalled_score == null ? null : normalizeFiniteNumber(row.last_recalled_score, 0),
+    algorithmVersion: String(row.algorithm_version || "v1").trim() || "v1",
+    debugPayload: normalizeJsonObjectValue(row.debug_payload, {}),
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null
+  };
+}
+
+function mapMemoryEventRow(row = {}) {
+  return {
+    id: String(row.id || "").trim(),
+    memoryItemId: String(row.memory_item_id || "").trim(),
+    contactId: String(row.contact_id || "").trim(),
+    eventType: normalizeMemoryEventType(row.event_type),
+    eventTime: row.event_time || null,
+    actorType: String(row.actor_type || "").trim(),
+    actorRef: row.actor_ref || "",
+    sourceKind: row.source_kind || "",
+    sourceRef: normalizeJsonObjectValue(row.source_ref, {}),
+    reasonCode: row.reason_code || "",
+    deltaPayload: normalizeJsonObjectValue(row.delta_payload, {}),
+    beforeSnapshot: normalizeJsonObjectValue(row.before_snapshot, null),
+    afterSnapshot: normalizeJsonObjectValue(row.after_snapshot, null),
+    batchId: row.batch_id || "",
+    note: row.note || "",
+    metadata: normalizeJsonObjectValue(row.metadata, {}),
+    createdAt: row.created_at || null
+  };
+}
+
+function createMemorySnapshot(row = {}) {
+  const item = mapMemoryItemRow(row);
+  return {
+    canonicalText: item.canonicalText,
+    summaryShort: item.summaryShort,
+    summaryFaint: item.summaryFaint,
+    status: item.status,
+    baseImportance: item.baseImportance,
+    confidence: item.confidence,
+    emotionIntensity: item.emotionIntensity,
+    emotionProfile: item.emotionProfile,
+    interactionTendency: item.interactionTendency,
+    emotionSummary: item.emotionSummary,
+    firstObservedAt: item.firstObservedAt,
+    lastObservedAt: item.lastObservedAt,
+    lastReinforcedAt: item.lastReinforcedAt,
+    lastRecalledAt: item.lastRecalledAt
+  };
+}
+
+function normalizeMemoryItemInput(input = {}, fallback = {}) {
+  const source = input && typeof input === "object" ? input : {};
+  const fallbackItem = fallback && typeof fallback === "object" ? fallback : {};
+  const contactId = normalizeRequiredText(
+    getInputValue(source, "contactId", "contact_id") ?? fallbackItem.contactId
+  );
+  const canonicalText = normalizeRequiredText(
+    getInputValue(source, "canonicalText", "canonical_text") ??
+      source.content ??
+      source.text ??
+      fallbackItem.canonicalText
+  );
+  const memoryType = normalizeMemoryType(
+    getInputValue(source, "memoryType", "memory_type") ?? source.type ?? fallbackItem.memoryType
+  );
+  const summaryShort =
+    normalizeRequiredText(
+      getInputValue(source, "summaryShort", "summary_short") ?? fallbackItem.summaryShort
+    ) || canonicalText;
+  const summaryFaint = normalizeRequiredText(
+    getInputValue(source, "summaryFaint", "summary_faint") ?? fallbackItem.summaryFaint
+  );
+  const status = normalizeMemoryStatus(
+    getInputValue(source, "status", "status") ?? fallbackItem.status,
+    fallbackItem.status || "active"
+  );
+  const legacyId = normalizeRequiredText(source.id || source.legacyId || source.legacy_id);
+  const semanticKey = normalizeRequiredText(
+    getInputValue(source, "semanticKey", "semantic_key") ??
+      fallbackItem.semanticKey ??
+      (legacyId ? `legacy:${legacyId}` : "")
+  );
+  const generatedSemanticKey =
+    semanticKey || `auto:${hashMemoryText(`${contactId}|${memoryType}|${canonicalText}`)}`;
+  const baseImportance = normalizeFiniteNumber(
+    getInputValue(source, "baseImportance", "base_importance") ??
+      source.importance ??
+      fallbackItem.baseImportance,
+    fallbackItem.baseImportance ?? 50
+  );
+  const confidence = normalizeFiniteNumber(
+    getInputValue(source, "confidence", "confidence") ?? fallbackItem.confidence,
+    fallbackItem.confidence ?? 0.7
+  );
+  const firstObservedAt =
+    normalizeTimestampValue(
+      getInputValue(source, "firstObservedAt", "first_observed_at") ??
+        source.createdAt ??
+        fallbackItem.firstObservedAt
+    ) || new Date().toISOString();
+  const lastObservedAt =
+    normalizeTimestampValue(
+      getInputValue(source, "lastObservedAt", "last_observed_at") ??
+        source.updatedAt ??
+        fallbackItem.lastObservedAt
+    ) || firstObservedAt;
+
+  return {
+    id: normalizeMemoryUuid(source.id) || normalizeMemoryUuid(fallbackItem.id) || randomUUID(),
+    contactId,
+    scopeType: normalizeMemoryScopeType(
+      getInputValue(source, "scopeType", "scope_type") ?? fallbackItem.scopeType
+    ),
+    sourceConversationId: normalizeOptionalText(
+      getInputValue(source, "sourceConversationId", "source_conversation_id") ??
+        source.conversationId ??
+        fallbackItem.sourceConversationId
+    ),
+    memoryType,
+    memorySubtype: normalizeOptionalText(
+      getInputValue(source, "memorySubtype", "memory_subtype") ?? fallbackItem.memorySubtype
+    ),
+    semanticKey: generatedSemanticKey,
+    canonicalText,
+    summaryShort,
+    summaryFaint,
+    keywords: normalizeJsonArrayValue(getInputValue(source, "keywords", "keywords"), fallbackItem.keywords || []),
+    entityRefs: normalizeJsonArrayValue(
+      getInputValue(source, "entityRefs", "entity_refs"),
+      fallbackItem.entityRefs || []
+    ),
+    baseImportance,
+    confidence,
+    status,
+    firstObservedAt,
+    lastObservedAt,
+    lastReinforcedAt: normalizeTimestampValue(
+      getInputValue(source, "lastReinforcedAt", "last_reinforced_at") ??
+        fallbackItem.lastReinforcedAt
+    ),
+    lastRecalledAt: normalizeTimestampValue(
+      getInputValue(source, "lastRecalledAt", "last_recalled_at") ?? fallbackItem.lastRecalledAt
+    ),
+    reinforceCount: normalizePositiveIntegerValue(
+      getInputValue(source, "reinforceCount", "reinforce_count") ?? fallbackItem.reinforceCount,
+      fallbackItem.reinforceCount || 0
+    ),
+    recallCount: normalizePositiveIntegerValue(
+      getInputValue(source, "recallCount", "recall_count") ?? fallbackItem.recallCount,
+      fallbackItem.recallCount || 0
+    ),
+    emotionIntensity:
+      getInputValue(source, "emotionIntensity", "emotion_intensity") == null
+        ? fallbackItem.emotionIntensity ?? null
+        : normalizeFiniteNumber(getInputValue(source, "emotionIntensity", "emotion_intensity"), 0),
+    emotionProfile: normalizeJsonObjectValue(
+      getInputValue(source, "emotionProfile", "emotion_profile"),
+      fallbackItem.emotionProfile || {}
+    ),
+    interactionTendency: normalizeJsonObjectValue(
+      getInputValue(source, "interactionTendency", "interaction_tendency"),
+      fallbackItem.interactionTendency || {}
+    ),
+    emotionSummary: normalizeRequiredText(
+      getInputValue(source, "emotionSummary", "emotion_summary") ?? fallbackItem.emotionSummary
+    ),
+    arousalLevel:
+      getInputValue(source, "arousalLevel", "arousal_level") == null
+        ? fallbackItem.arousalLevel ?? null
+        : normalizeFiniteNumber(getInputValue(source, "arousalLevel", "arousal_level"), 0),
+    archivedAt: normalizeTimestampValue(
+      getInputValue(source, "archivedAt", "archived_at") ?? fallbackItem.archivedAt
+    ),
+    supersededBy: normalizeMemoryUuid(
+      getInputValue(source, "supersededBy", "superseded_by") ?? fallbackItem.supersededBy
+    ),
+    metadata: {
+      ...normalizeJsonObjectValue(fallbackItem.metadata, {}),
+      ...normalizeJsonObjectValue(getInputValue(source, "metadata", "metadata"), {}),
+      ...(legacyId && !UUID_PATTERN.test(legacyId) ? { legacyId } : {})
+    }
+  };
+}
+
+function buildInitialMemoryRuntimeState(item = {}) {
+  const importanceScore = normalizeScoreNumber(item.baseImportance, 0.5);
+  const confidenceScore = normalizeScoreNumber(item.confidence, 0.7);
+  const emotionScore = normalizeScoreNumber(item.emotionIntensity ?? 0, 0);
+  const activationScore = Math.min(
+    1,
+    Math.max(0.05, importanceScore * 0.55 + confidenceScore * 0.25 + emotionScore * 0.2)
+  );
+  const stabilityScore = Math.min(
+    1,
+    Math.max(0.05, importanceScore * 0.4 + confidenceScore * 0.35 + emotionScore * 0.25)
+  );
+  return {
+    activationScore,
+    stabilityScore,
+    impressionFloor: item.status === "faint" ? 0.2 : Math.min(0.25, importanceScore * 0.25),
+    decayRate: Math.max(0.01, 0.18 - stabilityScore * 0.1),
+    cueRecallThreshold: item.status === "dormant" ? 0.7 : 0.55,
+    algorithmVersion: "v1"
+  };
+}
+
+async function insertMemoryEvent(db, options = {}) {
+  const eventType = normalizeMemoryEventType(options.eventType || options.event_type);
+  const result = await db.query(
+    `
+      insert into memory_events (
+        id,
+        memory_item_id,
+        contact_id,
+        event_type,
+        event_time,
+        actor_type,
+        actor_ref,
+        source_kind,
+        source_ref,
+        reason_code,
+        delta_payload,
+        before_snapshot,
+        after_snapshot,
+        batch_id,
+        note,
+        metadata,
+        created_at
+      )
+      values (
+        $1,
+        $2,
+        $3,
+        $4,
+        coalesce($5::timestamptz, now()),
+        $6,
+        $7,
+        $8,
+        $9::jsonb,
+        $10,
+        $11::jsonb,
+        $12::jsonb,
+        $13::jsonb,
+        $14,
+        $15,
+        $16::jsonb,
+        now()
+      )
+      returning *
+    `,
+    [
+      normalizeMemoryUuid(options.id) || randomUUID(),
+      options.memoryItemId || options.memory_item_id,
+      String(options.contactId || options.contact_id || "").trim(),
+      eventType,
+      normalizeTimestampValue(options.eventTime || options.event_time),
+      String(options.actorType || options.actor_type || "node_backend").trim() || "node_backend",
+      normalizeOptionalText(options.actorRef || options.actor_ref),
+      normalizeOptionalText(options.sourceKind || options.source_kind),
+      JSON.stringify(normalizeJsonObjectValue(options.sourceRef || options.source_ref, {})),
+      normalizeOptionalText(options.reasonCode || options.reason_code),
+      JSON.stringify(normalizeJsonObjectValue(options.deltaPayload || options.delta_payload, {})),
+      options.beforeSnapshot || options.before_snapshot
+        ? JSON.stringify(normalizeJsonObjectValue(options.beforeSnapshot || options.before_snapshot, {}))
+        : null,
+      options.afterSnapshot || options.after_snapshot
+        ? JSON.stringify(normalizeJsonObjectValue(options.afterSnapshot || options.after_snapshot, {}))
+        : null,
+      normalizeOptionalText(options.batchId || options.batch_id),
+      normalizeOptionalText(options.note),
+      JSON.stringify(normalizeJsonObjectValue(options.metadata, {}))
+    ]
+  );
+  return mapMemoryEventRow(result.rows[0]);
+}
+
+async function createMemoryItemInDb(db, rawItem = {}, options = {}) {
+  const item = normalizeMemoryItemInput(rawItem);
+  if (!item.contactId) {
+    throw new Error("contactId is required.");
+  }
+  if (!item.canonicalText) {
+    throw new Error("canonicalText is required.");
+  }
+  const runtime = {
+    ...buildInitialMemoryRuntimeState(item),
+    ...normalizeJsonObjectValue(options.runtimeState, {})
+  };
+  const itemResult = await db.query(
+    `
+      insert into memory_items (
+        id,
+        contact_id,
+        scope_type,
+        source_conversation_id,
+        memory_type,
+        memory_subtype,
+        semantic_key,
+        canonical_text,
+        summary_short,
+        summary_faint,
+        keywords,
+        entity_refs,
+        base_importance,
+        confidence,
+        status,
+        status_changed_at,
+        first_observed_at,
+        last_observed_at,
+        last_reinforced_at,
+        last_recalled_at,
+        reinforce_count,
+        recall_count,
+        emotion_intensity,
+        emotion_profile,
+        interaction_tendency,
+        emotion_summary,
+        arousal_level,
+        archived_at,
+        superseded_by,
+        metadata,
+        created_at,
+        updated_at
+      )
+      values (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        $10,
+        $11::jsonb,
+        $12::jsonb,
+        $13,
+        $14,
+        $15,
+        now(),
+        $16,
+        $17,
+        $18,
+        $19,
+        $20,
+        $21,
+        $22,
+        $23::jsonb,
+        $24::jsonb,
+        $25,
+        $26,
+        $27,
+        $28,
+        $29::jsonb,
+        now(),
+        now()
+      )
+      returning *
+    `,
+    [
+      item.id,
+      item.contactId,
+      item.scopeType,
+      item.sourceConversationId,
+      item.memoryType,
+      item.memorySubtype,
+      item.semanticKey,
+      item.canonicalText,
+      item.summaryShort,
+      item.summaryFaint,
+      JSON.stringify(item.keywords),
+      JSON.stringify(item.entityRefs),
+      item.baseImportance,
+      item.confidence,
+      item.status,
+      item.firstObservedAt,
+      item.lastObservedAt,
+      item.lastReinforcedAt,
+      item.lastRecalledAt,
+      item.reinforceCount,
+      item.recallCount,
+      item.emotionIntensity,
+      JSON.stringify(item.emotionProfile),
+      JSON.stringify(item.interactionTendency),
+      item.emotionSummary,
+      item.arousalLevel,
+      item.archivedAt,
+      item.supersededBy || null,
+      JSON.stringify(item.metadata)
+    ]
+  );
+  const savedItem = itemResult.rows[0];
+  const runtimeResult = await db.query(
+    `
+      insert into memory_runtime_state (
+        memory_item_id,
+        activation_score,
+        stability_score,
+        impression_floor,
+        decay_rate,
+        cue_recall_threshold,
+        last_computed_at,
+        algorithm_version,
+        debug_payload,
+        created_at,
+        updated_at
+      )
+      values ($1, $2, $3, $4, $5, $6, now(), $7, $8::jsonb, now(), now())
+      returning *
+    `,
+    [
+      savedItem.id,
+      normalizeFiniteNumber(runtime.activationScore ?? runtime.activation_score, 0),
+      normalizeFiniteNumber(runtime.stabilityScore ?? runtime.stability_score, 0),
+      normalizeFiniteNumber(runtime.impressionFloor ?? runtime.impression_floor, 0),
+      normalizeFiniteNumber(runtime.decayRate ?? runtime.decay_rate, 0),
+      normalizeFiniteNumber(runtime.cueRecallThreshold ?? runtime.cue_recall_threshold, 0),
+      String(runtime.algorithmVersion || runtime.algorithm_version || "v1").trim() || "v1",
+      JSON.stringify(normalizeJsonObjectValue(runtime.debugPayload || runtime.debug_payload, {}))
+    ]
+  );
+  const event = await insertMemoryEvent(db, {
+    memoryItemId: savedItem.id,
+    contactId: savedItem.contact_id,
+    eventType: options.eventType || "created",
+    actorType: options.actorType || "node_backend",
+    actorRef: options.actorRef,
+    sourceKind: options.sourceKind || "api",
+    sourceRef: options.sourceRef,
+    reasonCode: options.reasonCode,
+    deltaPayload: options.deltaPayload || { status: savedItem.status },
+    afterSnapshot: createMemorySnapshot(savedItem),
+    batchId: options.batchId,
+    note: options.note
+  });
+
+  return {
+    item: mapMemoryItemRow(savedItem),
+    runtimeState: mapMemoryRuntimeStateRow(runtimeResult.rows[0]),
+    event
+  };
+}
+
+async function loadMemoryItemWithRuntime(db, id = "") {
+  const result = await db.query(
+    `
+      select i.*, to_jsonb(r) as runtime_state
+      from memory_items i
+      left join memory_runtime_state r on r.memory_item_id = i.id
+      where i.id = $1
+      limit 1
+    `,
+    [id]
+  );
+  if (!result.rows.length) {
+    return null;
+  }
+  const row = result.rows[0];
+  return {
+    item: mapMemoryItemRow(row),
+    runtimeState: mapMemoryRuntimeStateRow(row.runtime_state)
+  };
+}
+
+function normalizeMemoryStatusFilter(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return ["active", "faint", "dormant"];
+  }
+  if (raw.toLowerCase() === "all") {
+    return Array.from(MEMORY_STATUSES);
+  }
+  const statuses = raw
+    .split(",")
+    .map((item) => String(item || "").trim().toLowerCase())
+    .filter((item) => MEMORY_STATUSES.has(item));
+  return statuses.length ? Array.from(new Set(statuses)) : ["active", "faint", "dormant"];
+}
+
+function normalizeMemoryImportItems(payload = {}) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const contactId = normalizeRequiredText(source.contactId || source.contact_id);
+  const rawItems = Array.isArray(source.items)
+    ? source.items
+    : Array.isArray(source.memories)
+      ? source.memories
+      : Array.isArray(source)
+        ? source
+        : [];
+  return rawItems
+    .map((item, index) => {
+      const record = item && typeof item === "object" ? item : {};
+      const fallbackContactId = normalizeRequiredText(
+        getInputValue(record, "contactId", "contact_id") || contactId
+      );
+      const canonicalText = normalizeRequiredText(
+        getInputValue(record, "canonicalText", "canonical_text") || record.content || record.text
+      );
+      if (!fallbackContactId || !canonicalText) {
+        return null;
+      }
+      const legacyId = normalizeRequiredText(record.id || `legacy_${index}`);
+      const memoryType = normalizeMemoryType(record.type || record.memoryType || record.memory_type);
+      const recordMetadata = normalizeJsonObjectValue(record.metadata, {});
+      return {
+        ...record,
+        id: legacyId,
+        contactId: fallbackContactId,
+        memoryType,
+        canonicalText,
+        summaryShort: record.summaryShort || record.summary_short || canonicalText,
+        summaryFaint: record.summaryFaint || record.summary_faint || "",
+        semanticKey:
+          record.semanticKey ||
+          record.semantic_key ||
+          (legacyId && !UUID_PATTERN.test(legacyId)
+            ? `legacy:${legacyId}`
+            : `legacy:${hashMemoryText(`${fallbackContactId}|${memoryType}|${legacyId}|${canonicalText}`)}`),
+        baseImportance: record.baseImportance ?? record.base_importance ?? record.importance ?? 50,
+        confidence: record.confidence ?? 0.7,
+        firstObservedAt: record.firstObservedAt || record.first_observed_at || record.createdAt,
+        lastObservedAt: record.lastObservedAt || record.last_observed_at || record.updatedAt,
+        metadata: {
+          ...recordMetadata,
+          legacySource: "browser_memory",
+          legacyId,
+          ...(legacyId && !recordMetadata.localMemoryId ? { localMemoryId: legacyId } : {}),
+          ...(record.type && !recordMetadata.localMemoryType ? { localMemoryType: record.type } : {}),
+          ...(record.source && !recordMetadata.localMemorySource ? { localMemorySource: record.source } : {}),
+          importedFromLocalCache: true
+        }
       };
     })
     .filter(Boolean);
@@ -1112,6 +2048,586 @@ app.post("/api/storage/import", async (request, response) => {
     response
       .status(500)
       .json(createJsonError("Failed to import storage payload.", error?.message));
+  } finally {
+    client.release();
+  }
+});
+
+app.get("/api/memory/items", async (request, response) => {
+  const contactId = String(request.query.contactId || request.query.contact_id || "").trim();
+  const statuses = normalizeMemoryStatusFilter(request.query.status);
+  const includeRuntime = String(request.query.includeRuntime || "true").trim() !== "false";
+  const limit = Math.min(
+    200,
+    Math.max(1, Number.parseInt(String(request.query.limit || "80"), 10) || 80)
+  );
+  const params = [];
+  const clauses = [];
+
+  if (contactId) {
+    params.push(contactId);
+    clauses.push(`i.contact_id = $${params.length}`);
+  }
+  if (statuses.length) {
+    params.push(statuses);
+    clauses.push(`i.status = any($${params.length}::text[])`);
+  }
+  params.push(limit);
+  const limitPlaceholder = `$${params.length}`;
+
+  try {
+    const result = await pool.query(
+      `
+        select i.*, ${includeRuntime ? "to_jsonb(r)" : "null::jsonb"} as runtime_state
+        from memory_items i
+        left join memory_runtime_state r on r.memory_item_id = i.id
+        ${clauses.length ? `where ${clauses.join(" and ")}` : ""}
+        order by
+          case i.status
+            when 'active' then 1
+            when 'faint' then 2
+            when 'dormant' then 3
+            when 'archived' then 4
+            else 5
+          end asc,
+          i.updated_at desc
+        limit ${limitPlaceholder}
+      `,
+      params
+    );
+    response.json({
+      ok: true,
+      items: result.rows.map((row) => ({
+        ...mapMemoryItemRow(row),
+        runtimeState: includeRuntime ? mapMemoryRuntimeStateRow(row.runtime_state) : null
+      }))
+    });
+  } catch (error) {
+    response.status(500).json(createJsonError("Failed to load memory items.", error?.message));
+  }
+});
+
+app.get("/api/memory/items/:id", async (request, response) => {
+  const id = normalizeMemoryUuid(request.params.id);
+  if (!id) {
+    response.status(400).json(createJsonError("Valid memory item id is required."));
+    return;
+  }
+  try {
+    const loaded = await loadMemoryItemWithRuntime(pool, id);
+    if (!loaded) {
+      response.status(404).json(createJsonError("Memory item was not found."));
+      return;
+    }
+    response.json({
+      ok: true,
+      ...loaded
+    });
+  } catch (error) {
+    response.status(500).json(createJsonError("Failed to load memory item.", error?.message));
+  }
+});
+
+app.post("/api/memory/items", async (request, response) => {
+  const body = request.body && typeof request.body === "object" ? request.body : {};
+  const rawItem = body.item && typeof body.item === "object" ? body.item : body;
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const saved = await createMemoryItemInDb(client, rawItem, {
+      eventType: "created",
+      actorType: body.actorType || "node_backend",
+      actorRef: body.actorRef,
+      sourceKind: body.sourceKind || "api",
+      sourceRef: body.sourceRef,
+      reasonCode: body.reasonCode,
+      batchId: body.batchId,
+      note: body.note,
+      runtimeState: body.runtimeState
+    });
+    await client.query("commit");
+    response.json({
+      ok: true,
+      ...saved
+    });
+  } catch (error) {
+    await client.query("rollback");
+    response
+      .status(String(error?.message || "").includes("required") ? 400 : 500)
+      .json(createJsonError("Failed to create memory item.", error?.message));
+  } finally {
+    client.release();
+  }
+});
+
+app.patch("/api/memory/items/:id", async (request, response) => {
+  const id = normalizeMemoryUuid(request.params.id);
+  if (!id) {
+    response.status(400).json(createJsonError("Valid memory item id is required."));
+    return;
+  }
+  const body = request.body && typeof request.body === "object" ? request.body : {};
+  const rawItem = body.item && typeof body.item === "object" ? body.item : body;
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const existingResult = await client.query("select * from memory_items where id = $1 limit 1", [
+      id
+    ]);
+    if (!existingResult.rows.length) {
+      await client.query("rollback");
+      response.status(404).json(createJsonError("Memory item was not found."));
+      return;
+    }
+    const existingRow = existingResult.rows[0];
+    const existingItem = mapMemoryItemRow(existingRow);
+    const nextItem = normalizeMemoryItemInput(
+      {
+        ...existingItem,
+        ...rawItem,
+        id,
+        contactId: existingItem.contactId
+      },
+      existingItem
+    );
+    const statusChanged = nextItem.status !== existingItem.status;
+    const updateResult = await client.query(
+      `
+        update memory_items
+        set scope_type = $2,
+            source_conversation_id = $3,
+            memory_type = $4,
+            memory_subtype = $5,
+            semantic_key = $6,
+            canonical_text = $7,
+            summary_short = $8,
+            summary_faint = $9,
+            keywords = $10::jsonb,
+            entity_refs = $11::jsonb,
+            base_importance = $12,
+            confidence = $13,
+            status = $14,
+            status_changed_at = case when status <> $14 then now() else status_changed_at end,
+            emotion_intensity = $15,
+            emotion_profile = $16::jsonb,
+            interaction_tendency = $17::jsonb,
+            emotion_summary = $18,
+            arousal_level = $19,
+            archived_at = $20,
+            metadata = $21::jsonb,
+            updated_at = now()
+        where id = $1
+        returning *
+      `,
+      [
+        id,
+        nextItem.scopeType,
+        nextItem.sourceConversationId,
+        nextItem.memoryType,
+        nextItem.memorySubtype,
+        nextItem.semanticKey,
+        nextItem.canonicalText,
+        nextItem.summaryShort,
+        nextItem.summaryFaint,
+        JSON.stringify(nextItem.keywords),
+        JSON.stringify(nextItem.entityRefs),
+        nextItem.baseImportance,
+        nextItem.confidence,
+        nextItem.status,
+        nextItem.emotionIntensity,
+        JSON.stringify(nextItem.emotionProfile),
+        JSON.stringify(nextItem.interactionTendency),
+        nextItem.emotionSummary,
+        nextItem.arousalLevel,
+        nextItem.archivedAt,
+        JSON.stringify(nextItem.metadata)
+      ]
+    );
+    const updatedRow = updateResult.rows[0];
+    const editedEvent = await insertMemoryEvent(client, {
+      memoryItemId: updatedRow.id,
+      contactId: updatedRow.contact_id,
+      eventType: "edited",
+      actorType: body.actorType || "node_backend",
+      actorRef: body.actorRef,
+      sourceKind: body.sourceKind || "api",
+      sourceRef: body.sourceRef,
+      reasonCode: body.reasonCode || (statusChanged ? "manual_status_change" : "manual_edit"),
+      beforeSnapshot: createMemorySnapshot(existingRow),
+      afterSnapshot: createMemorySnapshot(updatedRow),
+      batchId: body.batchId,
+      note: body.note
+    });
+    let statusEvent = null;
+    if (statusChanged) {
+      statusEvent = await insertMemoryEvent(client, {
+        memoryItemId: updatedRow.id,
+        contactId: updatedRow.contact_id,
+        eventType: "status_changed",
+        actorType: body.actorType || "node_backend",
+        actorRef: body.actorRef,
+        sourceKind: body.sourceKind || "api",
+        reasonCode: body.reasonCode || "manual_status_change",
+        deltaPayload: { status: { from: existingItem.status, to: nextItem.status } },
+        batchId: body.batchId
+      });
+    }
+    const loaded = await loadMemoryItemWithRuntime(client, id);
+    await client.query("commit");
+    response.json({
+      ok: true,
+      ...loaded,
+      events: [editedEvent, statusEvent].filter(Boolean)
+    });
+  } catch (error) {
+    await client.query("rollback");
+    response.status(500).json(createJsonError("Failed to update memory item.", error?.message));
+  } finally {
+    client.release();
+  }
+});
+
+app.post("/api/memory/items/:id/reinforce", async (request, response) => {
+  const id = normalizeMemoryUuid(request.params.id);
+  if (!id) {
+    response.status(400).json(createJsonError("Valid memory item id is required."));
+    return;
+  }
+  const body = request.body && typeof request.body === "object" ? request.body : {};
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const existingResult = await client.query("select * from memory_items where id = $1 limit 1", [
+      id
+    ]);
+    if (!existingResult.rows.length) {
+      await client.query("rollback");
+      response.status(404).json(createJsonError("Memory item was not found."));
+      return;
+    }
+    const existingRow = existingResult.rows[0];
+    const existingItem = mapMemoryItemRow(existingRow);
+    const nextStatus = body.status
+      ? normalizeMemoryStatus(body.status, existingItem.status)
+      : existingItem.status === "faint" || existingItem.status === "dormant"
+        ? "active"
+        : existingItem.status;
+    const result = await client.query(
+      `
+        update memory_items
+        set last_observed_at = now(),
+            last_reinforced_at = now(),
+            reinforce_count = reinforce_count + 1,
+            status = $2,
+            status_changed_at = case when status <> $2 then now() else status_changed_at end,
+            updated_at = now()
+        where id = $1
+        returning *
+      `,
+      [id, nextStatus]
+    );
+    const updatedRow = result.rows[0];
+    const runtimeResult = await client.query(
+      `
+        update memory_runtime_state
+        set activation_score = least(1, activation_score + $2),
+            stability_score = least(1, stability_score + $3),
+            updated_at = now()
+        where memory_item_id = $1
+        returning *
+      `,
+      [
+        id,
+        normalizeFiniteNumber(body.activationBoost ?? body.activation_boost, 0.15),
+        normalizeFiniteNumber(body.stabilityBoost ?? body.stability_boost, 0.05)
+      ]
+    );
+    const events = [];
+    events.push(
+      await insertMemoryEvent(client, {
+        memoryItemId: updatedRow.id,
+        contactId: updatedRow.contact_id,
+        eventType: "reinforced",
+        actorType: body.actorType || "node_backend",
+        actorRef: body.actorRef,
+        sourceKind: body.sourceKind || "api",
+        sourceRef: body.sourceRef,
+        reasonCode: body.reasonCode || "manual_reinforce",
+        deltaPayload: {
+          reinforceCount: {
+            from: existingItem.reinforceCount,
+            to: existingItem.reinforceCount + 1
+          }
+        },
+        batchId: body.batchId,
+        note: body.note
+      })
+    );
+    if (updatedRow.status !== existingRow.status) {
+      events.push(
+        await insertMemoryEvent(client, {
+          memoryItemId: updatedRow.id,
+          contactId: updatedRow.contact_id,
+          eventType: "status_changed",
+          actorType: body.actorType || "node_backend",
+          sourceKind: body.sourceKind || "api",
+          reasonCode: body.reasonCode || "reinforced_status_recovery",
+          deltaPayload: { status: { from: existingRow.status, to: updatedRow.status } },
+          batchId: body.batchId
+        })
+      );
+    }
+    await client.query("commit");
+    response.json({
+      ok: true,
+      item: mapMemoryItemRow(updatedRow),
+      runtimeState: mapMemoryRuntimeStateRow(runtimeResult.rows[0]),
+      events
+    });
+  } catch (error) {
+    await client.query("rollback");
+    response.status(500).json(createJsonError("Failed to reinforce memory item.", error?.message));
+  } finally {
+    client.release();
+  }
+});
+
+app.post("/api/memory/items/:id/recall", async (request, response) => {
+  const id = normalizeMemoryUuid(request.params.id);
+  if (!id) {
+    response.status(400).json(createJsonError("Valid memory item id is required."));
+    return;
+  }
+  const body = request.body && typeof request.body === "object" ? request.body : {};
+  const recalledScore = normalizeFiniteNumber(body.recalledScore ?? body.recalled_score, 0);
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const result = await client.query(
+      `
+        update memory_items
+        set last_recalled_at = now(),
+            recall_count = recall_count + 1,
+            updated_at = now()
+        where id = $1
+        returning *
+      `,
+      [id]
+    );
+    if (!result.rows.length) {
+      await client.query("rollback");
+      response.status(404).json(createJsonError("Memory item was not found."));
+      return;
+    }
+    const itemRow = result.rows[0];
+    const runtimeResult = await client.query(
+      `
+        update memory_runtime_state
+        set activation_score = least(1, activation_score + $2),
+            last_recalled_score = $3,
+            updated_at = now()
+        where memory_item_id = $1
+        returning *
+      `,
+      [id, normalizeFiniteNumber(body.activationBoost ?? body.activation_boost, 0.05), recalledScore]
+    );
+    const event = await insertMemoryEvent(client, {
+      memoryItemId: itemRow.id,
+      contactId: itemRow.contact_id,
+      eventType: "recalled",
+      actorType: body.actorType || "node_backend",
+      actorRef: body.actorRef,
+      sourceKind: body.sourceKind || "prompt",
+      sourceRef: body.sourceRef,
+      reasonCode: body.reasonCode || "prompt_recall",
+      deltaPayload: {
+        usedInPrompt: Boolean(body.usedInPrompt ?? true),
+        recalledScore,
+        cueTerms: normalizeJsonArrayValue(body.cueTerms || body.cue_terms, [])
+      },
+      batchId: body.batchId,
+      note: body.note
+    });
+    await client.query("commit");
+    response.json({
+      ok: true,
+      item: mapMemoryItemRow(itemRow),
+      runtimeState: mapMemoryRuntimeStateRow(runtimeResult.rows[0]),
+      event
+    });
+  } catch (error) {
+    await client.query("rollback");
+    response.status(500).json(createJsonError("Failed to mark memory as recalled.", error?.message));
+  } finally {
+    client.release();
+  }
+});
+
+app.get("/api/memory/items/:id/events", async (request, response) => {
+  const id = normalizeMemoryUuid(request.params.id);
+  if (!id) {
+    response.status(400).json(createJsonError("Valid memory item id is required."));
+    return;
+  }
+  const limit = Math.min(
+    300,
+    Math.max(1, Number.parseInt(String(request.query.limit || "100"), 10) || 100)
+  );
+  try {
+    const result = await pool.query(
+      `
+        select *
+        from memory_events
+        where memory_item_id = $1
+        order by event_time desc, created_at desc
+        limit $2
+      `,
+      [id, limit]
+    );
+    response.json({
+      ok: true,
+      events: result.rows.map(mapMemoryEventRow)
+    });
+  } catch (error) {
+    response.status(500).json(createJsonError("Failed to load memory events.", error?.message));
+  }
+});
+
+app.post("/api/memory/import", async (request, response) => {
+  const items = normalizeMemoryImportItems(request.body);
+  if (!items.length) {
+    response.status(400).json(createJsonError("No memory items were provided."));
+    return;
+  }
+  const batchId = randomUUID();
+  const runId = randomUUID();
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await client.query(
+      `
+        insert into migration_runs (id, type, status, started_at, summary)
+        values ($1, 'memory_import', 'running', now(), $2::jsonb)
+      `,
+      [runId, JSON.stringify({ requestedItems: items.length, batchId })]
+    );
+
+    const importedIds = [];
+    const skipped = [];
+    for (const item of items) {
+      const semanticKey = String(item.semanticKey || item.semantic_key || "").trim();
+      const legacyId = normalizeRequiredText(
+        item.metadata?.legacyId || item.metadata?.localMemoryId || item.legacyId || item.id
+      );
+      let existingMatch = null;
+      if (semanticKey) {
+        const existingResult = await client.query(
+          `
+            select id
+            from memory_items
+            where contact_id = $1
+              and semantic_key = $2
+            limit 1
+          `,
+          [item.contactId, semanticKey]
+        );
+        if (existingResult.rows.length) {
+          existingMatch = {
+            reason: "semantic_key_exists",
+            id: existingResult.rows[0].id,
+            semanticKey
+          };
+        }
+      }
+      if (!existingMatch && legacyId) {
+        const existingLegacyResult = await client.query(
+          `
+            select id
+            from memory_items
+            where contact_id = $1
+              and (
+                coalesce(metadata ->> 'legacyId', '') = $2
+                or coalesce(metadata ->> 'localMemoryId', '') = $2
+              )
+            limit 1
+          `,
+          [item.contactId, legacyId]
+        );
+        if (existingLegacyResult.rows.length) {
+          existingMatch = {
+            reason: "legacy_id_exists",
+            id: existingLegacyResult.rows[0].id,
+            legacyId
+          };
+        }
+      }
+      if (existingMatch) {
+        skipped.push(existingMatch);
+        continue;
+      }
+      const saved = await createMemoryItemInDb(client, item, {
+        eventType: "imported",
+        actorType: "migration",
+        sourceKind: "import",
+        reasonCode: "legacy_memory_import",
+        batchId,
+        note: "Imported from legacy browser memory cache."
+      });
+      importedIds.push(saved.item.id);
+    }
+
+    await client.query(
+      `
+        update migration_runs
+        set status = 'completed',
+            finished_at = now(),
+            summary = $2::jsonb
+        where id = $1
+      `,
+      [
+        runId,
+        JSON.stringify({
+          requestedItems: items.length,
+          importedItems: importedIds.length,
+          skippedItems: skipped.length,
+          batchId,
+          importedIds,
+          skipped
+        })
+      ]
+    );
+    await client.query("commit");
+    response.json({
+      ok: true,
+      migrationRunId: runId,
+      batchId,
+      importedItems: importedIds.length,
+      skippedItems: skipped.length,
+      importedIds,
+      skipped
+    });
+  } catch (error) {
+    await client.query("rollback");
+    try {
+      await pool.query(
+        `
+          insert into migration_runs (id, type, status, started_at, finished_at, summary, error)
+          values ($1, 'memory_import', 'failed', now(), now(), $2::jsonb, $3)
+          on conflict (id) do update
+            set status = excluded.status,
+                finished_at = excluded.finished_at,
+                summary = excluded.summary,
+                error = excluded.error
+        `,
+        [
+          runId,
+          JSON.stringify({ requestedItems: items.length, batchId }),
+          error?.message || "Unknown memory import error"
+        ]
+      );
+    } catch (_migrationError) {
+    }
+    response.status(500).json(createJsonError("Failed to import memory items.", error?.message));
   } finally {
     client.release();
   }
