@@ -5,8 +5,8 @@ const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GROK_MODEL = "grok-4";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 const DEFAULT_TEMPERATURE = 0.85;
-const APP_BUILD_VERSION = "20260416-184600";
-const APP_BUILD_UPDATED_AT = "2026-04-16 18:46:00";
+const APP_BUILD_VERSION = "20260416-191200";
+const APP_BUILD_UPDATED_AT = "2026-04-16 19:12:00";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -1359,8 +1359,14 @@ async function requestHomeStorageApi(pathname, options = {}) {
   }
 
   if (!response.ok || payload?.ok === false) {
+    const baseMessage = String(
+      payload?.error || `请求失败（HTTP ${response.status || 500}）。`
+    ).trim();
+    const detailsMessage = String(payload?.details || "").trim();
     throw new Error(
-      String(payload?.error || payload?.details || `请求失败（HTTP ${response.status || 500}）。`).trim()
+      detailsMessage && detailsMessage !== baseMessage
+        ? `${baseMessage} ${detailsMessage}`
+        : baseMessage
     );
   }
 

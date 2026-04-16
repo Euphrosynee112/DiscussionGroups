@@ -64,13 +64,57 @@ function parseJsonValue(value, fallback = null) {
   }
 }
 
+function sanitizeJsonbStringValue(value = "", stats = null) {
+  const text = String(value || "");
+  let mutated = false;
+  let result = "";
+
+  for (let index = 0; index < text.length; index += 1) {
+    const codeUnit = text.charCodeAt(index);
+
+    if (codeUnit === 0x0000) {
+      mutated = true;
+      result += "\\u0000";
+      if (stats) {
+        stats.replacedNullChars = (stats.replacedNullChars || 0) + 1;
+      }
+      continue;
+    }
+
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const nextCodeUnit =
+        index + 1 < text.length ? text.charCodeAt(index + 1) : null;
+      if (nextCodeUnit != null && nextCodeUnit >= 0xdc00 && nextCodeUnit <= 0xdfff) {
+        result += text[index] + text[index + 1];
+        index += 1;
+        continue;
+      }
+      mutated = true;
+      result += "\ufffd";
+      if (stats) {
+        stats.replacedInvalidSurrogates = (stats.replacedInvalidSurrogates || 0) + 1;
+      }
+      continue;
+    }
+
+    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      mutated = true;
+      result += "\ufffd";
+      if (stats) {
+        stats.replacedInvalidSurrogates = (stats.replacedInvalidSurrogates || 0) + 1;
+      }
+      continue;
+    }
+
+    result += text[index];
+  }
+
+  return mutated ? result : text;
+}
+
 function sanitizeJsonbValue(value, stats = null) {
   if (typeof value === "string") {
-    const nullCharMatches = value.match(/\u0000/g);
-    if (nullCharMatches?.length && stats) {
-      stats.replacedNullChars = (stats.replacedNullChars || 0) + nullCharMatches.length;
-    }
-    return value.replace(/\u0000/g, "\\u0000");
+    return sanitizeJsonbStringValue(value, stats);
   }
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeJsonbValue(item, stats));
@@ -2693,10 +2737,14 @@ app.post("/api/storage/import", async (request, response) => {
       currentItemIndex = index;
       const sanitizeStats = {};
       const sanitizedValueJson = sanitizeJsonbValue(item.valueJson, sanitizeStats);
-      if (Number(sanitizeStats.replacedNullChars) > 0) {
+      if (
+        Number(sanitizeStats.replacedNullChars) > 0 ||
+        Number(sanitizeStats.replacedInvalidSurrogates) > 0
+      ) {
         sanitizedKeys.push({
           key: item.key,
-          replacedNullChars: sanitizeStats.replacedNullChars
+          replacedNullChars: Number(sanitizeStats.replacedNullChars) || 0,
+          replacedInvalidSurrogates: Number(sanitizeStats.replacedInvalidSurrogates) || 0
         });
       }
       const result = await client.query(
@@ -2773,6 +2821,13 @@ app.post("/api/storage/import", async (request, response) => {
       );
     } catch (_migrationError) {
     }
+    console.error("[Pulse Server] storage import failed", {
+      runId,
+      failedKey: currentItem?.key || "",
+      failedSource: currentItem?.source || "",
+      failedValueType: describeStorageValue(currentItem?.valueJson),
+      error: error?.message || "Unknown import error"
+    });
     response
       .status(500)
       .json(createJsonError("Failed to import storage payload.", error?.message));
