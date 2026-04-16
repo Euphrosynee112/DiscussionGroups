@@ -6873,7 +6873,22 @@ function buildTimeAwarenessContext(promptSettings, settings = loadSettings()) {
   if (!promptSettings.timeAwareness) {
     return "";
   }
-  return `当前本地时间：${formatAwarenessTime(getPromptNow(settings))}`;
+  const baseNow = new Date();
+  const manualTimeSettings =
+    typeof window.PulsePromptConfig?.normalizeManualTimeSettings === "function"
+      ? window.PulsePromptConfig.normalizeManualTimeSettings(
+          settings?.manualTimeSettings,
+          baseNow
+        )
+      : {
+          enabled: Boolean(settings?.manualTimeSettings?.enabled)
+        };
+  const hasManualPromptTime = Boolean(manualTimeSettings?.enabled);
+  const promptNow =
+    window.PulsePromptConfig?.resolvePromptNow?.(settings, baseNow) || getPromptNow(settings);
+  return `${
+    hasManualPromptTime ? "当前生效时间（用户手动设定）" : "当前本地时间"
+  }：${formatAwarenessTime(promptNow)}`;
 }
 
 function getHotTopicsMountDiagnostics(settings, promptSettings) {
