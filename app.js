@@ -13,6 +13,7 @@ const DIRECT_MESSAGES_KEY = "x_style_generator_direct_messages_v1";
 const MESSAGE_CONTACTS_KEY = "x_style_generator_message_contacts_v1";
 const MESSAGE_THREADS_KEY = "x_style_generator_message_threads_v1";
 const MESSAGE_SHARE_INBOX_KEY = "x_style_generator_message_share_inbox_v1";
+const MESSAGE_VIDEO_MEDIA_KEY = "x_style_generator_message_video_media_v1";
 const DEFAULT_POST_COUNT = 10;
 const DEFAULT_REPLY_COUNT = 4;
 const MAX_FEED_ITEMS = 50;
@@ -4191,6 +4192,87 @@ function cloneStoredConversationEntries(entries = []) {
   }));
 }
 
+function normalizeStoredConversationVideoMediaPayload(payload = {}) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const normalized = {};
+  Object.keys(source).forEach((contactId) => {
+    const resolvedContactId = String(contactId || "").trim();
+    if (!resolvedContactId) {
+      return;
+    }
+    const entry = source[contactId];
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+    const videoContactImage = String(entry.videoContactImage || "").trim();
+    const videoUserImage = String(entry.videoUserImage || "").trim();
+    if (!videoContactImage && !videoUserImage) {
+      return;
+    }
+    normalized[resolvedContactId] = {
+      videoContactImage,
+      videoUserImage
+    };
+  });
+  return normalized;
+}
+
+function loadStoredConversationVideoMediaMap() {
+  return normalizeStoredConversationVideoMediaPayload(readStoredJson(MESSAGE_VIDEO_MEDIA_KEY, {}));
+}
+
+function persistStoredConversationVideoMediaMap(payload = {}) {
+  const normalized = normalizeStoredConversationVideoMediaPayload(payload);
+  return safeSetItem(MESSAGE_VIDEO_MEDIA_KEY, JSON.stringify(normalized));
+}
+
+function migrateStoredConversationVideoMedia(entries = []) {
+  const sourceEntries = cloneStoredConversationEntries(entries);
+  let mediaMap = loadStoredConversationVideoMediaMap();
+  let hasLegacyMedia = false;
+  let mediaChanged = false;
+
+  const nextEntries = sourceEntries.map((conversation) => {
+    if (!conversation || typeof conversation !== "object") {
+      return conversation;
+    }
+    const resolvedContactId = String(conversation.contactId || "").trim();
+    const videoContactImage = String(conversation.videoContactImage || "").trim();
+    const videoUserImage = String(conversation.videoUserImage || "").trim();
+    if (videoContactImage || videoUserImage) {
+      hasLegacyMedia = true;
+      if (resolvedContactId) {
+        const currentEntry = mediaMap[resolvedContactId] || {};
+        const nextEntry = {
+          videoContactImage: currentEntry.videoContactImage || videoContactImage,
+          videoUserImage: currentEntry.videoUserImage || videoUserImage
+        };
+        if (
+          nextEntry.videoContactImage !== currentEntry.videoContactImage ||
+          nextEntry.videoUserImage !== currentEntry.videoUserImage
+        ) {
+          mediaMap = {
+            ...mediaMap,
+            [resolvedContactId]: nextEntry
+          };
+          mediaChanged = true;
+        }
+      }
+    }
+    delete conversation.videoContactImage;
+    delete conversation.videoUserImage;
+    return conversation;
+  });
+
+  return {
+    entries: nextEntries,
+    hasLegacyMedia,
+    mediaChanged,
+    mediaMap,
+    mediaPersisted: mediaChanged ? persistStoredConversationVideoMediaMap(mediaMap) : true
+  };
+}
+
 function buildStoredConversationImageFallbackText(description = "") {
   const resolvedDescription = String(description || "").trim();
   return ["[图片消息]", resolvedDescription ? `图片说明：${resolvedDescription}` : ""]
@@ -4287,7 +4369,10 @@ function relieveChatStorageForThreadShare(inboxEntries = [], options = {}) {
     return true;
   }
 
-  let nextConversations = trimStoredConversationMessagesForShare(storedConversations);
+  const migratedVideoMedia = migrateStoredConversationVideoMedia(
+    trimStoredConversationMessagesForShare(storedConversations)
+  );
+  let nextConversations = migratedVideoMedia.entries;
   let payload = JSON.stringify(nextConversations);
   let attemptedAggressiveImageStrip = false;
 
@@ -4305,6 +4390,11 @@ function relieveChatStorageForThreadShare(inboxEntries = [], options = {}) {
   }
 
   let persisted = safeSetItem(storageKey, payload);
+  if (persisted && migratedVideoMedia.mediaChanged && !migratedVideoMedia.mediaPersisted) {
+    migratedVideoMedia.mediaPersisted = persistStoredConversationVideoMediaMap(
+      migratedVideoMedia.mediaMap
+    );
+  }
   while (!persisted) {
     if (!attemptedAggressiveImageStrip) {
       const strippedConversations = stripStoredConversationImagePayloads(nextConversations, 0);
@@ -4326,6 +4416,15 @@ function relieveChatStorageForThreadShare(inboxEntries = [], options = {}) {
     }
     payload = JSON.stringify(nextConversations);
     persisted = safeSetItem(storageKey, payload);
+    if (persisted && migratedVideoMedia.mediaChanged && !migratedVideoMedia.mediaPersisted) {
+      migratedVideoMedia.mediaPersisted = persistStoredConversationVideoMediaMap(
+        migratedVideoMedia.mediaMap
+      );
+    }
+  }
+
+  if (persisted && migratedVideoMedia.mediaChanged && !migratedVideoMedia.mediaPersisted) {
+    console.warn("[Pulse Forum] Failed to persist migrated video media after relieving chat storage.");
   }
 
   return persisted;

@@ -5608,8 +5608,6 @@ function normalizeConversation(conversation, index = 0) {
     contactAvatarImageSnapshot: String(source.contactAvatarImageSnapshot || "").trim(),
     contactAvatarTextSnapshot: String(source.contactAvatarTextSnapshot || "").trim(),
     promptSettings,
-    videoContactImage: String(source.videoContactImage || "").trim(),
-    videoUserImage: String(source.videoUserImage || "").trim(),
     sceneMode: String(source.sceneMode || "").trim().toLowerCase() === "offline" ? "offline" : "online",
     allowAiPresenceUpdate: Boolean(source.allowAiPresenceUpdate),
     allowAiProactiveMessage: Boolean(source.allowAiProactiveMessage),
@@ -5641,16 +5639,102 @@ function normalizeConversation(conversation, index = 0) {
   };
 }
 
+function stripConversationVideoMediaFields(conversations = []) {
+  return (Array.isArray(conversations) ? conversations : []).map((conversation) => {
+    if (!conversation || typeof conversation !== "object") {
+      return conversation;
+    }
+    const { videoContactImage: _videoContactImage, videoUserImage: _videoUserImage, ...rest } =
+      conversation;
+    return rest;
+  });
+}
+
+function migrateLegacyConversationVideoMedia(conversations = [], storageKey = "") {
+  const source = Array.isArray(conversations) ? conversations : [];
+  if (!source.length) {
+    return source;
+  }
+
+  let hasLegacyMedia = false;
+  let mediaMap = loadConversationVideoMediaMap();
+  let mediaChanged = false;
+  const strippedConversations = source.map((conversation) => {
+    if (!conversation || typeof conversation !== "object") {
+      return conversation;
+    }
+    const resolvedContactId = String(conversation.contactId || "").trim();
+    const videoContactImage = String(conversation.videoContactImage || "").trim();
+    const videoUserImage = String(conversation.videoUserImage || "").trim();
+    if (videoContactImage || videoUserImage) {
+      hasLegacyMedia = true;
+      if (resolvedContactId) {
+        const currentEntry = mediaMap[resolvedContactId] || {};
+        const nextEntry = {
+          videoContactImage: currentEntry.videoContactImage || videoContactImage,
+          videoUserImage: currentEntry.videoUserImage || videoUserImage
+        };
+        if (
+          nextEntry.videoContactImage !== currentEntry.videoContactImage ||
+          nextEntry.videoUserImage !== currentEntry.videoUserImage
+        ) {
+          mediaMap = {
+            ...mediaMap,
+            [resolvedContactId]: nextEntry
+          };
+          mediaChanged = true;
+        }
+      }
+    }
+    const { videoContactImage: _videoContactImage, videoUserImage: _videoUserImage, ...rest } =
+      conversation;
+    return rest;
+  });
+
+  if (!hasLegacyMedia) {
+    return source;
+  }
+
+  let mediaPersisted = true;
+  if (mediaChanged) {
+    mediaPersisted = persistConversationVideoMediaMap(mediaMap);
+    if (!mediaPersisted && storageKey) {
+      const strippedPayload = JSON.stringify(strippedConversations);
+      const strippedPersisted = safeSetItem(storageKey, strippedPayload);
+      if (strippedPersisted) {
+        mediaPersisted = persistConversationVideoMediaMap(mediaMap);
+      }
+    }
+  }
+
+  if (!mediaPersisted) {
+    console.warn("[Pulse Messages] Failed to migrate legacy video media out of conversation storage.");
+    return source;
+  }
+
+  if (storageKey) {
+    safeSetItem(storageKey, JSON.stringify(strippedConversations));
+  }
+
+  return strippedConversations;
+}
+
 function loadConversations() {
-  const raw = safeGetItem(MESSAGE_THREADS_KEY) || safeGetItem(DIRECT_MESSAGES_KEY);
+  const storageKey = safeGetItem(MESSAGE_THREADS_KEY)
+    ? MESSAGE_THREADS_KEY
+    : safeGetItem(DIRECT_MESSAGES_KEY)
+      ? DIRECT_MESSAGES_KEY
+      : "";
+  const raw = storageKey ? safeGetItem(storageKey) : null;
   if (!raw) {
     return [];
   }
 
   try {
     const parsed = JSON.parse(raw);
+    const migrated = migrateLegacyConversationVideoMedia(parsed, storageKey);
     return Array.isArray(parsed)
-      ? parsed.map((item, index) => normalizeConversation(item, index)).filter(Boolean)
+      ? migrated.map((item, index) => normalizeConversation(item, index)).filter(Boolean)
       : [];
   } catch (_error) {
     return [];
@@ -5701,12 +5785,14 @@ function getStoredConversationVideoMedia(conversation = getConversationById()) {
 }
 
 function cloneConversationsForStorage(conversations = []) {
-  return (Array.isArray(conversations) ? conversations : []).map((conversation) => ({
-    ...conversation,
-    messages: Array.isArray(conversation?.messages)
-      ? conversation.messages.map((message) => ({ ...message }))
-      : []
-  }));
+  return stripConversationVideoMediaFields(Array.isArray(conversations) ? conversations : []).map(
+    (conversation) => ({
+      ...conversation,
+      messages: Array.isArray(conversation?.messages)
+        ? conversation.messages.map((message) => ({ ...message }))
+        : []
+    })
+  );
 }
 
 function trimConversationMessagesForStorage(conversations = []) {
@@ -6573,8 +6659,6 @@ function createConversation(contact) {
     contactAvatarImageSnapshot: contact.avatarImage,
     contactAvatarTextSnapshot: contact.avatarText || getContactAvatarFallback(contact),
     promptSettings: buildConversationPromptSettingsBase(),
-    videoContactImage: "",
-    videoUserImage: "",
     sceneMode: "online",
     allowAiPresenceUpdate: false,
     allowAiProactiveMessage: false,
@@ -16153,17 +16237,11 @@ function getConversationAutoScheduleTime(conversation = getConversationById()) {
 }
 
 function getConversationVideoContactImage(conversation = getConversationById()) {
-  return (
-    String(conversation?.videoContactImage || "").trim() ||
-    String(getStoredConversationVideoMedia(conversation)?.videoContactImage || "").trim()
-  );
+  return String(getStoredConversationVideoMedia(conversation)?.videoContactImage || "").trim();
 }
 
 function getConversationVideoUserImage(conversation = getConversationById()) {
-  return (
-    String(conversation?.videoUserImage || "").trim() ||
-    String(getStoredConversationVideoMedia(conversation)?.videoUserImage || "").trim()
-  );
+  return String(getStoredConversationVideoMedia(conversation)?.videoUserImage || "").trim();
 }
 
 function getConversationVideoContactDisplayImage(conversation = getConversationById()) {
@@ -16200,8 +16278,6 @@ function setConversationVideoMediaSettings(contactImage = "", userImage = "") {
     }
   }
   const mediaPersisted = persistConversationVideoMediaMap(mediaMap);
-  conversation.videoContactImage = resolvedContactImage;
-  conversation.videoUserImage = resolvedUserImage;
   const conversationPersisted = persistConversations();
   return {
     conversationPersisted,
