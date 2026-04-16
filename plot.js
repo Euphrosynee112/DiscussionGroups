@@ -888,6 +888,9 @@ function enqueueReplyTask(conversationId = "", options = {}) {
     return null;
   }
   const requestOptions = normalizeObjectValue(options) || {};
+  const normalizedTriggeredAwareness = normalizeManualAwarenessTrigger(
+    requestOptions.triggeredAwareness
+  );
   const tasks = loadReplyTasks();
   const existingTask =
     tasks.find(
@@ -895,6 +898,14 @@ function enqueueReplyTask(conversationId = "", options = {}) {
         String(task?.conversationId || "").trim() === resolvedConversationId &&
         Boolean(task?.regenerate) === Boolean(requestOptions.regenerate) &&
         Boolean(task?.awarenessImmediateTrigger) === Boolean(requestOptions.awarenessImmediateTrigger) &&
+        String(normalizeManualAwarenessTrigger(task?.triggeredAwareness)?.title || "") ===
+          String(normalizedTriggeredAwareness?.title || "") &&
+        String(normalizeManualAwarenessTrigger(task?.triggeredAwareness)?.text || "") ===
+          String(normalizedTriggeredAwareness?.text || "") &&
+        String(normalizeManualAwarenessTrigger(task?.triggeredAwareness)?.emotionShift || "") ===
+          String(normalizedTriggeredAwareness?.emotionShift || "") &&
+        String(normalizeManualAwarenessTrigger(task?.triggeredAwareness)?.sensitivity || "") ===
+          String(normalizedTriggeredAwareness?.sensitivity || "") &&
         String(task?.status || "").trim() !== "error"
     ) || null;
   if (existingTask) {
@@ -906,6 +917,7 @@ function enqueueReplyTask(conversationId = "", options = {}) {
     regenerate: Boolean(requestOptions.regenerate),
     regenerateInstruction: String(requestOptions.regenerateInstruction || "").trim(),
     awarenessImmediateTrigger: Boolean(requestOptions.awarenessImmediateTrigger),
+    triggeredAwareness: normalizedTriggeredAwareness,
     status: "pending",
     errorMessage: "",
     startedAt: 0,
@@ -2381,77 +2393,25 @@ function savePlotSummaryAwareness(contactId = "", thread = null, content = "", e
   if (!resolvedContactId || !thread) {
     return null;
   }
-  const contactsPayload = loadStoredContactsPayload();
-  const contacts = [...contactsPayload.contacts];
-  const contactIndex = contacts.findIndex(
-    (item) => String(item?.id || "").trim() === resolvedContactId
-  );
   const contactSnapshot = getContactSnapshotById(resolvedContactId);
-  const previous =
-    normalizeObjectValue(contactIndex >= 0 ? contacts[contactIndex] : null) ||
-    normalizeObjectValue(contactSnapshot) ||
-    null;
+  const previous = normalizeObjectValue(contactSnapshot) || null;
   if (!previous) {
     throw new Error("未找到可写入察觉的角色。");
   }
   const nextTitle = resolveAwarenessTitle(`剧情总结：${thread.title}`, content);
   const nextSensitivity = normalizeAwarenessSensitivity(previous.awarenessSensitivity || "medium");
-  const changed =
-    String(previous.awarenessText || "").trim() !== String(content || "").trim() ||
-    resolveAwarenessTitle(previous.awarenessTitle, previous.awarenessText) !== nextTitle ||
-    String(previous.awarenessEmotionShift || "").trim() !== String(emotionSummary || "").trim() ||
-    normalizeAwarenessSensitivity(previous.awarenessSensitivity) !== nextSensitivity;
-  const nextContact = {
-    ...previous,
-    awarenessTitle: nextTitle,
-    awarenessText: String(content || "").trim(),
-    awarenessEmotionShift: String(emotionSummary || "").trim(),
-    awarenessSensitivity: nextSensitivity,
-    awarenessConsumed: changed ? false : Boolean(previous.awarenessConsumed),
-    awarenessResolvedState: changed ? "" : String(previous.awarenessResolvedState || "").trim(),
-    awarenessHistoryHidden: changed ? false : Boolean(previous.awarenessHistoryHidden),
-    awarenessCheckCount: changed
-      ? 0
-      : Math.max(0, Number.parseInt(String(previous.awarenessCheckCount || 0), 10) || 0),
-    awarenessTriggerCount: changed
-      ? 0
-      : Math.max(0, Number.parseInt(String(previous.awarenessTriggerCount || 0), 10) || 0),
-    awarenessLastCheckedAt: changed ? 0 : Number(previous.awarenessLastCheckedAt) || 0,
-    awarenessLastTriggeredAt: changed ? 0 : Number(previous.awarenessLastTriggeredAt) || 0,
-    awarenessHistory: changed ? [] : normalizeObjectArray(previous.awarenessHistory),
-    awarenessManualTriggerPending: {
-      title: nextTitle,
-      text: String(content || "").trim(),
-      emotionShift: String(emotionSummary || "").trim(),
-      sensitivity: nextSensitivity,
-      createdAt: Date.now()
-    },
-    updatedAt: Date.now()
-  };
-  if (contactIndex >= 0) {
-    contacts[contactIndex] = nextContact;
-  } else {
-    contacts.unshift(nextContact);
-  }
-  persistStoredContactsPayload(contactsPayload, contacts);
-
   const conversationResult = ensureStoredConversationForContact(resolvedContactId);
   if (!conversationResult?.conversation) {
     throw new Error("未找到对应聊天框，无法触发察觉消息。");
   }
-  const nextConversations = conversationResult.conversations.map((item) => {
-    if (String(item?.id || "").trim() !== String(conversationResult.conversation.id || "").trim()) {
-      return item;
-    }
-    return {
-      ...item,
-      awarenessCounter: 0,
-      updatedAt: Number(item?.updatedAt) || Date.now()
-    };
-  });
-  persistStoredConversationsPayload(conversationResult.payload, nextConversations);
   enqueueReplyTask(conversationResult.conversation.id, {
-    awarenessImmediateTrigger: true
+    awarenessImmediateTrigger: true,
+    triggeredAwareness: {
+      title: nextTitle,
+      text: String(content || "").trim(),
+      emotionShift: String(emotionSummary || "").trim(),
+      sensitivity: nextSensitivity
+    }
   });
   return conversationResult.conversation;
 }

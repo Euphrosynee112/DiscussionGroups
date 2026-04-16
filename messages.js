@@ -1723,6 +1723,9 @@ function enqueueReplyTask(conversationId = "", options = {}) {
     return null;
   }
   const requestOptions = options && typeof options === "object" ? options : {};
+  const normalizedTriggeredAwareness = normalizeManualAwarenessTrigger(
+    requestOptions.triggeredAwareness
+  );
   const tasks = loadReplyTasks();
   const existingTask =
     tasks.find(
@@ -1730,6 +1733,14 @@ function enqueueReplyTask(conversationId = "", options = {}) {
         task.conversationId === resolvedConversationId &&
         task.regenerate === Boolean(requestOptions.regenerate) &&
         task.awarenessImmediateTrigger === Boolean(requestOptions.awarenessImmediateTrigger) &&
+        String(normalizeManualAwarenessTrigger(task.triggeredAwareness)?.title || "") ===
+          String(normalizedTriggeredAwareness?.title || "") &&
+        String(normalizeManualAwarenessTrigger(task.triggeredAwareness)?.text || "") ===
+          String(normalizedTriggeredAwareness?.text || "") &&
+        String(normalizeManualAwarenessTrigger(task.triggeredAwareness)?.emotionShift || "") ===
+          String(normalizedTriggeredAwareness?.emotionShift || "") &&
+        String(normalizeManualAwarenessTrigger(task.triggeredAwareness)?.sensitivity || "") ===
+          String(normalizedTriggeredAwareness?.sensitivity || "") &&
         task.status !== "error"
     ) || null;
   if (existingTask) {
@@ -1741,6 +1752,7 @@ function enqueueReplyTask(conversationId = "", options = {}) {
     regenerate: Boolean(requestOptions.regenerate),
     regenerateInstruction: String(requestOptions.regenerateInstruction || "").trim(),
     awarenessImmediateTrigger: Boolean(requestOptions.awarenessImmediateTrigger),
+    triggeredAwareness: normalizedTriggeredAwareness,
     status: "pending",
     createdAt: Date.now(),
     updatedAt: Date.now()
@@ -4150,6 +4162,7 @@ function normalizeReplyTask(task, index = 0) {
     regenerate: Boolean(source.regenerate),
     regenerateInstruction: String(source.regenerateInstruction || "").trim(),
     awarenessImmediateTrigger: Boolean(source.awarenessImmediateTrigger),
+    triggeredAwareness: normalizeManualAwarenessTrigger(source.triggeredAwareness),
     status,
     errorMessage: String(source.errorMessage || "").trim(),
     startedAt: Number(source.startedAt) || 0,
@@ -19832,14 +19845,27 @@ async function requestConversationReply(options = {}) {
   }
 
   const pendingTask = !forceDirect ? getPendingReplyTaskForConversation(conversation.id) : null;
+  const explicitTriggeredAwareness = normalizeManualAwarenessTrigger(
+    requestOptions.triggeredAwareness
+  );
+  const pendingTaskTriggeredAwareness = normalizeManualAwarenessTrigger(
+    pendingTask?.triggeredAwareness
+  );
   const hasRegenerateOption = Object.prototype.hasOwnProperty.call(requestOptions, "regenerate");
   const hasRegenerateInstructionOption = Object.prototype.hasOwnProperty.call(
     requestOptions,
     "regenerateInstruction"
   );
+  const hasAwarenessImmediateTriggerOption = Object.prototype.hasOwnProperty.call(
+    requestOptions,
+    "awarenessImmediateTrigger"
+  );
   const isRegenerate = hasRegenerateOption
     ? Boolean(requestOptions.regenerate)
     : Boolean(pendingTask?.regenerate);
+  const awarenessImmediateTrigger = hasAwarenessImmediateTriggerOption
+    ? Boolean(requestOptions.awarenessImmediateTrigger)
+    : Boolean(pendingTask?.awarenessImmediateTrigger);
   const proactiveTrigger = !isRegenerate
     ? normalizeProactiveTriggerRequest(requestOptions.proactiveTrigger)
     : null;
@@ -19885,12 +19911,18 @@ async function requestConversationReply(options = {}) {
     0,
     Number.parseInt(String(conversation.awarenessCounter || 0), 10) || 0
   );
+  const transientAwarenessTrigger = !isRegenerate && !isProactiveTrigger
+    ? explicitTriggeredAwareness || pendingTaskTriggeredAwareness
+    : null;
   const manualAwarenessTrigger = !isRegenerate && !isProactiveTrigger
-    ? normalizeManualAwarenessTrigger(contact.awarenessManualTriggerPending)
+    ? transientAwarenessTrigger ||
+      normalizeManualAwarenessTrigger(contact.awarenessManualTriggerPending)
     : null;
   const hasManualAwarenessTrigger = Boolean(manualAwarenessTrigger?.text);
+  const hasStoredManualAwarenessTrigger =
+    hasManualAwarenessTrigger && !Boolean(transientAwarenessTrigger?.text);
   const shouldInjectAwarenessIntoContents =
-    hasManualAwarenessTrigger && Boolean(requestOptions.awarenessImmediateTrigger);
+    hasManualAwarenessTrigger && awarenessImmediateTrigger;
   const awarenessResolvedState = normalizeAwarenessResolvedState(
     contact.awarenessResolvedState,
     contact.awarenessConsumed
@@ -19973,7 +20005,9 @@ async function requestConversationReply(options = {}) {
   ) {
     const task = enqueueReplyTask(conversation.id, {
       regenerate: isRegenerate,
-      regenerateInstruction
+      regenerateInstruction,
+      awarenessImmediateTrigger,
+      triggeredAwareness: transientAwarenessTrigger
     });
     primeForegroundReplySync(conversation.id);
     if (!suppressUi) {
@@ -20156,7 +20190,7 @@ async function requestConversationReply(options = {}) {
           : currentAwarenessCounter;
       latestConversation.awarenessCounter = nextAwarenessCounter;
       if (
-        hasManualAwarenessTrigger ||
+        hasStoredManualAwarenessTrigger ||
         awarenessTriggered ||
         shouldEvaluateAwareness ||
         (hasAwarenessMonitor && nextAwarenessCounter > MAX_AWARENESS_MONITOR_ROUNDS)
@@ -20164,7 +20198,7 @@ async function requestConversationReply(options = {}) {
         const contactIndex = state.contacts.findIndex((item) => item.id === contact.id);
         if (contactIndex >= 0) {
           const previousContact = state.contacts[contactIndex];
-          const manualHistoryEntry = hasManualAwarenessTrigger
+          const manualHistoryEntry = hasStoredManualAwarenessTrigger
             ? buildAwarenessHistoryItem(
                 true,
                 currentAwarenessCounter,
@@ -20188,7 +20222,7 @@ async function requestConversationReply(options = {}) {
             awarenessConsumed: nextResolvedState === "triggered",
             awarenessResolvedState: nextResolvedState,
             awarenessHistoryHidden: shouldHideAwarenessMonitor,
-            awarenessManualTriggerPending: hasManualAwarenessTrigger
+            awarenessManualTriggerPending: hasStoredManualAwarenessTrigger
               ? null
               : normalizeManualAwarenessTrigger(previousContact.awarenessManualTriggerPending),
             awarenessCheckCount:
@@ -20368,7 +20402,8 @@ async function resumePendingReplyTaskForConversation(
       forceDirect: true,
       regenerate: pendingTask.regenerate,
       regenerateInstruction: pendingTask.regenerateInstruction,
-      awarenessImmediateTrigger: pendingTask.awarenessImmediateTrigger
+      awarenessImmediateTrigger: pendingTask.awarenessImmediateTrigger,
+      triggeredAwareness: pendingTask.triggeredAwareness
     });
     return true;
   } finally {
@@ -20402,6 +20437,7 @@ async function pumpBackgroundReplyTasks() {
       regenerate: nextTask.regenerate,
       regenerateInstruction: nextTask.regenerateInstruction,
       awarenessImmediateTrigger: nextTask.awarenessImmediateTrigger,
+      triggeredAwareness: nextTask.triggeredAwareness,
       forceDirect: true,
       suppressUi: true
     });
