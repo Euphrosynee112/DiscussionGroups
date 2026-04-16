@@ -64,6 +64,59 @@ function parseJsonValue(value, fallback = null) {
   }
 }
 
+function sanitizeJsonbValue(value, stats = null) {
+  if (typeof value === "string") {
+    const nullCharMatches = value.match(/\u0000/g);
+    if (nullCharMatches?.length && stats) {
+      stats.replacedNullChars = (stats.replacedNullChars || 0) + nullCharMatches.length;
+    }
+    return value.replace(/\u0000/g, "\\u0000");
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeJsonbValue(item, stats));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nestedValue]) => [
+        sanitizeJsonbValue(String(key || ""), stats),
+        sanitizeJsonbValue(nestedValue, stats)
+      ])
+    );
+  }
+  return value;
+}
+
+function describeStorageValue(value) {
+  if (Array.isArray(value)) {
+    return `array(${value.length})`;
+  }
+  if (value == null) {
+    return "null";
+  }
+  if (typeof value === "object") {
+    return `object(${Object.keys(value).length})`;
+  }
+  if (typeof value === "string") {
+    return `string(${value.length})`;
+  }
+  return typeof value;
+}
+
+function previewStorageValue(value, maxLength = 220) {
+  try {
+    const sanitized = sanitizeJsonbValue(value);
+    const raw =
+      typeof sanitized === "string" ? sanitized : JSON.stringify(sanitized);
+    const text = String(raw || "").trim();
+    if (!text) {
+      return "";
+    }
+    return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
+  } catch (_error) {
+    return "";
+  }
+}
+
 function normalizeTextArray(value) {
   const list = Array.isArray(value)
     ? value
@@ -2621,6 +2674,9 @@ app.post("/api/storage/import", async (request, response) => {
 
   const runId = randomUUID();
   const client = await pool.connect();
+  let currentItem = null;
+  let currentItemIndex = -1;
+  const sanitizedKeys = [];
   try {
     await client.query("begin");
     await client.query(
@@ -2632,7 +2688,17 @@ app.post("/api/storage/import", async (request, response) => {
     );
 
     const savedKeys = [];
-    for (const item of items) {
+    for (const [index, item] of items.entries()) {
+      currentItem = item;
+      currentItemIndex = index;
+      const sanitizeStats = {};
+      const sanitizedValueJson = sanitizeJsonbValue(item.valueJson, sanitizeStats);
+      if (Number(sanitizeStats.replacedNullChars) > 0) {
+        sanitizedKeys.push({
+          key: item.key,
+          replacedNullChars: sanitizeStats.replacedNullChars
+        });
+      }
       const result = await client.query(
         `
           insert into storage_records (key, value_json, version, updated_at, source)
@@ -2644,7 +2710,7 @@ app.post("/api/storage/import", async (request, response) => {
                 source = excluded.source
           returning key
         `,
-        [item.key, JSON.stringify(item.valueJson), item.source]
+        [item.key, JSON.stringify(sanitizedValueJson), item.source]
       );
       if (result.rows[0]?.key) {
         savedKeys.push(result.rows[0].key);
@@ -2664,7 +2730,8 @@ app.post("/api/storage/import", async (request, response) => {
         JSON.stringify({
           requestedKeys: items.length,
           importedKeys: savedKeys.length,
-          keys: savedKeys
+          keys: savedKeys,
+          sanitizedKeys
         })
       ]
     );
@@ -2674,7 +2741,8 @@ app.post("/api/storage/import", async (request, response) => {
       ok: true,
       migrationRunId: runId,
       importedKeys: savedKeys.length,
-      keys: savedKeys
+      keys: savedKeys,
+      sanitizedKeys
     });
   } catch (error) {
     await client.query("rollback");
@@ -2691,7 +2759,15 @@ app.post("/api/storage/import", async (request, response) => {
         `,
         [
           runId,
-          JSON.stringify({ requestedKeys: items.length }),
+          JSON.stringify({
+            requestedKeys: items.length,
+            importedKeysBeforeFailure: currentItemIndex >= 0 ? currentItemIndex : 0,
+            failedKey: currentItem?.key || "",
+            failedSource: currentItem?.source || "",
+            failedValueType: describeStorageValue(currentItem?.valueJson),
+            failedValuePreview: previewStorageValue(currentItem?.valueJson),
+            sanitizedKeys
+          }),
           error?.message || "Unknown import error"
         ]
       );
