@@ -743,6 +743,7 @@ const state = {
   memorySelectedContactId: "",
   memoryQuery: "",
   memoryTab: "all",
+  memoryCloudRefreshToken: "",
   journalGenerating: false,
   journalWeatherDate: "",
   journalWeatherLabel: "",
@@ -1084,6 +1085,28 @@ function getCloudMemoryPromptText(item = {}) {
   return String(item.summaryShort || item.summary_short || item.canonicalText || "").trim();
 }
 
+function normalizeCloudMemoryStatus(value = "") {
+  const resolved = String(value || "").trim().toLowerCase();
+  return ["active", "faint", "dormant", "archived"].includes(resolved) ? resolved : "active";
+}
+
+function normalizeCloudMemoryTextArray(value = []) {
+  return (Array.isArray(value) ? value : [])
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+}
+
+function normalizeCloudMemoryScoreMap(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([key, score]) => [String(key || "").trim(), Number(score)])
+      .filter(([key, score]) => key && Number.isFinite(score))
+  );
+}
+
 function buildPromptMemoryCueContext(options = {}) {
   const requestOptions = options && typeof options === "object" ? options : {};
   const historyMessages = Array.isArray(requestOptions.history) ? requestOptions.history : [];
@@ -1417,13 +1440,16 @@ async function markPromptBundleMemoriesRecalled(bundle = null, options = {}) {
 }
 
 function mapCloudMemoryItemToPromptEntry(item = {}) {
-  const resolvedStatus = String(item.status || "").trim().toLowerCase();
+  const resolvedStatus = normalizeCloudMemoryStatus(item.status);
   const memoryType = String(item.memoryType || item.memory_type || "").trim().toLowerCase();
+  const canonicalText = String(item.canonicalText || item.canonical_text || "").trim();
+  const summaryShort = String(item.summaryShort || item.summary_short || canonicalText).trim();
+  const summaryFaint = String(item.summaryFaint || item.summary_faint || "").trim();
   const content =
     resolvedStatus === "faint"
-      ? String(item.summaryFaint || item.summaryShort || item.canonicalText || "").trim()
-      : String(item.summaryShort || item.canonicalText || "").trim();
-  return normalizeMessageMemory(
+      ? String(summaryFaint || summaryShort || canonicalText).trim()
+      : String(summaryShort || canonicalText).trim();
+  const normalizedEntry = normalizeMessageMemory(
     {
       id: String(item.id || "").trim(),
       contactId: String(item.contactId || item.contact_id || "").trim(),
@@ -1436,6 +1462,44 @@ function mapCloudMemoryItemToPromptEntry(item = {}) {
     },
     0
   );
+  const runtimeState = getCloudMemoryRuntimeState(item);
+  const metadata =
+    item.metadata && typeof item.metadata === "object" && !Array.isArray(item.metadata)
+      ? item.metadata
+      : {};
+  return {
+    ...normalizedEntry,
+    isCloudMemory: true,
+    cloudStatus: resolvedStatus,
+    cloudMemoryType: memoryType || "relationship",
+    cloudMemorySubtype: String(item.memorySubtype || item.memory_subtype || "").trim(),
+    semanticKey: String(item.semanticKey || item.semantic_key || "").trim(),
+    canonicalText,
+    summaryShort,
+    summaryFaint,
+    baseImportance: Number(item.baseImportance ?? item.base_importance ?? 0) || 0,
+    confidence:
+      item.confidence == null ? null : clampNumber(Number(item.confidence) || 0, 0, 1),
+    keywords: normalizeCloudMemoryTextArray(item.keywords),
+    entityRefs: normalizeCloudMemoryTextArray(item.entityRefs || item.entity_refs),
+    emotionIntensity:
+      item.emotionIntensity == null && item.emotion_intensity == null
+        ? null
+        : clampNumber(Number(item.emotionIntensity ?? item.emotion_intensity) || 0, 0, 1),
+    emotionProfile: normalizeCloudMemoryScoreMap(item.emotionProfile || item.emotion_profile),
+    interactionTendency: normalizeCloudMemoryScoreMap(
+      item.interactionTendency || item.interaction_tendency
+    ),
+    emotionSummary: String(item.emotionSummary || item.emotion_summary || "").trim(),
+    firstObservedAt: item.firstObservedAt || item.first_observed_at || "",
+    lastObservedAt: item.lastObservedAt || item.last_observed_at || "",
+    lastReinforcedAt: item.lastReinforcedAt || item.last_reinforced_at || "",
+    lastRecalledAt: item.lastRecalledAt || item.last_recalled_at || "",
+    reinforceCount: Math.max(0, Number.parseInt(String(item.reinforceCount || 0), 10) || 0),
+    recallCount: Math.max(0, Number.parseInt(String(item.recallCount || 0), 10) || 0),
+    runtimeState,
+    metadata
+  };
 }
 
 function findCloudMemoryItemByLocalEntry(contactId = "", entry = {}) {
@@ -18520,6 +18584,192 @@ function renderMemoryEditorContactOptions(selectedId = state.memorySelectedConta
     : contacts[0]?.id || "";
 }
 
+function getMemoryCloudStatusLabel(status = "") {
+  const resolved = normalizeCloudMemoryStatus(status);
+  return {
+    active: "清楚记得",
+    faint: "印象变淡",
+    dormant: "沉睡记忆",
+    archived: "已归档"
+  }[resolved] || "清楚记得";
+}
+
+function getMemoryCloudTypeLabel(type = "", fallbackType = "") {
+  const resolved = String(type || "").trim().toLowerCase();
+  if (resolved === "scene") {
+    return "情景";
+  }
+  if (resolved === "relationship") {
+    return "关系";
+  }
+  if (resolved === "preference") {
+    return "偏好";
+  }
+  if (resolved === "fact") {
+    return "事实";
+  }
+  if (resolved === "habit") {
+    return "习惯";
+  }
+  return fallbackType === "scene" ? "情景" : "核心";
+}
+
+function formatMemoryCloudScore(value, options = {}) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "";
+  }
+  const maxValue = Number(options.maxValue) || 1;
+  const percent = maxValue === 100 ? numeric : numeric * 100;
+  return `${Math.round(clampNumber(percent, 0, 100))}%`;
+}
+
+function formatMemoryCloudDate(value = "") {
+  const timestamp = Number(value) || Date.parse(String(value || ""));
+  if (!timestamp) {
+    return "";
+  }
+  return resolveStoredTimestampLabel(timestamp, formatMemoryDate(timestamp));
+}
+
+function formatMemoryCloudScoreMap(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return "";
+  }
+  return Object.entries(value)
+    .map(([key, score]) => {
+      const label = String(key || "").trim();
+      const formattedScore = formatMemoryCloudScore(score);
+      return label && formattedScore ? `${label} ${formattedScore}` : "";
+    })
+    .filter(Boolean)
+    .slice(0, 6)
+    .join("、");
+}
+
+function buildMemoryCloudMetaChips(entry = {}) {
+  if (!entry?.isCloudMemory) {
+    return "";
+  }
+  const runtimeState = getCloudMemoryRuntimeState(entry);
+  const chips = [
+    `状态：${getMemoryCloudStatusLabel(entry.cloudStatus)}`,
+    `类型：${getMemoryCloudTypeLabel(entry.cloudMemoryType, entry.type)}`,
+    entry.confidence == null ? "" : `置信：${formatMemoryCloudScore(entry.confidence)}`,
+    runtimeState.activationScore == null
+      ? ""
+      : `激活：${formatMemoryCloudScore(runtimeState.activationScore)}`,
+    runtimeState.stabilityScore == null
+      ? ""
+      : `稳定：${formatMemoryCloudScore(runtimeState.stabilityScore)}`,
+    `强化 ${Math.max(0, Number.parseInt(String(entry.reinforceCount || 0), 10) || 0)}`,
+    `回忆 ${Math.max(0, Number.parseInt(String(entry.recallCount || 0), 10) || 0)}`
+  ].filter(Boolean);
+  if (!chips.length) {
+    return "";
+  }
+  return `
+    <div class="messages-memory-card__cloud-chips">
+      ${chips
+        .map((chip) => `<span class="messages-memory-card__cloud-chip">${escapeHtml(chip)}</span>`)
+        .join("")}
+    </div>
+  `;
+}
+
+function buildMemoryCloudDetailRows(entry = {}) {
+  if (!entry?.isCloudMemory) {
+    return [];
+  }
+  const runtimeState = getCloudMemoryRuntimeState(entry);
+  const metadata = entry.metadata && typeof entry.metadata === "object" ? entry.metadata : {};
+  const rows = [
+    ["标准记忆", entry.canonicalText],
+    ["短摘要", entry.summaryShort],
+    ["模糊摘要", entry.summaryFaint],
+    ["情绪摘要", entry.emotionSummary],
+    ["关键词", Array.isArray(entry.keywords) ? entry.keywords.join("、") : ""],
+    ["关联对象", Array.isArray(entry.entityRefs) ? entry.entityRefs.join("、") : ""],
+    ["情绪画像", formatMemoryCloudScoreMap(entry.emotionProfile)],
+    ["互动倾向", formatMemoryCloudScoreMap(entry.interactionTendency)],
+    [
+      "情绪强度",
+      entry.emotionIntensity == null ? "" : formatMemoryCloudScore(entry.emotionIntensity)
+    ],
+    ["首次观察", formatMemoryCloudDate(entry.firstObservedAt)],
+    ["最近观察", formatMemoryCloudDate(entry.lastObservedAt)],
+    ["最近强化", formatMemoryCloudDate(entry.lastReinforcedAt)],
+    ["最近回忆", formatMemoryCloudDate(entry.lastRecalledAt)],
+    [
+      "下次衰减",
+      formatMemoryCloudDate(runtimeState.nextDecayAt || runtimeState.next_decay_at || "")
+    ],
+    ["来源片段", metadata.lastSourceExcerpt || ""],
+    ["本地来源", metadata.localMemorySource || ""],
+    ["写入理由", metadata.lastReasonNote || ""]
+  ];
+  return rows
+    .map(([label, value]) => [String(label || "").trim(), String(value || "").trim()])
+    .filter(([, value]) => value);
+}
+
+function buildMemoryCloudDetailsMarkup(entry = {}) {
+  const rows = buildMemoryCloudDetailRows(entry);
+  if (!rows.length) {
+    return "";
+  }
+  return `
+    <details class="messages-memory-card__cloud-details">
+      <summary>云端字段</summary>
+      <dl class="messages-memory-card__cloud-grid">
+        ${rows
+          .map(
+            ([label, value]) => `
+              <div class="messages-memory-card__cloud-row">
+                <dt>${escapeHtml(label)}</dt>
+                <dd>${escapeHtml(value)}</dd>
+              </div>
+            `
+          )
+          .join("")}
+      </dl>
+    </details>
+  `;
+}
+
+async function refreshMemoryViewerCloudEntries(contactId = state.memorySelectedContactId) {
+  const resolvedContactId = String(contactId || "").trim();
+  if (!resolvedContactId) {
+    return [];
+  }
+  const refreshToken = `memory_cloud_refresh_${Date.now()}_${hashText(resolvedContactId)}`;
+  state.memoryCloudRefreshToken = refreshToken;
+  setMemoryStatus("正在同步云端记忆…");
+  try {
+    const cloudItems = await ensureCloudMemoriesReady(resolvedContactId, {
+      force: true,
+      importLocalFallback: true
+    });
+    if (state.memoryCloudRefreshToken !== refreshToken) {
+      return cloudItems;
+    }
+    const visibleEntries = syncLocalMemoriesFromCloudContact(resolvedContactId, cloudItems);
+    if (
+      state.memoryViewerOpen &&
+      String(state.memorySelectedContactId || "").trim() === resolvedContactId
+    ) {
+      renderMemoryViewer();
+      setMemoryStatus(`已同步 ${visibleEntries.length} 条可展示云端记忆。`, "success");
+    }
+    return cloudItems;
+  } catch (error) {
+    if (state.memoryCloudRefreshToken === refreshToken) {
+      setMemoryStatus(`云端记忆同步失败：${error?.message || "请求失败"}`, "error");
+    }
+    return [];
+  }
+}
+
 function getFilteredMemoryEntries() {
   const contactId = resolveSelectedMemoryContactId();
   if (!contactId) {
@@ -18533,7 +18783,17 @@ function getFilteredMemoryEntries() {
     if (!keyword) {
       return true;
     }
-    return String(item.content || "").toLowerCase().includes(keyword);
+    return [
+      item.content,
+      item.canonicalText,
+      item.summaryShort,
+      item.summaryFaint,
+      item.emotionSummary,
+      ...(Array.isArray(item.keywords) ? item.keywords : []),
+      ...(Array.isArray(item.entityRefs) ? item.entityRefs : [])
+    ]
+      .map((value) => String(value || "").toLowerCase())
+      .some((value) => value.includes(keyword));
   });
 }
 
@@ -18601,6 +18861,8 @@ function renderMemoryViewer() {
               entry.source === "manual" ? "手动添加" : "AI 提取"
             }</span>
           </div>
+          ${buildMemoryCloudMetaChips(entry)}
+          ${buildMemoryCloudDetailsMarkup(entry)}
           <div class="messages-memory-card__actions">
             <button
               class="messages-memory-card__action"
@@ -18664,9 +18926,10 @@ function setMemoryViewerOpen(isOpen, preferredContactId = "") {
     if (messagesMemorySearchInputEl) {
       messagesMemorySearchInputEl.value = "";
     }
-    resolveSelectedMemoryContactId(preferredContactId);
+    const selectedContactId = resolveSelectedMemoryContactId(preferredContactId);
     renderMemoryViewer();
     setMemoryStatus("");
+    void refreshMemoryViewerCloudEntries(selectedContactId);
   } else {
     setMemoryEditorOpen(false);
     setMemorySettingsOpen(false);
@@ -22683,6 +22946,7 @@ function attachEvents() {
     messagesMemoryContactSelectEl.addEventListener("change", () => {
       state.memorySelectedContactId = String(messagesMemoryContactSelectEl.value || "").trim();
       renderMemoryViewer();
+      void refreshMemoryViewerCloudEntries(state.memorySelectedContactId);
     });
   }
 
