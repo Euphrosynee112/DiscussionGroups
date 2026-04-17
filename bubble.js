@@ -98,17 +98,20 @@ function buildPromptSectionText(value, fallback = "") {
 }
 
 function buildStructuredPromptSections(promptTypeOrSections = {}, maybeSections = null, maybeOptions = {}) {
+  const resolvedOptions = maybeOptions && typeof maybeOptions === "object" ? maybeOptions : {};
+  const shouldIncludeNegativeConstraints = resolvedOptions.includeNegativeConstraints !== false;
+  const wrapPrompt = (text) =>
+    shouldIncludeNegativeConstraints
+      ? prependGlobalPromptGuard(text, resolvedOptions.settings)
+      : String(text || "").trim();
   if (typeof promptTypeOrSections === "string" && window.PulsePromptConfig?.buildPrompt) {
     const configuredPrompt = window.PulsePromptConfig.buildPrompt(
       promptTypeOrSections,
       maybeSections && typeof maybeSections === "object" ? maybeSections : {},
-      maybeOptions && typeof maybeOptions === "object" ? maybeOptions : {}
+      resolvedOptions
     );
     if (configuredPrompt) {
-      return prependGlobalPromptGuard(
-        configuredPrompt,
-        maybeOptions && typeof maybeOptions === "object" ? maybeOptions.settings : undefined
-      );
+      return wrapPrompt(configuredPrompt);
     }
   }
   const resolvedSections =
@@ -117,7 +120,7 @@ function buildStructuredPromptSections(promptTypeOrSections = {}, maybeSections 
       : maybeSections && typeof maybeSections === "object"
         ? maybeSections
         : {};
-  return prependGlobalPromptGuard(
+  return wrapPrompt(
     [
       `<context_library>\n${buildPromptSectionText(
         resolvedSections.contextLibrary,
@@ -131,8 +134,7 @@ function buildStructuredPromptSections(promptTypeOrSections = {}, maybeSections 
         resolvedSections.outputStandard,
         "只输出符合要求的最终结果。"
       )}\n</output_standard>`
-    ].join("\n\n"),
-    maybeOptions && typeof maybeOptions === "object" ? maybeOptions.settings : undefined
+    ].join("\n\n")
   );
 }
 
@@ -885,7 +887,8 @@ function buildTranslatePrompt(sourceText) {
       }
     },
     {
-      settings: getCurrentSettings()
+      settings: getCurrentSettings(),
+      includeNegativeConstraints: false
     }
   );
 }
