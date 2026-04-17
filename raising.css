@@ -1,16 +1,16 @@
 :root {
-  --raising-bg: #f7f1e8;
-  --raising-bg-soft: #fffaf2;
+  --raising-bg: var(--page-raising-tint);
+  --raising-bg-soft: #fffcf6;
   --raising-panel: rgba(255, 255, 255, 0.9);
   --raising-panel-strong: rgba(255, 250, 242, 0.98);
-  --raising-line: rgba(194, 156, 105, 0.18);
-  --raising-text: #5b4631;
-  --raising-muted: rgba(91, 70, 49, 0.62);
-  --raising-accent: #d6a16e;
-  --raising-accent-strong: #c48b56;
-  --raising-pink: #e7a8bb;
-  --raising-blue: #8cb4da;
-  --raising-shadow: 0 18px 36px rgba(172, 140, 101, 0.16);
+  --raising-line: rgba(var(--page-raising-accent-rgb), 0.18);
+  --raising-text: var(--color-text);
+  --raising-muted: rgba(var(--color-text-rgb), 0.62);
+  --raising-accent: var(--page-raising-accent);
+  --raising-accent-strong: var(--page-raising-accent-strong);
+  --raising-pink: var(--page-bubble-accent);
+  --raising-blue: var(--page-home-accent);
+  --raising-shadow: var(--shadow-lg);
 }
 
 * {

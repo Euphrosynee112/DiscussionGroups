@@ -1,13 +1,13 @@
 :root {
-  --bg: #eceff3;
+  --bg: var(--color-bg-app);
   --panel: rgba(255, 255, 255, 0.94);
   --panel-strong: #ffffff;
-  --line: rgba(15, 23, 42, 0.08);
-  --text: #0f172a;
-  --muted: rgba(15, 23, 42, 0.58);
-  --green: #14804a;
-  --red: #b42318;
-  --shadow: 0 24px 48px rgba(15, 23, 42, 0.1);
+  --line: var(--color-border-soft);
+  --text: var(--color-text);
+  --muted: rgba(var(--color-text-rgb), 0.58);
+  --green: var(--color-success);
+  --red: var(--color-danger);
+  --shadow: var(--shadow-overlay);
 }
 
 * {

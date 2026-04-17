@@ -1,17 +1,17 @@
 :root {
-  --bg: #f7f9fc;
-  --panel: #ffffff;
-  --panel-soft: #f3f6fa;
-  --panel-elevated: #eef3f9;
-  --line: rgba(15, 23, 42, 0.1);
-  --line-strong: rgba(15, 23, 42, 0.16);
-  --text: #111827;
-  --muted: #667085;
-  --brand: #1d9bf0;
-  --brand-soft: rgba(29, 155, 240, 0.16);
-  --success: #14804a;
-  --danger: #c62828;
-  --shadow: 0 18px 44px rgba(15, 23, 42, 0.08);
+  --bg: var(--page-forum-tint);
+  --panel: var(--color-surface);
+  --panel-soft: var(--color-surface-soft);
+  --panel-elevated: var(--color-surface-raised);
+  --line: var(--color-border-soft);
+  --line-strong: var(--color-border);
+  --text: var(--color-text);
+  --muted: var(--color-text-muted);
+  --brand: var(--color-brand-500);
+  --brand-soft: var(--color-brand-soft);
+  --success: var(--color-success);
+  --danger: var(--color-danger);
+  --shadow: var(--shadow-md);
   --radius-xl: 26px;
   --radius-lg: 20px;
   --radius-md: 16px;
@@ -30,9 +30,9 @@ body {
 
 body {
   background:
-    radial-gradient(circle at top left, rgba(29, 155, 240, 0.14), transparent 26%),
-    radial-gradient(circle at top right, rgba(125, 211, 252, 0.16), transparent 24%),
-    linear-gradient(180deg, #ffffff 0%, #f6f9fd 100%);
+    radial-gradient(circle at top left, rgba(var(--color-brand-rgb), 0.14), transparent 26%),
+    radial-gradient(circle at top right, rgba(var(--page-forum-accent-rgb), 0.18), transparent 24%),
+    linear-gradient(180deg, #ffffff 0%, var(--page-forum-tint) 100%);
   color: var(--text);
   font-family: "Avenir Next", "SF Pro Display", "PingFang SC", "Noto Sans SC",
     sans-serif;
@@ -135,7 +135,7 @@ body.embedded .embedded-close-btn {
   border-radius: 18px;
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, #ffffff 0%, #7fd4ff 100%);
+  background: linear-gradient(135deg, #ffffff 0%, rgba(var(--page-forum-accent-rgb), 0.9) 100%);
   color: #000;
   font-size: 28px;
   font-weight: 800;
@@ -193,7 +193,7 @@ body.embedded .embedded-close-btn {
 
 .nav-item:hover,
 .nav-item.active {
-  background: rgba(29, 155, 240, 0.08);
+  background: rgba(var(--color-brand-rgb), 0.08);
   transform: translateX(3px);
 }
 
@@ -302,7 +302,7 @@ body.embedded .embedded-close-btn {
 
 .ghost-button:hover,
 .ghost-chip:hover {
-  background: rgba(29, 155, 240, 0.08);
+  background: rgba(var(--color-brand-rgb), 0.08);
 }
 
 .ghost-chip--danger {
@@ -351,13 +351,13 @@ body.embedded .embedded-close-btn {
   overflow: hidden;
   min-height: 0;
   margin: 0 16px;
-  border: 1px dashed rgba(29, 155, 240, 0.4);
+  border: 1px dashed rgba(var(--color-brand-rgb), 0.4);
   border-radius: 22px;
   display: grid;
   place-items: center;
   text-align: center;
-  background: rgba(29, 155, 240, 0.08);
-  color: #165a8d;
+  background: rgba(var(--color-brand-rgb), 0.08);
+  color: var(--color-brand-700);
   transform-origin: top center;
   transition:
     max-height 200ms ease,
@@ -389,8 +389,8 @@ body.embedded .embedded-close-btn {
   width: 18px;
   height: 18px;
   margin-bottom: 4px;
-  border: 2px solid rgba(29, 155, 240, 0.28);
-  border-top-color: rgba(29, 155, 240, 0.9);
+  border: 2px solid rgba(var(--color-brand-rgb), 0.28);
+  border-top-color: rgba(var(--color-brand-rgb), 0.9);
   border-radius: 999px;
   opacity: 0;
   transform: scale(0.9);
@@ -398,8 +398,8 @@ body.embedded .embedded-close-btn {
 }
 
 .pull-indicator.ready {
-  background: rgba(29, 155, 240, 0.16);
-  border-color: rgba(29, 155, 240, 0.75);
+  background: rgba(var(--color-brand-rgb), 0.16);
+  border-color: rgba(var(--color-brand-rgb), 0.75);
 }
 
 .pull-indicator.loading {
@@ -613,8 +613,8 @@ body.embedded .embedded-close-btn {
 }
 
 .custom-tab-item.is-active {
-  border-color: rgba(29, 155, 240, 0.42);
-  box-shadow: 0 0 0 3px rgba(29, 155, 240, 0.08);
+  border-color: rgba(var(--color-brand-rgb), 0.42);
+  box-shadow: 0 0 0 3px rgba(var(--color-brand-rgb), 0.08);
   transform: translateY(-1px);
 }
 
@@ -623,8 +623,8 @@ body.embedded .embedded-close-btn {
 }
 
 .custom-tab-item.drag-over {
-  border-color: rgba(29, 155, 240, 0.55);
-  box-shadow: 0 0 0 2px rgba(29, 155, 240, 0.16);
+  border-color: rgba(var(--color-brand-rgb), 0.55);
+  box-shadow: 0 0 0 2px rgba(var(--color-brand-rgb), 0.16);
 }
 
 .custom-tab-item__actions {
@@ -773,7 +773,11 @@ body.embedded .embedded-close-btn {
 .avatar {
   width: 48px;
   height: 48px;
-  background: linear-gradient(135deg, rgba(29, 155, 240, 0.95), rgba(74, 222, 249, 0.52));
+  background: linear-gradient(
+    135deg,
+    rgba(var(--color-brand-rgb), 0.95),
+    rgba(var(--page-forum-accent-rgb), 0.56)
+  );
   color: white;
 }
 
@@ -1186,8 +1190,8 @@ body.embedded .embedded-close-btn {
   overflow: hidden;
   display: grid;
   place-items: center;
-  background: rgba(29, 155, 240, 0.12);
-  color: #165c92;
+  background: rgba(var(--color-brand-rgb), 0.12);
+  color: var(--color-brand-700);
   font-weight: 800;
 }
 
@@ -1216,7 +1220,7 @@ body.embedded .embedded-close-btn {
 }
 
 .thread-share-row__arrow {
-  color: #1d9bf0;
+  color: var(--color-brand-500);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -1254,8 +1258,8 @@ body.embedded .embedded-close-btn {
   display: grid;
   place-items: center;
   font-weight: 800;
-  background: rgba(29, 155, 240, 0.14);
-  color: #155a8f;
+  background: rgba(var(--color-brand-rgb), 0.14);
+  color: var(--color-brand-700);
 }
 
 .reply-text {
@@ -1277,7 +1281,7 @@ body.embedded .embedded-close-btn {
 .reply-composer {
   margin-top: 12px;
   padding: 12px;
-  border: 1px solid rgba(29, 155, 240, 0.18);
+  border: 1px solid rgba(var(--color-brand-rgb), 0.18);
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.98);
   display: grid;
@@ -1381,8 +1385,8 @@ body.embedded .embedded-close-btn {
 
 .conversation-card--interactive:hover,
 .tag-stat-card:hover {
-  border-color: rgba(29, 155, 240, 0.28);
-  box-shadow: 0 12px 28px rgba(29, 155, 240, 0.08);
+  border-color: rgba(var(--color-brand-rgb), 0.28);
+  box-shadow: 0 12px 28px rgba(var(--color-brand-rgb), 0.08);
 }
 
 .tag-stats-list {
@@ -1476,8 +1480,8 @@ body.embedded .embedded-close-btn {
 .profile-banner {
   height: 170px;
   background:
-    radial-gradient(circle at left top, rgba(29, 155, 240, 0.32), transparent 30%),
-    linear-gradient(135deg, #f3f8ff, #d8ebfb 55%, #eef6ff);
+    radial-gradient(circle at left top, rgba(var(--color-brand-rgb), 0.28), transparent 30%),
+    linear-gradient(135deg, #f5f8ff, #e3ebfb 55%, #f1f5fd);
   background-position: center;
   background-repeat: no-repeat;
   background-size: cover;
@@ -1636,8 +1640,8 @@ textarea {
 input:focus,
 select:focus,
 textarea:focus {
-  border-color: rgba(29, 155, 240, 0.72);
-  box-shadow: 0 0 0 3px rgba(29, 155, 240, 0.16);
+  border-color: rgba(var(--color-brand-rgb), 0.72);
+  box-shadow: 0 0 0 3px rgba(var(--color-brand-rgb), 0.16);
 }
 
 textarea {
@@ -1698,8 +1702,8 @@ textarea {
 }
 
 .api-config-item.active {
-  border-color: rgba(29, 155, 240, 0.35);
-  background: rgba(29, 155, 240, 0.08);
+  border-color: rgba(var(--color-brand-rgb), 0.35);
+  background: rgba(var(--color-brand-rgb), 0.08);
 }
 
 .api-config-item__head {

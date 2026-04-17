@@ -1,16 +1,16 @@
 :root {
-  --plot-bg: #f4f0ea;
-  --plot-bg-strong: #ede7df;
-  --plot-surface: rgba(255, 252, 248, 0.84);
-  --plot-surface-strong: rgba(255, 251, 246, 0.95);
-  --plot-border: rgba(116, 86, 55, 0.08);
-  --plot-text: #241a12;
-  --plot-muted: rgba(36, 26, 18, 0.62);
-  --plot-accent: #8c6f54;
-  --plot-accent-strong: #75553a;
-  --plot-shadow-lg: 0 24px 48px rgba(67, 47, 28, 0.12);
-  --plot-shadow-md: 0 14px 28px rgba(67, 47, 28, 0.08);
-  --plot-shadow-sm: 0 8px 16px rgba(67, 47, 28, 0.06);
+  --plot-bg: var(--page-plot-tint);
+  --plot-bg-strong: #f0e8df;
+  --plot-surface: rgba(255, 252, 248, 0.88);
+  --plot-surface-strong: rgba(255, 251, 246, 0.96);
+  --plot-border: rgba(var(--page-plot-accent-rgb), 0.12);
+  --plot-text: var(--color-text);
+  --plot-muted: rgba(var(--color-text-rgb), 0.62);
+  --plot-accent: var(--page-plot-accent);
+  --plot-accent-strong: var(--page-plot-accent-strong);
+  --plot-shadow-lg: var(--shadow-overlay);
+  --plot-shadow-md: var(--shadow-lg);
+  --plot-shadow-sm: var(--shadow-sm);
 }
 
 * {

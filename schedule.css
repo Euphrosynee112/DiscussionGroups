@@ -1,16 +1,16 @@
 :root {
-  --schedule-bg: #f3f1ed;
-  --schedule-bg-soft: #fbfaf7;
+  --schedule-bg: var(--page-schedule-tint);
+  --schedule-bg-soft: #fffaf6;
   --schedule-panel: rgba(255, 255, 255, 0.92);
   --schedule-panel-strong: rgba(255, 255, 255, 0.98);
-  --schedule-line: rgba(56, 48, 42, 0.08);
-  --schedule-text: #26211d;
-  --schedule-muted: rgba(38, 33, 29, 0.58);
-  --schedule-accent: #cc7c59;
-  --schedule-accent-soft: rgba(204, 124, 89, 0.12);
-  --schedule-green: #5f9a75;
-  --schedule-blue: #7d9cc8;
-  --schedule-shadow: 0 16px 34px rgba(97, 86, 75, 0.1);
+  --schedule-line: rgba(var(--color-text-rgb), 0.08);
+  --schedule-text: var(--color-text);
+  --schedule-muted: rgba(var(--color-text-rgb), 0.58);
+  --schedule-accent: var(--page-schedule-accent);
+  --schedule-accent-soft: rgba(var(--page-schedule-accent-rgb), 0.12);
+  --schedule-green: var(--color-success);
+  --schedule-blue: var(--color-info);
+  --schedule-shadow: var(--shadow-lg);
   --schedule-app-height: 100vh;
   --schedule-app-height: 100svh;
   --schedule-app-height: 100dvh;
@@ -522,18 +522,18 @@ body.embedded .schedule-shell {
 }
 
 .schedule-chip--user {
-  background: rgba(125, 156, 200, 0.16);
-  color: #5b79a5;
+  background: var(--color-info-soft);
+  color: var(--color-info);
 }
 
 .schedule-chip--contact {
-  background: rgba(95, 154, 117, 0.16);
-  color: #447556;
+  background: var(--color-success-soft);
+  color: var(--color-success);
 }
 
 .schedule-chip--visibility {
-  background: rgba(211, 138, 104, 0.12);
-  color: #a26243;
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
 }
 
 .schedule-week-timeline {
@@ -922,7 +922,7 @@ body.embedded .schedule-shell {
   height: 18px;
   margin: 0;
   flex-shrink: 0;
-  accent-color: #eb4fa2;
+  accent-color: var(--schedule-accent);
 }
 
 .schedule-inline-check span,

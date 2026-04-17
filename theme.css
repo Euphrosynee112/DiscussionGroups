@@ -1,0 +1,82 @@
+:root {
+  --color-bg-app: #f4f7fb;
+  --color-bg-subtle: #edf2f7;
+  --color-surface: #ffffff;
+  --color-surface-soft: #f8fafc;
+  --color-surface-raised: #eef3f8;
+  --color-surface-glass: rgba(255, 255, 255, 0.78);
+  --color-surface-glass-strong: rgba(255, 255, 255, 0.9);
+  --color-surface-glass-soft: rgba(255, 255, 255, 0.64);
+  --color-text: #0f172a;
+  --color-text-rgb: 15, 23, 42;
+  --color-text-muted: #667085;
+  --color-text-soft: #98a2b3;
+  --color-text-inverse: #ffffff;
+  --color-border-soft: rgba(15, 23, 42, 0.08);
+  --color-border: rgba(15, 23, 42, 0.12);
+  --color-border-strong: rgba(15, 23, 42, 0.18);
+
+  --color-brand-rgb: 94, 143, 215;
+  --color-brand-50: #f2f6ff;
+  --color-brand-100: #e6eeff;
+  --color-brand-400: #8eb2e7;
+  --color-brand-500: #5e8fd7;
+  --color-brand-600: #4f7cc1;
+  --color-brand-700: #436aa6;
+  --color-brand-soft: rgba(94, 143, 215, 0.14);
+  --color-brand-ring: rgba(94, 143, 215, 0.18);
+
+  --color-success-rgb: 47, 158, 104;
+  --color-success: #2f9e68;
+  --color-success-soft: rgba(47, 158, 104, 0.12);
+  --color-warning-rgb: 210, 138, 57;
+  --color-warning: #d28a39;
+  --color-warning-soft: rgba(210, 138, 57, 0.12);
+  --color-danger-rgb: 210, 87, 87;
+  --color-danger: #d25757;
+  --color-danger-soft: rgba(210, 87, 87, 0.12);
+  --color-info-rgb: 78, 141, 224;
+  --color-info: #4e8de0;
+  --color-info-soft: rgba(78, 141, 224, 0.12);
+
+  --shadow-sm: 0 8px 20px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 12px 28px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 18px 40px rgba(15, 23, 42, 0.12);
+  --shadow-overlay: 0 24px 48px rgba(15, 23, 42, 0.16);
+
+  --page-home-accent-rgb: 143, 183, 232;
+  --page-home-accent: #8fb7e8;
+  --page-home-accent-strong: #6b88c6;
+  --page-home-tint: #f5f8fd;
+
+  --page-forum-accent-rgb: 143, 183, 232;
+  --page-forum-accent: #8fb7e8;
+  --page-forum-accent-strong: #6b88c6;
+  --page-forum-tint: #f4f8ff;
+
+  --page-chat-accent-rgb: 126, 207, 155;
+  --page-chat-accent: #7ecf9b;
+  --page-chat-accent-strong: #68b686;
+  --page-chat-tint: #f4fbf6;
+  --page-chat-user-bubble: #d8f0d2;
+
+  --page-bubble-accent-rgb: 231, 155, 181;
+  --page-bubble-accent: #e79bb5;
+  --page-bubble-accent-strong: #d785a4;
+  --page-bubble-tint: #fff6fa;
+
+  --page-schedule-accent-rgb: 216, 161, 126;
+  --page-schedule-accent: #d8a17e;
+  --page-schedule-accent-strong: #c48761;
+  --page-schedule-tint: #fcf7f3;
+
+  --page-plot-accent-rgb: 167, 138, 114;
+  --page-plot-accent: #a78a72;
+  --page-plot-accent-strong: #8c6f54;
+  --page-plot-tint: #f7f2ec;
+
+  --page-raising-accent-rgb: 216, 176, 122;
+  --page-raising-accent: #d8b07a;
+  --page-raising-accent-strong: #c5925c;
+  --page-raising-tint: #fff9ef;
+}
