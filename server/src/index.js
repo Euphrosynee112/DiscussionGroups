@@ -1366,6 +1366,64 @@ function isValidPrivacyAllowlistPlaceholder(value = "", category = "") {
   return new RegExp(`^__PG_${resolvedCategory}_[A-Z0-9]{8}__$`).test(placeholder);
 }
 
+function getPrivacyAllowlistNamePlaceholderParts(value = "") {
+  const match = trimPrivacyText(value)
+    .toUpperCase()
+    .match(/^__PG_NAME_([A-Z0-9]{8})_(FULL|COMMON|NICK|PET|HONOR)__$/);
+  return match
+    ? {
+        baseId: match[1],
+        level: match[2]
+      }
+    : null;
+}
+
+function buildPrivacyAllowlistNamePlaceholderFromBase(baseId = "", nameLevel = "") {
+  const normalizedBaseId = trimPrivacyText(baseId).toUpperCase();
+  if (!/^[A-Z0-9]{8}$/.test(normalizedBaseId)) {
+    return "";
+  }
+  return `__PG_NAME_${normalizedBaseId}_${normalizePrivacyAllowlistNameLevel(nameLevel)}__`;
+}
+
+function getPrivacyAllowlistNameLevelPriority(nameLevel = "") {
+  const order = ["FULL", "COMMON", "NICK", "PET", "HONOR"];
+  const index = order.indexOf(normalizePrivacyAllowlistNameLevel(nameLevel));
+  return index >= 0 ? index : order.length;
+}
+
+function shouldPreferPrivacyAllowlistNamePlaceholder(candidate = "", current = "") {
+  const candidateParts = getPrivacyAllowlistNamePlaceholderParts(candidate);
+  if (!candidateParts) {
+    return false;
+  }
+  const currentParts = getPrivacyAllowlistNamePlaceholderParts(current);
+  if (!currentParts) {
+    return true;
+  }
+  return (
+    getPrivacyAllowlistNameLevelPriority(candidateParts.level) <
+    getPrivacyAllowlistNameLevelPriority(currentParts.level)
+  );
+}
+
+function resolvePrivacyAllowlistPlaceholderFromScopeMap(
+  scopeMap,
+  scopeKey = "",
+  category = "",
+  nameLevel = ""
+) {
+  if (!(scopeMap instanceof Map) || !scopeKey || !scopeMap.has(scopeKey)) {
+    return "";
+  }
+  const existingPlaceholder = trimPrivacyText(scopeMap.get(scopeKey)).toUpperCase();
+  if (normalizePrivacyAllowlistCategory(category) !== "NAME") {
+    return existingPlaceholder;
+  }
+  const nameParts = getPrivacyAllowlistNamePlaceholderParts(existingPlaceholder);
+  return buildPrivacyAllowlistNamePlaceholderFromBase(nameParts?.baseId, nameLevel) || existingPlaceholder;
+}
+
 function buildDefaultPrivacyAllowlistPlaceholder(options = {}) {
   const category = normalizePrivacyAllowlistCategory(options.category);
   const text = trimPrivacyText(options.text);
@@ -1393,12 +1451,16 @@ function collectPrivacyAllowlistPlaceholderScopeMap(items = []) {
     const category = normalizePrivacyAllowlistCategory(item?.category);
     const placeholder = trimPrivacyText(item?.placeholder).toUpperCase();
     const scopeKey = buildPrivacyAllowlistPlaceholderScope(item);
-    if (
-      !scopeKey ||
-      !placeholder ||
-      scopeMap.has(scopeKey) ||
-      !isValidPrivacyAllowlistPlaceholder(placeholder, category)
-    ) {
+    if (!scopeKey || !placeholder || !isValidPrivacyAllowlistPlaceholder(placeholder, category)) {
+      return;
+    }
+    if (scopeMap.has(scopeKey)) {
+      if (
+        category === "NAME" &&
+        shouldPreferPrivacyAllowlistNamePlaceholder(placeholder, scopeMap.get(scopeKey))
+      ) {
+        scopeMap.set(scopeKey, placeholder);
+      }
       return;
     }
     scopeMap.set(scopeKey, placeholder);
@@ -1419,8 +1481,16 @@ function resolveDerivedPrivacyAllowlistPlaceholder(options = {}, scopeMap = new 
     nameGroupId,
     nameLevel
   });
-  if (scopeKey && scopeMap.has(scopeKey)) {
-    return scopeMap.get(scopeKey);
+  if (scopeKey) {
+    const existingPlaceholder = resolvePrivacyAllowlistPlaceholderFromScopeMap(
+      scopeMap,
+      scopeKey,
+      category,
+      nameLevel
+    );
+    if (existingPlaceholder) {
+      return existingPlaceholder;
+    }
   }
   const generated = buildDefaultPrivacyAllowlistPlaceholder({
     category,
@@ -1428,7 +1498,7 @@ function resolveDerivedPrivacyAllowlistPlaceholder(options = {}, scopeMap = new 
     nameGroupId,
     nameLevel
   });
-  if (scopeKey) {
+  if (scopeKey && !scopeMap.has(scopeKey)) {
     scopeMap.set(scopeKey, generated);
   }
   return generated;
@@ -1452,12 +1522,11 @@ function buildPrivacyAllowlistPlaceholderScope(item = {}) {
   const nameGroupId = shouldKeepPrivacyAllowlistGroupId(category)
     ? normalizePrivacyAllowlistNameGroupId(item.nameGroupId)
     : "";
-  const nameLevel = category === "NAME" ? normalizePrivacyAllowlistNameLevel(item.nameLevel) : "COMMON";
   if (!text) {
     return "";
   }
   if (category === "NAME") {
-    return `NAME:${nameGroupId || text}:${nameLevel}`;
+    return `NAME:${nameGroupId || text}`;
   }
   if (category === "TERM") {
     return `TERM:${nameGroupId || text}`;
@@ -1470,6 +1539,7 @@ function buildPrivacyAllowlistPlaceholderScope(item = {}) {
 
 function validatePrivacyAllowlistItems(items = []) {
   const placeholderScopeMap = new Map();
+  const nameGroupBaseMap = new Map();
   const termGroupPlaceholderMap = new Map();
   const issueMap = new Map();
 
@@ -1488,6 +1558,8 @@ function validatePrivacyAllowlistItems(items = []) {
     const nameGroupId = shouldKeepPrivacyAllowlistGroupId(category)
       ? normalizePrivacyAllowlistNameGroupId(item.nameGroupId)
       : "";
+    const nameLevel =
+      category === "NAME" ? normalizePrivacyAllowlistNameLevel(item.nameLevel) : "COMMON";
 
     if (!text || !placeholder || !scopeKey) {
       return;
@@ -1501,6 +1573,30 @@ function validatePrivacyAllowlistItems(items = []) {
       );
     } else {
       placeholderScopeMap.set(placeholder, scopeKey);
+    }
+
+    if (category === "NAME") {
+      const nameParts = getPrivacyAllowlistNamePlaceholderParts(placeholder);
+      const groupLabel = nameGroupId || text;
+      if (nameParts && nameParts.level !== nameLevel) {
+        addIssue(
+          `name-level:${scopeKey}:${placeholder}`,
+          `人名“${text}”的占位符层级是 ${nameParts.level}，但当前层级是 ${nameLevel}。`
+        );
+      }
+      if (nameParts?.baseId) {
+        const existingBase = nameGroupBaseMap.get(scopeKey);
+        if (existingBase && existingBase.baseId !== nameParts.baseId) {
+          addIssue(
+            `name-group:${scopeKey}`,
+            `人名分组 ${groupLabel} 存在多个占位符主体编号，请统一成同一个后再保存。`
+          );
+        } else if (!existingBase) {
+          nameGroupBaseMap.set(scopeKey, {
+            baseId: nameParts.baseId
+          });
+        }
+      }
     }
 
     if (category === "TERM" && nameGroupId) {

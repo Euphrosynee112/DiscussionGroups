@@ -108,18 +108,71 @@
     return new RegExp(`^__PG_${resolvedCategory}_[A-Z0-9]{8}__$`).test(placeholder);
   }
 
+  function getPrivacyNamePlaceholderParts(value = "") {
+    const match = String(value || "")
+      .trim()
+      .toUpperCase()
+      .match(/^__PG_NAME_([A-Z0-9]{8})_(FULL|COMMON|NICK|PET|HONOR)__$/);
+    return match
+      ? {
+          baseId: match[1],
+          level: match[2]
+        }
+      : null;
+  }
+
+  function buildPrivacyNamePlaceholderFromBase(baseId = "", nameLevel = "") {
+    const normalizedBaseId = String(baseId || "").trim().toUpperCase();
+    if (!/^[A-Z0-9]{8}$/.test(normalizedBaseId)) {
+      return "";
+    }
+    return `__PG_NAME_${normalizedBaseId}_${normalizePrivacyNameAliasLevel(nameLevel)}__`;
+  }
+
+  function getPrivacyNameLevelPriority(nameLevel = "") {
+    const order = ["FULL", "COMMON", "NICK", "PET", "HONOR"];
+    const index = order.indexOf(normalizePrivacyNameAliasLevel(nameLevel));
+    return index >= 0 ? index : order.length;
+  }
+
+  function shouldPreferPrivacyNamePlaceholder(candidate = "", current = "") {
+    const candidateParts = getPrivacyNamePlaceholderParts(candidate);
+    if (!candidateParts) {
+      return false;
+    }
+    const currentParts = getPrivacyNamePlaceholderParts(current);
+    if (!currentParts) {
+      return true;
+    }
+    return (
+      getPrivacyNameLevelPriority(candidateParts.level) <
+      getPrivacyNameLevelPriority(currentParts.level)
+    );
+  }
+
+  function resolvePrivacyPlaceholderFromScopeMap(scopeMap, scopeKey = "", category = "", nameLevel = "") {
+    if (!(scopeMap instanceof Map) || !scopeKey || !scopeMap.has(scopeKey)) {
+      return "";
+    }
+    const existingPlaceholder = String(scopeMap.get(scopeKey) || "").trim().toUpperCase();
+    if (normalizePrivacyAllowlistCategory(category) !== "NAME") {
+      return existingPlaceholder;
+    }
+    const nameParts = getPrivacyNamePlaceholderParts(existingPlaceholder);
+    return buildPrivacyNamePlaceholderFromBase(nameParts?.baseId, nameLevel) || existingPlaceholder;
+  }
+
   function buildPrivacyPlaceholderScope(item = {}) {
     const category = normalizePrivacyAllowlistCategory(item.category);
     const text = String(item.text || "").trim();
     const nameGroupId = shouldKeepPrivacyGroupId(category)
       ? normalizePrivacyNameGroupId(item.nameGroupId)
       : "";
-    const nameLevel = category === "NAME" ? normalizePrivacyNameAliasLevel(item.nameLevel) : "COMMON";
     if (!text) {
       return "";
     }
     if (category === "NAME") {
-      return `NAME:${nameGroupId || text}:${nameLevel}`;
+      return `NAME:${nameGroupId || text}`;
     }
     if (category === "TERM") {
       return `TERM:${nameGroupId || text}`;
@@ -157,12 +210,13 @@
       const category = normalizePrivacyAllowlistCategory(item?.category);
       const placeholder = String(item?.placeholder || "").trim().toUpperCase();
       const scopeKey = buildPrivacyPlaceholderScope(item);
-      if (
-        !scopeKey ||
-        !placeholder ||
-        scopeMap.has(scopeKey) ||
-        !isValidPrivacyPlaceholder(placeholder, category)
-      ) {
+      if (!scopeKey || !placeholder || !isValidPrivacyPlaceholder(placeholder, category)) {
+        return;
+      }
+      if (scopeMap.has(scopeKey)) {
+        if (category === "NAME" && shouldPreferPrivacyNamePlaceholder(placeholder, scopeMap.get(scopeKey))) {
+          scopeMap.set(scopeKey, placeholder);
+        }
         return;
       }
       scopeMap.set(scopeKey, placeholder);
@@ -183,8 +237,16 @@
       nameGroupId,
       nameLevel
     });
-    if (scopeKey && scopeMap.has(scopeKey)) {
-      return scopeMap.get(scopeKey);
+    if (scopeKey) {
+      const existingPlaceholder = resolvePrivacyPlaceholderFromScopeMap(
+        scopeMap,
+        scopeKey,
+        category,
+        nameLevel
+      );
+      if (existingPlaceholder) {
+        return existingPlaceholder;
+      }
     }
     const generated = buildDefaultPrivacyPlaceholder({
       category,
@@ -192,7 +254,7 @@
       nameGroupId,
       nameLevel
     });
-    if (scopeKey) {
+    if (scopeKey && !scopeMap.has(scopeKey)) {
       scopeMap.set(scopeKey, generated);
     }
     return generated;

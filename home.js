@@ -2660,6 +2660,60 @@ function isValidPrivacyPlaceholder(value = "", category = "") {
   return new RegExp(`^__PG_${resolvedCategory}_[A-Z0-9]{8}__$`).test(placeholder);
 }
 
+function getPrivacyNamePlaceholderParts(value = "") {
+  const match = String(value || "")
+    .trim()
+    .toUpperCase()
+    .match(/^__PG_NAME_([A-Z0-9]{8})_(FULL|COMMON|NICK|PET|HONOR)__$/);
+  return match
+    ? {
+        baseId: match[1],
+        level: match[2]
+      }
+    : null;
+}
+
+function buildPrivacyNamePlaceholderFromBase(baseId = "", nameLevel = "") {
+  const normalizedBaseId = String(baseId || "").trim().toUpperCase();
+  if (!/^[A-Z0-9]{8}$/.test(normalizedBaseId)) {
+    return "";
+  }
+  return `__PG_NAME_${normalizedBaseId}_${normalizePrivacyNameAliasLevel(nameLevel)}__`;
+}
+
+function getPrivacyNameLevelPriority(nameLevel = "") {
+  const order = ["FULL", "COMMON", "NICK", "PET", "HONOR"];
+  const index = order.indexOf(normalizePrivacyNameAliasLevel(nameLevel));
+  return index >= 0 ? index : order.length;
+}
+
+function shouldPreferPrivacyNamePlaceholder(candidate = "", current = "") {
+  const candidateParts = getPrivacyNamePlaceholderParts(candidate);
+  if (!candidateParts) {
+    return false;
+  }
+  const currentParts = getPrivacyNamePlaceholderParts(current);
+  if (!currentParts) {
+    return true;
+  }
+  return (
+    getPrivacyNameLevelPriority(candidateParts.level) <
+    getPrivacyNameLevelPriority(currentParts.level)
+  );
+}
+
+function resolvePrivacyPlaceholderFromScopeMap(scopeMap, scopeKey = "", category = "", nameLevel = "") {
+  if (!(scopeMap instanceof Map) || !scopeKey || !scopeMap.has(scopeKey)) {
+    return "";
+  }
+  const existingPlaceholder = String(scopeMap.get(scopeKey) || "").trim().toUpperCase();
+  if (normalizePrivacyAllowlistCategory(category) !== "NAME") {
+    return existingPlaceholder;
+  }
+  const nameParts = getPrivacyNamePlaceholderParts(existingPlaceholder);
+  return buildPrivacyNamePlaceholderFromBase(nameParts?.baseId, nameLevel) || existingPlaceholder;
+}
+
 function buildDefaultPrivacyPlaceholder(options = {}) {
   const category = normalizePrivacyAllowlistCategory(options.category, options.text);
   const text = String(options.text || "").trim();
@@ -2691,12 +2745,13 @@ function collectPrivacyPlaceholderScopeMap(items = [], options = {}) {
     const category = normalizePrivacyAllowlistCategory(item?.category, item?.text);
     const placeholder = String(item?.placeholder || "").trim().toUpperCase();
     const scopeKey = buildPrivacyPlaceholderScope(item);
-    if (
-      !scopeKey ||
-      !placeholder ||
-      scopeMap.has(scopeKey) ||
-      !isValidPrivacyPlaceholder(placeholder, category)
-    ) {
+    if (!scopeKey || !placeholder || !isValidPrivacyPlaceholder(placeholder, category)) {
+      return;
+    }
+    if (scopeMap.has(scopeKey)) {
+      if (category === "NAME" && shouldPreferPrivacyNamePlaceholder(placeholder, scopeMap.get(scopeKey))) {
+        scopeMap.set(scopeKey, placeholder);
+      }
       return;
     }
     scopeMap.set(scopeKey, placeholder);
@@ -2722,7 +2777,12 @@ function resolveDerivedPrivacyPlaceholder(options = {}, items = [], context = {}
       ? context.scopeMap
       : collectPrivacyPlaceholderScopeMap(items, context);
   if (scopeKey) {
-    const existingPlaceholder = scopeMap.get(scopeKey);
+    const existingPlaceholder = resolvePrivacyPlaceholderFromScopeMap(
+      scopeMap,
+      scopeKey,
+      category,
+      nameLevel
+    );
     if (existingPlaceholder) {
       return existingPlaceholder;
     }
@@ -2734,7 +2794,9 @@ function resolveDerivedPrivacyPlaceholder(options = {}, items = [], context = {}
     nameLevel
   });
   if (scopeKey) {
-    scopeMap.set(scopeKey, generatedPlaceholder);
+    if (!scopeMap.has(scopeKey)) {
+      scopeMap.set(scopeKey, generatedPlaceholder);
+    }
   }
   return generatedPlaceholder;
 }
@@ -2757,12 +2819,11 @@ function buildPrivacyPlaceholderScope(item = {}) {
   const nameGroupId = shouldKeepPrivacyGroupId(category)
     ? normalizePrivacyNameGroupId(item.nameGroupId)
     : "";
-  const nameLevel = category === "NAME" ? normalizePrivacyNameAliasLevel(item.nameLevel) : "COMMON";
   if (!text) {
     return "";
   }
   if (category === "NAME") {
-    return `NAME:${nameGroupId || text}:${nameLevel}`;
+    return `NAME:${nameGroupId || text}`;
   }
   if (category === "TERM") {
     return `TERM:${nameGroupId || text}`;
@@ -2775,6 +2836,7 @@ function buildPrivacyPlaceholderScope(item = {}) {
 
 function buildPrivacyAllowlistValidation(items = []) {
   const placeholderScopeMap = new Map();
+  const nameGroupBaseMap = new Map();
   const termGroupPlaceholderMap = new Map();
   const itemIssueMap = new Map();
   const issueMap = new Map();
@@ -2799,6 +2861,7 @@ function buildPrivacyAllowlistValidation(items = []) {
     const nameGroupId = shouldKeepPrivacyGroupId(category)
       ? normalizePrivacyNameGroupId(item.nameGroupId)
       : "";
+    const nameLevel = category === "NAME" ? normalizePrivacyNameAliasLevel(item.nameLevel) : "COMMON";
     if (!item.text || !placeholder || !scopeKey) {
       return;
     }
@@ -2813,6 +2876,31 @@ function buildPrivacyAllowlistValidation(items = []) {
         id: item.id,
         scopeKey
       });
+    }
+
+    if (category === "NAME") {
+      const nameParts = getPrivacyNamePlaceholderParts(placeholder);
+      const groupLabel = nameGroupId || item.text;
+      if (nameParts && nameParts.level !== nameLevel) {
+        addItemIssue(
+          item.id,
+          `name-level:${placeholder}`,
+          `人名“${item.text}”的占位符层级是 ${nameParts.level}，但当前层级是 ${nameLevel}。`
+        );
+      }
+      if (nameParts?.baseId) {
+        const existingBase = nameGroupBaseMap.get(scopeKey);
+        if (existingBase && existingBase.baseId !== nameParts.baseId) {
+          const message = `人名分组 ${groupLabel} 存在多个占位符主体编号，应统一成同一个。`;
+          addItemIssue(item.id, `name-group:${scopeKey}`, message);
+          addItemIssue(existingBase.id, `name-group:${scopeKey}`, message);
+        } else if (!existingBase) {
+          nameGroupBaseMap.set(scopeKey, {
+            id: item.id,
+            baseId: nameParts.baseId
+          });
+        }
+      }
     }
 
     if (category === "TERM" && nameGroupId) {
@@ -3990,9 +4078,17 @@ function getPrivacyAddGroupOptions(
     existingGroup.count += 1;
     if (resolvedCategory === "NAME") {
       const level = normalizePrivacyNameAliasLevel(item.nameLevel);
+      const placeholder = String(item.placeholder || "").trim().toUpperCase();
       existingGroup.levels.add(level);
-      if (!existingGroup.placeholdersByLevel.has(level) && item.placeholder) {
-        existingGroup.placeholdersByLevel.set(level, String(item.placeholder || "").trim().toUpperCase());
+      if (
+        placeholder &&
+        (!existingGroup.placeholder ||
+          shouldPreferPrivacyNamePlaceholder(placeholder, existingGroup.placeholder))
+      ) {
+        existingGroup.placeholder = placeholder;
+      }
+      if (!existingGroup.placeholdersByLevel.has(level) && placeholder) {
+        existingGroup.placeholdersByLevel.set(level, placeholder);
       }
     } else if (!existingGroup.placeholder && item.placeholder) {
       existingGroup.placeholder = String(item.placeholder || "").trim().toUpperCase();
@@ -4064,9 +4160,14 @@ function getPrivacyAddGroupMatchHint(option = null, draft = {}) {
   if (category === "NAME") {
     const level = normalizePrivacyNameAliasLevel(draft.nameLevel);
     const matchedPlaceholder = option.placeholdersByLevel.get(level) || "";
+    const nameParts = getPrivacyNamePlaceholderParts(option.placeholder);
+    const derivedPlaceholder = buildPrivacyNamePlaceholderFromBase(nameParts?.baseId, level);
     const levelSummary = option.levels.map((item) => getPrivacyNameLevelLabel(item)).join(" / ");
-    return matchedPlaceholder
-      ? `已匹配已有分组“${option.displayName}”，当前 ${getPrivacyNameLevelLabel(level)} 层级会复用 ${matchedPlaceholder}。${levelSummary ? `已有层级：${levelSummary}。` : ""}`
+    if (matchedPlaceholder) {
+      return `已匹配已有分组“${option.displayName}”，当前 ${getPrivacyNameLevelLabel(level)} 层级会复用 ${matchedPlaceholder}。${levelSummary ? `已有层级：${levelSummary}。` : ""}`;
+    }
+    return derivedPlaceholder
+      ? `已匹配已有分组“${option.displayName}”，会沿用同一主体编号生成 ${derivedPlaceholder}。${levelSummary ? `已有层级：${levelSummary}。` : ""}`
       : `已匹配已有分组“${option.displayName}”，当前 ${getPrivacyNameLevelLabel(level)} 层级暂无现成占位符，会新生成一个。${levelSummary ? `已有层级：${levelSummary}。` : ""}`;
   }
   return option.placeholder
