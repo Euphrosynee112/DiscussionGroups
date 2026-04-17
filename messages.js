@@ -5611,6 +5611,14 @@ function normalizeMessageMemory(memory, index = 0) {
   };
 }
 
+function normalizeMessageMemoryEntry(memory, index = 0) {
+  const source = memory && typeof memory === "object" ? memory : {};
+  return {
+    ...source,
+    ...normalizeMessageMemory(source, index)
+  };
+}
+
 function getMemoryDecayConfig() {
   const fallback = {
     meta: {
@@ -5958,7 +5966,7 @@ function pruneExpiredMessageMemories(
   now = Date.now()
 ) {
   return normalizeObjectArray(memories)
-    .map((item, index) => normalizeMessageMemory(item, index))
+    .map((item, index) => normalizeMessageMemoryEntry(item, index))
     .filter((item) => item.contactId && item.content)
     .filter((item) => !isMessageMemoryExpired(item, promptSettings, now));
 }
@@ -5990,7 +5998,7 @@ function loadMessageMemories() {
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed)
       ? parsed
-          .map((item, index) => normalizeMessageMemory(item, index))
+          .map((item, index) => normalizeMessageMemoryEntry(item, index))
           .filter((item) => item.contactId && item.content)
       : [];
   } catch (_error) {
@@ -6024,9 +6032,11 @@ function memoryLooksSimilar(left = "", right = "") {
 }
 
 function mergeMemories(existing = [], incoming = []) {
-  const next = Array.isArray(existing) ? [...existing] : [];
+  const next = Array.isArray(existing)
+    ? existing.map((item, index) => normalizeMessageMemoryEntry(item, index))
+    : [];
   incoming.forEach((candidate, index) => {
-    const entry = normalizeMessageMemory(candidate, index);
+    const entry = normalizeMessageMemoryEntry(candidate, index);
     if (!entry.contactId || !entry.content) {
       return;
     }
@@ -6039,11 +6049,17 @@ function mergeMemories(existing = [], incoming = []) {
       return;
     }
     const current = next[foundIndex];
+    const createdAtCandidates = [Number(current.createdAt) || 0, Number(entry.createdAt) || 0].filter(
+      Boolean
+    );
     next[foundIndex] = {
       ...current,
+      ...entry,
+      id: String(current.id || entry.id || "").trim(),
       type: current.type === "core" || entry.type === "core" ? "core" : "scene",
       importance: Math.max(Number(current.importance) || 0, Number(entry.importance) || 0),
       source: current.source === "manual" ? "manual" : entry.source,
+      createdAt: createdAtCandidates.length ? Math.min(...createdAtCandidates) : Date.now(),
       updatedAt: Math.max(Number(current.updatedAt) || 0, Number(entry.updatedAt) || 0) || Date.now(),
       content:
         String(current.content || "").trim().length >= String(entry.content || "").trim().length
