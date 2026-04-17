@@ -5,6 +5,7 @@ const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GROK_MODEL = "grok-4";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 const DEFAULT_TEMPERATURE = 0.85;
+const APP_BUILD_VERSION = "20260417-170500";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const PROFILE_KEY = "x_style_generator_profile_v1";
 const MESSAGE_CONTACTS_KEY = "x_style_generator_message_contacts_v1";
@@ -1533,7 +1534,7 @@ function ensurePlotBackgroundMessagesWorker() {
   iframe.id = "plot-background-messages-frame";
   iframe.setAttribute("aria-hidden", "true");
   iframe.tabIndex = -1;
-  iframe.src = "./messages.html?embed=1&background=1";
+  iframe.src = `./messages-background-host.html?mode=reply&v=${APP_BUILD_VERSION}`;
   iframe.style.position = "fixed";
   iframe.style.width = "0";
   iframe.style.height = "0";
@@ -2858,7 +2859,6 @@ function bindEvents() {
 
 function init() {
   syncRuntimeData();
-  ensurePlotBackgroundMessagesWorker();
   render();
   bindEvents();
 }

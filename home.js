@@ -5,8 +5,8 @@ const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GROK_MODEL = "grok-4";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 const DEFAULT_TEMPERATURE = 0.85;
-const APP_BUILD_VERSION = "20260417-145828";
-const APP_BUILD_UPDATED_AT = "2026-04-17 14:58:28";
+const APP_BUILD_VERSION = "20260417-170500";
+const APP_BUILD_UPDATED_AT = "2026-04-17 17:05:00";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -185,7 +185,8 @@ const privacyAppAddNameLevelFieldEl = document.querySelector("#privacy-app-add-n
 const privacyAppAddNameLevelSelectEl = document.querySelector("#privacy-app-add-name-level");
 const privacyAppAddPlaceholderInputEl = document.querySelector("#privacy-app-add-placeholder");
 const privacyAppAddPlaceholderHintEl = document.querySelector("#privacy-app-add-placeholder-hint");
-let homeBackgroundMessagesFrameEl = null;
+let homeReplyWorkerHostFrameEl = null;
+let homeAutomationWorkerHostFrameEl = null;
 
 const weekdayLabels = [
   "星期日",
@@ -6841,7 +6842,7 @@ function requestBackgroundProactiveTriggerRescan(options = {}) {
           reason: ""
         };
   try {
-    homeBackgroundMessagesFrameEl?.contentWindow?.postMessage(
+    homeAutomationWorkerHostFrameEl?.contentWindow?.postMessage(
       {
         type: "pulse-generator-proactive-trigger-rescan",
         payload
@@ -6850,6 +6851,55 @@ function requestBackgroundProactiveTriggerRescan(options = {}) {
     );
   } catch (_error) {
   }
+}
+
+function createHiddenBackgroundHostFrame(src = "") {
+  const iframe = document.createElement("iframe");
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.tabIndex = -1;
+  iframe.src = src;
+  iframe.style.position = "fixed";
+  iframe.style.width = "0";
+  iframe.style.height = "0";
+  iframe.style.border = "0";
+  iframe.style.opacity = "0";
+  iframe.style.pointerEvents = "none";
+  iframe.style.inset = "auto";
+  document.body?.appendChild(iframe);
+  return iframe;
+}
+
+function buildBackgroundHostUrl(mode = "reply", options = {}) {
+  const params = new URLSearchParams();
+  params.set("mode", mode === "automation" ? "automation" : "reply");
+  params.set("v", APP_BUILD_VERSION);
+  if (mode === "automation") {
+    const startDelayMs = Number.parseInt(String(options.startDelayMs || ""), 10);
+    if (Number.isFinite(startDelayMs) && startDelayMs >= 0) {
+      params.set("startDelayMs", String(startDelayMs));
+    }
+  }
+  return `./messages-background-host.html?${params.toString()}`;
+}
+
+function ensureBackgroundReplyWorkerHost() {
+  if (isPrivacyAppView() || homeReplyWorkerHostFrameEl) {
+    return;
+  }
+  homeReplyWorkerHostFrameEl = createHiddenBackgroundHostFrame(
+    buildBackgroundHostUrl("reply")
+  );
+}
+
+function ensureBackgroundAutomationWorkerHost() {
+  if (isPrivacyAppView() || homeAutomationWorkerHostFrameEl) {
+    return;
+  }
+  homeAutomationWorkerHostFrameEl = createHiddenBackgroundHostFrame(
+    buildBackgroundHostUrl("automation", {
+      startDelayMs: 12000
+    })
+  );
 }
 
 function commitHomeManualTimeFromControls(options = {}) {
@@ -7595,23 +7645,8 @@ function openHomeApp(tabName) {
 }
 
 function ensureBackgroundMessagesWorker() {
-  if (isPrivacyAppView() || homeBackgroundMessagesFrameEl) {
-    return;
-  }
-  const iframe = document.createElement("iframe");
-  iframe.id = "home-background-messages-frame";
-  iframe.setAttribute("aria-hidden", "true");
-  iframe.tabIndex = -1;
-  iframe.src = `./messages.html?embed=1&background=1&v=${APP_BUILD_VERSION}`;
-  iframe.style.position = "fixed";
-  iframe.style.width = "0";
-  iframe.style.height = "0";
-  iframe.style.border = "0";
-  iframe.style.opacity = "0";
-  iframe.style.pointerEvents = "none";
-  iframe.style.inset = "auto";
-  document.body?.appendChild(iframe);
-  homeBackgroundMessagesFrameEl = iframe;
+  ensureBackgroundReplyWorkerHost();
+  ensureBackgroundAutomationWorkerHost();
 }
 
 function attachHomeSettingsEvents() {
@@ -7744,8 +7779,9 @@ function attachHomeSettingsEvents() {
 
   window.addEventListener("message", (event) => {
     const frameWindow = homeBrowserFrameEl?.contentWindow || null;
-    const backgroundFrameWindow = homeBackgroundMessagesFrameEl?.contentWindow || null;
-    const acceptedSources = [frameWindow, backgroundFrameWindow].filter(Boolean);
+    const replyWorkerHostWindow = homeReplyWorkerHostFrameEl?.contentWindow || null;
+    const automationWorkerHostWindow = homeAutomationWorkerHostFrameEl?.contentWindow || null;
+    const acceptedSources = [frameWindow, replyWorkerHostWindow, automationWorkerHostWindow].filter(Boolean);
     if (event.source && acceptedSources.length && !acceptedSources.includes(event.source)) {
       return;
     }

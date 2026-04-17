@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Messages Background Host</title>
+  </head>
+  <body>
+    <script>
+      (function initMessagesBackgroundHost() {
+        const MESSAGE_REPLY_TASKS_KEY = "x_style_generator_message_reply_tasks_v1";
+        const MESSAGE_ACTIVE_VIEW_KEY = "x_style_generator_message_active_view_v1";
+        const REPLY_TASK_STALE_MS = 30000;
+        const REPLY_WORKER_TEARDOWN_DELAY_MS = 5000;
+        const REPLY_EVALUATE_INTERVAL_MS = 4000;
+        const DEFAULT_AUTOMATION_START_DELAY_MS = 12000;
+        const FORWARDED_CHILD_MESSAGE_TYPES = new Set([
+          "pulse-generator-message-notification",
+          "pulse-generator-app-ready"
+        ]);
+
+        let workerFrameEl = null;
+        let replyEvaluateTimerId = 0;
+        let replyTeardownTimerId = 0;
+        let automationStartTimerId = 0;
+        let pendingWorkerMessages = [];
+        let automationStarted = false;
+
+        function getQuery() {
+          try {
+            return new URLSearchParams(window.location.search);
+          } catch (_error) {
+            return new URLSearchParams();
+          }
+        }
+
+        const query = getQuery();
+        const hostMode =
+          String(query.get("mode") || "").trim().toLowerCase() === "automation"
+            ? "automation"
+            : "reply";
+        const buildVersion = String(query.get("v") || "").trim();
+        const requestedStartDelayMs = Number.parseInt(String(query.get("startDelayMs") || ""), 10);
+        const automationStartDelayMs = Number.isFinite(requestedStartDelayMs)
+          ? Math.max(0, requestedStartDelayMs)
+          : DEFAULT_AUTOMATION_START_DELAY_MS;
+
+        function safeGetItem(key) {
+          try {
+            return window.localStorage.getItem(key);
+          } catch (_error) {
+            return null;
+          }
+        }
+
+        function loadReplyTasks() {
+          const raw = safeGetItem(MESSAGE_REPLY_TASKS_KEY);
+          if (!raw) {
+            return [];
+          }
+          try {
+            const parsed = JSON.parse(raw);
+            return Array.isArray(parsed) ? parsed : [];
+          } catch (_error) {
+            return [];
+          }
+        }
+
+        function loadActiveConversationView() {
+          const raw = safeGetItem(MESSAGE_ACTIVE_VIEW_KEY);
+          if (!raw) {
+            return {
+              conversationId: "",
+              visible: false,
+              updatedAt: 0
+            };
+          }
+          try {
+            const parsed = JSON.parse(raw);
+            return {
+              conversationId: String(parsed?.conversationId || "").trim(),
+              visible: Boolean(parsed?.visible),
+              updatedAt: Number(parsed?.updatedAt) || 0
+            };
+          } catch (_error) {
+            return {
+              conversationId: "",
+              visible: false,
+              updatedAt: 0
+            };
+          }
+        }
+
+        function getReplyTaskPulseAt(task = null) {
+          return Math.max(
+            0,
+            Number(task?.heartbeatAt) || 0,
+            Number(task?.startedAt) || 0,
+            Number(task?.updatedAt) || 0,
+            Number(task?.createdAt) || 0
+          );
+        }
+
+        function isReplyTaskStale(task = null, now = Date.now()) {
+          const referenceTime = getReplyTaskPulseAt(task);
+          if (!referenceTime) {
+            return false;
+          }
+          return Math.max(0, Number(now) || 0) - referenceTime > REPLY_TASK_STALE_MS;
+        }
+
+        function buildWorkerUrl(mode) {
+          const url = new URL("./messages.html", window.location.href);
+          url.searchParams.set("embed", "1");
+          url.searchParams.set("background", "1");
+          url.searchParams.set("worker", mode === "automation" ? "automation" : "reply");
+          if (buildVersion) {
+            url.searchParams.set("v", buildVersion);
+          }
+          return url.toString();
+        }
+
+        function flushPendingWorkerMessages() {
+          const workerWindow = workerFrameEl?.contentWindow || null;
+          if (!workerWindow || !pendingWorkerMessages.length) {
+            return;
+          }
+          pendingWorkerMessages.forEach((message) => {
+            try {
+              workerWindow.postMessage(message, "*");
+            } catch (_error) {
+            }
+          });
+          pendingWorkerMessages = [];
+        }
+
+        function ensureWorker(mode = hostMode) {
+          if (workerFrameEl) {
+            return workerFrameEl;
+          }
+          const iframe = document.createElement("iframe");
+          iframe.setAttribute("aria-hidden", "true");
+          iframe.tabIndex = -1;
+          iframe.src = buildWorkerUrl(mode);
+          iframe.style.position = "fixed";
+          iframe.style.width = "0";
+          iframe.style.height = "0";
+          iframe.style.border = "0";
+          iframe.style.opacity = "0";
+          iframe.style.pointerEvents = "none";
+          iframe.style.inset = "auto";
+          iframe.addEventListener("load", () => {
+            flushPendingWorkerMessages();
+          });
+          document.body.appendChild(iframe);
+          workerFrameEl = iframe;
+          return iframe;
+        }
+
+        function destroyWorker() {
+          if (!workerFrameEl) {
+            return;
+          }
+          try {
+            workerFrameEl.remove();
+          } catch (_error) {
+          }
+          workerFrameEl = null;
+          pendingWorkerMessages = [];
+        }
+
+        function queueMessageForWorker(message) {
+          pendingWorkerMessages.push(message);
+          ensureWorker(hostMode);
+          flushPendingWorkerMessages();
+        }
+
+        function shouldActivateReplyWorker() {
+          const tasks = loadReplyTasks();
+          if (!tasks.length) {
+            return false;
+          }
+          const now = Date.now();
+          const activeView = loadActiveConversationView();
+          return tasks.some((task) => {
+            const status = String(task?.status || "").trim();
+            if (status === "pending") {
+              return true;
+            }
+            if (status !== "processing") {
+              return false;
+            }
+            if (isReplyTaskStale(task, now)) {
+              return true;
+            }
+            if (!activeView.visible) {
+              return true;
+            }
+            return String(task?.conversationId || "").trim() !== String(activeView.conversationId || "").trim();
+          });
+        }
+
+        function clearReplyWorkerTeardown() {
+          if (!replyTeardownTimerId) {
+            return;
+          }
+          window.clearTimeout(replyTeardownTimerId);
+          replyTeardownTimerId = 0;
+        }
+
+        function scheduleReplyWorkerTeardown() {
+          if (!workerFrameEl || replyTeardownTimerId) {
+            return;
+          }
+          replyTeardownTimerId = window.setTimeout(() => {
+            replyTeardownTimerId = 0;
+            if (!shouldActivateReplyWorker()) {
+              destroyWorker();
+            }
+          }, REPLY_WORKER_TEARDOWN_DELAY_MS);
+        }
+
+        function evaluateReplyWorker() {
+          if (shouldActivateReplyWorker()) {
+            clearReplyWorkerTeardown();
+            ensureWorker("reply");
+            return;
+          }
+          scheduleReplyWorkerTeardown();
+        }
+
+        function startAutomationWorker() {
+          if (automationStarted) {
+            return;
+          }
+          automationStarted = true;
+          ensureWorker("automation");
+          flushPendingWorkerMessages();
+        }
+
+        function scheduleAutomationWorkerStart() {
+          if (automationStarted || automationStartTimerId) {
+            return;
+          }
+          automationStartTimerId = window.setTimeout(() => {
+            automationStartTimerId = 0;
+            if (typeof window.requestIdleCallback === "function") {
+              window.requestIdleCallback(
+                () => {
+                  startAutomationWorker();
+                },
+                { timeout: 3000 }
+              );
+              return;
+            }
+            startAutomationWorker();
+          }, automationStartDelayMs);
+        }
+
+        window.addEventListener("storage", (event) => {
+          const key = String(event?.key || "").trim();
+          if (hostMode === "reply") {
+            if (key === MESSAGE_REPLY_TASKS_KEY || key === MESSAGE_ACTIVE_VIEW_KEY) {
+              evaluateReplyWorker();
+            }
+          }
+        });
+
+        window.addEventListener("message", (event) => {
+          const workerWindow = workerFrameEl?.contentWindow || null;
+          if (workerWindow && event.source === workerWindow) {
+            const eventType = String(event.data?.type || "").trim();
+            if (FORWARDED_CHILD_MESSAGE_TYPES.has(eventType)) {
+              try {
+                window.parent?.postMessage(event.data, "*");
+              } catch (_error) {
+              }
+            }
+            return;
+          }
+          if (hostMode !== "automation") {
+            return;
+          }
+          if (event.source && event.source !== window.parent) {
+            return;
+          }
+          if (String(event.data?.type || "").trim() !== "pulse-generator-proactive-trigger-rescan") {
+            return;
+          }
+          queueMessageForWorker(event.data);
+        });
+
+        if (hostMode === "reply") {
+          evaluateReplyWorker();
+          replyEvaluateTimerId = window.setInterval(evaluateReplyWorker, REPLY_EVALUATE_INTERVAL_MS);
+          return;
+        }
+
+        scheduleAutomationWorkerStart();
+      })();
+    </script>
+  </body>
+</html>

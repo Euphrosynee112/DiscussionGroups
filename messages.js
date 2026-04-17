@@ -799,6 +799,29 @@ function isBackgroundMessagesWorker() {
   }
 }
 
+function getBackgroundWorkerMode() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const mode = String(params.get("worker") || "").trim().toLowerCase();
+    if (mode === "reply") {
+      return "reply";
+    }
+    if (mode === "automation") {
+      return "automation";
+    }
+  } catch (_error) {
+  }
+  return "";
+}
+
+function isBackgroundReplyWorker() {
+  return isBackgroundMessagesWorker() && getBackgroundWorkerMode() === "reply";
+}
+
+function isBackgroundAutomationWorker() {
+  return isBackgroundMessagesWorker() && getBackgroundWorkerMode() === "automation";
+}
+
 function canUseBackgroundReplyWorker() {
   return isEmbeddedView() && !isBackgroundMessagesWorker();
 }
@@ -13626,12 +13649,14 @@ async function requestChatReplyText(
         )
       });
       logged = true;
-      void markPromptBundleMemoriesRecalled(memoryPromptBundle, {
-        contactId: contact.id,
-        conversationId: mergedRequestOptions.conversation?.id || "",
-        proactiveTrigger: mergedRequestOptions.proactiveTrigger,
-        regenerate: mergedRequestOptions.regenerate
-      });
+      if (!mergedRequestOptions.skipMemoryRecallWrite) {
+        void markPromptBundleMemoriesRecalled(memoryPromptBundle, {
+          contactId: contact.id,
+          conversationId: mergedRequestOptions.conversation?.id || "",
+          proactiveTrigger: mergedRequestOptions.proactiveTrigger,
+          regenerate: mergedRequestOptions.regenerate
+        });
+      }
       return {
         text: cleanedEncodedMessage,
         privacySession,
@@ -20794,6 +20819,13 @@ function sendConversationMessage(text, options = {}) {
 async function requestConversationReply(options = {}) {
   syncProfileStateFromStorage();
   const requestOptions = options && typeof options === "object" ? options : {};
+  const backgroundWorkerMode = String(
+    requestOptions.backgroundWorkerMode || getBackgroundWorkerMode() || ""
+  )
+    .trim()
+    .toLowerCase();
+  const shouldUseReplyWorkerLightMode =
+    backgroundWorkerMode === "reply" || Boolean(requestOptions.replyWorkerLightMode);
   const conversationId = String(requestOptions.conversationId || state.activeConversationId).trim();
   if (!conversationId) {
     return;
@@ -20884,9 +20916,11 @@ async function requestConversationReply(options = {}) {
   const settings = loadSettings();
   const promptSettings = getConversationPromptSettings(conversation, settings.messagePromptSettings);
   state.chatPromptSettings = promptSettings;
-  await ensureCloudMemoriesReady(contact.id, {
-    importLocalFallback: true
-  });
+  if (!shouldUseReplyWorkerLightMode) {
+    await ensureCloudMemoriesReady(contact.id, {
+      importLocalFallback: true
+    });
+  }
   let history = [];
   let removedReplyBatch = [];
   const currentAwarenessCounter = Math.max(
@@ -21058,7 +21092,9 @@ async function requestConversationReply(options = {}) {
       if (!suppressUi) {
         renderMessagesPage();
       }
-      await maybeAutoGenerateSchedulesForConversation(conversation);
+      if (!shouldUseReplyWorkerLightMode) {
+        await maybeAutoGenerateSchedulesForConversation(conversation);
+      }
       history = selectConversationHistory(conversation.messages, promptSettings.historyRounds);
     }
 
@@ -21089,6 +21125,7 @@ async function requestConversationReply(options = {}) {
         pendingUserMessages: pendingUserMessagesForPrompt,
         continueAssistant,
         proactiveTrigger,
+        skipMemoryRecallWrite: shouldUseReplyWorkerLightMode,
         sceneMode: conversation.sceneMode === "offline" ? "offline" : "online",
         conversation
       }
@@ -21248,7 +21285,9 @@ async function requestConversationReply(options = {}) {
         deferMaintenance: true,
         fallbackToMaintenanceOnFailure: false
       });
-      void maybeExtractConversationMemories(latestConversation.id, settings, promptSettings);
+      if (!shouldUseReplyWorkerLightMode) {
+        void maybeExtractConversationMemories(latestConversation.id, settings, promptSettings);
+      }
     }
     if (!suppressUi) {
       setMessagesStatus(
@@ -21420,6 +21459,8 @@ async function pumpBackgroundReplyTasks() {
       regenerateInstruction: nextTask.regenerateInstruction,
       awarenessImmediateTrigger: nextTask.awarenessImmediateTrigger,
       triggeredAwareness: nextTask.triggeredAwareness,
+      backgroundWorkerMode: "reply",
+      replyWorkerLightMode: true,
       forceDirect: true,
       suppressUi: true
     });
@@ -21440,8 +21481,21 @@ async function pumpBackgroundReplyTasks() {
   }
 }
 
-function initBackgroundMessagesWorker() {
+function initBackgroundReplyWorker() {
   requeueStaleProcessingReplyTasks();
+  refreshStateFromStorage();
+  window.addEventListener("storage", (event) => {
+    const targetKey = String(event?.key || "").trim();
+    if (targetKey === MESSAGE_REPLY_TASKS_KEY) {
+      void pumpBackgroundReplyTasks();
+    }
+  });
+  window.setTimeout(() => {
+    void pumpBackgroundReplyTasks();
+  }, 80);
+}
+
+function initBackgroundAutomationWorker() {
   refreshStateFromStorage();
   sanitizePresenceStateReferences();
   persistPresenceState();
@@ -21459,10 +21513,6 @@ function initBackgroundMessagesWorker() {
   window.addEventListener("storage", (event) => {
     const targetKey = String(event?.key || "").trim();
     if (!targetKey) {
-      return;
-    }
-    if (targetKey === MESSAGE_REPLY_TASKS_KEY) {
-      void pumpBackgroundReplyTasks();
       return;
     }
     if (targetKey === MESSAGE_MEMORIES_KEY) {
@@ -21507,9 +21557,11 @@ function initBackgroundMessagesWorker() {
       }
     }
   });
-  window.setTimeout(() => {
-    void pumpBackgroundReplyTasks();
-  }, 80);
+}
+
+function initBackgroundMessagesWorker() {
+  initBackgroundReplyWorker();
+  initBackgroundAutomationWorker();
 }
 
 function refreshStateFromStorage() {
@@ -24065,7 +24117,13 @@ function init() {
   }
   if (isBackgroundMessagesWorker()) {
     try {
-      initBackgroundMessagesWorker();
+      if (isBackgroundReplyWorker()) {
+        initBackgroundReplyWorker();
+      } else if (isBackgroundAutomationWorker()) {
+        initBackgroundAutomationWorker();
+      } else {
+        initBackgroundMessagesWorker();
+      }
     } catch (error) {
       console.error("[Pulse Messages] Background worker init failed:", error);
     }
