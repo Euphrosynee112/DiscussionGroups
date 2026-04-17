@@ -1253,12 +1253,8 @@ async function requestTranslatedText(settings, sourceText) {
 
   const requestEndpoint = validateApiSettings(settings, "翻译");
   const prompt = buildTranslatePrompt(originalText);
-  const privacySession = createPrivacySession({
-    settings,
-    sourceText: originalText,
-    prompt
-  });
-  const encodedPrompt = preparePromptWithPrivacy(prompt, privacySession);
+  const privacySession = null;
+  const encodedPrompt = prompt;
   const requestBody = buildTranslateRequestBody(settings, encodedPrompt);
   const logBase = applyPrivacyToLogEntry(
     buildBubbleApiLogBase(

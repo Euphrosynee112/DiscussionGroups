@@ -6717,12 +6717,8 @@ async function requestTranslatedPostContent(settings, post) {
   }
 
   const prompt = buildTranslatePostPrompt(post);
-  const privacySession = createPrivacySession({
-    settings,
-    post,
-    prompt
-  });
-  const encodedPrompt = preparePromptWithPrivacy(prompt, privacySession);
+  const privacySession = null;
+  const encodedPrompt = prompt;
   const requestBody = buildTranslateRequestBody(settings, encodedPrompt);
   const logBase = applyPrivacyToLogEntry(
     buildDiscussionApiLogBase(
@@ -6860,12 +6856,8 @@ async function requestTranslatedText(settings, sourceText) {
   }
 
   const prompt = buildTranslatePrompt(originalText);
-  const privacySession = createPrivacySession({
-    settings,
-    sourceText: originalText,
-    prompt
-  });
-  const encodedPrompt = preparePromptWithPrivacy(prompt, privacySession);
+  const privacySession = null;
+  const encodedPrompt = prompt;
   const requestBody = buildTranslateRequestBody(settings, encodedPrompt);
   const logBase = applyPrivacyToLogEntry(
     buildDiscussionApiLogBase(

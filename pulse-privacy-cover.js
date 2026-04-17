@@ -743,6 +743,15 @@
       if (!entry?.raw || !entry?.placeholder) {
         return;
       }
+      if (String(entry.category || "") === "TITLE") {
+        const wrappedPlaceholder = `《${entry.placeholder}》`;
+        if (decoded.includes(wrappedPlaceholder)) {
+          const titleReplacement = /^《[^》\n]{1,120}》$/.test(entry.raw)
+            ? entry.raw
+            : `《${entry.raw}》`;
+          decoded = decoded.split(wrappedPlaceholder).join(titleReplacement);
+        }
+      }
       decoded = decoded.split(entry.placeholder).join(entry.raw);
     });
     if (decoded.includes("__PG_NAME_")) {
