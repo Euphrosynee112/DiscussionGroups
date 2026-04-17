@@ -1,6 +1,7 @@
 const path = require("path");
 const { randomUUID } = require("crypto");
 
+const compression = require("compression");
 const cors = require("cors");
 const dotenv = require("dotenv");
 const express = require("express");
@@ -35,6 +36,21 @@ const MEMORY_DECAY_WORKER_BATCH_SIZE = clampIntegerEnv(
   200
 );
 const MEMORY_DECAY_WORKER_LOCK_ID = 2026041601;
+const STATIC_LONG_CACHE_EXTENSIONS = new Set([
+  ".js",
+  ".css",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".svg",
+  ".webp",
+  ".ico",
+  ".woff",
+  ".woff2",
+  ".ttf",
+  ".map"
+]);
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -196,6 +212,11 @@ function clampIntegerEnv(value, fallback, min, max) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   const resolved = Number.isFinite(parsed) ? parsed : fallback;
   return Math.min(max, Math.max(min, resolved));
+}
+
+function shouldApplyLongCacheForStaticAsset(requestPath = "") {
+  const extension = path.extname(String(requestPath || "").trim().toLowerCase());
+  return STATIC_LONG_CACHE_EXTENSIONS.has(extension);
 }
 
 function createPoolConfig(connectionString = "") {
@@ -4602,6 +4623,11 @@ app.use(
   })
 );
 app.use(express.json({ limit: "10mb" }));
+app.use(
+  compression({
+    threshold: 1024
+  })
+);
 
 app.get("/api/health", async (_request, response) => {
   if (!pool) {
@@ -5756,7 +5782,21 @@ app.post("/api/memory/import", async (request, response) => {
   }
 });
 
-app.use(express.static(STATIC_ROOT, { index: ["index.html"] }));
+app.use(
+  express.static(STATIC_ROOT, {
+    index: ["index.html"],
+    cacheControl: false,
+    setHeaders(response, filePath) {
+      if (shouldApplyLongCacheForStaticAsset(filePath)) {
+        response.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        return;
+      }
+      if (path.extname(String(filePath || "").trim().toLowerCase()) === ".html") {
+        response.setHeader("Cache-Control", "no-cache");
+      }
+    }
+  })
+);
 
 app.use((request, response) => {
   if (request.path.startsWith("/api/")) {
