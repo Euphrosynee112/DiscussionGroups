@@ -4300,16 +4300,17 @@ function syncPrivacyAddForm(options = {}) {
     privacyAppAddGroupLabelEl.textContent = draft.category === "NAME" ? "同一人分组" : "同义词分组";
   }
   if (privacyAppAddNameGroupInputEl) {
-    privacyAppAddNameGroupInputEl.required = showGroupField && !matchedGroupOption;
+    privacyAppAddNameGroupInputEl.required =
+      draft.category === "NAME" && !matchedGroupOption;
     privacyAppAddNameGroupInputEl.placeholder =
-      draft.category === "NAME" ? "例如：Jessie" : "例如：RIIZE";
+      draft.category === "NAME" ? "例如：Jessie" : "可选，例如：RIIZE";
   }
   if (privacyAppAddGroupHintEl) {
     privacyAppAddGroupHintEl.textContent =
       draft.category === "NAME"
         ? "可先从下拉选择已有的人物分组；没有时再新建。层级差异仍由“称呼层级”表达。"
         : showGroupField
-          ? "可先从下拉选择已有的普通词分组；没有时再新建。同组会共用同一个占位符。"
+          ? "普通词分组可选；同义词需要共用占位符时再选择或新建分组。"
           : "标题词条不需要额外分组。";
   }
   if (privacyAppAddGroupMatchHintEl) {
@@ -4355,9 +4356,6 @@ function getPrivacyAddValidationError(item = {}) {
   }
   if (category === "NAME" && !nameGroupId) {
     return "人名词条必须填写“同一人分组”。";
-  }
-  if (category === "TERM" && !nameGroupId) {
-    return "普通词词条必须填写“同义词分组”。";
   }
   if (!placeholder) {
     return "请确认实际占位符后再保存。";
@@ -4790,13 +4788,14 @@ async function handlePrivacyAllowlistChange(event) {
       })
     };
   }));
-  renderPrivacyApp();
   try {
     await persistPrivacyAllowlistItems(homeState.privacyAllowlistItems, {
       eventSource: "home-edit"
     });
+    renderPrivacyApp();
     setPrivacyAppStatus("白名单修改已同步到云端。", "success");
   } catch (error) {
+    renderPrivacyApp();
     setPrivacyAppStatus(`白名单同步失败：${error?.message || "请稍后重试。"}`, "error");
   }
 }
