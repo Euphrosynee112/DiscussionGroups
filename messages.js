@@ -4515,6 +4515,20 @@ function buildConversationPromptSettingsBase(globalPromptSettings = loadSettings
   });
 }
 
+function applyGlobalMemoryPromptSettings(
+  promptSettings = {},
+  globalPromptSettings = loadSettings().messagePromptSettings
+) {
+  const source = promptSettings && typeof promptSettings === "object" ? promptSettings : {};
+  const globalSettings = normalizeMessagePromptSettings(globalPromptSettings);
+  return {
+    ...source,
+    memorySummaryIntervalRounds: globalSettings.memorySummaryIntervalRounds,
+    coreMemoryThreshold: globalSettings.coreMemoryThreshold,
+    sceneMemoryThreshold: globalSettings.sceneMemoryThreshold
+  };
+}
+
 function normalizeConversationPromptSettings(
   source = null,
   globalPromptSettings = loadSettings().messagePromptSettings
@@ -4522,10 +4536,15 @@ function normalizeConversationPromptSettings(
   if (!source || typeof source !== "object") {
     return null;
   }
-  return normalizeMessagePromptSettings({
-    ...buildConversationPromptSettingsBase(globalPromptSettings),
-    ...source
-  });
+  return normalizeMessagePromptSettings(
+    applyGlobalMemoryPromptSettings(
+      {
+        ...buildConversationPromptSettingsBase(globalPromptSettings),
+        ...source
+      },
+      globalPromptSettings
+    )
+  );
 }
 
 function getConversationPromptSettings(
@@ -4547,14 +4566,37 @@ function setConversationPromptSettings(promptSettings = {}, conversation = getCo
   if (!conversation) {
     return null;
   }
-  const nextPromptSettings = normalizeMessagePromptSettings({
-    ...getConversationPromptSettings(conversation),
-    ...(promptSettings && typeof promptSettings === "object" ? promptSettings : {})
-  });
+  const globalPromptSettings = loadSettings().messagePromptSettings;
+  const nextPromptSettings =
+    normalizeConversationPromptSettings(
+      {
+        ...getConversationPromptSettings(conversation, globalPromptSettings),
+        ...(promptSettings && typeof promptSettings === "object" ? promptSettings : {})
+      },
+      globalPromptSettings
+    ) || buildConversationPromptSettingsBase(globalPromptSettings);
   conversation.promptSettings = nextPromptSettings;
   state.chatPromptSettings = nextPromptSettings;
   persistConversations();
   return nextPromptSettings;
+}
+
+function syncConversationMemoryPromptSettingsWithGlobal(
+  globalPromptSettings = loadSettings().messagePromptSettings
+) {
+  const resolvedGlobalPromptSettings = normalizeMessagePromptSettings(globalPromptSettings);
+  normalizeObjectArray(state.conversations).forEach((conversation) => {
+    if (!conversation || typeof conversation !== "object") {
+      return;
+    }
+    conversation.promptSettings =
+      normalizeConversationPromptSettings(
+        conversation.promptSettings && typeof conversation.promptSettings === "object"
+          ? conversation.promptSettings
+          : {},
+        resolvedGlobalPromptSettings
+      ) || buildConversationPromptSettingsBase(resolvedGlobalPromptSettings);
+  });
 }
 
 function getDefaultConversationMemorySummaryIntervalRounds(promptSettings = loadSettings().messagePromptSettings) {
@@ -23183,6 +23225,8 @@ function attachEvents() {
       });
       nextSettings.messagePromptSettings = nextPromptSettings;
       persistSettings(nextSettings);
+      syncConversationMemoryPromptSettingsWithGlobal(nextPromptSettings);
+      persistConversations();
       syncActiveConversationPromptSettings();
       setMemorySettingsStatus("记忆设置已保存。", "success");
       renderMemoryViewer();
