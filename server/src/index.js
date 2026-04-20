@@ -3781,14 +3781,22 @@ async function runMemoryDecayWorkerOnce(options = {}) {
   try {
     lockAcquired = await tryAcquireMemoryDecayWorkerLock(client);
     if (!lockAcquired) {
+      const finishedAt = new Date().toISOString();
       const summary = {
         skipped: true,
         reason: "lock_not_acquired",
+        requestedCount: 0,
         processedCount: 0,
         batchId,
-        finishedAt: new Date().toISOString()
+        startedAt: now.toISOString(),
+        finishedAt,
+        durationMs: Math.max(0, Date.now() - now.getTime()),
+        workerBatchSize: limit,
+        error: ""
       };
       memoryDecayWorkerLastSummary = summary;
+      await persistMemoryDecayWorkerRun(summary).catch(() => {
+      });
       return summary;
     }
 
@@ -3819,18 +3827,25 @@ async function runMemoryDecayWorkerOnce(options = {}) {
     await client.query("commit");
     transactionStarted = false;
 
+    const finishedAt = new Date().toISOString();
     const summary = {
       skipped: false,
       batchId,
+      startedAt: now.toISOString(),
+      finishedAt,
+      durationMs: Math.max(0, Date.now() - now.getTime()),
       requestedCount: ids.length,
       processedCount: results.length,
       statusChangedCount: results.filter(
         (item) => item.changes?.status?.from && item.changes?.status?.from !== item.changes?.status?.to
       ).length,
       decayedEventCount: results.filter((item) => item.wouldWriteEvents.includes("decayed")).length,
-      finishedAt: new Date().toISOString()
+      workerBatchSize: limit,
+      error: ""
     };
     memoryDecayWorkerLastSummary = summary;
+    await persistMemoryDecayWorkerRun(summary).catch(() => {
+    });
     if (ids.length || requestOptions.logEmptyRun) {
       console.log("[Pulse Server] Memory decay worker run completed.", summary);
     }
@@ -3843,12 +3858,18 @@ async function runMemoryDecayWorkerOnce(options = {}) {
       }
     }
     memoryDecayWorkerLastError = error?.message || "Unknown memory decay worker error";
+    const finishedAt = new Date().toISOString();
     memoryDecayWorkerLastSummary = {
       skipped: false,
       batchId,
-      error: memoryDecayWorkerLastError,
-      finishedAt: new Date().toISOString()
+      startedAt: now.toISOString(),
+      finishedAt,
+      durationMs: Math.max(0, Date.now() - now.getTime()),
+      workerBatchSize: limit,
+      error: memoryDecayWorkerLastError
     };
+    await persistMemoryDecayWorkerRun(memoryDecayWorkerLastSummary, memoryDecayWorkerLastError).catch(() => {
+    });
     console.error("[Pulse Server] Memory decay worker failed:", error);
     throw error;
   } finally {
@@ -4691,7 +4712,352 @@ function createJsonError(message = "Request failed", details = null) {
   };
 }
 
+const MEMORY_REPORT_BAD_PREFIX_RE = /^\s*(你隐约记得|我隐约记得|隐约记得)/;
+const MEMORY_REPORT_AMBIGUOUS_PRONOUN_RE = /[你我他她]|我们|咱们|用户|联系人/;
+const MEMORY_REPORT_PLACEHOLDER_RE = /charname|username/i;
+const MEMORY_REPORT_GENERIC_SEMANTIC_KEY_RE = /^(legacy|auto):[a-z0-9_-]{4,}$/i;
+const MEMORY_REPORT_CUE_SOURCES = new Set(["explicit", "derived", "alias", "recent_user"]);
+const MEMORY_REPORT_CUE_STRENGTHS = new Set(["strong", "weak"]);
+const MEMORY_REPORT_GENERIC_CUE_TERMS = [
+  "喜欢",
+  "事情",
+  "印象",
+  "关系",
+  "聊天",
+  "记得",
+  "似乎",
+  "觉得",
+  "感觉",
+  "部分",
+  "内容",
+  "情况",
+  "有点"
+];
+
 const app = express();
+function normalizeMemoryCueStrength(value = "") {
+  const resolved = String(value || "").trim().toLowerCase();
+  return MEMORY_REPORT_CUE_STRENGTHS.has(resolved) ? resolved : "";
+}
+
+function normalizeMemoryCueSources(value = []) {
+  return Array.from(
+    new Set(
+      normalizeJsonArrayValue(value, [])
+        .map((item) => String(item || "").trim().toLowerCase())
+        .filter((item) => MEMORY_REPORT_CUE_SOURCES.has(item))
+    )
+  );
+}
+
+function isMemoryGenericCueTerm(value = "") {
+  const normalized = canonicalizeMemoryCompareText(value);
+  if (!normalized) {
+    return true;
+  }
+  return MEMORY_REPORT_GENERIC_CUE_TERMS.some(
+    (term) => canonicalizeMemoryCompareText(term) === normalized
+  );
+}
+
+function buildMemoryIssueSample(source = {}) {
+  return {
+    id: String(source.id || "").trim(),
+    contactId: String(source.contactId || source.contact_id || "").trim(),
+    contactName: String(source.contactName || source.contact_name || "").trim(),
+    status: normalizeMemoryStatus(source.status),
+    memoryType: normalizeMemoryType(source.memoryType || source.memory_type),
+    semanticKey: String(source.semanticKey || source.semantic_key || "").trim(),
+    canonicalText: String(source.canonicalText || source.canonical_text || "").trim(),
+    summaryShort: String(source.summaryShort || source.summary_short || "").trim(),
+    summaryFaint: String(source.summaryFaint || source.summary_faint || "").trim(),
+    keywords: normalizeJsonArrayValue(source.keywords, []),
+    entityRefs: normalizeJsonArrayValue(source.entityRefs || source.entity_refs, []),
+    updatedAt: source.updatedAt || source.updated_at || null
+  };
+}
+
+function buildMemoryItemQualityChecks(item = {}) {
+  const summaryFaint = String(item.summaryFaint || "").trim();
+  const combinedText = [item.canonicalText, item.summaryShort, summaryFaint]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join("\n");
+  const semanticKey = String(item.semanticKey || "").trim();
+  const keywords = normalizeJsonArrayValue(item.keywords, [])
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  const entityRefs = normalizeJsonArrayValue(item.entityRefs, [])
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  const emotionProfile = normalizeJsonObjectValue(item.emotionProfile, {});
+  const interactionTendency = normalizeJsonObjectValue(item.interactionTendency, {});
+  const keywordsWeak = !keywords.length || keywords.every((term) => isMemoryGenericCueTerm(term));
+  const entityRefsWeak =
+    !entityRefs.length || entityRefs.every((term) => isMemoryGenericCueTerm(term));
+  const emotionProfileEmpty = !Object.keys(emotionProfile).length;
+  const interactionTendencyEmpty = !Object.keys(interactionTendency).length;
+  return {
+    badPrefix: MEMORY_REPORT_BAD_PREFIX_RE.test(summaryFaint),
+    ambiguousPronoun: MEMORY_REPORT_AMBIGUOUS_PRONOUN_RE.test(summaryFaint),
+    placeholderLeak: MEMORY_REPORT_PLACEHOLDER_RE.test(combinedText),
+    emptySummaryFaint:
+      ["faint", "dormant"].includes(normalizeMemoryStatus(item.status)) && !summaryFaint,
+    summaryFaintTooLong: summaryFaint.length > 90,
+    semanticKeyWeak: !semanticKey || MEMORY_REPORT_GENERIC_SEMANTIC_KEY_RE.test(semanticKey),
+    keywordsWeak,
+    entityRefsWeak,
+    cueTermsWeak: keywordsWeak && entityRefsWeak,
+    emotionProfileEmpty,
+    interactionTendencyEmpty,
+    emotionStructureEmpty: emotionProfileEmpty && interactionTendencyEmpty
+  };
+}
+
+function buildMemoryQualityReportFromRows(rows = [], sampleLimit = 50) {
+  const cappedSampleLimit = Math.min(100, Math.max(1, sampleLimit || 50));
+  const issues = {
+    badPrefix: { count: 0, samples: [] },
+    ambiguousPronoun: { count: 0, samples: [] },
+    placeholderLeak: { count: 0, samples: [] },
+    emptySummaryFaint: { count: 0, samples: [] },
+    summaryFaintTooLong: { count: 0, samples: [] },
+    semanticKeyWeak: { count: 0, samples: [] },
+    duplicateCanonical: { count: 0, samples: [] },
+    cueTermsWeak: { count: 0, samples: [] },
+    emotionProfileEmpty: { count: 0, samples: [] },
+    interactionTendencyEmpty: { count: 0, samples: [] },
+    emotionStructureEmpty: { count: 0, samples: [] }
+  };
+  const normalizedRows = rows.map((row) => {
+    const item = mapMemoryItemRow(row);
+    return {
+      row,
+      item,
+      sample: buildMemoryIssueSample({
+        ...row,
+        ...item,
+        contact_name: row.contact_name || ""
+      }),
+      checks: buildMemoryItemQualityChecks(item),
+      normalizedCanonical: canonicalizeMemoryCompareText(item.canonicalText)
+    };
+  });
+
+  function addIssueSample(issueKey, sample) {
+    if (!issues[issueKey]) {
+      return;
+    }
+    issues[issueKey].count += 1;
+    if (issues[issueKey].samples.length < cappedSampleLimit) {
+      issues[issueKey].samples.push(sample);
+    }
+  }
+
+  normalizedRows.forEach((entry) => {
+    if (entry.checks.badPrefix) {
+      addIssueSample("badPrefix", entry.sample);
+    }
+    if (entry.checks.ambiguousPronoun) {
+      addIssueSample("ambiguousPronoun", entry.sample);
+    }
+    if (entry.checks.placeholderLeak) {
+      addIssueSample("placeholderLeak", entry.sample);
+    }
+    if (entry.checks.emptySummaryFaint) {
+      addIssueSample("emptySummaryFaint", entry.sample);
+    }
+    if (entry.checks.summaryFaintTooLong) {
+      addIssueSample("summaryFaintTooLong", entry.sample);
+    }
+    if (entry.checks.semanticKeyWeak) {
+      addIssueSample("semanticKeyWeak", entry.sample);
+    }
+    if (entry.checks.cueTermsWeak) {
+      addIssueSample("cueTermsWeak", entry.sample);
+    }
+    if (entry.checks.emotionProfileEmpty) {
+      addIssueSample("emotionProfileEmpty", entry.sample);
+    }
+    if (entry.checks.interactionTendencyEmpty) {
+      addIssueSample("interactionTendencyEmpty", entry.sample);
+    }
+    if (entry.checks.emotionStructureEmpty) {
+      addIssueSample("emotionStructureEmpty", entry.sample);
+    }
+  });
+
+  const duplicatePairKeys = new Set();
+  const duplicateBuckets = new Map();
+  normalizedRows.forEach((entry) => {
+    if (entry.normalizedCanonical.length < 8) {
+      return;
+    }
+    const bucketKey = `${entry.item.contactId}:${entry.item.memoryType}:${entry.normalizedCanonical.slice(0, 12)}`;
+    if (!duplicateBuckets.has(bucketKey)) {
+      duplicateBuckets.set(bucketKey, []);
+    }
+    duplicateBuckets.get(bucketKey).push(entry);
+  });
+  duplicateBuckets.forEach((entries) => {
+    for (let leftIndex = 0; leftIndex < entries.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < entries.length; rightIndex += 1) {
+        const left = entries[leftIndex];
+        const right = entries[rightIndex];
+        if (!memoryTextsLookSimilar(left.item.canonicalText, right.item.canonicalText)) {
+          continue;
+        }
+        const pairKey = [left.item.id, right.item.id].sort().join(":");
+        if (duplicatePairKeys.has(pairKey)) {
+          continue;
+        }
+        duplicatePairKeys.add(pairKey);
+        issues.duplicateCanonical.count += 1;
+        if (issues.duplicateCanonical.samples.length < cappedSampleLimit) {
+          issues.duplicateCanonical.samples.push({
+            contactId: left.item.contactId,
+            contactName: left.sample.contactName || right.sample.contactName || "",
+            primary: left.sample,
+            secondary: right.sample
+          });
+        }
+      }
+    }
+  });
+
+  return {
+    totalItems: normalizedRows.length,
+    counts: Object.fromEntries(
+      Object.entries(issues).map(([key, value]) => [key, value.count])
+    ),
+    samples: Object.fromEntries(
+      Object.entries(issues).map(([key, value]) => [key, value.samples])
+    )
+  };
+}
+
+function buildMemoryPromptEligibility(item = {}) {
+  const resolvedStatus = normalizeMemoryStatus(item.status);
+  const promptKind = item.memoryType === "scene" ? "scene" : "core";
+  const promptText =
+    resolvedStatus === "faint"
+      ? String(item.summaryFaint || item.summaryShort || item.canonicalText || "").trim()
+      : String(item.summaryShort || item.canonicalText || "").trim();
+  const hasPromptText = Boolean(promptText);
+  return {
+    promptKind,
+    status: resolvedStatus,
+    hasPromptText,
+    requiresCue: resolvedStatus === "dormant",
+    mayEnterWithoutCue: hasPromptText && ["active", "faint"].includes(resolvedStatus),
+    mayEnterWithCue: hasPromptText && resolvedStatus === "dormant",
+    blockedReason:
+      hasPromptText && ["active", "faint", "dormant"].includes(resolvedStatus)
+        ? ""
+        : "status_or_prompt_text_not_ready"
+  };
+}
+
+function buildMemoryEventSummary(events = []) {
+  const eventTypeCounts = {};
+  const reasonCodeCounts = {};
+  events.forEach((event) => {
+    const eventType = normalizeMemoryEventType(event.eventType || event.event_type);
+    const reasonCode = String(event.reasonCode || event.reason_code || "").trim();
+    eventTypeCounts[eventType] = (eventTypeCounts[eventType] || 0) + 1;
+    if (reasonCode) {
+      reasonCodeCounts[reasonCode] = (reasonCodeCounts[reasonCode] || 0) + 1;
+    }
+  });
+  return {
+    eventTypeCounts,
+    reasonCodeCounts
+  };
+}
+
+function buildMemoryLifecycleEventSample(event = {}) {
+  const deltaPayload = normalizeJsonObjectValue(event.deltaPayload || event.delta_payload, {});
+  return {
+    id: String(event.id || "").trim(),
+    eventType: normalizeMemoryEventType(event.eventType || event.event_type),
+    eventTime: event.eventTime || event.event_time || null,
+    reasonCode: String(event.reasonCode || event.reason_code || "").trim(),
+    status: normalizeJsonObjectValue(deltaPayload.status, null),
+    cueStrength: normalizeMemoryCueStrength(deltaPayload.cueStrength),
+    cueSources: normalizeMemoryCueSources(deltaPayload.cueSources),
+    cueTerms: normalizeJsonArrayValue(deltaPayload.cueTerms, []),
+    cueScore:
+      deltaPayload.cueScore == null ? null : normalizeFiniteNumber(deltaPayload.cueScore, 0),
+    cueThreshold:
+      deltaPayload.cueThreshold == null
+        ? null
+        : normalizeFiniteNumber(deltaPayload.cueThreshold, 0)
+  };
+}
+
+function findSimilarMemoryItems(targetItem = {}, rows = [], limit = 5) {
+  const normalizedTargetText = canonicalizeMemoryCompareText(targetItem.canonicalText);
+  if (!normalizedTargetText || normalizedTargetText.length < 8) {
+    return [];
+  }
+  return rows
+    .map((row) => mapMemoryItemRow(row))
+    .filter((item) => item.id && item.id !== targetItem.id && item.contactId === targetItem.contactId)
+    .filter((item) => memoryTextsLookSimilar(targetItem.canonicalText, item.canonicalText))
+    .slice(0, Math.max(1, limit))
+    .map((item) => buildMemoryIssueSample(item));
+}
+
+async function loadMemoryRowsForQuality(db, options = {}) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const params = [];
+  const clauses = [];
+  if (requestOptions.contactId) {
+    params.push(String(requestOptions.contactId || "").trim());
+    clauses.push(`mi.contact_id = $${params.length}`);
+  }
+  const result = await db.query(
+    `
+      select
+        mi.*,
+        coalesce(cc.name, '') as contact_name
+      from memory_items mi
+      left join chat_contacts cc on cc.id = mi.contact_id
+      ${clauses.length ? `where ${clauses.join(" and ")}` : ""}
+      order by mi.updated_at desc nulls last, mi.id asc
+    `,
+    params
+  );
+  return result.rows;
+}
+
+async function persistMemoryDecayWorkerRun(summary = {}, errorMessage = "") {
+  if (!pool) {
+    return null;
+  }
+  const runId = randomUUID();
+  const resolvedSummary = normalizeJsonObjectValue(summary, {});
+  const status = errorMessage
+    ? "failed"
+    : resolvedSummary.skipped
+      ? "skipped"
+      : "completed";
+  await pool.query(
+    `
+      insert into migration_runs (id, type, status, started_at, finished_at, summary, error)
+      values ($1, 'memory_decay_worker', $2, $3::timestamptz, $4::timestamptz, $5::jsonb, $6)
+    `,
+    [
+      runId,
+      status,
+      normalizeTimestampValue(resolvedSummary.startedAt, new Date().toISOString()),
+      normalizeTimestampValue(resolvedSummary.finishedAt, new Date().toISOString()),
+      JSON.stringify(resolvedSummary),
+      errorMessage || null
+    ]
+  );
+  return runId;
+}
 
 app.use(
   cors({
@@ -5599,9 +5965,12 @@ app.post("/api/memory/items/:id/recall", async (request, response) => {
         usedInPrompt: Boolean(body.usedInPrompt ?? true),
         recalledScore,
         cueTerms: normalizeJsonArrayValue(body.cueTerms || body.cue_terms, []),
+        cueStrength: normalizeMemoryCueStrength(body.cueStrength || body.cue_strength),
+        cueSources: normalizeMemoryCueSources(body.cueSources || body.cue_sources),
         cueScore,
         cueThreshold,
-        statusBeforeRecall: normalizeOptionalText(body.statusBeforeRecall || body.status_before_recall)
+        statusBeforeRecall: normalizeOptionalText(body.statusBeforeRecall || body.status_before_recall),
+        cooldownApplied: Boolean(body.cooldownApplied ?? body.cooldown_applied)
       },
       batchId: body.batchId,
       note: body.note
@@ -6002,6 +6371,265 @@ app.post("/api/memory/import", async (request, response) => {
   }
 });
 
+app.get('/api/memory/quality/report', async (request, response) => {
+  const sampleLimit = clampIntegerEnv(request.query.limit, 50, 1, 100);
+  try {
+    const rows = await loadMemoryRowsForQuality(pool);
+    const report = buildMemoryQualityReportFromRows(rows, sampleLimit);
+    response.json({
+      ok: true,
+      ...report
+    });
+  } catch (error) {
+    response.status(500).json(createJsonError('Failed to build memory quality report.', error?.message));
+  }
+});
+
+app.get('/api/memory/cue-recall-report', async (request, response) => {
+  const contactId = String(request.query.contactId || request.query.contact_id || '').trim();
+  const sinceDays = clampIntegerEnv(request.query.sinceDays, 7, 1, 120);
+  const limit = clampIntegerEnv(request.query.limit, 50, 1, 200);
+  const params = [sinceDays];
+  const clauses = [
+    "e.event_type = 'recalled'",
+    "e.reason_code = 'prompt_memory_cue_recall'",
+    "e.event_time >= now() - ($1::int * interval '1 day')"
+  ];
+  if (contactId) {
+    params.push(contactId);
+    clauses.push('e.contact_id = $' + String(params.length));
+  }
+  params.push(limit);
+  try {
+    const queryText =
+      "select e.*, coalesce(cc.name, '') as contact_name, coalesce(i.status, '') as current_status, " +
+      "coalesce(i.memory_type, '') as memory_type, coalesce(i.summary_short, '') as summary_short, " +
+      "coalesce(i.summary_faint, '') as summary_faint, coalesce(i.canonical_text, '') as canonical_text " +
+      "from memory_events e left join memory_items i on i.id = e.memory_item_id " +
+      "left join chat_contacts cc on cc.id = e.contact_id " +
+      (clauses.length ? 'where ' + clauses.join(' and ') + ' ' : '') +
+      "order by e.event_time desc, e.created_at desc limit $" + String(params.length);
+    const result = await pool.query(queryText, params);
+    const events = result.rows.map((row) => {
+      const mappedEvent = mapMemoryEventRow(row);
+      const deltaPayload = normalizeJsonObjectValue(mappedEvent.deltaPayload, {});
+      const cueScore = deltaPayload.cueScore == null ? null : normalizeFiniteNumber(deltaPayload.cueScore, 0);
+      const cueThreshold =
+        deltaPayload.cueThreshold == null ? null : normalizeFiniteNumber(deltaPayload.cueThreshold, 0);
+      const cueStrength =
+        normalizeMemoryCueStrength(deltaPayload.cueStrength) ||
+        (cueScore != null && cueThreshold != null && cueScore >= cueThreshold + 0.12
+          ? 'strong'
+          : cueScore != null && cueThreshold != null && cueScore >= cueThreshold
+            ? 'weak'
+            : '');
+      return {
+        id: mappedEvent.id,
+        memoryItemId: mappedEvent.memoryItemId,
+        contactId: mappedEvent.contactId,
+        contactName: row.contact_name || '',
+        eventTime: mappedEvent.eventTime,
+        reasonCode: mappedEvent.reasonCode || '',
+        currentStatus: normalizeMemoryStatus(row.current_status),
+        memoryType: normalizeMemoryType(row.memory_type),
+        summaryShort: row.summary_short || '',
+        summaryFaint: row.summary_faint || '',
+        canonicalText: row.canonical_text || '',
+        cueTerms: normalizeJsonArrayValue(deltaPayload.cueTerms, []),
+        cueScore,
+        cueThreshold,
+        cueStrength,
+        cueSources: normalizeMemoryCueSources(deltaPayload.cueSources),
+        statusBeforeRecall: normalizeOptionalText(deltaPayload.statusBeforeRecall),
+        cooldownApplied: Boolean(deltaPayload.cooldownApplied)
+      };
+    });
+    const byCueStrength = {};
+    const byCueSource = {};
+    const byMemoryType = {};
+    events.forEach((event) => {
+      const cueStrengthKey = event.cueStrength || 'unknown';
+      byCueStrength[cueStrengthKey] = (byCueStrength[cueStrengthKey] || 0) + 1;
+      const memoryTypeKey = event.memoryType || 'unknown';
+      byMemoryType[memoryTypeKey] = (byMemoryType[memoryTypeKey] || 0) + 1;
+      event.cueSources.forEach((source) => {
+        byCueSource[source] = (byCueSource[source] || 0) + 1;
+      });
+    });
+    response.json({
+      ok: true,
+      contactId,
+      sinceDays,
+      summary: {
+        totalEvents: events.length,
+        distinctMemories: new Set(events.map((event) => event.memoryItemId).filter(Boolean)).size,
+        byCueStrength,
+        byCueSource,
+        byMemoryType
+      },
+      events
+    });
+  } catch (error) {
+    response.status(500).json(createJsonError('Failed to load cue recall report.', error?.message));
+  }
+});
+
+app.get('/api/memory/decay-report', async (request, response) => {
+  const sinceDays = clampIntegerEnv(request.query.sinceDays, 14, 1, 120);
+  const limit = clampIntegerEnv(request.query.limit, 50, 1, 200);
+  try {
+    const [statusCountsResult, typeStatusResult, statusChangeResult, decayedResult, workerRunsResult, promptRecallBoostResult] = await Promise.all([
+      pool.query("select status, count(*)::int as count from memory_items group by status order by status asc"),
+      pool.query("select memory_type, status, count(*)::int as count from memory_items group by memory_type, status order by memory_type asc, status asc"),
+      pool.query("select e.*, coalesce(cc.name, '') as contact_name from memory_events e left join chat_contacts cc on cc.id = e.contact_id where e.event_type = 'status_changed' and e.event_time >= now() - ($1::int * interval '1 day') order by e.event_time desc, e.created_at desc limit $2", [sinceDays, limit]),
+      pool.query("select e.*, coalesce(cc.name, '') as contact_name from memory_events e left join chat_contacts cc on cc.id = e.contact_id where e.event_type = 'decayed' and e.event_time >= now() - ($1::int * interval '1 day') order by e.event_time desc, e.created_at desc limit $2", [sinceDays, limit]),
+      pool.query("select id, status, started_at, finished_at, summary, error from migration_runs where type = 'memory_decay_worker' and started_at >= now() - ($1::int * interval '1 day') order by started_at desc limit $2", [sinceDays, limit]),
+      pool.query("select count(distinct memory_item_id)::int as count from memory_events where event_type = 'recalled' and reason_code = any($2::text[]) and event_time >= now() - ($1::int * interval '1 day')", [sinceDays, ['prompt_memory_used', 'prompt_memory_cue_recall']])
+    ]);
+    const statusCounts = statusCountsResult.rows.reduce((accumulator, row) => {
+      accumulator[normalizeMemoryStatus(row.status)] = normalizePositiveIntegerValue(row.count, 0);
+      return accumulator;
+    }, {});
+    const typeStatusDistribution = typeStatusResult.rows.reduce((accumulator, row) => {
+      const memoryType = normalizeMemoryType(row.memory_type);
+      const status = normalizeMemoryStatus(row.status);
+      if (!accumulator[memoryType]) {
+        accumulator[memoryType] = {};
+      }
+      accumulator[memoryType][status] = normalizePositiveIntegerValue(row.count, 0);
+      return accumulator;
+    }, {});
+    const recentStatusChanges = statusChangeResult.rows.map((row) => ({
+      ...buildMemoryLifecycleEventSample(row),
+      contactId: row.contact_id || '',
+      contactName: row.contact_name || ''
+    }));
+    const recentDecayedEvents = decayedResult.rows.map((row) => ({
+      ...buildMemoryLifecycleEventSample(row),
+      contactId: row.contact_id || '',
+      contactName: row.contact_name || ''
+    }));
+    const transitionCounts = recentStatusChanges.reduce((accumulator, event) => {
+      const fromStatus = normalizeMemoryStatus(event.status?.from || '');
+      const toStatus = normalizeMemoryStatus(event.status?.to || '');
+      if (!fromStatus || !toStatus) {
+        return accumulator;
+      }
+      const key = fromStatus + '->' + toStatus;
+      accumulator[key] = (accumulator[key] || 0) + 1;
+      return accumulator;
+    }, {});
+    const recentWorkerRuns = workerRunsResult.rows.map((row) => ({
+      id: row.id,
+      status: row.status || '',
+      startedAt: row.started_at || null,
+      finishedAt: row.finished_at || null,
+      summary: normalizeJsonObjectValue(row.summary, {}),
+      error: row.error || ''
+    }));
+    response.json({
+      ok: true,
+      sinceDays,
+      statusCounts,
+      typeStatusDistribution,
+      transitionCounts,
+      recentStatusChanges,
+      recentDecayedEvents,
+      recentWorkerRuns,
+      promptRecallBoostedMemoryCount: normalizePositiveIntegerValue(promptRecallBoostResult.rows[0]?.count, 0),
+      memoryDecayWorker: getMemoryDecayWorkerStatus()
+    });
+  } catch (error) {
+    response.status(500).json(createJsonError('Failed to load memory decay report.', error?.message));
+  }
+});
+app.get('/api/memory/items/:id/diagnostics', async (request, response) => {
+  const id = normalizeMemoryUuid(request.params.id);
+  if (!id) {
+    response.status(400).json(createJsonError('Valid memory item id is required.'));
+    return;
+  }
+  const eventLimit = clampIntegerEnv(request.query.limit, 50, 1, 200);
+  try {
+    const loaded = await loadMemoryItemWithRuntime(pool, id);
+    if (!loaded) {
+      response.status(404).json(createJsonError('Memory item was not found.'));
+      return;
+    }
+    const [eventsResult, contactRows] = await Promise.all([
+      pool.query("select * from memory_events where memory_item_id = $1 order by event_time desc, created_at desc limit $2", [id, eventLimit]),
+      loadMemoryRowsForQuality(pool, { contactId: loaded.item.contactId })
+    ]);
+    const events = eventsResult.rows.map(mapMemoryEventRow);
+    response.json({
+      ok: true,
+      item: loaded.item,
+      runtimeState: loaded.runtimeState,
+      debugPayload: normalizeJsonObjectValue(loaded.runtimeState?.debugPayload, {}),
+      promptEligibility: buildMemoryPromptEligibility(loaded.item),
+      quality: {
+        checks: buildMemoryItemQualityChecks(loaded.item),
+        similarItems: findSimilarMemoryItems(loaded.item, contactRows, 5)
+      },
+      recentSummary: {
+        ...buildMemoryEventSummary(events),
+        recalled: events.filter((event) => event.eventType === 'recalled').slice(0, 10).map(buildMemoryLifecycleEventSample),
+        decayed: events.filter((event) => event.eventType === 'decayed').slice(0, 10).map(buildMemoryLifecycleEventSample),
+        statusChanged: events.filter((event) => event.eventType === 'status_changed').slice(0, 10).map(buildMemoryLifecycleEventSample)
+      },
+      events
+    });
+  } catch (error) {
+    response.status(500).json(createJsonError('Failed to load memory item diagnostics.', error?.message));
+  }
+});
+
+app.get('/api/memory/contacts/:contactId/diagnostics', async (request, response) => {
+  const contactId = String(request.params.contactId || '').trim();
+  if (!contactId) {
+    response.status(400).json(createJsonError('contactId is required.'));
+    return;
+  }
+  const eventLimit = clampIntegerEnv(request.query.limit, 50, 1, 200);
+  try {
+    const [rows, eventsResult, contactResult] = await Promise.all([
+      loadMemoryRowsForQuality(pool, { contactId }),
+      pool.query("select e.*, coalesce(i.status, '') as current_status from memory_events e left join memory_items i on i.id = e.memory_item_id where e.contact_id = $1 and e.event_type = any($2::text[]) order by e.event_time desc, e.created_at desc limit $3", [contactId, ['recalled', 'decayed', 'status_changed'], eventLimit]),
+      pool.query("select name from chat_contacts where id = $1 limit 1", [contactId])
+    ]);
+    const items = rows.map((row) => mapMemoryItemRow(row));
+    const events = eventsResult.rows.map((row) => ({
+      ...mapMemoryEventRow(row),
+      currentStatus: normalizeMemoryStatus(row.current_status)
+    }));
+    const qualityReport = buildMemoryQualityReportFromRows(rows, Math.min(20, eventLimit));
+    const statusCounts = items.reduce((accumulator, item) => {
+      const status = normalizeMemoryStatus(item.status);
+      accumulator[status] = (accumulator[status] || 0) + 1;
+      return accumulator;
+    }, {});
+    const memoryTypeCounts = items.reduce((accumulator, item) => {
+      const memoryType = normalizeMemoryType(item.memoryType);
+      accumulator[memoryType] = (accumulator[memoryType] || 0) + 1;
+      return accumulator;
+    }, {});
+    const contactName = String(contactResult.rows[0]?.name || rows[0]?.contact_name || '').trim();
+    response.json({
+      ok: true,
+      contactId,
+      contactName,
+      totalItems: items.length,
+      statusCounts,
+      memoryTypeCounts,
+      dormantCandidateCount: items.filter((item) => item.status === 'dormant' && Boolean(item.canonicalText || item.summaryShort || item.summaryFaint || item.keywords.length || item.entityRefs.length)).length,
+      eventSummary: buildMemoryEventSummary(events),
+      recentEvents: events.slice(0, eventLimit).map(buildMemoryLifecycleEventSample),
+      quality: qualityReport
+    });
+  } catch (error) {
+    response.status(500).json(createJsonError('Failed to load contact memory diagnostics.', error?.message));
+  }
+});
 app.use(
   express.static(STATIC_ROOT, {
     index: ["index.html"],

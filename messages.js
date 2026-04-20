@@ -54,6 +54,36 @@ const PROMPT_MEMORY_CUE_MESSAGE_LIMIT = 8;
 const PROMPT_MEMORY_CUE_TERM_MIN_LENGTH = 2;
 const PROMPT_MEMORY_RECALL_CUE_TERM_LIMIT = 4;
 const PROMPT_MEMORY_DERIVED_CUE_TERM_LIMIT = 12;
+const PROMPT_MEMORY_RECENT_USER_CUE_MESSAGE_LIMIT = 3;
+const PROMPT_MEMORY_STRONG_CUE_MARGIN = 0.12;
+const PROMPT_MEMORY_DORMANT_RECALL_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const PROMPT_MEMORY_DORMANT_RECALL_COOLDOWN_THRESHOLD_BONUS = 0.08;
+const PROMPT_MEMORY_DORMANT_RECALL_COOLDOWN_PRIORITY_PENALTY = 6;
+const PROACTIVE_ACTIVE_SCENE_PROMPT_MEMORY_LIMIT = 2;
+const PROACTIVE_FAINT_CORE_PROMPT_MEMORY_LIMIT = 1;
+const PROACTIVE_FAINT_SCENE_PROMPT_MEMORY_LIMIT = 0;
+const PROACTIVE_DORMANT_TOTAL_PROMPT_MEMORY_LIMIT = 1;
+const PROMPT_MEMORY_GENERIC_CUE_TERMS = [
+  "喜欢",
+  "事情",
+  "印象",
+  "关系",
+  "聊天",
+  "记得",
+  "似乎",
+  "觉得",
+  "感觉",
+  "部分",
+  "内容",
+  "情况",
+  "有点"
+];
+const PROMPT_MEMORY_CUE_ALIAS_GROUPS = [
+  ["公开", "官宣", "恋情", "脱粉"],
+  ["前男友", "前任", "前任相关"],
+  ["纸片人", "小卡", "周边"],
+  ["机场", "后台", "行程", "直播", "咖啡店"]
+];
 const DEFAULT_CONTEXT_FOCUS_MINUTES = 60;
 const MAX_CONTEXT_FOCUS_MINUTES = 1440;
 const DEFAULT_AUTO_SCHEDULE_DAYS = 3;
@@ -1064,23 +1094,31 @@ function buildLocalMemoryPromptBundle(contact, promptSettings) {
       (item) => item.type === "scene" && item.importance >= resolvedSettings.sceneMemoryThreshold
     )
     .slice(0, 10);
+  const coreEntries = coreMemories.map((item) => ({
+    importance: item.importance,
+    promptText: String(item.content || "").trim()
+  }));
+  const sceneEntries = sceneMemories.map((item) => ({
+    importance: item.importance,
+    promptText: String(item.content || "").trim()
+  }));
 
   return {
-    core: coreMemories.length
-      ? [
+    core: coreEntries.length
+      ? buildCloudPromptMemorySection(
           "这些核心记忆会持续影响你当下的情绪走向、判断和对用户的态度，请像真的记得它们一样自然体现：",
-          ...coreMemories.map(
-            (item) => `- 重要度 ${item.importance}/100：${String(item.content || "").trim()}`
-          )
-        ].join("\n")
+          coreEntries,
+          [],
+          []
+        )
       : "",
-    scene: sceneMemories.length
-      ? [
+    scene: sceneEntries.length
+      ? buildCloudPromptMemorySection(
           "这些情景记忆只在聊天内容自然相关时再想起来，不必刻意提前提起：",
-          ...sceneMemories.map(
-            (item) => `- 重要度 ${item.importance}/100：${String(item.content || "").trim()}`
-          )
-        ].join("\n")
+          sceneEntries,
+          [],
+          []
+        )
       : "",
     usedCloudMemories: []
   };
@@ -1131,13 +1169,112 @@ function normalizeCloudMemoryScoreMap(value = {}) {
   );
 }
 
+function isCloudMemoryGenericCueTerm(value = "") {
+  const normalized = canonicalizeMemoryContent(value);
+  if (!normalized) {
+    return true;
+  }
+  return PROMPT_MEMORY_GENERIC_CUE_TERMS.some(
+    (term) => canonicalizeMemoryContent(term) === normalized
+  );
+}
+
+function getPromptMemoryCueSourceWeight(source = "") {
+  const resolvedSource = String(source || "").trim().toLowerCase();
+  if (resolvedSource === "recent_user") {
+    return 1.2;
+  }
+  if (resolvedSource === "explicit") {
+    return 1.08;
+  }
+  if (resolvedSource === "alias") {
+    return 0.92;
+  }
+  if (resolvedSource === "derived") {
+    return 0.76;
+  }
+  return 1;
+}
+
+function getPromptMemoryTypeCueWeight(memoryType = "") {
+  const resolvedType = String(memoryType || "").trim().toLowerCase();
+  if (["relationship", "preference", "constraint"].includes(resolvedType)) {
+    return 1.08;
+  }
+  if (resolvedType === "habit") {
+    return 1.04;
+  }
+  if (["event", "fact"].includes(resolvedType)) {
+    return 0.94;
+  }
+  if (resolvedType === "scene") {
+    return 0.88;
+  }
+  return 1;
+}
+
+function getPromptMemoryBudget(options = {}) {
+  const isProactiveTrigger = Boolean(options?.proactiveTrigger);
+  if (!isProactiveTrigger) {
+    return {
+      coreActiveLimit: ACTIVE_CORE_PROMPT_MEMORY_LIMIT,
+      sceneActiveLimit: ACTIVE_SCENE_PROMPT_MEMORY_LIMIT,
+      coreFaintLimit: FAINT_CORE_PROMPT_MEMORY_LIMIT,
+      sceneFaintLimit: FAINT_SCENE_PROMPT_MEMORY_LIMIT,
+      coreDormantLimit: DORMANT_CORE_PROMPT_MEMORY_LIMIT,
+      sceneDormantLimit: DORMANT_SCENE_PROMPT_MEMORY_LIMIT,
+      dormantTotalLimit: null
+    };
+  }
+  return {
+    coreActiveLimit: ACTIVE_CORE_PROMPT_MEMORY_LIMIT,
+    sceneActiveLimit: PROACTIVE_ACTIVE_SCENE_PROMPT_MEMORY_LIMIT,
+    coreFaintLimit: PROACTIVE_FAINT_CORE_PROMPT_MEMORY_LIMIT,
+    sceneFaintLimit: PROACTIVE_FAINT_SCENE_PROMPT_MEMORY_LIMIT,
+    coreDormantLimit: 1,
+    sceneDormantLimit: 1,
+    dormantTotalLimit: PROACTIVE_DORMANT_TOTAL_PROMPT_MEMORY_LIMIT
+  };
+}
+
+function getCloudMemoryCueAliasTerms(item = {}) {
+  const searchableText = canonicalizeMemoryContent(
+    []
+      .concat(Array.isArray(item.keywords) ? item.keywords : [])
+      .concat(Array.isArray(item.entityRefs) ? item.entityRefs : [])
+      .concat([
+        item.canonicalText || item.canonical_text,
+        item.summaryShort || item.summary_short,
+        item.summaryFaint || item.summary_faint
+      ])
+      .filter(Boolean)
+      .join("\n")
+  );
+  if (!searchableText) {
+    return [];
+  }
+  const terms = [];
+  const seen = new Set();
+  PROMPT_MEMORY_CUE_ALIAS_GROUPS.filter((group) =>
+    group.some((term) => searchableText.includes(canonicalizeMemoryContent(term)))
+  ).forEach((group) => {
+    group.forEach((term) => {
+      addCloudMemoryCueTerm(terms, seen, term, "alias");
+    });
+  });
+  return terms;
+}
+
 function addCloudMemoryCueTerm(targetTerms = [], seenTerms = new Set(), term = "", source = "explicit") {
   const original = String(term || "").trim();
   const normalized = canonicalizeMemoryContent(original);
   if (!normalized || normalized.length < PROMPT_MEMORY_CUE_TERM_MIN_LENGTH) {
     return;
   }
-  if (/^(似乎|有些|大概|可能|应该|比较|容易|记得|印象|事情|部分)$/.test(normalized)) {
+  if (
+    /^(似乎|有些|大概|可能|应该|比较|容易|记得|印象|事情|部分)$/.test(normalized) ||
+    isCloudMemoryGenericCueTerm(normalized)
+  ) {
     return;
   }
   if (seenTerms.has(normalized)) {
@@ -1196,18 +1333,42 @@ function buildPromptMemoryCueContext(options = {}) {
     ? requestOptions.pendingUserMessages
     : [];
   const recentMessages = historyMessages.slice(-PROMPT_MEMORY_CUE_MESSAGE_LIMIT);
+  const recentUserMessages = recentMessages
+    .filter((message) => String(message?.role || "").trim() === "user")
+    .slice(-PROMPT_MEMORY_RECENT_USER_CUE_MESSAGE_LIMIT);
   const fragments = []
     .concat(recentMessages)
+    .concat(pendingUserMessages)
+    .map((message) => String(message?.text || "").trim())
+    .filter(Boolean);
+  const recentUserFragments = []
+    .concat(recentUserMessages)
     .concat(pendingUserMessages)
     .map((message) => String(message?.text || "").trim())
     .filter(Boolean);
   if (requestOptions.triggeredAwareness?.text) {
     fragments.push(String(requestOptions.triggeredAwareness.text || "").trim());
   }
+  const proactiveTrigger = normalizeProactiveTriggerRequest(requestOptions.proactiveTrigger);
+  if (proactiveTrigger) {
+    fragments.push(
+      [
+        proactiveTrigger.triggerType,
+        proactiveTrigger.scheduleTitle,
+        proactiveTrigger.reasonSummary
+      ]
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+        .join("\n")
+    );
+  }
   const joinedText = fragments.join("\n");
+  const recentUserText = recentUserFragments.join("\n");
   return {
     text: joinedText,
-    normalizedText: canonicalizeMemoryContent(joinedText)
+    normalizedText: canonicalizeMemoryContent(joinedText),
+    recentUserText,
+    recentUserNormalizedText: canonicalizeMemoryContent(recentUserText)
   };
 }
 
@@ -1221,6 +1382,9 @@ function getCloudMemoryCueTerms(item = {}) {
   const seen = new Set();
   explicitTerms.forEach((term) => {
     addCloudMemoryCueTerm(unique, seen, term, "explicit");
+  });
+  getCloudMemoryCueAliasTerms(item).forEach((term) => {
+    addCloudMemoryCueTerm(unique, seen, term.original, term.source);
   });
   [
     item.canonicalText || item.canonical_text,
@@ -1236,39 +1400,83 @@ function getCloudMemoryCueTerms(item = {}) {
 
 function scoreCloudMemoryCueMatch(item = {}, cueContext = null) {
   const normalizedCueText = String(cueContext?.normalizedText || "").trim();
+  const recentUserNormalizedText = String(cueContext?.recentUserNormalizedText || "").trim();
   const cueTerms = getCloudMemoryCueTerms(item);
   if (!normalizedCueText || !cueTerms.length) {
     return {
       score: 0,
-      matchedTerms: []
+      matchedTerms: [],
+      matchedTermDetails: [],
+      cueSources: [],
+      typeWeight: getPromptMemoryTypeCueWeight(item.memoryType || item.memory_type)
     };
   }
-  const matchedTerms = cueTerms.filter((term) => normalizedCueText.includes(term.normalized));
+  const matchedTerms = cueTerms
+    .filter((term) => normalizedCueText.includes(term.normalized))
+    .map((term) => {
+      const cueSources = [term.source];
+      const recentUserMatched =
+        Boolean(recentUserNormalizedText) && recentUserNormalizedText.includes(term.normalized);
+      if (recentUserMatched) {
+        cueSources.push("recent_user");
+      }
+      return {
+        ...term,
+        cueSources,
+        recentUserMatched,
+        weight:
+          getPromptMemoryCueSourceWeight(term.source) *
+          (recentUserMatched ? getPromptMemoryCueSourceWeight("recent_user") : 1)
+      };
+    });
   if (!matchedTerms.length) {
     return {
       score: 0,
-      matchedTerms: []
+      matchedTerms: [],
+      matchedTermDetails: [],
+      cueSources: [],
+      typeWeight: getPromptMemoryTypeCueWeight(item.memoryType || item.memory_type)
     };
   }
+  const typeWeight = getPromptMemoryTypeCueWeight(item.memoryType || item.memory_type);
   const totalMatchedWeight = matchedTerms.reduce(
-    (total, term) => total + (term.source === "derived" ? 0.75 : 1),
+    (total, term) => total + term.weight,
     0
   );
   const totalMatchedLength = matchedTerms.reduce(
     (total, term) =>
-      total + Math.min(term.source === "derived" ? 9 : 12, term.normalized.length),
+      total + Math.min(term.source === "derived" ? 9 : 12, term.normalized.length) * term.weight,
     0
   );
   const longestMatchedLength = Math.max(...matchedTerms.map((term) => term.normalized.length));
   const hitRatio = totalMatchedWeight / Math.max(1, Math.min(3, cueTerms.length));
   const densityScore = Math.min(1, totalMatchedLength / 18);
   const strongestTermScore = Math.min(1, longestMatchedLength / 6);
+  const recentUserBonus = matchedTerms.some((term) => term.recentUserMatched) ? 0.08 : 0;
+  const explicitBonus = matchedTerms.some((term) => term.source === "explicit") ? 0.05 : 0;
+  const aliasBonus = matchedTerms.some((term) => term.source === "alias") ? 0.03 : 0;
+  const cueSources = Array.from(
+    new Set(matchedTerms.flatMap((term) => term.cueSources).filter(Boolean))
+  );
   return {
-    score: clampNumber(0.45 * hitRatio + 0.35 * densityScore + 0.2 * strongestTermScore, 0, 1),
+    score: clampNumber(
+      (0.45 * hitRatio + 0.35 * densityScore + 0.2 * strongestTermScore + recentUserBonus + explicitBonus + aliasBonus) *
+        typeWeight,
+      0,
+      1
+    ),
     matchedTerms: matchedTerms
       .map((term) => term.original)
       .filter(Boolean)
-      .slice(0, PROMPT_MEMORY_RECALL_CUE_TERM_LIMIT)
+      .slice(0, PROMPT_MEMORY_RECALL_CUE_TERM_LIMIT),
+    matchedTermDetails: matchedTerms.slice(0, PROMPT_MEMORY_RECALL_CUE_TERM_LIMIT).map((term) => ({
+      term: term.original,
+      normalized: term.normalized,
+      cueSources: term.cueSources,
+      recentUserMatched: term.recentUserMatched
+    })),
+    cueSources,
+    typeWeight
   };
 }
 
@@ -1278,13 +1486,59 @@ function getCloudMemoryPromptPriority(candidate = {}) {
   const cueScore = clampNumber(candidate.cueScore, 0, 1);
   const importanceScore = clampNumber(candidate.importance, 0, 100) / 100;
   const updatedAtMs = Number(candidate.updatedAtMs) || 0;
+  const typeWeight = getPromptMemoryTypeCueWeight(candidate.memoryType);
+  const cueStrengthBonus = candidate.cueStrength === "strong" ? 8 : cueScore > 0 ? 3 : 0;
+  const cooldownPenalty = candidate.cooldownApplied
+    ? PROMPT_MEMORY_DORMANT_RECALL_COOLDOWN_PRIORITY_PENALTY
+    : 0;
   return (
     activationScore * 100 +
     stabilityScore * 40 +
-    cueScore * 25 +
+    cueScore * 25 * typeWeight +
     importanceScore * 20 +
+    cueStrengthBonus -
+    cooldownPenalty +
     Math.min(10, updatedAtMs / (24 * 60 * 60 * 1000 * 30))
   );
+}
+
+function getCloudMemoryDormantCooldownState(item = {}) {
+  const lastRecalledAtMs =
+    Date.parse(item.lastRecalledAt || item.last_recalled_at || "") || 0;
+  if (!lastRecalledAtMs) {
+    return {
+      applied: false,
+      thresholdBonus: 0,
+      lastRecalledAtMs: 0
+    };
+  }
+  const expiresAtMs = lastRecalledAtMs + PROMPT_MEMORY_DORMANT_RECALL_COOLDOWN_MS;
+  if (expiresAtMs <= Date.now()) {
+    return {
+      applied: false,
+      thresholdBonus: 0,
+      lastRecalledAtMs
+    };
+  }
+  return {
+    applied: true,
+    thresholdBonus: PROMPT_MEMORY_DORMANT_RECALL_COOLDOWN_THRESHOLD_BONUS,
+    lastRecalledAtMs
+  };
+}
+
+function resolveCloudMemoryCueStrength(cueScore = 0, cueThreshold = 0, cueSources = []) {
+  const resolvedCueScore = clampNumber(cueScore, 0, 1);
+  const resolvedThreshold = clampNumber(cueThreshold, 0, 1);
+  const resolvedSources = Array.isArray(cueSources) ? cueSources : [];
+  if (
+    resolvedCueScore >= Math.min(1, resolvedThreshold + PROMPT_MEMORY_STRONG_CUE_MARGIN) ||
+    (resolvedSources.includes("recent_user") &&
+      (resolvedSources.includes("explicit") || resolvedSources.includes("alias")))
+  ) {
+    return "strong";
+  }
+  return resolvedCueScore >= resolvedThreshold ? "weak" : "";
 }
 
 function formatCloudPromptMemoryLine(candidate = {}) {
@@ -1301,7 +1555,7 @@ function buildCloudPromptMemorySection(
   if (activeEntries.length) {
     sections.push(
       [
-        "你清楚记得的部分：",
+        "清楚记得的部分：",
         ...activeEntries.map((entry) => formatCloudPromptMemoryLine(entry))
       ].join("\n")
     );
@@ -1309,7 +1563,7 @@ function buildCloudPromptMemorySection(
   if (faintEntries.length) {
     sections.push(
       [
-        "你隐约还有印象的部分：",
+        "只保留模糊印象的部分：",
         ...faintEntries.map((entry) => formatCloudPromptMemoryLine(entry))
       ].join("\n")
     );
@@ -1317,7 +1571,7 @@ function buildCloudPromptMemorySection(
   if (dormantEntries.length) {
     sections.push(
       [
-        "这次因为当前话题线索被勾起的旧印象：",
+        "被当前话题线索勾起的旧印象：",
         ...dormantEntries.map((entry) => formatCloudPromptMemoryLine(entry))
       ].join("\n")
     );
@@ -1345,23 +1599,39 @@ function buildMemoryPromptBundle(contact, promptSettings, options = {}) {
 
   const resolvedSettings = normalizeMessagePromptSettings(promptSettings);
   const cueContext = buildPromptMemoryCueContext(options);
+  const promptBudget = getPromptMemoryBudget(options);
   const candidates = cachedCloudItems
     .filter((item) => ["active", "faint", "dormant"].includes(String(item.status || "").trim().toLowerCase()))
     .map((item) => {
       const runtimeState = getCloudMemoryRuntimeState(item);
       const promptKind = getCloudMemoryPromptKind(item);
       const cueMatch = scoreCloudMemoryCueMatch(item, cueContext);
+      const resolvedStatus = String(item.status || "").trim().toLowerCase() || "active";
+      const cooldownState =
+        resolvedStatus === "dormant" ? getCloudMemoryDormantCooldownState(item) : null;
       const importance = clampNumber(
         Number(item.baseImportance ?? item.base_importance ?? 0) || 0,
         0,
         100
       );
+      const cueThreshold = clampNumber(
+        Number(runtimeState.cueRecallThreshold ?? runtimeState.cue_recall_threshold ?? 0.55) || 0.55,
+        0,
+        1
+      );
+      const effectiveCueThreshold = clampNumber(
+        cueThreshold + (cooldownState?.thresholdBonus || 0),
+        0,
+        1
+      );
+      const cueSources = Array.isArray(cueMatch.cueSources) ? cueMatch.cueSources : [];
       return {
         item,
         id: String(item.id || "").trim(),
         contactId: String(item.contactId || item.contact_id || resolvedContactId).trim(),
+        memoryType: String(item.memoryType || item.memory_type || "").trim().toLowerCase(),
         promptKind,
-        status: String(item.status || "").trim().toLowerCase() || "active",
+        status: resolvedStatus,
         promptText: getCloudMemoryPromptText(item),
         importance,
         activationScore: clampNumber(
@@ -1374,13 +1644,18 @@ function buildMemoryPromptBundle(contact, promptSettings, options = {}) {
           0,
           1
         ),
-        cueThreshold: clampNumber(
-          Number(runtimeState.cueRecallThreshold ?? runtimeState.cue_recall_threshold ?? 0.55) || 0.55,
-          0,
-          1
-        ),
+        cueThreshold,
+        effectiveCueThreshold,
         cueScore: cueMatch.score,
         matchedCueTerms: cueMatch.matchedTerms,
+        matchedCueDetails: cueMatch.matchedTermDetails,
+        cueSources,
+        cueStrength: resolveCloudMemoryCueStrength(
+          cueMatch.score,
+          effectiveCueThreshold,
+          cueSources
+        ),
+        cooldownApplied: Boolean(cooldownState?.applied),
         updatedAtMs:
           Date.parse(item.updatedAt || item.updated_at || item.lastObservedAt || item.last_observed_at || "") ||
           0
@@ -1402,27 +1677,47 @@ function buildMemoryPromptBundle(contact, promptSettings, options = {}) {
     return localFallbackBundle;
   }
 
-  function pickCandidates(promptKind, status, limit) {
-    return candidates
-      .filter((entry) => entry.promptKind === promptKind && entry.status === status)
-      .filter((entry) => status !== "dormant" || entry.cueScore >= entry.cueThreshold)
-      .sort(
-        (left, right) =>
-          right.promptPriority - left.promptPriority ||
-          right.activationScore - left.activationScore ||
-          right.importance - left.importance ||
-          right.stabilityScore - left.stabilityScore ||
-          right.updatedAtMs - left.updatedAtMs
-      )
-      .slice(0, limit);
+  function sortPromptCandidates(entries = []) {
+    return entries.slice().sort(
+      (left, right) =>
+        right.promptPriority - left.promptPriority ||
+        right.activationScore - left.activationScore ||
+        right.importance - left.importance ||
+        right.stabilityScore - left.stabilityScore ||
+        right.updatedAtMs - left.updatedAtMs
+    );
   }
 
-  const coreActive = pickCandidates("core", "active", ACTIVE_CORE_PROMPT_MEMORY_LIMIT);
-  const coreFaint = pickCandidates("core", "faint", FAINT_CORE_PROMPT_MEMORY_LIMIT);
-  const coreDormant = pickCandidates("core", "dormant", DORMANT_CORE_PROMPT_MEMORY_LIMIT);
-  const sceneActive = pickCandidates("scene", "active", ACTIVE_SCENE_PROMPT_MEMORY_LIMIT);
-  const sceneFaint = pickCandidates("scene", "faint", FAINT_SCENE_PROMPT_MEMORY_LIMIT);
-  const sceneDormant = pickCandidates("scene", "dormant", DORMANT_SCENE_PROMPT_MEMORY_LIMIT);
+  function pickCandidates(promptKind, status, limit) {
+    if (!limit) {
+      return [];
+    }
+    return sortPromptCandidates(
+      candidates
+      .filter((entry) => entry.promptKind === promptKind && entry.status === status)
+      .filter((entry) => status !== "dormant" || entry.cueScore >= entry.effectiveCueThreshold)
+    ).slice(0, limit);
+  }
+
+  const coreActive = pickCandidates("core", "active", promptBudget.coreActiveLimit);
+  const coreFaint = pickCandidates("core", "faint", promptBudget.coreFaintLimit);
+  const sceneActive = pickCandidates("scene", "active", promptBudget.sceneActiveLimit);
+  const sceneFaint = pickCandidates("scene", "faint", promptBudget.sceneFaintLimit);
+  const dormantCandidates = sortPromptCandidates(
+    candidates
+      .filter((entry) => entry.status === "dormant")
+      .filter((entry) => entry.cueScore >= entry.effectiveCueThreshold)
+  );
+  const selectedDormantCandidates =
+    promptBudget.dormantTotalLimit == null
+      ? dormantCandidates
+      : dormantCandidates.slice(0, promptBudget.dormantTotalLimit);
+  const coreDormant = selectedDormantCandidates
+    .filter((entry) => entry.promptKind === "core")
+    .slice(0, promptBudget.coreDormantLimit);
+  const sceneDormant = selectedDormantCandidates
+    .filter((entry) => entry.promptKind === "scene")
+    .slice(0, promptBudget.sceneDormantLimit);
 
   const coreContext = buildCloudPromptMemorySection(
     "这些核心记忆会持续影响你当下的情绪走向、判断和对用户的态度，请像真的记得它们一样自然体现：",
@@ -1472,8 +1767,11 @@ function buildMemoryPromptBundle(contact, promptSettings, options = {}) {
                   ? recallBaseBoost * 0.75
                   : recallBaseBoost,
             cueTerms: entry.matchedCueTerms,
+            cueStrength: entry.cueStrength,
+            cueSources: entry.cueSources,
             cueScore: entry.cueScore,
-            cueThreshold: entry.cueThreshold
+            cueThreshold: entry.effectiveCueThreshold,
+            cooldownApplied: entry.cooldownApplied
           }
         ])
     ).values()
@@ -1515,9 +1813,12 @@ async function markPromptBundleMemoriesRecalled(bundle = null, options = {}) {
           recalledScore: clampNumber(memory.recalledScore, 0, 1),
           activationBoost: clampNumber(memory.activationBoost, 0, 1),
           cueTerms: Array.isArray(memory.cueTerms) ? memory.cueTerms : [],
+          cueStrength: String(memory.cueStrength || "").trim(),
+          cueSources: Array.isArray(memory.cueSources) ? memory.cueSources : [],
           cueScore: clampNumber(memory.cueScore, 0, 1),
           cueThreshold: clampNumber(memory.cueThreshold, 0, 1),
-          statusBeforeRecall: memory.status || ""
+          statusBeforeRecall: memory.status || "",
+          cooldownApplied: Boolean(memory.cooldownApplied)
         })
       });
       patchCachedCloudMemoryItem(
