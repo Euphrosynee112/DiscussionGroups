@@ -53,6 +53,7 @@ const DORMANT_SCENE_PROMPT_MEMORY_LIMIT = 1;
 const PROMPT_MEMORY_CUE_MESSAGE_LIMIT = 8;
 const PROMPT_MEMORY_CUE_TERM_MIN_LENGTH = 2;
 const PROMPT_MEMORY_RECALL_CUE_TERM_LIMIT = 4;
+const PROMPT_MEMORY_DERIVED_CUE_TERM_LIMIT = 12;
 const DEFAULT_CONTEXT_FOCUS_MINUTES = 60;
 const MAX_CONTEXT_FOCUS_MINUTES = 1440;
 const DEFAULT_AUTO_SCHEDULE_DAYS = 3;
@@ -1130,6 +1131,64 @@ function normalizeCloudMemoryScoreMap(value = {}) {
   );
 }
 
+function addCloudMemoryCueTerm(targetTerms = [], seenTerms = new Set(), term = "", source = "explicit") {
+  const original = String(term || "").trim();
+  const normalized = canonicalizeMemoryContent(original);
+  if (!normalized || normalized.length < PROMPT_MEMORY_CUE_TERM_MIN_LENGTH) {
+    return;
+  }
+  if (/^(似乎|有些|大概|可能|应该|比较|容易|记得|印象|事情|部分)$/.test(normalized)) {
+    return;
+  }
+  if (seenTerms.has(normalized)) {
+    return;
+  }
+  seenTerms.add(normalized);
+  targetTerms.push({
+    original,
+    normalized,
+    source
+  });
+}
+
+function deriveCloudMemoryCueTermsFromText(value = "", limit = PROMPT_MEMORY_DERIVED_CUE_TERM_LIMIT) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return [];
+  }
+  const terms = [];
+  const seen = new Set();
+  const quotedMatches = text.match(/[“"「『《【（(]([^”"」』》】）)]{2,18})[”"」』》】）)]/g) || [];
+  quotedMatches.forEach((match) => {
+    const cleaned = match.replace(/^[“"「『《【（(]+|[”"」』》】）)]+$/g, "");
+    addCloudMemoryCueTerm(terms, seen, cleaned, "derived");
+  });
+
+  const domainMatches =
+    text.match(
+      /前男友|公开恋情|纸片人|小卡|机场|后台|咖啡店|直播|恋综|男嘉宾|分手|脱粉|照片|脚踝|称呼|欧巴|亲密称呼|异国|粉丝|八卦头条|聚餐|男朋友|恋情|吃醋|报备|暗号|行程/g
+    ) || [];
+  domainMatches.forEach((term) => {
+    addCloudMemoryCueTerm(terms, seen, term, "derived");
+  });
+
+  const chunks = text
+    .split(/[，。！？、,.!?；;:“”"'（）()【】\[\]《》<>—\-\s]+/g)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  chunks.forEach((chunk) => {
+    const cleaned = chunk
+      .replace(/^(将太郎|艺声|亦洁Jessie|Jessie|用户|角色|对方)/g, "")
+      .replace(/(将太郎|艺声|亦洁Jessie|Jessie|用户|角色|对方)$/g, "")
+      .trim();
+    if (cleaned.length >= 3 && cleaned.length <= 12) {
+      addCloudMemoryCueTerm(terms, seen, cleaned, "derived");
+    }
+  });
+
+  return terms.slice(0, limit);
+}
+
 function buildPromptMemoryCueContext(options = {}) {
   const requestOptions = options && typeof options === "object" ? options : {};
   const historyMessages = Array.isArray(requestOptions.history) ? requestOptions.history : [];
@@ -1153,23 +1212,23 @@ function buildPromptMemoryCueContext(options = {}) {
 }
 
 function getCloudMemoryCueTerms(item = {}) {
-  const rawTerms = []
+  const explicitTerms = []
     .concat(Array.isArray(item.keywords) ? item.keywords : [])
     .concat(Array.isArray(item.entityRefs) ? item.entityRefs : [])
     .map((term) => String(term || "").trim())
     .filter(Boolean);
   const unique = [];
-  rawTerms.forEach((term) => {
-    const normalized = canonicalizeMemoryContent(term);
-    if (!normalized || normalized.length < PROMPT_MEMORY_CUE_TERM_MIN_LENGTH) {
-      return;
-    }
-    if (unique.some((entry) => entry.normalized === normalized)) {
-      return;
-    }
-    unique.push({
-      original: term,
-      normalized
+  const seen = new Set();
+  explicitTerms.forEach((term) => {
+    addCloudMemoryCueTerm(unique, seen, term, "explicit");
+  });
+  [
+    item.canonicalText || item.canonical_text,
+    item.summaryShort || item.summary_short,
+    item.summaryFaint || item.summary_faint
+  ].forEach((text) => {
+    deriveCloudMemoryCueTermsFromText(text).forEach((term) => {
+      addCloudMemoryCueTerm(unique, seen, term.original, term.source);
     });
   });
   return unique;
@@ -1191,12 +1250,17 @@ function scoreCloudMemoryCueMatch(item = {}, cueContext = null) {
       matchedTerms: []
     };
   }
+  const totalMatchedWeight = matchedTerms.reduce(
+    (total, term) => total + (term.source === "derived" ? 0.75 : 1),
+    0
+  );
   const totalMatchedLength = matchedTerms.reduce(
-    (total, term) => total + Math.min(12, term.normalized.length),
+    (total, term) =>
+      total + Math.min(term.source === "derived" ? 9 : 12, term.normalized.length),
     0
   );
   const longestMatchedLength = Math.max(...matchedTerms.map((term) => term.normalized.length));
-  const hitRatio = matchedTerms.length / Math.max(1, Math.min(3, cueTerms.length));
+  const hitRatio = totalMatchedWeight / Math.max(1, Math.min(3, cueTerms.length));
   const densityScore = Math.min(1, totalMatchedLength / 18);
   const strongestTermScore = Math.min(1, longestMatchedLength / 6);
   return {
@@ -1389,6 +1453,14 @@ function buildMemoryPromptBundle(contact, promptSettings, options = {}) {
             id: entry.id,
             contactId: entry.contactId,
             status: entry.status,
+            sourceKind:
+              entry.status === "dormant" && entry.matchedCueTerms.length
+                ? "prompt_cue"
+                : "prompt",
+            reasonCode:
+              entry.status === "dormant" && entry.matchedCueTerms.length
+                ? "prompt_memory_cue_recall"
+                : "prompt_memory_used",
             recalledScore:
               entry.status === "dormant"
                 ? Math.max(entry.cueScore, entry.cueThreshold)
@@ -1399,7 +1471,9 @@ function buildMemoryPromptBundle(contact, promptSettings, options = {}) {
                 : entry.status === "faint"
                   ? recallBaseBoost * 0.75
                   : recallBaseBoost,
-            cueTerms: entry.matchedCueTerms
+            cueTerms: entry.matchedCueTerms,
+            cueScore: entry.cueScore,
+            cueThreshold: entry.cueThreshold
           }
         ])
     ).values()
@@ -1428,19 +1502,22 @@ async function markPromptBundleMemoriesRecalled(bundle = null, options = {}) {
         body: JSON.stringify({
           actorType: "system",
           actorRef: "messages_prompt_builder",
-          sourceKind: "prompt",
+          sourceKind: memory.sourceKind || "prompt",
           sourceRef: {
             contactId: requestOptions.contactId || memory.contactId || "",
             conversationId: requestOptions.conversationId || "",
             proactiveTrigger: Boolean(requestOptions.proactiveTrigger),
             regenerate: Boolean(requestOptions.regenerate)
           },
-          reasonCode: "prompt_memory_used",
+          reasonCode: memory.reasonCode || "prompt_memory_used",
           batchId,
           usedInPrompt: true,
           recalledScore: clampNumber(memory.recalledScore, 0, 1),
           activationBoost: clampNumber(memory.activationBoost, 0, 1),
-          cueTerms: Array.isArray(memory.cueTerms) ? memory.cueTerms : []
+          cueTerms: Array.isArray(memory.cueTerms) ? memory.cueTerms : [],
+          cueScore: clampNumber(memory.cueScore, 0, 1),
+          cueThreshold: clampNumber(memory.cueThreshold, 0, 1),
+          statusBeforeRecall: memory.status || ""
         })
       });
       patchCachedCloudMemoryItem(
@@ -1584,10 +1661,32 @@ async function fetchCloudMemoriesForContact(contactId = "", options = {}) {
       return Array.isArray(cached.items) ? cached.items : [];
     }
   }
-  const payload = await requestMessagesStorageApi(
-    `/api/memory/items?contactId=${encodeURIComponent(resolvedContactId)}&status=all&limit=200`
+  const statusGroups = [
+    { status: "active", limit: 200 },
+    { status: "faint", limit: 200 },
+    { status: "dormant", limit: 80 },
+    { status: "archived,superseded", limit: 40 }
+  ];
+  const payloads = await Promise.all(
+    statusGroups.map((group) =>
+      requestMessagesStorageApi(
+        `/api/memory/items?contactId=${encodeURIComponent(resolvedContactId)}&status=${encodeURIComponent(
+          group.status
+        )}&limit=${group.limit}`
+      )
+    )
   );
-  return setCachedCloudMemoriesForContact(resolvedContactId, Array.isArray(payload?.items) ? payload.items : []);
+  const mergedItemsById = new Map();
+  payloads.forEach((payload) => {
+    (Array.isArray(payload?.items) ? payload.items : []).forEach((item) => {
+      const id = String(item?.id || "").trim();
+      if (!id || mergedItemsById.has(id)) {
+        return;
+      }
+      mergedItemsById.set(id, item);
+    });
+  });
+  return setCachedCloudMemoriesForContact(resolvedContactId, Array.from(mergedItemsById.values()));
 }
 
 async function importLocalMemoriesToCloud(contactId = "", entries = []) {

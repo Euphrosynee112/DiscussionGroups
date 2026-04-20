@@ -2942,6 +2942,64 @@ function buildMemoryDecayDebugPayload(item = {}, runtimeState = {}, result = {},
   };
 }
 
+function normalizeMemoryFaintSummarySource(value = "") {
+  return String(value || "")
+    .replace(/^\s*(你隐约记得|我隐约记得|隐约记得)[：:，,\s]*/u, "")
+    .replace(/^\s*(你好像|我好像|好像)[：:，,\s]*/u, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function needsMemorySummaryFaintFallback(value = "") {
+  const text = String(value || "").trim();
+  if (!text) {
+    return true;
+  }
+  return (
+    /^\s*(你隐约记得|我隐约记得|隐约记得)/u.test(text) ||
+    /charname|username/i.test(text) ||
+    /[你我他她]/u.test(text) ||
+    /我们|咱们|联系人|用户/u.test(text)
+  );
+}
+
+function buildFallbackMemorySummaryFaint(summaryShort = "", canonicalText = "") {
+  let nextText = normalizeMemoryFaintSummarySource(summaryShort || canonicalText || "");
+  if (!nextText) {
+    return "";
+  }
+  nextText = nextText.replace(/[。！？]+$/u, "").trim();
+  if (!nextText) {
+    return "";
+  }
+
+  if (!/(似乎|有些|大概|倾向于|比较|容易|经常)/u.test(nextText)) {
+    if (nextText.includes("会")) {
+      nextText = nextText.replace("会", "似乎会");
+    } else if (nextText.includes("很")) {
+      nextText = nextText.replace("很", "似乎有些");
+    } else if (nextText.startsWith("在")) {
+      nextText = `${nextText}，似乎留下了一点印象`;
+    } else {
+      nextText = `似乎${nextText}`;
+    }
+  }
+
+  if (nextText.length > 90) {
+    const chunks = nextText
+      .split(/[，；]/u)
+      .map((item) => String(item || "").trim())
+      .filter(Boolean);
+    if (chunks.length >= 2) {
+      nextText = `${chunks[0]}，${chunks[1]}`;
+    }
+  }
+  if (nextText.length > 90) {
+    nextText = nextText.slice(0, 88).replace(/[，、；,\s]+$/u, "").trim();
+  }
+  return /[。！？]$/u.test(nextText) ? nextText : `${nextText}。`;
+}
+
 function normalizeMemoryItemInput(input = {}, fallback = {}) {
   const source = input && typeof input === "object" ? input : {};
   const fallbackItem = fallback && typeof fallback === "object" ? fallback : {};
@@ -2961,9 +3019,12 @@ function normalizeMemoryItemInput(input = {}, fallback = {}) {
     normalizeRequiredText(
       getInputValue(source, "summaryShort", "summary_short") ?? fallbackItem.summaryShort
     ) || canonicalText;
-  const summaryFaint = normalizeRequiredText(
+  const providedSummaryFaint = normalizeRequiredText(
     getInputValue(source, "summaryFaint", "summary_faint") ?? fallbackItem.summaryFaint
   );
+  const summaryFaint = needsMemorySummaryFaintFallback(providedSummaryFaint)
+    ? buildFallbackMemorySummaryFaint(summaryShort, canonicalText)
+    : providedSummaryFaint;
   const status = normalizeMemoryStatus(
     getInputValue(source, "status", "status") ?? fallbackItem.status,
     fallbackItem.status || "active"
@@ -3544,17 +3605,23 @@ async function applyMemoryDecayRecomputeInDb(db, memoryId = "", options = {}) {
         : recomputed.status !== beforeItem.status
           ? null
           : beforeItem.archivedAt;
+    const nextSummaryFaint =
+      (recomputed.status === "faint" || recomputed.status === "dormant") &&
+      needsMemorySummaryFaintFallback(beforeItem.summaryFaint)
+        ? buildFallbackMemorySummaryFaint(beforeItem.summaryShort, beforeItem.canonicalText)
+        : beforeItem.summaryFaint;
     const itemUpdateResult = await db.query(
       `
         update memory_items
         set status = $2,
             status_changed_at = now(),
             archived_at = $3,
+            summary_faint = $4,
             updated_at = now()
         where id = $1
         returning *
       `,
-      [beforeItem.id, recomputed.status, archivedAt]
+      [beforeItem.id, recomputed.status, archivedAt, nextSummaryFaint]
     );
     itemRow = itemUpdateResult.rows[0] || null;
   } else {
@@ -4189,7 +4256,16 @@ function buildMemoryItemPayloadFromCandidate(candidate = {}, fallbackItem = {}, 
       fallbackItem.summaryShort ||
       fallbackItem.canonicalText ||
       "",
-    summaryFaint: candidate.summaryFaint || fallbackItem.summaryFaint || "",
+    summaryFaint: needsMemorySummaryFaintFallback(candidate.summaryFaint || fallbackItem.summaryFaint)
+      ? buildFallbackMemorySummaryFaint(
+          candidate.summaryShort ||
+            candidate.canonicalText ||
+            fallbackItem.summaryShort ||
+            fallbackItem.canonicalText ||
+            "",
+          candidate.canonicalText || fallbackItem.canonicalText || ""
+        )
+      : candidate.summaryFaint || fallbackItem.summaryFaint || "",
     keywords: mergeUniqueJsonArray(fallbackItem.keywords || [], candidate.keywords || []),
     entityRefs: mergeUniqueJsonArray(fallbackItem.entityRefs || [], candidate.entityRefs || []),
     baseImportance: Math.max(
@@ -4659,6 +4735,142 @@ app.use("/api", (request, response, next) => {
   response
     .status(500)
     .json(createJsonError("DATABASE_URL is missing. API routes are unavailable."));
+});
+
+app.get("/api/memory/diagnostics", async (request, response) => {
+  const recentLimit = Math.min(
+    50,
+    Math.max(1, Number.parseInt(String(request.query.limit || "12"), 10) || 12)
+  );
+  try {
+    const [statusCountsResult, dueDecayResult, recentEventsResult] = await Promise.all([
+      pool.query(
+        `
+          select status, count(*)::int as count
+          from memory_items
+          group by status
+          order by status asc
+        `
+      ),
+      pool.query(
+        `
+          select count(*)::int as count
+          from memory_items i
+          left join memory_runtime_state r on r.memory_item_id = i.id
+          where (r.next_decay_at is null or r.next_decay_at <= now())
+            and i.status <> 'archived'
+            and i.status <> 'superseded'
+        `
+      ),
+      pool.query(
+        `
+          select
+            e.*,
+            coalesce(cc.name, '') as contact_name,
+            coalesce(i.status, '') as current_status
+          from memory_events e
+          left join memory_items i on i.id = e.memory_item_id
+          left join chat_contacts cc on cc.id = e.contact_id
+          where e.event_type in ('decayed', 'status_changed', 'recalled')
+          order by e.event_time desc, e.created_at desc
+          limit $1
+        `,
+        [recentLimit]
+      )
+    ]);
+    response.json({
+      ok: true,
+      memoryDecayWorker: getMemoryDecayWorkerStatus(),
+      statusCounts: statusCountsResult.rows.reduce((accumulator, row) => {
+        accumulator[normalizeMemoryStatus(row.status)] = normalizePositiveIntegerValue(row.count, 0);
+        return accumulator;
+      }, {}),
+      dueDecayCount: normalizePositiveIntegerValue(dueDecayResult.rows[0]?.count, 0),
+      recentEvents: recentEventsResult.rows.map((row) => ({
+        ...mapMemoryEventRow(row),
+        contactName: row.contact_name || "",
+        currentStatus: row.current_status || ""
+      }))
+    });
+  } catch (error) {
+    response
+      .status(500)
+      .json(createJsonError("Failed to load memory diagnostics.", error?.message));
+  }
+});
+
+app.get("/api/memory/quality/summary-faint", async (request, response) => {
+  const sampleLimit = Math.min(
+    100,
+    Math.max(1, Number.parseInt(String(request.query.limit || "20"), 10) || 20)
+  );
+  try {
+    const [countsResult, samplesResult] = await Promise.all([
+      pool.query(
+        `
+          select
+            count(*)::int as total,
+            count(*) filter (where coalesce(summary_faint, '') <> '')::int as non_empty,
+            count(*) filter (where status in ('faint', 'dormant'))::int as faint_or_dormant_total,
+            count(*) filter (
+              where status in ('faint', 'dormant') and coalesce(summary_faint, '') = ''
+            )::int as empty_faint_or_dormant,
+            count(*) filter (
+              where coalesce(summary_faint, '') ~ '^\\s*(你隐约记得|我隐约记得|隐约记得)'
+            )::int as bad_prefix,
+            count(*) filter (
+              where coalesce(summary_faint, '') ~ '[你我他她]'
+                 or coalesce(summary_faint, '') ~ '我们|咱们|联系人|用户'
+            )::int as ambiguous_pronoun,
+            count(*) filter (where coalesce(summary_faint, '') ~* 'charname|username')::int as placeholder,
+            count(*) filter (where length(coalesce(summary_faint, '')) > 90)::int as too_long
+          from memory_items
+        `
+      ),
+      pool.query(
+        `
+          select
+            mi.id::text as id,
+            mi.contact_id,
+            coalesce(cc.name, '') as contact_name,
+            mi.status,
+            coalesce(mi.summary_faint, '') as summary_faint,
+            coalesce(mi.summary_short, '') as summary_short,
+            coalesce(mi.canonical_text, '') as canonical_text,
+            mi.updated_at
+          from memory_items mi
+          left join chat_contacts cc on cc.id = mi.contact_id
+          where (mi.status in ('faint', 'dormant') and coalesce(mi.summary_faint, '') = '')
+             or coalesce(mi.summary_faint, '') ~ '^\\s*(你隐约记得|我隐约记得|隐约记得)'
+             or coalesce(mi.summary_faint, '') ~ '[你我他她]'
+             or coalesce(mi.summary_faint, '') ~ '我们|咱们|联系人|用户'
+             or coalesce(mi.summary_faint, '') ~* 'charname|username'
+             or length(coalesce(mi.summary_faint, '')) > 90
+          order by mi.updated_at desc nulls last, mi.id asc
+          limit $1
+        `,
+        [sampleLimit]
+      )
+    ]);
+    response.json({
+      ok: true,
+      checks: countsResult.rows[0] || {},
+      samples: samplesResult.rows.map((row) => ({
+        id: row.id,
+        contactId: row.contact_id || "",
+        contactName: row.contact_name || "",
+        status: normalizeMemoryStatus(row.status),
+        summaryFaint: row.summary_faint || "",
+        summaryShort: row.summary_short || "",
+        canonicalText: row.canonical_text || "",
+        updatedAt: row.updated_at || null
+      }))
+    });
+  } catch (error) {
+    response
+      .status(500)
+      .json(createJsonError("Failed to check summary_faint quality.", error?.message));
+  }
 });
 
 app.get("/api/privacy-allowlist", async (_request, response) => {
@@ -5338,6 +5550,11 @@ app.post("/api/memory/items/:id/recall", async (request, response) => {
   }
   const body = request.body && typeof request.body === "object" ? request.body : {};
   const recalledScore = normalizeFiniteNumber(body.recalledScore ?? body.recalled_score, 0);
+  const rawCueScore = body.cueScore ?? body.cue_score;
+  const rawCueThreshold = body.cueThreshold ?? body.cue_threshold;
+  const cueScore = rawCueScore == null ? null : normalizeFiniteNumber(rawCueScore, 0);
+  const cueThreshold =
+    rawCueThreshold == null ? null : normalizeFiniteNumber(rawCueThreshold, 0);
   const client = await pool.connect();
   try {
     await client.query("begin");
@@ -5381,7 +5598,10 @@ app.post("/api/memory/items/:id/recall", async (request, response) => {
       deltaPayload: {
         usedInPrompt: Boolean(body.usedInPrompt ?? true),
         recalledScore,
-        cueTerms: normalizeJsonArrayValue(body.cueTerms || body.cue_terms, [])
+        cueTerms: normalizeJsonArrayValue(body.cueTerms || body.cue_terms, []),
+        cueScore,
+        cueThreshold,
+        statusBeforeRecall: normalizeOptionalText(body.statusBeforeRecall || body.status_before_recall)
       },
       batchId: body.batchId,
       note: body.note
