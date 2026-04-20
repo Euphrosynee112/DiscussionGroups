@@ -81,6 +81,51 @@ const PRIVACY_ALLOWLIST_NAME_LEVELS = new Set(["FULL", "COMMON", "NICK", "PET", 
 const MEMORY_SCOPE_TYPES = new Set(["contact", "global", "thread", "scene"]);
 const MEMORY_STATUSES = new Set(["active", "faint", "dormant", "archived", "superseded"]);
 const MEMORY_EXTRACTION_ACTIONS = new Set(["create", "reinforce", "supersede", "ignore"]);
+const FORUM_BACKGROUND_SOURCE_TYPES = new Set([
+  "worldbook_entry",
+  "forum_tab_text",
+  "forum_tab_hot_topic"
+]);
+const FORUM_BACKGROUND_SOURCE_LAYERS = new Set([
+  "history_base",
+  "recent_campaign",
+  "observable_timeline",
+  "tab_background",
+  "hot_topic"
+]);
+const FORUM_BACKGROUND_TRUTH_LEVELS = new Set([
+  "worldbook_fact",
+  "tab_setting",
+  "community_viewpoint",
+  "community_speculation",
+  "interpretation_frame",
+  "discussion_structure"
+]);
+const FORUM_BACKGROUND_CARD_STATUSES = new Set([
+  "candidate",
+  "approved",
+  "stable",
+  "archived",
+  "worldbook_candidate"
+]);
+const FORUM_BACKGROUND_CARD_EVENT_TYPES = new Set([
+  "extracted",
+  "reinforced",
+  "approved",
+  "stabilized",
+  "archived",
+  "restored",
+  "edited",
+  "marked_worldbook_candidate"
+]);
+const FORUM_BACKGROUND_EXTRACTION_RUN_STATUSES = new Set([
+  "dirty",
+  "pending_submission",
+  "completed",
+  "failed"
+]);
+const FORUM_BACKGROUND_GENERATION_TYPES = new Set(["posts", "replies"]);
+const FORUM_BACKGROUND_DETAIL_LEVELS = new Set(["brief", "standard", "full"]);
 const MEMORY_EVENT_TYPES = new Set([
   "created",
   "observed",
@@ -95,6 +140,30 @@ const MEMORY_EVENT_TYPES = new Set([
 ]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DEFAULT_STORAGE_OWNER_ID = "default";
+const XIMILU_FORUM_TAB_NAME = "西米露💖";
+const XIMILU_WORLD_BOOK_SOURCE_DEFINITIONS = [
+  {
+    policyId: "forum_bg_policy_ximilu_history_base",
+    aliases: ["Jessie的公开信息合集"],
+    sourceLayer: "history_base",
+    knowledgeDomains: ["history_profile", "public_fact", "performance_history"],
+    priority: 80
+  },
+  {
+    policyId: "forum_bg_policy_ximilu_recent_campaign",
+    aliases: ["《四季予你》2026年世界个人巡演信息", "《四季予你》2026年世界个人巡演信息汇总"],
+    sourceLayer: "recent_campaign",
+    knowledgeDomains: ["recent_tour", "career_stage", "performance_history"],
+    priority: 92
+  },
+  {
+    policyId: "forum_bg_policy_ximilu_observable_timeline",
+    aliases: ["Jessie的公开行程"],
+    sourceLayer: "observable_timeline",
+    knowledgeDomains: ["schedule_timeline", "workload_state", "career_stage"],
+    priority: 88
+  }
+];
 const STORAGE_DOCUMENT_DEFINITIONS = new Map([
   [
     POSTS_KEY,
@@ -577,6 +646,10 @@ async function ensureBusinessSnapshotTables(db) {
     );
   `);
   await db.query(`
+    create index if not exists chat_messages_conversation_seq_idx
+      on chat_messages (owner_id, conversation_id, message_seq);
+  `);
+  await db.query(`
     create table if not exists chat_journals (
       owner_id text not null,
       id text not null,
@@ -679,6 +752,114 @@ async function ensureBusinessSnapshotTables(db) {
       updated_at timestamptz not null default now(),
       primary key (owner_id, id)
     );
+  `);
+  await db.query(`
+    create table if not exists forum_background_source_policies (
+      owner_id text not null,
+      id text not null,
+      tab_id text not null,
+      source_ref_type text not null,
+      source_ref_id text not null,
+      source_title text not null default '',
+      source_layer text not null,
+      knowledge_domains_jsonb jsonb not null default '[]'::jsonb,
+      priority integer not null default 0,
+      is_enabled boolean not null default true,
+      metadata jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (owner_id, id)
+    );
+  `);
+  await db.query(`
+    create unique index if not exists forum_background_source_policies_ref_idx
+      on forum_background_source_policies (owner_id, tab_id, source_ref_type, source_ref_id, source_layer);
+  `);
+  await db.query(`
+    create index if not exists forum_background_source_policies_tab_idx
+      on forum_background_source_policies (owner_id, tab_id, is_enabled, priority desc, updated_at desc);
+  `);
+  await db.query(`
+    create table if not exists forum_background_cards (
+      owner_id text not null,
+      id text not null,
+      tab_id text not null,
+      source_type text not null,
+      source_id text not null,
+      source_title text not null default '',
+      source_layer text not null default '',
+      source_excerpt text not null default '',
+      truth_level text not null default '',
+      knowledge_domain text not null default '',
+      summary text not null default '',
+      detail_text text not null default '',
+      suitable_roles_jsonb jsonb not null default '[]'::jsonb,
+      keywords_jsonb jsonb not null default '[]'::jsonb,
+      confidence double precision not null default 0.7,
+      status text not null default 'candidate',
+      mention_count integer not null default 1,
+      first_seen_at timestamptz not null default now(),
+      last_seen_at timestamptz not null default now(),
+      approved_at timestamptz,
+      archived_at timestamptz,
+      extraction_run_id text not null default '',
+      metadata jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (owner_id, id)
+    );
+  `);
+  await db.query(`
+    create index if not exists forum_background_cards_tab_status_idx
+      on forum_background_cards (owner_id, tab_id, status, updated_at desc);
+  `);
+  await db.query(`
+    create index if not exists forum_background_cards_source_idx
+      on forum_background_cards (owner_id, tab_id, source_type, source_id, source_layer);
+  `);
+  await db.query(`
+    create table if not exists forum_background_card_events (
+      owner_id text not null,
+      id text not null,
+      card_id text not null,
+      tab_id text not null default '',
+      event_type text not null,
+      actor_type text not null default '',
+      note text not null default '',
+      before_snapshot jsonb,
+      after_snapshot jsonb,
+      payload_jsonb jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now(),
+      primary key (owner_id, id)
+    );
+  `);
+  await db.query(`
+    create index if not exists forum_background_card_events_card_idx
+      on forum_background_card_events (owner_id, card_id, created_at desc);
+  `);
+  await db.query(`
+    create table if not exists forum_background_extraction_runs (
+      owner_id text not null,
+      id text not null,
+      tab_id text not null,
+      status text not null default 'dirty',
+      trigger_reason text not null default '',
+      source_bundle_jsonb jsonb not null default '{}'::jsonb,
+      source_bundle_hash text not null default '',
+      hot_topic_hash text not null default '',
+      candidate_count integer not null default 0,
+      submitted_at timestamptz,
+      completed_at timestamptz,
+      dirty_since timestamptz,
+      metadata jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (owner_id, id)
+    );
+  `);
+  await db.query(`
+    create index if not exists forum_background_extraction_runs_tab_idx
+      on forum_background_extraction_runs (owner_id, tab_id, created_at desc);
   `);
 }
 
@@ -845,6 +1026,7 @@ async function replaceAppSettingsSnapshot(db, valueJson, ownerId, tableWrites) {
     );
   }
   addTableWriteSummary(tableWrites, "app_api_configs", apiConfigs.length);
+  await ensureXimiluBackgroundPolicies(db, ownerId);
 }
 
 async function replaceAppProfileSnapshot(db, valueJson, ownerId, tableWrites) {
@@ -979,6 +1161,177 @@ function getConversationLastMessage(conversation = {}) {
   return messages.length ? messages[messages.length - 1] : null;
 }
 
+async function replaceChatMessagesForConversation(db, conversation = {}, ownerId = DEFAULT_STORAGE_OWNER_ID) {
+  const conversationId = toStorageText(conversation.id);
+  if (!conversationId) {
+    return 0;
+  }
+  const contactId = toStorageText(conversation.contactId);
+  const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
+  await db.query("delete from chat_messages where owner_id = $1 and conversation_id = $2", [
+    ownerId,
+    conversationId
+  ]);
+
+  let messageCount = 0;
+  for (const [messageIndex, message] of messages.entries()) {
+    const sanitizedMessage = sanitizeJsonbValue(message);
+    const messageId = toStorageText(message?.id, `${conversationId}_message_${messageIndex + 1}`);
+    await db.query(
+      `
+        insert into chat_messages (
+          owner_id,
+          id,
+          conversation_id,
+          contact_id,
+          sender_role,
+          message_type,
+          text_content,
+          needs_reply,
+          message_seq,
+          status,
+          payload_jsonb,
+          client_created_at,
+          client_updated_at,
+          created_at,
+          updated_at
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, now(), now())
+      `,
+        [
+          ownerId,
+          messageId,
+          conversationId,
+          contactId,
+          toStorageText(sanitizedMessage?.role, "user"),
+          toStorageText(sanitizedMessage?.messageType, "text"),
+          toStorageText(sanitizedMessage?.text),
+          toStorageBoolean(sanitizedMessage?.needsReply),
+          messageIndex + 1,
+          toStorageText(sanitizedMessage?.status, "active"),
+          stringifyJsonb(sanitizedMessage),
+          toClientTimestamp(sanitizedMessage?.createdAt),
+          toClientTimestamp(sanitizedMessage?.updatedAt || sanitizedMessage?.createdAt)
+        ]
+      );
+    messageCount += 1;
+  }
+  return messageCount;
+}
+
+async function upsertChatConversationSnapshot(
+  db,
+  conversation = {},
+  ownerId = DEFAULT_STORAGE_OWNER_ID,
+  options = {}
+) {
+  const snapshot = sanitizeJsonbValue(normalizeSnapshotObject(conversation));
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const fallbackId = String(requestOptions.fallbackId || "").trim();
+  const conversationId = toStorageText(snapshot.id, fallbackId);
+  if (!conversationId) {
+    return null;
+  }
+  const contactId = toStorageText(snapshot.contactId);
+  const lastMessage = getConversationLastMessage(snapshot);
+  const clientUpdatedAt = toClientTimestamp(
+    requestOptions.clientUpdatedAt || snapshot.lastMutatedAt || snapshot.updatedAt
+  );
+  await db.query(
+    `
+      insert into chat_conversations (
+        owner_id,
+        id,
+        contact_id,
+        conversation_key,
+        contact_name_snapshot,
+        contact_avatar_image_snapshot,
+        contact_avatar_text_snapshot,
+        prompt_settings_jsonb,
+        scene_mode,
+        allow_ai_presence_update,
+        allow_ai_proactive_message,
+        allow_ai_auto_schedule,
+        auto_schedule_days,
+        auto_schedule_time,
+        auto_schedule_last_run_date,
+        voice_call_state_jsonb,
+        reply_context_version,
+        memory_summary_counter,
+        memory_summary_last_message_count,
+        last_message_at,
+        last_message_id,
+        payload_jsonb,
+        client_updated_at,
+        created_at,
+        updated_at
+      )
+      values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17, $18, $19, $20, $21, $22::jsonb, $23, now(), now())
+      on conflict (owner_id, id) do update
+        set contact_id = excluded.contact_id,
+            conversation_key = excluded.conversation_key,
+            contact_name_snapshot = excluded.contact_name_snapshot,
+            contact_avatar_image_snapshot = excluded.contact_avatar_image_snapshot,
+            contact_avatar_text_snapshot = excluded.contact_avatar_text_snapshot,
+            prompt_settings_jsonb = excluded.prompt_settings_jsonb,
+            scene_mode = excluded.scene_mode,
+            allow_ai_presence_update = excluded.allow_ai_presence_update,
+            allow_ai_proactive_message = excluded.allow_ai_proactive_message,
+            allow_ai_auto_schedule = excluded.allow_ai_auto_schedule,
+            auto_schedule_days = excluded.auto_schedule_days,
+            auto_schedule_time = excluded.auto_schedule_time,
+            auto_schedule_last_run_date = excluded.auto_schedule_last_run_date,
+            voice_call_state_jsonb = excluded.voice_call_state_jsonb,
+            reply_context_version = excluded.reply_context_version,
+            memory_summary_counter = excluded.memory_summary_counter,
+            memory_summary_last_message_count = excluded.memory_summary_last_message_count,
+            last_message_at = excluded.last_message_at,
+            last_message_id = excluded.last_message_id,
+            payload_jsonb = excluded.payload_jsonb,
+            client_updated_at = excluded.client_updated_at,
+            updated_at = now()
+    `,
+    [
+      ownerId,
+      conversationId,
+      contactId,
+      `${contactId || "contact"}:${conversationId}`,
+      toStorageText(snapshot.contactNameSnapshot),
+      toStorageText(snapshot.contactAvatarImageSnapshot),
+      toStorageText(snapshot.contactAvatarTextSnapshot),
+      stringifyJsonb(normalizeSnapshotObject(snapshot.promptSettings)),
+      toStorageText(snapshot.sceneMode, "online"),
+      toStorageBoolean(snapshot.allowAiPresenceUpdate),
+      toStorageBoolean(snapshot.allowAiProactiveMessage),
+      toStorageBoolean(snapshot.allowAiAutoSchedule),
+      toStorageInteger(snapshot.autoScheduleDays, 0),
+      toStorageText(snapshot.autoScheduleTime),
+      toStorageText(snapshot.autoScheduleLastRunDate),
+      stringifyJsonb(normalizeSnapshotObject(snapshot.voiceCallState)),
+      toStorageInteger(snapshot.replyContextVersion, 0),
+      toStorageInteger(snapshot.memorySummaryCounter, 0),
+      toStorageInteger(snapshot.memorySummaryLastMessageCount, 0),
+      toClientTimestamp(lastMessage?.createdAt || snapshot.updatedAt),
+      lastMessage ? toStorageText(lastMessage.id) : null,
+      stringifyJsonb(snapshot),
+      clientUpdatedAt
+    ]
+  );
+  const messageCount = await replaceChatMessagesForConversation(
+    db,
+    {
+      ...snapshot,
+      id: conversationId,
+      contactId
+    },
+    ownerId
+  );
+  return {
+    conversationId,
+    messageCount
+  };
+}
+
 async function replaceChatThreadsSnapshot(db, valueJson, ownerId, tableWrites) {
   const conversations = normalizeSnapshotArray(valueJson);
   await db.query("delete from chat_messages where owner_id = $1", [ownerId]);
@@ -986,112 +1339,10 @@ async function replaceChatThreadsSnapshot(db, valueJson, ownerId, tableWrites) {
 
   let messageCount = 0;
   for (const [conversationIndex, conversation] of conversations.entries()) {
-    const conversationId = toStorageText(conversation.id, `conversation_${conversationIndex + 1}`);
-    const contactId = toStorageText(conversation.contactId);
-    const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
-    const lastMessage = getConversationLastMessage(conversation);
-    await db.query(
-      `
-        insert into chat_conversations (
-          owner_id,
-          id,
-          contact_id,
-          conversation_key,
-          contact_name_snapshot,
-          contact_avatar_image_snapshot,
-          contact_avatar_text_snapshot,
-          prompt_settings_jsonb,
-          scene_mode,
-          allow_ai_presence_update,
-          allow_ai_proactive_message,
-          allow_ai_auto_schedule,
-          auto_schedule_days,
-          auto_schedule_time,
-          auto_schedule_last_run_date,
-          voice_call_state_jsonb,
-          reply_context_version,
-          memory_summary_counter,
-          memory_summary_last_message_count,
-          last_message_at,
-          last_message_id,
-          payload_jsonb,
-          client_updated_at,
-          created_at,
-          updated_at
-        )
-        values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17, $18, $19, $20, $21, $22::jsonb, $23, now(), now())
-      `,
-      [
-        ownerId,
-        conversationId,
-        contactId,
-        `${contactId || "contact"}:${conversationId}`,
-        toStorageText(conversation.contactNameSnapshot),
-        toStorageText(conversation.contactAvatarImageSnapshot),
-        toStorageText(conversation.contactAvatarTextSnapshot),
-        stringifyJsonb(normalizeSnapshotObject(conversation.promptSettings)),
-        toStorageText(conversation.sceneMode, "online"),
-        toStorageBoolean(conversation.allowAiPresenceUpdate),
-        toStorageBoolean(conversation.allowAiProactiveMessage),
-        toStorageBoolean(conversation.allowAiAutoSchedule),
-        toStorageInteger(conversation.autoScheduleDays, 0),
-        toStorageText(conversation.autoScheduleTime),
-        toStorageText(conversation.autoScheduleLastRunDate),
-        stringifyJsonb(normalizeSnapshotObject(conversation.voiceCallState)),
-        toStorageInteger(conversation.replyContextVersion, 0),
-        toStorageInteger(conversation.memorySummaryCounter, 0),
-        toStorageInteger(conversation.memorySummaryLastMessageCount, 0),
-        toClientTimestamp(lastMessage?.createdAt || conversation.updatedAt),
-        lastMessage ? toStorageText(lastMessage.id) : null,
-        stringifyJsonb(conversation),
-        toClientTimestamp(conversation.updatedAt)
-      ]
-    );
-
-    for (const [messageIndex, message] of messages.entries()) {
-      const messageId = toStorageText(
-        message?.id,
-        `${conversationId}_message_${messageIndex + 1}`
-      );
-      await db.query(
-        `
-          insert into chat_messages (
-            owner_id,
-            id,
-            conversation_id,
-            contact_id,
-            sender_role,
-            message_type,
-            text_content,
-            needs_reply,
-            message_seq,
-            status,
-            payload_jsonb,
-            client_created_at,
-            client_updated_at,
-            created_at,
-            updated_at
-          )
-          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, now(), now())
-        `,
-        [
-          ownerId,
-          messageId,
-          conversationId,
-          contactId,
-          toStorageText(message?.role, "user"),
-          toStorageText(message?.messageType, "text"),
-          toStorageText(message?.text),
-          toStorageBoolean(message?.needsReply),
-          messageIndex + 1,
-          toStorageText(message?.status, "active"),
-          stringifyJsonb(message),
-          toClientTimestamp(message?.createdAt),
-          toClientTimestamp(message?.updatedAt || message?.createdAt)
-        ]
-      );
-      messageCount += 1;
-    }
+    const upserted = await upsertChatConversationSnapshot(db, conversation, ownerId, {
+      fallbackId: `conversation_${conversationIndex + 1}`
+    });
+    messageCount += Number(upserted?.messageCount) || 0;
   }
   addTableWriteSummary(tableWrites, "chat_conversations", conversations.length);
   addTableWriteSummary(tableWrites, "chat_messages", messageCount);
@@ -1332,6 +1583,7 @@ async function replaceWorldbooksSnapshot(db, valueJson, ownerId, tableWrites) {
   }
   addTableWriteSummary(tableWrites, "worldbook_categories", categories.length);
   addTableWriteSummary(tableWrites, "worldbook_entries", entries.length);
+  await ensureXimiluBackgroundPolicies(db, ownerId);
 }
 
 async function mirrorStorageItemToBusinessTables(db, item, tableWrites, ownerId = DEFAULT_STORAGE_OWNER_ID) {
@@ -2386,6 +2638,7 @@ async function ensureCoreTables() {
   `);
   await ensureBusinessSnapshotTables(pool);
   await ensureMemoryTables(pool);
+  await ensureXimiluBackgroundPolicies(pool, DEFAULT_STORAGE_OWNER_ID);
   return ensurePrivacyAllowlistSeeded(pool);
 }
 
@@ -5059,6 +5312,1346 @@ async function persistMemoryDecayWorkerRun(summary = {}, errorMessage = "") {
   return runId;
 }
 
+function normalizeForumBackgroundSourceType(value = "", fallback = "worldbook_entry") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return FORUM_BACKGROUND_SOURCE_TYPES.has(normalized) ? normalized : fallback;
+}
+
+function normalizeForumBackgroundSourceLayer(value = "", fallback = "tab_background") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return FORUM_BACKGROUND_SOURCE_LAYERS.has(normalized) ? normalized : fallback;
+}
+
+function normalizeForumBackgroundTruthLevel(value = "", fallback = "community_viewpoint") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return FORUM_BACKGROUND_TRUTH_LEVELS.has(normalized) ? normalized : fallback;
+}
+
+function normalizeForumBackgroundCardStatus(value = "", fallback = "candidate") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return FORUM_BACKGROUND_CARD_STATUSES.has(normalized) ? normalized : fallback;
+}
+
+function normalizeForumBackgroundRunStatus(value = "", fallback = "dirty") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return FORUM_BACKGROUND_EXTRACTION_RUN_STATUSES.has(normalized) ? normalized : fallback;
+}
+
+function normalizeForumBackgroundEventType(value = "", fallback = "edited") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return FORUM_BACKGROUND_CARD_EVENT_TYPES.has(normalized) ? normalized : fallback;
+}
+
+function normalizeForumBackgroundGenerationType(value = "", fallback = "posts") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return FORUM_BACKGROUND_GENERATION_TYPES.has(normalized) ? normalized : fallback;
+}
+
+function normalizeForumBackgroundDetailLevel(value = "", fallback = "standard") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return FORUM_BACKGROUND_DETAIL_LEVELS.has(normalized) ? normalized : fallback;
+}
+
+function normalizeForumBackgroundTextArray(value = [], fallback = []) {
+  return Array.from(
+    new Set(
+      normalizeJsonArrayValue(value, fallback)
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+    )
+  );
+}
+
+function normalizeForumTabRecord(tab = {}, index = 0) {
+  const source = normalizeJsonObjectValue(tab, {});
+  const rawName = source.name || source.label || source.title || "";
+  const rawAudience =
+    source.audience ||
+    source.userPosition ||
+    source.userProfile ||
+    source.positioning ||
+    source.targetAudience ||
+    "";
+  const rawDiscussionText =
+    source.discussionText || source.text || source.prompt || source.content || source.description || "";
+  const rawHotTopic =
+    source.hotTopic || source.hotspot || source.hotText || source.topicText || source.topic || "";
+  return {
+    id:
+      String(
+        source.id ||
+          source.feedId ||
+          source.key ||
+          `custom_${index}_${hashMemoryText(`${rawName}-${rawDiscussionText}-${rawHotTopic}`)}`
+      ).trim(),
+    name: String(rawName || "自定义页签").trim(),
+    audience: String(rawAudience || "").trim(),
+    discussionText: String(rawDiscussionText || "").trim(),
+    hotTopic: String(rawHotTopic || "").trim(),
+    worldbookIds: normalizeForumBackgroundTextArray(
+      source.worldbookIds ||
+        source.mountedWorldbookIds ||
+        source.worldbooks ||
+        source.worldbookEntries ||
+        []
+    )
+  };
+}
+
+function normalizeForumCustomTabs(value = []) {
+  return normalizeJsonArrayValue(value, [])
+    .map((item, index) => normalizeForumTabRecord(item, index))
+    .filter((item) => item.id && item.name);
+}
+
+function findForumTabById(tabs = [], tabId = "") {
+  const resolvedTabId = String(tabId || "").trim();
+  if (!resolvedTabId) {
+    return null;
+  }
+  return normalizeForumCustomTabs(tabs).find((item) => item.id === resolvedTabId) || null;
+}
+
+function findForumTabByName(tabs = [], tabName = "") {
+  const resolvedName = String(tabName || "").trim();
+  if (!resolvedName) {
+    return null;
+  }
+  return normalizeForumCustomTabs(tabs).find((item) => item.name === resolvedName) || null;
+}
+
+function mapForumBackgroundSourcePolicyRow(row = {}) {
+  return {
+    id: String(row.id || "").trim(),
+    tabId: String(row.tab_id || "").trim(),
+    sourceRefType: normalizeForumBackgroundSourceType(row.source_ref_type, "worldbook_entry"),
+    sourceRefId: String(row.source_ref_id || "").trim(),
+    sourceTitle: String(row.source_title || "").trim(),
+    sourceLayer: normalizeForumBackgroundSourceLayer(row.source_layer),
+    knowledgeDomains: normalizeForumBackgroundTextArray(row.knowledge_domains_jsonb, []),
+    priority: clampIntegerValue(row.priority, 0, 999, 0),
+    isEnabled: row.is_enabled !== false,
+    metadata: normalizeJsonObjectValue(row.metadata, {}),
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null
+  };
+}
+
+function mapForumBackgroundCardRow(row = {}) {
+  return {
+    id: String(row.id || "").trim(),
+    tabId: String(row.tab_id || "").trim(),
+    sourceType: normalizeForumBackgroundSourceType(row.source_type, "worldbook_entry"),
+    sourceId: String(row.source_id || "").trim(),
+    sourceTitle: String(row.source_title || "").trim(),
+    sourceLayer: normalizeForumBackgroundSourceLayer(row.source_layer),
+    sourceExcerpt: String(row.source_excerpt || "").trim(),
+    truthLevel: normalizeForumBackgroundTruthLevel(row.truth_level),
+    knowledgeDomain: String(row.knowledge_domain || "").trim(),
+    summary: String(row.summary || "").trim(),
+    detailText: String(row.detail_text || "").trim(),
+    suitableRoles: normalizeForumBackgroundTextArray(row.suitable_roles_jsonb, []),
+    keywords: normalizeForumBackgroundTextArray(row.keywords_jsonb, []),
+    confidence: normalizeConfidenceValue(row.confidence, 0.7),
+    status: normalizeForumBackgroundCardStatus(row.status),
+    mentionCount: clampIntegerValue(row.mention_count, 0, 9999, 0),
+    firstSeenAt: row.first_seen_at || null,
+    lastSeenAt: row.last_seen_at || null,
+    approvedAt: row.approved_at || null,
+    archivedAt: row.archived_at || null,
+    extractionRunId: String(row.extraction_run_id || "").trim(),
+    metadata: normalizeJsonObjectValue(row.metadata, {}),
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null
+  };
+}
+
+function createForumBackgroundCardSnapshot(row = {}) {
+  const card = mapForumBackgroundCardRow(row);
+  return {
+    sourceType: card.sourceType,
+    sourceId: card.sourceId,
+    sourceTitle: card.sourceTitle,
+    sourceLayer: card.sourceLayer,
+    sourceExcerpt: card.sourceExcerpt,
+    truthLevel: card.truthLevel,
+    knowledgeDomain: card.knowledgeDomain,
+    summary: card.summary,
+    detailText: card.detailText,
+    suitableRoles: card.suitableRoles,
+    keywords: card.keywords,
+    confidence: card.confidence,
+    status: card.status,
+    mentionCount: card.mentionCount
+  };
+}
+
+function mapForumBackgroundCardEventRow(row = {}) {
+  return {
+    id: String(row.id || "").trim(),
+    cardId: String(row.card_id || "").trim(),
+    tabId: String(row.tab_id || "").trim(),
+    eventType: normalizeForumBackgroundEventType(row.event_type),
+    actorType: String(row.actor_type || "").trim(),
+    note: String(row.note || "").trim(),
+    beforeSnapshot: normalizeJsonObjectValue(row.before_snapshot, null),
+    afterSnapshot: normalizeJsonObjectValue(row.after_snapshot, null),
+    payload: normalizeJsonObjectValue(row.payload_jsonb, {}),
+    createdAt: row.created_at || null
+  };
+}
+
+function mapForumBackgroundExtractionRunRow(row = {}) {
+  return {
+    id: String(row.id || "").trim(),
+    tabId: String(row.tab_id || "").trim(),
+    status: normalizeForumBackgroundRunStatus(row.status),
+    triggerReason: String(row.trigger_reason || "").trim(),
+    sourceBundle: normalizeJsonObjectValue(row.source_bundle_jsonb, {}),
+    sourceBundleHash: String(row.source_bundle_hash || "").trim(),
+    hotTopicHash: String(row.hot_topic_hash || "").trim(),
+    candidateCount: clampIntegerValue(row.candidate_count, 0, 9999, 0),
+    submittedAt: row.submitted_at || null,
+    completedAt: row.completed_at || null,
+    dirtySince: row.dirty_since || null,
+    metadata: normalizeJsonObjectValue(row.metadata, {}),
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null
+  };
+}
+
+function truncateForumBackgroundText(value = "", maxLength = 240) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) {
+    return "";
+  }
+  return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
+}
+
+function formatForumBackgroundSourceLayerLabel(value = "") {
+  const resolved = normalizeForumBackgroundSourceLayer(value);
+  const labels = {
+    history_base: "历史基底",
+    recent_campaign: "近期主线",
+    observable_timeline: "公开行程时间线",
+    tab_background: "页签背景",
+    hot_topic: "页签热点"
+  };
+  return labels[resolved] || resolved;
+}
+
+function formatForumBackgroundTruthLevelLabel(value = "") {
+  const resolved = normalizeForumBackgroundTruthLevel(value);
+  const labels = {
+    worldbook_fact: "世界书事实",
+    tab_setting: "页签设定",
+    community_viewpoint: "社区观点",
+    community_speculation: "社区推测",
+    interpretation_frame: "解释框架",
+    discussion_structure: "讨论结构"
+  };
+  return labels[resolved] || resolved;
+}
+
+function formatForumBackgroundRoleLabel(value = "") {
+  const resolved = String(value || "").trim();
+  const labels = {
+    newcomer: "新入场角色",
+    old_guard: "老角色",
+    schedule_tracker: "行程状态型",
+    career_fan: "事业粉",
+    cp_digger: "CP 深挖型",
+    worldbook_seed: "世界书种子型",
+    fact_checker: "考据型角色"
+  };
+  return labels[resolved] || resolved;
+}
+
+async function createForumBackgroundCardEvent(db, options = {}) {
+  const eventId = randomUUID();
+  await db.query(
+    `
+      insert into forum_background_card_events (
+        owner_id,
+        id,
+        card_id,
+        tab_id,
+        event_type,
+        actor_type,
+        note,
+        before_snapshot,
+        after_snapshot,
+        payload_jsonb,
+        created_at
+      )
+      values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, now())
+    `,
+    [
+      String(options.ownerId || DEFAULT_STORAGE_OWNER_ID).trim(),
+      eventId,
+      String(options.cardId || "").trim(),
+      String(options.tabId || "").trim(),
+      normalizeForumBackgroundEventType(options.eventType, "edited"),
+      String(options.actorType || "system").trim() || "system",
+      String(options.note || "").trim(),
+      options.beforeSnapshot == null ? null : stringifyJsonb(options.beforeSnapshot),
+      options.afterSnapshot == null ? null : stringifyJsonb(options.afterSnapshot),
+      stringifyJsonb(normalizeJsonObjectValue(options.payload, {}))
+    ]
+  );
+  return eventId;
+}
+
+async function loadForumAppSettingsState(db, ownerId = DEFAULT_STORAGE_OWNER_ID) {
+  const result = await db.query(
+    `
+      select forum_settings, api_state
+      from app_settings
+      where owner_id = $1
+      limit 1
+    `,
+    [ownerId]
+  );
+  const row = result.rows[0] || {};
+  return {
+    forumSettings: normalizeJsonObjectValue(row.forum_settings, {}),
+    apiState: normalizeJsonObjectValue(row.api_state, {})
+  };
+}
+
+async function loadForumBackgroundLatestRun(db, ownerId = DEFAULT_STORAGE_OWNER_ID, tabId = "") {
+  const resolvedTabId = String(tabId || "").trim();
+  if (!resolvedTabId) {
+    return null;
+  }
+  const result = await db.query(
+    `
+      select *
+      from forum_background_extraction_runs
+      where owner_id = $1 and tab_id = $2
+      order by created_at desc
+      limit 1
+    `,
+    [ownerId, resolvedTabId]
+  );
+  return result.rows.length ? mapForumBackgroundExtractionRunRow(result.rows[0]) : null;
+}
+
+async function resolveXimiluWorldbookMatches(db, ownerId = DEFAULT_STORAGE_OWNER_ID) {
+  const aliases = Array.from(
+    new Set(
+      XIMILU_WORLD_BOOK_SOURCE_DEFINITIONS.flatMap((item) => item.aliases || []).filter(Boolean)
+    )
+  );
+  if (!aliases.length) {
+    return new Map();
+  }
+  const result = await db.query(
+    `
+      select id, name, text_content, updated_at
+      from worldbook_entries
+      where owner_id = $1
+        and name = any($2::text[])
+      order by updated_at desc nulls last, name asc
+    `,
+    [ownerId, aliases]
+  );
+  const picked = new Map();
+  XIMILU_WORLD_BOOK_SOURCE_DEFINITIONS.forEach((definition) => {
+    const match = result.rows.find((row) => definition.aliases.includes(String(row.name || "").trim()));
+    if (match) {
+      picked.set(definition.policyId, match);
+    }
+  });
+  return picked;
+}
+
+async function buildForumBackgroundSourceBundle(
+  db,
+  ownerId = DEFAULT_STORAGE_OWNER_ID,
+  tabId = "",
+  options = {}
+) {
+  const requestOptions = normalizeJsonObjectValue(options, {});
+  if (!requestOptions.skipEnsurePolicies) {
+    await ensureXimiluBackgroundPolicies(db, ownerId);
+  }
+  const settingsState = await loadForumAppSettingsState(db, ownerId);
+  const tabs = normalizeForumCustomTabs(settingsState.forumSettings.customTabs || []);
+  const tab =
+    findForumTabById(tabs, tabId) ||
+    (String(tabId || "").trim() === XIMILU_FORUM_TAB_NAME
+      ? findForumTabByName(tabs, XIMILU_FORUM_TAB_NAME)
+      : null);
+  if (!tab) {
+    return null;
+  }
+  const policyResult = await db.query(
+    `
+      select *
+      from forum_background_source_policies
+      where owner_id = $1
+        and tab_id = $2
+        and is_enabled = true
+      order by priority desc, created_at asc
+    `,
+    [ownerId, tab.id]
+  );
+  const policies = policyResult.rows.map(mapForumBackgroundSourcePolicyRow);
+  const worldbookIds = policies
+    .filter((policy) => policy.sourceRefType === "worldbook_entry")
+    .map((policy) => policy.sourceRefId)
+    .filter(Boolean);
+  const worldbookResult = worldbookIds.length
+    ? await db.query(
+        `
+          select id, name, text_content, updated_at
+          from worldbook_entries
+          where owner_id = $1
+            and id = any($2::text[])
+        `,
+        [ownerId, worldbookIds]
+      )
+    : { rows: [] };
+  const worldbookMap = new Map(
+    worldbookResult.rows.map((row) => [String(row.id || "").trim(), row])
+  );
+  const sources = policies
+    .map((policy) => {
+      if (policy.sourceRefType === "forum_tab_text") {
+        const content = [
+          tab.audience ? `页签用户定位：${tab.audience}` : "",
+          tab.discussionText ? `页签文本：${tab.discussionText}` : ""
+        ]
+          .filter(Boolean)
+          .join("\n");
+        return {
+          policyId: policy.id,
+          sourceType: policy.sourceRefType,
+          sourceId: policy.sourceRefId,
+          sourceTitle: policy.sourceTitle || `${tab.name}页签文本`,
+          sourceLayer: policy.sourceLayer,
+          knowledgeDomains: policy.knowledgeDomains,
+          priority: policy.priority,
+          content,
+          updatedAt: policy.updatedAt
+        };
+      }
+      if (policy.sourceRefType === "forum_tab_hot_topic") {
+        return {
+          policyId: policy.id,
+          sourceType: policy.sourceRefType,
+          sourceId: policy.sourceRefId,
+          sourceTitle: policy.sourceTitle || `${tab.name}页签热点`,
+          sourceLayer: policy.sourceLayer,
+          knowledgeDomains: policy.knowledgeDomains,
+          priority: policy.priority,
+          content: String(tab.hotTopic || "").trim(),
+          updatedAt: policy.updatedAt
+        };
+      }
+      const worldbook = worldbookMap.get(policy.sourceRefId) || null;
+      if (!worldbook) {
+        return null;
+      }
+      return {
+        policyId: policy.id,
+        sourceType: policy.sourceRefType,
+        sourceId: policy.sourceRefId,
+        sourceTitle: String(worldbook.name || policy.sourceTitle || "").trim(),
+        sourceLayer: policy.sourceLayer,
+        knowledgeDomains: policy.knowledgeDomains,
+        priority: policy.priority,
+        content: String(worldbook.text_content || "").trim(),
+        updatedAt: worldbook.updated_at || policy.updatedAt
+      };
+    })
+    .filter(Boolean);
+  const latestRun = await loadForumBackgroundLatestRun(db, ownerId, tab.id);
+  const bundleHash = hashMemoryText(
+    JSON.stringify(
+      sanitizeJsonbValue({
+        tabId: tab.id,
+        audience: tab.audience,
+        discussionText: tab.discussionText,
+        hotTopic: tab.hotTopic,
+        sources: sources.map((source) => ({
+          sourceType: source.sourceType,
+          sourceId: source.sourceId,
+          sourceLayer: source.sourceLayer,
+          sourceTitle: source.sourceTitle,
+          content: source.content
+        }))
+      })
+    )
+  );
+  return {
+    tab: {
+      id: tab.id,
+      name: tab.name,
+      audience: tab.audience,
+      discussionText: tab.discussionText,
+      hotTopic: tab.hotTopic
+    },
+    summaryApi: {
+      enabled: Boolean(settingsState.apiState.summaryApiEnabled),
+      configId: String(settingsState.apiState.summaryApiConfigId || "").trim()
+    },
+    sources,
+    latestRun,
+    bundleHash
+  };
+}
+
+async function markForumBackgroundDirtyRunIfNeeded(
+  db,
+  ownerId = DEFAULT_STORAGE_OWNER_ID,
+  tab = null
+) {
+  const resolvedTab = tab && typeof tab === "object" ? tab : null;
+  if (!resolvedTab?.id) {
+    return null;
+  }
+  const sourceBundle = await buildForumBackgroundSourceBundle(db, ownerId, resolvedTab.id, {
+    skipEnsurePolicies: true
+  });
+  if (!sourceBundle) {
+    return null;
+  }
+  const hotTopicHash = hashMemoryText(
+    JSON.stringify({
+      tabId: sourceBundle.tab.id,
+      hotTopic: sourceBundle.tab.hotTopic || ""
+    })
+  );
+  const existing = await db.query(
+    `
+      select *
+      from forum_background_extraction_runs
+      where owner_id = $1
+        and tab_id = $2
+        and hot_topic_hash = $3
+      order by created_at desc
+      limit 1
+    `,
+    [ownerId, sourceBundle.tab.id, hotTopicHash]
+  );
+  if (existing.rows.length) {
+    return mapForumBackgroundExtractionRunRow(existing.rows[0]);
+  }
+  const runId = randomUUID();
+  await db.query(
+    `
+      insert into forum_background_extraction_runs (
+        owner_id,
+        id,
+        tab_id,
+        status,
+        trigger_reason,
+        source_bundle_jsonb,
+        source_bundle_hash,
+        hot_topic_hash,
+        candidate_count,
+        dirty_since,
+        metadata,
+        created_at,
+        updated_at
+      )
+      values ($1, $2, $3, 'dirty', 'hot_topic_changed', $4::jsonb, $5, $6, 0, now(), $7::jsonb, now(), now())
+    `,
+    [
+      ownerId,
+      runId,
+      sourceBundle.tab.id,
+      stringifyJsonb(sourceBundle),
+      sourceBundle.bundleHash,
+      hotTopicHash,
+      stringifyJsonb({
+        seededBy: "system_ximilu_v1"
+      })
+    ]
+  );
+  return loadForumBackgroundLatestRun(db, ownerId, sourceBundle.tab.id);
+}
+
+async function ensureXimiluBackgroundPolicies(db, ownerId = DEFAULT_STORAGE_OWNER_ID) {
+  if (!db) {
+    return null;
+  }
+  const settingsState = await loadForumAppSettingsState(db, ownerId);
+  const tabs = normalizeForumCustomTabs(settingsState.forumSettings.customTabs || []);
+  const ximiluTab = findForumTabByName(tabs, XIMILU_FORUM_TAB_NAME);
+  if (!ximiluTab) {
+    return null;
+  }
+  const matchedWorldbooks = await resolveXimiluWorldbookMatches(db, ownerId);
+  const systemPolicies = [
+    {
+      id: "forum_bg_policy_ximilu_tab_background",
+      tabId: ximiluTab.id,
+      sourceRefType: "forum_tab_text",
+      sourceRefId: `${ximiluTab.id}:discussion_text`,
+      sourceTitle: `${ximiluTab.name}页签文本`,
+      sourceLayer: "tab_background",
+      knowledgeDomains: ["community_atmosphere", "fan_discourse", "audience_positioning"],
+      priority: 96,
+      isEnabled: true
+    },
+    {
+      id: "forum_bg_policy_ximilu_hot_topic",
+      tabId: ximiluTab.id,
+      sourceRefType: "forum_tab_hot_topic",
+      sourceRefId: `${ximiluTab.id}:hot_topic`,
+      sourceTitle: `${ximiluTab.name}页签热点`,
+      sourceLayer: "hot_topic",
+      knowledgeDomains: ["hot_topic_event", "fan_discourse", "relationship_pattern"],
+      priority: 100,
+      isEnabled: true
+    }
+  ];
+  XIMILU_WORLD_BOOK_SOURCE_DEFINITIONS.forEach((definition) => {
+    const worldbook = matchedWorldbooks.get(definition.policyId) || null;
+    systemPolicies.push({
+      id: definition.policyId,
+      tabId: ximiluTab.id,
+      sourceRefType: "worldbook_entry",
+      sourceRefId: worldbook ? String(worldbook.id || "").trim() : definition.policyId,
+      sourceTitle: worldbook ? String(worldbook.name || "").trim() : definition.aliases[0],
+      sourceLayer: definition.sourceLayer,
+      knowledgeDomains: definition.knowledgeDomains,
+      priority: definition.priority,
+      isEnabled: Boolean(worldbook)
+    });
+  });
+  for (const policy of systemPolicies) {
+    await db.query(
+      `
+        insert into forum_background_source_policies (
+          owner_id,
+          id,
+          tab_id,
+          source_ref_type,
+          source_ref_id,
+          source_title,
+          source_layer,
+          knowledge_domains_jsonb,
+          priority,
+          is_enabled,
+          metadata,
+          created_at,
+          updated_at
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11::jsonb, now(), now())
+        on conflict (owner_id, id) do update
+          set tab_id = excluded.tab_id,
+              source_ref_type = excluded.source_ref_type,
+              source_ref_id = excluded.source_ref_id,
+              source_title = excluded.source_title,
+              source_layer = excluded.source_layer,
+              knowledge_domains_jsonb = excluded.knowledge_domains_jsonb,
+              priority = excluded.priority,
+              is_enabled = excluded.is_enabled,
+              metadata = excluded.metadata,
+              updated_at = now()
+      `,
+      [
+        ownerId,
+        policy.id,
+        policy.tabId,
+        policy.sourceRefType,
+        policy.sourceRefId,
+        policy.sourceTitle,
+        policy.sourceLayer,
+        stringifyJsonb(policy.knowledgeDomains),
+        policy.priority,
+        policy.isEnabled !== false,
+        stringifyJsonb({
+          seededBy: "system_ximilu_v1",
+          tabName: ximiluTab.name
+        })
+      ]
+    );
+  }
+  await markForumBackgroundDirtyRunIfNeeded(db, ownerId, ximiluTab);
+  return {
+    tabId: ximiluTab.id,
+    seededCount: systemPolicies.length
+  };
+}
+
+function normalizeForumBackgroundCandidateInput(input = {}, defaults = {}) {
+  const source = normalizeJsonObjectValue(input, {});
+  const fallback = normalizeJsonObjectValue(defaults, {});
+  return {
+    sourceType: normalizeForumBackgroundSourceType(
+      getInputValue(source, "sourceType", "source_type") ?? fallback.sourceType,
+      fallback.sourceType || "worldbook_entry"
+    ),
+    sourceId: normalizeRequiredText(
+      getInputValue(source, "sourceId", "source_id") ?? fallback.sourceId
+    ),
+    sourceTitle: normalizeOptionalText(
+      getInputValue(source, "sourceTitle", "source_title") ?? fallback.sourceTitle
+    ),
+    sourceLayer: normalizeForumBackgroundSourceLayer(
+      getInputValue(source, "sourceLayer", "source_layer") ?? fallback.sourceLayer,
+      fallback.sourceLayer || "tab_background"
+    ),
+    sourceExcerpt: normalizeRequiredText(
+      getInputValue(source, "sourceExcerpt", "source_excerpt") ?? fallback.sourceExcerpt
+    ),
+    truthLevel: normalizeForumBackgroundTruthLevel(
+      getInputValue(source, "truthLevel", "truth_level") ?? fallback.truthLevel,
+      fallback.truthLevel || "community_viewpoint"
+    ),
+    knowledgeDomain: normalizeRequiredText(
+      getInputValue(source, "knowledgeDomain", "knowledge_domain") ?? fallback.knowledgeDomain
+    ),
+    summary: normalizeRequiredText(getInputValue(source, "summary", "summary") ?? fallback.summary),
+    detailText: normalizeRequiredText(
+      getInputValue(source, "detailText", "detail_text") ?? fallback.detailText
+    ),
+    suitableRoles: normalizeForumBackgroundTextArray(
+      getInputValue(source, "suitableRoles", "suitable_roles") ?? fallback.suitableRoles,
+      []
+    ),
+    keywords: normalizeForumBackgroundTextArray(
+      getInputValue(source, "keywords", "keywords") ?? fallback.keywords,
+      []
+    ),
+    confidence: normalizeConfidenceValue(
+      getInputValue(source, "confidence", "confidence") ?? fallback.confidence,
+      fallback.confidence ?? 0.78
+    ),
+    status: normalizeForumBackgroundCardStatus(
+      getInputValue(source, "status", "status") ?? fallback.status,
+      fallback.status || "candidate"
+    ),
+    mentionCount: clampIntegerValue(
+      getInputValue(source, "mentionCount", "mention_count") ?? fallback.mentionCount,
+      1,
+      9999,
+      fallback.mentionCount ?? 1
+    ),
+    metadata: normalizeJsonObjectValue(
+      getInputValue(source, "metadata", "metadata"),
+      fallback.metadata || {}
+    )
+  };
+}
+
+function normalizeForumBackgroundGenerationInput(payload = {}) {
+  const source = normalizeJsonObjectValue(payload, {});
+  return {
+    tabId: normalizeRequiredText(getInputValue(source, "tabId", "tab_id")),
+    generationType: normalizeForumBackgroundGenerationType(
+      getInputValue(source, "generationType", "generation_type"),
+      "posts"
+    ),
+    appearedAt: normalizeTimestampValue(
+      getInputValue(source, "appearedAt", "appeared_at"),
+      null
+    ),
+    roleTags: normalizeForumBackgroundTextArray(
+      getInputValue(source, "roleTags", "role_tags"),
+      []
+    ),
+    includeDomains: normalizeForumBackgroundTextArray(
+      getInputValue(source, "includeDomains", "include_domains"),
+      []
+    ),
+    excludeDomains: normalizeForumBackgroundTextArray(
+      getInputValue(source, "excludeDomains", "exclude_domains"),
+      []
+    ),
+    allowedSourceLayers: normalizeForumBackgroundTextArray(
+      getInputValue(source, "allowedSourceLayers", "allowed_source_layers"),
+      []
+    )
+      .map((item) => normalizeForumBackgroundSourceLayer(item, item))
+      .filter((item) => FORUM_BACKGROUND_SOURCE_LAYERS.has(item)),
+    maxCards: clampIntegerValue(
+      getInputValue(source, "maxCards", "max_cards"),
+      1,
+      18,
+      6
+    ),
+    detailLevel: normalizeForumBackgroundDetailLevel(
+      getInputValue(source, "detailLevel", "detail_level"),
+      "standard"
+    ),
+    includeArchived: Boolean(getInputValue(source, "includeArchived", "include_archived"))
+  };
+}
+
+function forumRoleTagSet(roleTags = []) {
+  return new Set(
+    normalizeForumBackgroundTextArray(roleTags, []).map((item) =>
+      String(item || "").trim().toLowerCase()
+    )
+  );
+}
+
+function forumRoleTagMatches(roleTagLookup = new Set(), candidates = []) {
+  return candidates.some((candidate) =>
+    roleTagLookup.has(String(candidate || "").trim().toLowerCase())
+  );
+}
+
+function computeForumBackgroundCardScore(card = {}, options = {}) {
+  const roleTags = forumRoleTagSet(options.roleTags || []);
+  const ageDays = options.appearedAt
+    ? Math.max(
+        0,
+        Math.floor(
+          (Date.now() - new Date(options.appearedAt).getTime()) / (24 * 60 * 60 * 1000)
+        )
+      )
+    : 9999;
+  let score = card.status === "stable" ? 52 : card.status === "approved" ? 36 : 12;
+  score += Math.min(12, card.mentionCount || 0);
+  if (card.knowledgeDomain) {
+    const includeDomains = new Set((options.includeDomains || []).map((item) => String(item).trim()));
+    const excludeDomains = new Set((options.excludeDomains || []).map((item) => String(item).trim()));
+    if (excludeDomains.has(card.knowledgeDomain)) {
+      return Number.NEGATIVE_INFINITY;
+    }
+    if (includeDomains.size && !includeDomains.has(card.knowledgeDomain)) {
+      score -= 24;
+    }
+  }
+  if (Array.isArray(options.allowedSourceLayers) && options.allowedSourceLayers.length) {
+    const allowed = new Set(options.allowedSourceLayers);
+    if (!allowed.has(card.sourceLayer)) {
+      return Number.NEGATIVE_INFINITY;
+    }
+  }
+  if (card.status === "archived" && !options.includeArchived) {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  if (forumRoleTagMatches(roleTags, ["newcomer", "new_role", "新入场角色"])) {
+    if (card.sourceLayer === "hot_topic") score += 38;
+    if (card.sourceLayer === "tab_background") score += 26;
+    if (card.sourceLayer === "recent_campaign") score += 14;
+    if (card.sourceLayer === "history_base") score -= 28;
+    if (card.status === "archived") score -= 40;
+  }
+  if (forumRoleTagMatches(roleTags, ["old_guard", "old_role", "老角色"])) {
+    if (card.sourceLayer === "history_base") score += 34;
+    if (card.sourceLayer === "observable_timeline") score += 18;
+    if (card.status === "archived") score += 22;
+    if (card.status === "stable") score += 12;
+  }
+  if (forumRoleTagMatches(roleTags, ["worldbook_seed", "worldbook_role", "世界书种子型"])) {
+    if (["history_base", "recent_campaign", "observable_timeline"].includes(card.sourceLayer)) {
+      score += 24;
+    }
+    if (card.sourceLayer === "hot_topic") {
+      score -= 12;
+    }
+  }
+  if (forumRoleTagMatches(roleTags, ["schedule_tracker", "行程状态型"])) {
+    if (card.sourceLayer === "observable_timeline") score += 40;
+    if (["schedule_timeline", "workload_state", "career_stage"].includes(card.knowledgeDomain)) {
+      score += 26;
+    }
+  }
+  if (forumRoleTagMatches(roleTags, ["career_fan", "事业粉"])) {
+    if (["recent_campaign", "observable_timeline"].includes(card.sourceLayer)) {
+      score += 30;
+    }
+    if (["career_stage", "recent_tour", "performance_history", "workload_state"].includes(card.knowledgeDomain)) {
+      score += 20;
+    }
+  }
+  if (forumRoleTagMatches(roleTags, ["cp_digger", "cp_fan", "CP深挖型"])) {
+    if (["hot_topic", "tab_background"].includes(card.sourceLayer)) {
+      score += 24;
+    }
+    if (["relationship_pattern", "fan_discourse", "hot_topic_event"].includes(card.knowledgeDomain)) {
+      score += 22;
+    }
+    if (["community_speculation", "interpretation_frame"].includes(card.truthLevel)) {
+      score += 14;
+    }
+  }
+  if (forumRoleTagMatches(roleTags, ["fact_checker", "考据型角色"])) {
+    if (card.truthLevel === "worldbook_fact") score += 28;
+    if (card.sourceLayer === "history_base") score += 22;
+  }
+
+  if (ageDays <= 7) {
+    if (card.sourceLayer === "hot_topic") score += 18;
+    if (card.sourceLayer === "tab_background") score += 12;
+    if (card.sourceLayer === "history_base") score -= 34;
+    if (card.status === "archived") score -= 56;
+  } else if (ageDays <= 30) {
+    if (card.sourceLayer === "recent_campaign") score += 12;
+    if (card.sourceLayer === "history_base") score -= 12;
+    if (card.status === "archived") score -= 22;
+  } else if (ageDays >= 180) {
+    if (card.sourceLayer === "history_base") score += 16;
+    if (card.status === "archived") score += 14;
+  }
+
+  if (card.truthLevel === "worldbook_fact") score += 8;
+  if (card.truthLevel === "tab_setting") score += 6;
+  if (card.truthLevel === "community_speculation") score -= 2;
+  return score;
+}
+
+function selectForumBackgroundCards(cards = [], options = {}) {
+  const requestOptions = normalizeJsonObjectValue(options, {});
+  return (Array.isArray(cards) ? cards : [])
+    .filter((card) => {
+      const status = normalizeForumBackgroundCardStatus(card.status);
+      if (status === "candidate") {
+        return false;
+      }
+      if (status === "archived" && !requestOptions.includeArchived) {
+        return false;
+      }
+      return ["approved", "stable", "archived"].includes(status);
+    })
+    .map((card) => ({
+      card,
+      score: computeForumBackgroundCardScore(card, requestOptions)
+    }))
+    .filter((item) => Number.isFinite(item.score))
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      if (left.card.status !== right.card.status) {
+        return left.card.status === "stable" ? -1 : 1;
+      }
+      return new Date(right.card.updatedAt || 0).getTime() - new Date(left.card.updatedAt || 0).getTime();
+    })
+    .slice(0, Math.max(1, requestOptions.maxCards || 6))
+    .map((item) => item.card);
+}
+
+function buildForumBackgroundFallbackReferenceText(sourceBundle = {}, detailLevel = "standard") {
+  const maxLength = detailLevel === "full" ? 320 : detailLevel === "brief" ? 120 : 220;
+  const sources = Array.isArray(sourceBundle.sources) ? sourceBundle.sources : [];
+  if (!sources.length) {
+    return "";
+  }
+  return [
+    "当前暂无已确认背景卡，先回退到来源摘要：",
+    ...sources.map(
+      (source, index) =>
+        `${index + 1}. [${formatForumBackgroundSourceLayerLabel(source.sourceLayer)}] ${
+          source.sourceTitle || "未命名来源"
+        }\n${truncateForumBackgroundText(source.content, maxLength)}`
+    )
+  ].join("\n");
+}
+
+function buildForumBackgroundCardsPromptText(cards = [], detailLevel = "standard") {
+  const maxLength = detailLevel === "full" ? 240 : detailLevel === "brief" ? 110 : 180;
+  if (!cards.length) {
+    return "";
+  }
+  return [
+    "已确认的论坛背景卡（只能作为角色隐性认知使用，不要直说“根据背景卡”）：",
+    ...cards.map((card, index) => {
+      const parts = [
+        `${index + 1}. [${formatForumBackgroundSourceLayerLabel(card.sourceLayer)}｜${formatForumBackgroundTruthLevelLabel(
+          card.truthLevel
+        )}] ${card.summary}`,
+        card.detailText ? `展开：${truncateForumBackgroundText(card.detailText, maxLength)}` : "",
+        card.knowledgeDomain ? `知识域：${card.knowledgeDomain}` : "",
+        card.sourceExcerpt ? `原文片段：${truncateForumBackgroundText(card.sourceExcerpt, 90)}` : ""
+      ].filter(Boolean);
+      return parts.join("\n");
+    })
+  ].join("\n");
+}
+
+function buildForumUnknownBoundaryList(cards = [], roleTags = []) {
+  const list = [];
+  const resolvedCards = Array.isArray(cards) ? cards : [];
+  if (resolvedCards.some((card) => card.truthLevel === "community_speculation")) {
+    list.push("涉及社区推测的内容只能写成“有人猜”“部分人会往这边想”，不能写成已经确认的事实。");
+  }
+  if (resolvedCards.some((card) => card.truthLevel === "interpretation_frame")) {
+    list.push("解释框架不是唯一结论，角色可以拿来理解现象，但不能说成只有这一种原因。");
+  }
+  if (resolvedCards.some((card) => card.truthLevel === "community_viewpoint")) {
+    list.push("社区观点只代表一部分论坛用户，不代表全体共识。");
+  }
+  const roleTagLookup = forumRoleTagSet(roleTags);
+  if (
+    forumRoleTagMatches(roleTagLookup, ["cp_digger", "CP深挖型"]) &&
+    resolvedCards.some(
+      (card) =>
+        ["community_speculation", "interpretation_frame"].includes(card.truthLevel) ||
+        ["relationship_pattern", "fan_discourse"].includes(card.knowledgeDomain)
+    )
+  ) {
+    list.push("即使是 CP 深挖型角色，也不知道关系猜测是否真实成立，只能表现为代入、脑补和试探。");
+  }
+  return Array.from(new Set(list));
+}
+
+function buildForumUnknownBoundaryText(cards = [], roleTags = []) {
+  const lines = buildForumUnknownBoundaryList(cards, roleTags);
+  if (!lines.length) {
+    return "";
+  }
+  return ["边界提醒：", ...lines.map((line, index) => `${index + 1}. ${line}`)].join("\n");
+}
+
+function buildForumRoleKnowledgePackText(pack = {}, detailLevel = "standard") {
+  const cards = Array.isArray(pack.cards) ? pack.cards : [];
+  if (!cards.length) {
+    return "";
+  }
+  return [
+    `当前角色知识包：${String(pack.label || "论坛角色").trim()}`,
+    `知识特点：${String(pack.description || "").trim() || "按已确认背景卡控制知道什么、不知道什么。"}`,
+    ...cards.map(
+      (card, index) =>
+        `${index + 1}. ${card.summary}${
+          detailLevel === "brief" ? "" : `（${formatForumBackgroundSourceLayerLabel(card.sourceLayer)}）`
+        }`
+    )
+  ].join("\n");
+}
+
+function buildForumRoleBucketText(buckets = [], detailLevel = "standard") {
+  const resolvedBuckets = Array.isArray(buckets) ? buckets.filter(Boolean) : [];
+  if (!resolvedBuckets.length) {
+    return "";
+  }
+  const lines = ["论坛角色知识分层建议："];
+  resolvedBuckets.forEach((bucket, bucketIndex) => {
+    const cards = Array.isArray(bucket.cards) ? bucket.cards : [];
+    if (!cards.length) {
+      return;
+    }
+    lines.push(
+      `${bucketIndex + 1}. ${bucket.label}：${bucket.description || "围绕不同信息量展开讨论。"}`
+    );
+    cards.forEach((card, index) => {
+      lines.push(
+        `   - ${index + 1}. ${card.summary}${
+          detailLevel === "brief" ? "" : `（${formatForumBackgroundSourceLayerLabel(card.sourceLayer)}）`
+        }`
+      );
+    });
+  });
+  return lines.join("\n");
+}
+
+function dedupeForumBackgroundCards(cards = []) {
+  const seen = new Set();
+  return (Array.isArray(cards) ? cards : []).filter((card) => {
+    const id = String(card?.id || "").trim();
+    if (!id || seen.has(id)) {
+      return false;
+    }
+    seen.add(id);
+    return true;
+  });
+}
+
+function buildDefaultForumRoleBuckets(cards = [], requestInput = {}) {
+  const detailLevel = normalizeForumBackgroundDetailLevel(requestInput.detailLevel, "standard");
+  const base = {
+    appearedAt: requestInput.appearedAt || null,
+    detailLevel
+  };
+  return [
+    {
+      key: "newcomer",
+      label: "新入场角色",
+      description: "只知道热点和少量页签背景，更容易做当下判断。",
+      cards: selectForumBackgroundCards(cards, {
+        ...base,
+        roleTags: ["newcomer"],
+        maxCards: 4
+      })
+    },
+    {
+      key: "old_guard",
+      label: "老角色",
+      description: "知道更多历史和长期语境，会主动做前后对比。",
+      cards: selectForumBackgroundCards(cards, {
+        ...base,
+        roleTags: ["old_guard"],
+        maxCards: 6,
+        includeArchived: true
+      })
+    },
+    {
+      key: "schedule_tracker",
+      label: "行程状态型",
+      description: "更会用公开行程解释状态、工作量和表现起伏。",
+      cards: selectForumBackgroundCards(cards, {
+        ...base,
+        roleTags: ["schedule_tracker"],
+        maxCards: 5
+      })
+    },
+    {
+      key: "career_fan",
+      label: "事业粉",
+      description: "关注作品、舞台和近期事业线，会主动看近期主线。",
+      cards: selectForumBackgroundCards(cards, {
+        ...base,
+        roleTags: ["career_fan"],
+        maxCards: 5
+      })
+    },
+    {
+      key: "cp_digger",
+      label: "CP 深挖型",
+      description: "更容易围绕关系模式和热点推理延伸，但边界感要保留。",
+      cards: selectForumBackgroundCards(cards, {
+        ...base,
+        roleTags: ["cp_digger"],
+        maxCards: 5
+      })
+    }
+  ].filter((bucket) => bucket.cards.length);
+}
+
+function buildForumGenerationContextPayload(sourceBundle = {}, cards = [], requestInput = {}) {
+  const resolvedCards = dedupeForumBackgroundCards(cards);
+  const roleTags = normalizeForumBackgroundTextArray(requestInput.roleTags || [], []);
+  const roleTagLookup = forumRoleTagSet(roleTags);
+  const hasExplicitRolePack = roleTags.length > 0;
+  const detailLevel = normalizeForumBackgroundDetailLevel(requestInput.detailLevel, "standard");
+  const singlePack = hasExplicitRolePack
+    ? {
+        label:
+          roleTags.map((tag) => formatForumBackgroundRoleLabel(tag)).join(" / ") || "论坛角色",
+        description: "后端已按角色标签、出现时间和知识层级筛过背景卡。",
+        cards: selectForumBackgroundCards(resolvedCards, {
+          ...requestInput,
+          roleTags,
+          maxCards: requestInput.maxCards || 6,
+          includeArchived:
+            Boolean(requestInput.includeArchived) ||
+            forumRoleTagMatches(roleTagLookup, ["old_guard", "old_role", "老角色"])
+        })
+      }
+    : null;
+  const roleBuckets = hasExplicitRolePack
+    ? []
+    : buildDefaultForumRoleBuckets(resolvedCards, requestInput);
+  const contextCards = hasExplicitRolePack
+    ? singlePack.cards
+    : dedupeForumBackgroundCards(roleBuckets.flatMap((bucket) => bucket.cards || []));
+  const unknownBoundaries = buildForumUnknownBoundaryList(contextCards, roleTags);
+  const fallbackReferenceText = contextCards.length
+    ? ""
+    : buildForumBackgroundFallbackReferenceText(sourceBundle, detailLevel);
+  return {
+    tab: sourceBundle.tab || null,
+    cards: contextCards,
+    roleKnowledgePack: hasExplicitRolePack ? singlePack : null,
+    roleBuckets,
+    unknownBoundaries,
+    fallbackUsed: !contextCards.length,
+    promptBlocks: {
+      backgroundCardsText: contextCards.length
+        ? buildForumBackgroundCardsPromptText(contextCards, detailLevel)
+        : fallbackReferenceText,
+      roleKnowledgeText: hasExplicitRolePack
+        ? buildForumRoleKnowledgePackText(singlePack, detailLevel)
+        : buildForumRoleBucketText(roleBuckets, detailLevel),
+      unknownBoundaryText: buildForumUnknownBoundaryText(contextCards, roleTags),
+      fallbackReferenceText
+    }
+  };
+}
+
+async function mergeForumBackgroundCandidateIntoDb(
+  db,
+  ownerId = DEFAULT_STORAGE_OWNER_ID,
+  tabId = "",
+  extractionRunId = "",
+  candidate = {}
+) {
+  const resolvedTabId = String(tabId || "").trim();
+  const normalizedCandidate = normalizeForumBackgroundCandidateInput(candidate);
+  const existing = await db.query(
+    `
+      select *
+      from forum_background_cards
+      where owner_id = $1
+        and tab_id = $2
+        and source_type = $3
+        and source_id = $4
+        and source_layer = $5
+      order by updated_at desc
+      limit 20
+    `,
+    [
+      ownerId,
+      resolvedTabId,
+      normalizedCandidate.sourceType,
+      normalizedCandidate.sourceId,
+      normalizedCandidate.sourceLayer
+    ]
+  );
+  const matchedRow =
+    existing.rows.find((row) =>
+      memoryTextsLookSimilar(row.summary || "", normalizedCandidate.summary || "") ||
+      memoryTextsLookSimilar(row.detail_text || "", normalizedCandidate.detailText || "")
+    ) || null;
+  if (matchedRow) {
+    const beforeSnapshot = createForumBackgroundCardSnapshot(matchedRow);
+    const updatedResult = await db.query(
+      `
+        update forum_background_cards
+        set source_excerpt = $4,
+            source_title = $5,
+            truth_level = $6,
+            knowledge_domain = $7,
+            summary = $8,
+            detail_text = $9,
+            suitable_roles_jsonb = $10::jsonb,
+            keywords_jsonb = $11::jsonb,
+            confidence = $12,
+            mention_count = forum_background_cards.mention_count + $13,
+            last_seen_at = now(),
+            extraction_run_id = $14,
+            metadata = $15::jsonb,
+            updated_at = now()
+        where owner_id = $1
+          and id = $2
+          and tab_id = $3
+        returning *
+      `,
+      [
+        ownerId,
+        String(matchedRow.id || "").trim(),
+        resolvedTabId,
+        choosePreferredMemoryText(matchedRow.source_excerpt, normalizedCandidate.sourceExcerpt),
+        choosePreferredMemoryText(matchedRow.source_title, normalizedCandidate.sourceTitle),
+        normalizedCandidate.truthLevel,
+        normalizedCandidate.knowledgeDomain,
+        choosePreferredMemoryText(matchedRow.summary, normalizedCandidate.summary),
+        choosePreferredMemoryText(matchedRow.detail_text, normalizedCandidate.detailText),
+        stringifyJsonb(
+          mergeUniqueJsonArray(
+            normalizeForumBackgroundTextArray(matchedRow.suitable_roles_jsonb, []),
+            normalizedCandidate.suitableRoles
+          )
+        ),
+        stringifyJsonb(
+          mergeUniqueJsonArray(
+            normalizeForumBackgroundTextArray(matchedRow.keywords_jsonb, []),
+            normalizedCandidate.keywords
+          )
+        ),
+        Math.max(normalizeConfidenceValue(matchedRow.confidence, 0.7), normalizedCandidate.confidence),
+        normalizedCandidate.mentionCount,
+        String(extractionRunId || "").trim(),
+        stringifyJsonb({
+          ...normalizeJsonObjectValue(matchedRow.metadata, {}),
+          ...normalizedCandidate.metadata
+        })
+      ]
+    );
+    const updatedRow = updatedResult.rows[0] || matchedRow;
+    await createForumBackgroundCardEvent(db, {
+      ownerId,
+      cardId: updatedRow.id,
+      tabId: resolvedTabId,
+      eventType: "reinforced",
+      actorType: "frontend",
+      note: "候选背景卡命中相似旧卡，已执行强化。",
+      beforeSnapshot,
+      afterSnapshot: createForumBackgroundCardSnapshot(updatedRow),
+      payload: {
+        extractionRunId,
+        candidate: normalizedCandidate
+      }
+    });
+    return {
+      action: "reinforced",
+      card: mapForumBackgroundCardRow(updatedRow)
+    };
+  }
+
+  const nextId = randomUUID();
+  const inserted = await db.query(
+    `
+      insert into forum_background_cards (
+        owner_id,
+        id,
+        tab_id,
+        source_type,
+        source_id,
+        source_title,
+        source_layer,
+        source_excerpt,
+        truth_level,
+        knowledge_domain,
+        summary,
+        detail_text,
+        suitable_roles_jsonb,
+        keywords_jsonb,
+        confidence,
+        status,
+        mention_count,
+        first_seen_at,
+        last_seen_at,
+        extraction_run_id,
+        metadata,
+        created_at,
+        updated_at
+      )
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15, 'candidate', $16, now(), now(), $17, $18::jsonb, now(), now())
+      returning *
+    `,
+    [
+      ownerId,
+      nextId,
+      resolvedTabId,
+      normalizedCandidate.sourceType,
+      normalizedCandidate.sourceId,
+      normalizedCandidate.sourceTitle,
+      normalizedCandidate.sourceLayer,
+      normalizedCandidate.sourceExcerpt,
+      normalizedCandidate.truthLevel,
+      normalizedCandidate.knowledgeDomain,
+      normalizedCandidate.summary,
+      normalizedCandidate.detailText,
+      stringifyJsonb(normalizedCandidate.suitableRoles),
+      stringifyJsonb(normalizedCandidate.keywords),
+      normalizedCandidate.confidence,
+      normalizedCandidate.mentionCount,
+      String(extractionRunId || "").trim(),
+      stringifyJsonb(normalizedCandidate.metadata)
+    ]
+  );
+  const insertedRow = inserted.rows[0];
+  await createForumBackgroundCardEvent(db, {
+    ownerId,
+    cardId: insertedRow.id,
+    tabId: resolvedTabId,
+    eventType: "extracted",
+    actorType: "frontend",
+    note: "AI 候选背景卡已写入待审核列表。",
+    afterSnapshot: createForumBackgroundCardSnapshot(insertedRow),
+    payload: {
+      extractionRunId,
+      candidate: normalizedCandidate
+    }
+  });
+  return {
+    action: "created",
+    card: mapForumBackgroundCardRow(insertedRow)
+  };
+}
+
 app.use(
   cors({
     origin: true
@@ -5405,8 +6998,11 @@ app.put("/api/storage/:key", async (request, response) => {
       : body.value;
   const source = String(body.source || "api").trim() || "api";
 
+  const client = await pool.connect();
   try {
-    const result = await pool.query(
+    await client.query("begin");
+    const sanitizedValueJson = sanitizeJsonbValue(valueJson);
+    const result = await client.query(
       `
         insert into storage_records (key, value_json, version, updated_at, source)
         values ($1, $2::jsonb, 1, now(), $3)
@@ -5417,16 +7013,31 @@ app.put("/api/storage/:key", async (request, response) => {
               source = excluded.source
         returning key, value_json, version, updated_at, source
       `,
-      [key, JSON.stringify(valueJson), source]
+      [key, JSON.stringify(sanitizedValueJson), source]
     );
+    const dataTableWrites = [];
+    await mirrorStorageItemToBusinessTables(
+      client,
+      {
+        key,
+        valueJson: sanitizedValueJson,
+        source
+      },
+      dataTableWrites
+    );
+    await client.query("commit");
     response.json({
       ok: true,
-      record: result.rows[0]
+      record: result.rows[0],
+      dataTableWrites
     });
   } catch (error) {
+    await client.query("rollback");
     response
       .status(500)
       .json(createJsonError("Failed to save storage record.", error?.message));
+  } finally {
+    client.release();
   }
 });
 
@@ -5566,6 +7177,649 @@ app.post("/api/storage/import", async (request, response) => {
       .json(createJsonError("Failed to import storage payload.", error?.message));
   } finally {
     client.release();
+  }
+});
+
+function normalizeChatSyncReason(value = "", fallback = "mutation") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["mutation", "startup_retry", "pagehide", "manual"].includes(normalized)
+    ? normalized
+    : fallback;
+}
+
+function normalizeChatSyncUpserts(value) {
+  const items = Array.isArray(value) ? value : [];
+  const upsertsByConversationId = new Map();
+  items.forEach((item) => {
+    const source = item && typeof item === "object" ? item : {};
+    const conversation = normalizeSnapshotObject(source.conversation);
+    const conversationId = toStorageText(conversation.id);
+    if (!conversationId) {
+      return;
+    }
+    upsertsByConversationId.set(conversationId, {
+      conversation: {
+        ...conversation,
+        id: conversationId
+      },
+      lastMutatedAt:
+        Number(source.lastMutatedAt) ||
+        Number(conversation.lastMutatedAt) ||
+        Number(conversation.updatedAt) ||
+        0
+    });
+  });
+  return Array.from(upsertsByConversationId.values());
+}
+
+function normalizeChatSyncDeletes(value) {
+  const items = Array.isArray(value) ? value : [];
+  const deletesByConversationId = new Map();
+  items.forEach((item) => {
+    const source = item && typeof item === "object" ? item : {};
+    const conversationId = toStorageText(source.conversationId || source.id);
+    if (!conversationId) {
+      return;
+    }
+    deletesByConversationId.set(conversationId, {
+      conversationId,
+      deletedAt: Number(source.deletedAt) || 0
+    });
+  });
+  return Array.from(deletesByConversationId.values());
+}
+
+app.post("/api/chat/sync", async (request, response) => {
+  const body = request.body && typeof request.body === "object" ? request.body : {};
+  const ownerId = toStorageText(body.ownerId, DEFAULT_STORAGE_OWNER_ID);
+  const reason = normalizeChatSyncReason(body.reason);
+  const upserts = normalizeChatSyncUpserts(body.upserts);
+  const deletes = normalizeChatSyncDeletes(body.deletes);
+
+  if (!upserts.length && !deletes.length) {
+    response.status(400).json(createJsonError("At least one chat upsert or delete is required."));
+    return;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    let deletedConversationCount = 0;
+    let upsertedConversationCount = 0;
+    let writtenMessageCount = 0;
+
+    for (const entry of deletes) {
+      await client.query("delete from chat_messages where owner_id = $1 and conversation_id = $2", [
+        ownerId,
+        entry.conversationId
+      ]);
+      const deletedConversationResult = await client.query(
+        "delete from chat_conversations where owner_id = $1 and id = $2",
+        [ownerId, entry.conversationId]
+      );
+      deletedConversationCount += Number(deletedConversationResult.rowCount) || 0;
+    }
+
+    for (const entry of upserts) {
+      const result = await upsertChatConversationSnapshot(client, entry.conversation, ownerId, {
+        clientUpdatedAt: entry.lastMutatedAt
+      });
+      if (!result?.conversationId) {
+        continue;
+      }
+      upsertedConversationCount += 1;
+      writtenMessageCount += Number(result.messageCount) || 0;
+    }
+
+    await client.query("commit");
+    response.json({
+      ok: true,
+      ownerId,
+      reason,
+      summary: {
+        deletedConversationCount,
+        upsertedConversationCount,
+        writtenMessageCount
+      }
+    });
+  } catch (error) {
+    await client.query("rollback");
+    response.status(500).json(createJsonError("Failed to sync chat conversations.", error?.message));
+  } finally {
+    client.release();
+  }
+});
+
+app.get("/api/forum/background/source-bundle", async (request, response) => {
+  if (!pool) {
+    response.status(500).json(createJsonError("DATABASE_URL is missing. API routes are unavailable."));
+    return;
+  }
+  const tabId = String(request.query.tabId || request.query.tab_id || "").trim();
+  if (!tabId) {
+    response.status(400).json(createJsonError("tabId is required."));
+    return;
+  }
+  try {
+    const bundle = await buildForumBackgroundSourceBundle(pool, DEFAULT_STORAGE_OWNER_ID, tabId);
+    if (!bundle) {
+      response.status(404).json(createJsonError("Forum tab was not found."));
+      return;
+    }
+    response.json({
+      ok: true,
+      tab: bundle.tab,
+      sources: bundle.sources,
+      summaryApiEnabled: bundle.summaryApi.enabled,
+      summaryApiConfigId: bundle.summaryApi.configId,
+      latestRun: bundle.latestRun,
+      bundleHash: bundle.bundleHash
+    });
+  } catch (error) {
+    response
+      .status(500)
+      .json(createJsonError("Failed to build forum background source bundle.", error?.message));
+  }
+});
+
+app.post("/api/forum/background/extraction-runs", async (request, response) => {
+  if (!pool) {
+    response.status(500).json(createJsonError("DATABASE_URL is missing. API routes are unavailable."));
+    return;
+  }
+  const body = normalizeJsonObjectValue(request.body, {});
+  const tabId = normalizeRequiredText(getInputValue(body, "tabId", "tab_id"));
+  if (!tabId) {
+    response.status(400).json(createJsonError("tabId is required."));
+    return;
+  }
+  try {
+    const sourceBundle =
+      normalizeJsonObjectValue(body.sourceBundle || body.source_bundle, null) ||
+      (await buildForumBackgroundSourceBundle(pool, DEFAULT_STORAGE_OWNER_ID, tabId));
+    if (!sourceBundle?.tab?.id) {
+      response.status(404).json(createJsonError("Forum tab was not found."));
+      return;
+    }
+    const runId = randomUUID();
+    await pool.query(
+      `
+        insert into forum_background_extraction_runs (
+          owner_id,
+          id,
+          tab_id,
+          status,
+          trigger_reason,
+          source_bundle_jsonb,
+          source_bundle_hash,
+          hot_topic_hash,
+          candidate_count,
+          metadata,
+          created_at,
+          updated_at
+        )
+        values ($1, $2, $3, 'pending_submission', $4, $5::jsonb, $6, $7, 0, $8::jsonb, now(), now())
+      `,
+      [
+        DEFAULT_STORAGE_OWNER_ID,
+        runId,
+        sourceBundle.tab.id,
+        String(body.triggerReason || body.trigger_reason || "manual_editor_extract").trim() ||
+          "manual_editor_extract",
+        stringifyJsonb(sourceBundle),
+        String(body.sourceBundleHash || body.source_bundle_hash || sourceBundle.bundleHash || "").trim(),
+        hashMemoryText(
+          JSON.stringify({
+            tabId: sourceBundle.tab.id,
+            hotTopic: sourceBundle.tab.hotTopic || ""
+          })
+        ),
+        stringifyJsonb(
+          normalizeJsonObjectValue(body.metadata, {
+            actorType: "frontend"
+          })
+        )
+      ]
+    );
+    const created = await loadForumBackgroundLatestRun(pool, DEFAULT_STORAGE_OWNER_ID, sourceBundle.tab.id);
+    response.json({
+      ok: true,
+      run: created
+    });
+  } catch (error) {
+    response
+      .status(500)
+      .json(createJsonError("Failed to create forum background extraction run.", error?.message));
+  }
+});
+
+app.post("/api/forum/background/extraction-runs/:id/candidates", async (request, response) => {
+  if (!pool) {
+    response.status(500).json(createJsonError("DATABASE_URL is missing. API routes are unavailable."));
+    return;
+  }
+  const runId = String(request.params.id || "").trim();
+  if (!runId) {
+    response.status(400).json(createJsonError("Extraction run id is required."));
+    return;
+  }
+  const body = normalizeJsonObjectValue(request.body, {});
+  const rawItems = Array.isArray(body.items)
+    ? body.items
+    : Array.isArray(body.candidates)
+      ? body.candidates
+      : Array.isArray(body)
+        ? body
+        : [];
+  if (!rawItems.length) {
+    response.status(400).json(createJsonError('Request body must include an "items" array.'));
+    return;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const runResult = await client.query(
+      `
+        select *
+        from forum_background_extraction_runs
+        where owner_id = $1 and id = $2
+        limit 1
+      `,
+      [DEFAULT_STORAGE_OWNER_ID, runId]
+    );
+    if (!runResult.rows.length) {
+      await client.query("rollback");
+      response.status(404).json(createJsonError("Extraction run was not found."));
+      return;
+    }
+    const run = mapForumBackgroundExtractionRunRow(runResult.rows[0]);
+    const sourceBundle = normalizeJsonObjectValue(run.sourceBundle, {});
+    const sourceLookup = new Map(
+      (Array.isArray(sourceBundle.sources) ? sourceBundle.sources : []).map((item) => [
+        `${String(item.sourceType || "").trim()}::${String(item.sourceId || "").trim()}`,
+        item
+      ])
+    );
+    const validationErrors = [];
+    const normalizedItems = rawItems.map((item, index) => {
+      const sourceType = normalizeForumBackgroundSourceType(
+        getInputValue(item, "sourceType", "source_type"),
+        "worldbook_entry"
+      );
+      const sourceId = normalizeRequiredText(getInputValue(item, "sourceId", "source_id"));
+      const sourceMeta = sourceLookup.get(`${sourceType}::${sourceId}`) || {};
+      const normalized = normalizeForumBackgroundCandidateInput(item, {
+        sourceType,
+        sourceId,
+        sourceTitle: sourceMeta.sourceTitle || "",
+        sourceLayer: sourceMeta.sourceLayer || "tab_background"
+      });
+      if (!normalized.sourceType || !normalized.sourceId || !normalized.sourceExcerpt || !normalized.truthLevel) {
+        validationErrors.push({
+          index,
+          message: "候选背景卡缺少 source_type / source_id / source_excerpt / truth_level。"
+        });
+      }
+      if (normalized.status !== "candidate") {
+        validationErrors.push({
+          index,
+          message: "候选背景卡提交时 status 只能为 candidate。"
+        });
+      }
+      if (normalized.truthLevel === "community_speculation" && normalized.status === "stable") {
+        validationErrors.push({
+          index,
+          message: "community_speculation 不能直接以 stable 状态提交。"
+        });
+      }
+      return normalized;
+    });
+    if (validationErrors.length) {
+      await client.query("rollback");
+      response.status(400).json({
+        ...createJsonError("Invalid forum background card candidates."),
+        validationErrors
+      });
+      return;
+    }
+    const mergeResults = [];
+    for (const item of normalizedItems) {
+      mergeResults.push(
+        await mergeForumBackgroundCandidateIntoDb(
+          client,
+          DEFAULT_STORAGE_OWNER_ID,
+          run.tabId,
+          runId,
+          item
+        )
+      );
+    }
+    const createdCount = mergeResults.filter((item) => item.action === "created").length;
+    const reinforcedCount = mergeResults.filter((item) => item.action === "reinforced").length;
+    await client.query(
+      `
+        update forum_background_extraction_runs
+        set status = 'completed',
+            candidate_count = $3,
+            submitted_at = now(),
+            completed_at = now(),
+            updated_at = now()
+        where owner_id = $1 and id = $2
+      `,
+      [DEFAULT_STORAGE_OWNER_ID, runId, mergeResults.length]
+    );
+    const updatedRunResult = await client.query(
+      `
+        select *
+        from forum_background_extraction_runs
+        where owner_id = $1 and id = $2
+        limit 1
+      `,
+      [DEFAULT_STORAGE_OWNER_ID, runId]
+    );
+    await client.query("commit");
+    response.json({
+      ok: true,
+      run: updatedRunResult.rows.length
+        ? mapForumBackgroundExtractionRunRow(updatedRunResult.rows[0])
+        : run,
+      results: mergeResults,
+      summary: {
+        requestedCount: normalizedItems.length,
+        createdCount,
+        reinforcedCount
+      }
+    });
+  } catch (error) {
+    await client.query("rollback");
+    response
+      .status(500)
+      .json(createJsonError("Failed to save forum background card candidates.", error?.message));
+  } finally {
+    client.release();
+  }
+});
+
+app.get("/api/forum/background/cards", async (request, response) => {
+  if (!pool) {
+    response.status(500).json(createJsonError("DATABASE_URL is missing. API routes are unavailable."));
+    return;
+  }
+  const tabId = String(request.query.tabId || request.query.tab_id || "").trim();
+  if (!tabId) {
+    response.status(400).json(createJsonError("tabId is required."));
+    return;
+  }
+  const statuses = Array.from(
+    new Set(
+      String(request.query.status || "")
+        .split(",")
+        .map((item) => normalizeForumBackgroundCardStatus(item, ""))
+        .filter((item) => FORUM_BACKGROUND_CARD_STATUSES.has(item))
+    )
+  );
+  try {
+    const params = [DEFAULT_STORAGE_OWNER_ID, tabId];
+    const clauses = ["owner_id = $1", "tab_id = $2"];
+    if (statuses.length) {
+      params.push(statuses);
+      clauses.push(`status = any($${params.length}::text[])`);
+    }
+    const result = await pool.query(
+      `
+        select *
+        from forum_background_cards
+        where ${clauses.join(" and ")}
+        order by
+          case status
+            when 'candidate' then 0
+            when 'approved' then 1
+            when 'stable' then 2
+            when 'worldbook_candidate' then 3
+            when 'archived' then 4
+            else 9
+          end asc,
+          updated_at desc,
+          created_at desc
+      `,
+      params
+    );
+    const cards = result.rows.map(mapForumBackgroundCardRow);
+    response.json({
+      ok: true,
+      cards,
+      counts: cards.reduce((accumulator, card) => {
+        accumulator[card.status] = (accumulator[card.status] || 0) + 1;
+        return accumulator;
+      }, {})
+    });
+  } catch (error) {
+    response
+      .status(500)
+      .json(createJsonError("Failed to load forum background cards.", error?.message));
+  }
+});
+
+app.patch("/api/forum/background/cards/:id", async (request, response) => {
+  if (!pool) {
+    response.status(500).json(createJsonError("DATABASE_URL is missing. API routes are unavailable."));
+    return;
+  }
+  const cardId = String(request.params.id || "").trim();
+  if (!cardId) {
+    response.status(400).json(createJsonError("Card id is required."));
+    return;
+  }
+  const body = normalizeJsonObjectValue(request.body, {});
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const existingResult = await client.query(
+      `
+        select *
+        from forum_background_cards
+        where owner_id = $1 and id = $2
+        limit 1
+      `,
+      [DEFAULT_STORAGE_OWNER_ID, cardId]
+    );
+    if (!existingResult.rows.length) {
+      await client.query("rollback");
+      response.status(404).json(createJsonError("Forum background card was not found."));
+      return;
+    }
+    const existingRow = existingResult.rows[0];
+    const currentCard = mapForumBackgroundCardRow(existingRow);
+    const nextStatus =
+      Object.prototype.hasOwnProperty.call(body, "status") ||
+      Object.prototype.hasOwnProperty.call(body, "status_text")
+        ? normalizeForumBackgroundCardStatus(body.status || body.status_text, currentCard.status)
+        : currentCard.status;
+    if (
+      nextStatus === "stable" &&
+      currentCard.truthLevel === "community_speculation" &&
+      currentCard.status === "candidate"
+    ) {
+      await client.query("rollback");
+      response
+        .status(400)
+        .json(createJsonError("community_speculation 卡不能从 candidate 直接进入 stable。"));
+      return;
+    }
+    const nextCard = {
+      ...currentCard,
+      sourceExcerpt:
+        Object.prototype.hasOwnProperty.call(body, "sourceExcerpt") ||
+        Object.prototype.hasOwnProperty.call(body, "source_excerpt")
+          ? normalizeRequiredText(getInputValue(body, "sourceExcerpt", "source_excerpt"))
+          : currentCard.sourceExcerpt,
+      truthLevel:
+        Object.prototype.hasOwnProperty.call(body, "truthLevel") ||
+        Object.prototype.hasOwnProperty.call(body, "truth_level")
+          ? normalizeForumBackgroundTruthLevel(
+              getInputValue(body, "truthLevel", "truth_level"),
+              currentCard.truthLevel
+            )
+          : currentCard.truthLevel,
+      knowledgeDomain:
+        Object.prototype.hasOwnProperty.call(body, "knowledgeDomain") ||
+        Object.prototype.hasOwnProperty.call(body, "knowledge_domain")
+          ? normalizeRequiredText(getInputValue(body, "knowledgeDomain", "knowledge_domain"))
+          : currentCard.knowledgeDomain,
+      summary: Object.prototype.hasOwnProperty.call(body, "summary")
+        ? normalizeRequiredText(body.summary)
+        : currentCard.summary,
+      detailText:
+        Object.prototype.hasOwnProperty.call(body, "detailText") ||
+        Object.prototype.hasOwnProperty.call(body, "detail_text")
+          ? normalizeRequiredText(getInputValue(body, "detailText", "detail_text"))
+          : currentCard.detailText,
+      suitableRoles:
+        Object.prototype.hasOwnProperty.call(body, "suitableRoles") ||
+        Object.prototype.hasOwnProperty.call(body, "suitable_roles")
+          ? normalizeForumBackgroundTextArray(
+              getInputValue(body, "suitableRoles", "suitable_roles"),
+              currentCard.suitableRoles
+            )
+          : currentCard.suitableRoles,
+      keywords: Object.prototype.hasOwnProperty.call(body, "keywords")
+        ? normalizeForumBackgroundTextArray(body.keywords, currentCard.keywords)
+        : currentCard.keywords,
+      confidence: Object.prototype.hasOwnProperty.call(body, "confidence")
+        ? normalizeConfidenceValue(body.confidence, currentCard.confidence)
+        : currentCard.confidence,
+      status: nextStatus,
+      metadata: {
+        ...normalizeJsonObjectValue(existingRow.metadata, {}),
+        ...normalizeJsonObjectValue(body.metadata, {})
+      }
+    };
+    const beforeSnapshot = createForumBackgroundCardSnapshot(existingRow);
+    const updateResult = await client.query(
+      `
+        update forum_background_cards
+        set source_excerpt = $3,
+            truth_level = $4,
+            knowledge_domain = $5,
+            summary = $6,
+            detail_text = $7,
+            suitable_roles_jsonb = $8::jsonb,
+            keywords_jsonb = $9::jsonb,
+            confidence = $10,
+            status = $11,
+            approved_at = case when $11 in ('approved', 'stable', 'worldbook_candidate') then coalesce(approved_at, now()) else approved_at end,
+            archived_at = case when $11 = 'archived' then now() when $11 <> 'archived' then null else archived_at end,
+            metadata = $12::jsonb,
+            updated_at = now()
+        where owner_id = $1 and id = $2
+        returning *
+      `,
+      [
+        DEFAULT_STORAGE_OWNER_ID,
+        cardId,
+        nextCard.sourceExcerpt,
+        nextCard.truthLevel,
+        nextCard.knowledgeDomain,
+        nextCard.summary,
+        nextCard.detailText,
+        stringifyJsonb(nextCard.suitableRoles),
+        stringifyJsonb(nextCard.keywords),
+        nextCard.confidence,
+        nextCard.status,
+        stringifyJsonb(nextCard.metadata)
+      ]
+    );
+    const updatedRow = updateResult.rows[0];
+    const eventType =
+      currentCard.status !== nextCard.status
+        ? nextCard.status === "approved"
+          ? "approved"
+          : nextCard.status === "stable"
+            ? "stabilized"
+            : nextCard.status === "archived"
+              ? "archived"
+              : nextCard.status === "worldbook_candidate"
+                ? "marked_worldbook_candidate"
+                : "restored"
+        : "edited";
+    await createForumBackgroundCardEvent(client, {
+      ownerId: DEFAULT_STORAGE_OWNER_ID,
+      cardId,
+      tabId: currentCard.tabId,
+      eventType,
+      actorType: String(body.actorType || body.actor_type || "frontend").trim() || "frontend",
+      note: String(body.note || "").trim(),
+      beforeSnapshot,
+      afterSnapshot: createForumBackgroundCardSnapshot(updatedRow),
+      payload: {
+        patch: body
+      }
+    });
+    await client.query("commit");
+    response.json({
+      ok: true,
+      card: mapForumBackgroundCardRow(updatedRow)
+    });
+  } catch (error) {
+    await client.query("rollback");
+    response
+      .status(500)
+      .json(createJsonError("Failed to update forum background card.", error?.message));
+  } finally {
+    client.release();
+  }
+});
+
+app.post("/api/forum/generation-context", async (request, response) => {
+  if (!pool) {
+    response.status(500).json(createJsonError("DATABASE_URL is missing. API routes are unavailable."));
+    return;
+  }
+  const input = normalizeForumBackgroundGenerationInput(request.body);
+  if (!input.tabId) {
+    response.status(400).json(createJsonError("tabId is required."));
+    return;
+  }
+  try {
+    const sourceBundle = await buildForumBackgroundSourceBundle(
+      pool,
+      DEFAULT_STORAGE_OWNER_ID,
+      input.tabId
+    );
+    if (!sourceBundle) {
+      response.status(404).json(createJsonError("Forum tab was not found."));
+      return;
+    }
+    const cardResult = await pool.query(
+      `
+        select *
+        from forum_background_cards
+        where owner_id = $1
+          and tab_id = $2
+          and status = any($3::text[])
+        order by updated_at desc, created_at desc
+      `,
+      [DEFAULT_STORAGE_OWNER_ID, sourceBundle.tab.id, ["approved", "stable", "archived"]]
+    );
+    const allCards = cardResult.rows.map(mapForumBackgroundCardRow);
+    const generationContext = buildForumGenerationContextPayload(sourceBundle, allCards, input);
+    response.json({
+      ok: true,
+      tab: sourceBundle.tab,
+      generationType: input.generationType,
+      currentHotTopic: sourceBundle.tab?.hotTopic || "",
+      cards: generationContext.cards,
+      roleKnowledgePack: generationContext.roleKnowledgePack,
+      roleBuckets: generationContext.roleBuckets,
+      unknownBoundaries: generationContext.unknownBoundaries,
+      fallbackUsed: generationContext.fallbackUsed,
+      promptBlocks: generationContext.promptBlocks,
+      latestRun: sourceBundle.latestRun
+    });
+  } catch (error) {
+    response
+      .status(500)
+      .json(createJsonError("Failed to build forum generation context.", error?.message));
   }
 });
 

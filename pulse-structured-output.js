@@ -414,6 +414,245 @@
         };
       }
     },
+    forum_background_extract_v1: {
+      name: "forum_background_extract_v1",
+      deepseekMaxTokens: 3200,
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          items: {
+            type: "array",
+            description: "Candidate forum background cards extracted from the provided layered sources.",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                source_type: {
+                  type: "string",
+                  enum: ["worldbook_entry", "forum_tab_text", "forum_tab_hot_topic"]
+                },
+                source_id: {
+                  type: "string"
+                },
+                source_title: {
+                  type: "string"
+                },
+                source_layer: {
+                  type: "string",
+                  enum: [
+                    "history_base",
+                    "recent_campaign",
+                    "observable_timeline",
+                    "tab_background",
+                    "hot_topic"
+                  ]
+                },
+                source_excerpt: {
+                  type: "string"
+                },
+                truth_level: {
+                  type: "string",
+                  enum: [
+                    "worldbook_fact",
+                    "tab_setting",
+                    "community_viewpoint",
+                    "community_speculation",
+                    "interpretation_frame",
+                    "discussion_structure"
+                  ]
+                },
+                knowledge_domain: {
+                  type: "string"
+                },
+                summary: {
+                  type: "string"
+                },
+                detail_text: {
+                  type: "string"
+                },
+                suitable_roles: {
+                  type: "array",
+                  items: {
+                    type: "string"
+                  }
+                },
+                keywords: {
+                  type: "array",
+                  items: {
+                    type: "string"
+                  }
+                },
+                confidence: {
+                  type: "number",
+                  minimum: 0,
+                  maximum: 1
+                },
+                reason_note: {
+                  type: "string"
+                }
+              },
+              required: [
+                "source_type",
+                "source_id",
+                "source_layer",
+                "source_excerpt",
+                "truth_level",
+                "knowledge_domain",
+                "summary",
+                "detail_text",
+                "suitable_roles",
+                "reason_note"
+              ]
+            }
+          }
+        },
+        required: ["items"]
+      },
+      promptHint: [
+        "请只返回 json，不要解释，不要 markdown。",
+        'json 示例：{"items":[{"source_type":"worldbook_entry","source_id":"worldbook_entry_xxx","source_title":"Jessie的公开行程","source_layer":"observable_timeline","source_excerpt":"4月到6月公开行程密集。","truth_level":"worldbook_fact","knowledge_domain":"schedule_timeline","summary":"Jessie 近期公开行程密集，讨论时常被拿来解释状态波动。","detail_text":"适合让行程状态型和老角色用来解释近期舞台起伏，但不要自动推出唯一结论。","suitable_roles":["schedule_tracker","old_guard","career_fan"],"keywords":["公开行程","状态"],"confidence":0.86,"reason_note":"这是稳定、可持续调用的近期背景。"}]}'
+      ].join("\n"),
+      repairExample: {
+        items: [
+          {
+            source_type: "worldbook_entry",
+            source_id: "worldbook_entry_xxx",
+            source_title: "Jessie的公开行程",
+            source_layer: "observable_timeline",
+            source_excerpt: "4月到6月公开行程密集。",
+            truth_level: "worldbook_fact",
+            knowledge_domain: "schedule_timeline",
+            summary: "Jessie 近期公开行程密集，讨论时常被拿来解释状态波动。",
+            detail_text:
+              "适合让行程状态型和老角色用来解释近期舞台起伏，但不要自动推出唯一结论。",
+            suitable_roles: ["schedule_tracker", "old_guard", "career_fan"],
+            keywords: ["公开行程", "状态"],
+            confidence: 0.86,
+            reason_note: "这是稳定、可持续调用的近期背景。"
+          }
+        ]
+      },
+      normalize(value) {
+        const source = Array.isArray(value) ? { items: value } : normalizeObjectValue(value);
+        if (!source) {
+          return null;
+        }
+        const rawItems = Array.isArray(source.items)
+          ? source.items
+          : Array.isArray(source.cards)
+            ? source.cards
+            : null;
+        if (!Array.isArray(rawItems)) {
+          return null;
+        }
+        const allowedSourceTypes = new Set(["worldbook_entry", "forum_tab_text", "forum_tab_hot_topic"]);
+        const allowedSourceLayers = new Set([
+          "history_base",
+          "recent_campaign",
+          "observable_timeline",
+          "tab_background",
+          "hot_topic"
+        ]);
+        const allowedTruthLevels = new Set([
+          "worldbook_fact",
+          "tab_setting",
+          "community_viewpoint",
+          "community_speculation",
+          "interpretation_frame",
+          "discussion_structure"
+        ]);
+        const items = rawItems
+          .map((item) => {
+            const normalized = normalizeObjectValue(item);
+            if (!normalized) {
+              return null;
+            }
+            const sourceType = String(
+              normalized.source_type || normalized.sourceType || ""
+            )
+              .trim()
+              .toLowerCase();
+            const sourceId = String(
+              normalized.source_id || normalized.sourceId || ""
+            ).trim();
+            const sourceLayer = String(
+              normalized.source_layer || normalized.sourceLayer || ""
+            )
+              .trim()
+              .toLowerCase();
+            const truthLevel = String(
+              normalized.truth_level || normalized.truthLevel || ""
+            )
+              .trim()
+              .toLowerCase();
+            const sourceExcerpt = String(
+              normalized.source_excerpt || normalized.sourceExcerpt || ""
+            ).trim();
+            const knowledgeDomain = String(
+              normalized.knowledge_domain || normalized.knowledgeDomain || ""
+            ).trim();
+            const summary = String(normalized.summary || "").trim();
+            const detailText = String(
+              normalized.detail_text || normalized.detailText || ""
+            ).trim();
+            const reasonNote = String(
+              normalized.reason_note || normalized.reasonNote || ""
+            ).trim();
+            if (
+              !allowedSourceTypes.has(sourceType) ||
+              !sourceId ||
+              !allowedSourceLayers.has(sourceLayer) ||
+              !allowedTruthLevels.has(truthLevel) ||
+              !sourceExcerpt ||
+              !knowledgeDomain ||
+              !summary ||
+              !detailText ||
+              !reasonNote
+            ) {
+              return null;
+            }
+            return {
+              source_type: sourceType,
+              source_id: sourceId,
+              source_title: String(
+                normalized.source_title || normalized.sourceTitle || ""
+              ).trim(),
+              source_layer: sourceLayer,
+              source_excerpt: sourceExcerpt,
+              truth_level: truthLevel,
+              knowledge_domain: knowledgeDomain,
+              summary,
+              detail_text: detailText,
+              suitable_roles: Array.isArray(normalized.suitable_roles)
+                ? normalized.suitable_roles
+                    .map((entry) => String(entry || "").trim())
+                    .filter(Boolean)
+                : Array.isArray(normalized.suitableRoles)
+                  ? normalized.suitableRoles
+                      .map((entry) => String(entry || "").trim())
+                      .filter(Boolean)
+                  : [],
+              keywords: Array.isArray(normalized.keywords)
+                ? normalized.keywords
+                    .map((entry) => String(entry || "").trim())
+                    .filter(Boolean)
+                : [],
+              confidence: clampNumber(
+                normalized.confidence == null ? 0.8 : normalized.confidence,
+                0,
+                1
+              ),
+              reason_note: reasonNote
+            };
+          })
+          .filter(Boolean)
+          .slice(0, 24);
+        return {
+          items
+        };
+      }
+    },
     auto_schedule_fill_v1: {
       name: "auto_schedule_fill_v1",
       deepseekMaxTokens: 2200,

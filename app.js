@@ -29,6 +29,8 @@ const API_CONFIG_LIMIT = 12;
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GROK_MODEL = "grok-4";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
+const LOCAL_STORAGE_API_BASE_URL = "http://localhost:3000";
+const DEPLOYED_STORAGE_API_BASE_URL = "https://spring-field-3219.fly.dev";
 const THREAD_SHARE_INBOX_LIMIT = 24;
 const CHAT_SHARE_STORAGE_TARGET_CHARS = 1400000;
 const CHAT_SHARE_STORAGE_SOFT_MESSAGE_LIMIT = 240;
@@ -61,6 +63,8 @@ const DEFAULT_SETTINGS = {
   activeApiConfigId: "",
   translationApiEnabled: false,
   translationApiConfigId: "",
+  summaryApiEnabled: false,
+  summaryApiConfigId: "",
   floatingApiSwitcherEnabled: false,
   negativePromptConstraints: [],
   privacyAllowlist: []
@@ -249,6 +253,11 @@ const customTabBubbleFocusMinutesInput = document.querySelector(
 const customTabInsFocusEnabledInput = document.querySelector("#custom-tab-ins-focus-enabled-input");
 const customTabInsFocusMinutesInput = document.querySelector("#custom-tab-ins-focus-minutes-input");
 const customTabFormStatusEl = document.querySelector("#custom-tab-form-status");
+const customTabBackgroundRefreshBtn = document.querySelector("#custom-tab-background-refresh-btn");
+const customTabBackgroundExtractBtn = document.querySelector("#custom-tab-background-extract-btn");
+const customTabBackgroundMetaEl = document.querySelector("#custom-tab-background-meta");
+const customTabBackgroundListEl = document.querySelector("#custom-tab-background-list");
+const customTabBackgroundStatusEl = document.querySelector("#custom-tab-background-status");
 const customTabCancelBtn = document.querySelector("#custom-tab-cancel-btn");
 const customTabsCloseBtn = document.querySelector("#custom-tabs-close-btn");
 const customTabsLimitHintEl = document.querySelector("#custom-tabs-limit-hint");
@@ -353,7 +362,10 @@ const state = {
   threadReplyStatusTone: "",
   threadReplySubmitting: false,
   translatingPosts: {},
-  translatingReplies: {}
+  translatingReplies: {},
+  forumBackgroundByTab: {},
+  forumBackgroundPanelLoading: false,
+  forumBackgroundPanelExtracting: false
 };
 
 function safeGetItem(key) {
@@ -582,6 +594,189 @@ function buildDiscussionApiLogBase(action, settings, endpoint, prompt, requestBo
     model: mode === "generic" ? "" : settings.model || getDefaultModelByMode(mode),
     prompt,
     requestBody
+  };
+}
+
+function resolveDiscussionStorageApiBaseUrl() {
+  const injectedBaseUrl = String(
+    window.PULSE_STORAGE_API_BASE_URL || window.PULSE_API_BASE_URL || ""
+  ).trim();
+  if (injectedBaseUrl) {
+    return injectedBaseUrl.replace(/\/+$/, "");
+  }
+  const origin = String(window.location?.origin || "").trim();
+  const protocol = String(window.location?.protocol || "").trim().toLowerCase();
+  const hostname = String(window.location?.hostname || "").trim().toLowerCase();
+  if (!origin || origin === "null" || protocol === "file:") {
+    return DEPLOYED_STORAGE_API_BASE_URL;
+  }
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return LOCAL_STORAGE_API_BASE_URL;
+  }
+  if (hostname.endsWith(".fly.dev")) {
+    return origin.replace(/\/+$/, "");
+  }
+  return DEPLOYED_STORAGE_API_BASE_URL;
+}
+
+function buildDiscussionStorageApiUrl(pathname = "/api/health") {
+  const baseUrl = resolveDiscussionStorageApiBaseUrl();
+  return new URL(String(pathname || "").replace(/^\/+/, ""), `${baseUrl}/`).toString();
+}
+
+async function requestDiscussionStorageApi(pathname, options = {}) {
+  const response = await fetch(buildDiscussionStorageApiUrl(pathname), {
+    ...options,
+    headers: {
+      Accept: "application/json",
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.headers || {})
+    }
+  });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch (_error) {
+  }
+  if (!response.ok || payload?.ok === false) {
+    throw new Error(
+      String(payload?.error || payload?.details || `请求失败（HTTP ${response.status || 500}）。`).trim()
+    );
+  }
+  return payload;
+}
+
+function buildSingleInstructionRequestBody(
+  settings,
+  systemPrompt,
+  userInstruction,
+  intent = "utility"
+) {
+  const mode = normalizeApiMode(settings.mode);
+  if (isOpenAICompatibleMode(mode)) {
+    return {
+      model: settings.model || getDefaultModelByMode(mode),
+      temperature: normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE),
+      messages: [
+        {
+          role: "system",
+          content: systemPrompt
+        },
+        {
+          role: "user",
+          content: userInstruction
+        }
+      ],
+      stream: false
+    };
+  }
+  if (mode === "gemini") {
+    return {
+      systemInstruction: {
+        parts: [{ text: systemPrompt }]
+      },
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: userInstruction }]
+        }
+      ],
+      safetySettings: buildGeminiSafetySettings(),
+      generationConfig: {
+        temperature: normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE)
+      }
+    };
+  }
+  return {
+    prompt: [systemPrompt, userInstruction].filter(Boolean).join("\n\n"),
+    temperature: normalizeTemperature(settings.temperature, DEFAULT_TEMPERATURE),
+    intent
+  };
+}
+
+function createStructuredOutputContext(settings, contractName = "") {
+  if (!window.PulseStructuredOutput?.createRequestContext) {
+    return {
+      enabled: false,
+      provider: "none",
+      contractName: "",
+      contract: null
+    };
+  }
+  return window.PulseStructuredOutput.createRequestContext(settings, contractName);
+}
+
+function decorateRequestBodyWithStructuredOutput(requestBody, context) {
+  if (!window.PulseStructuredOutput?.decorateRequestBody) {
+    return requestBody;
+  }
+  return window.PulseStructuredOutput.decorateRequestBody(requestBody, context);
+}
+
+function appendStructuredOutputPromptHint(text = "", context = null) {
+  const baseText = String(text || "").trim();
+  const hint = String(window.PulseStructuredOutput?.getPromptHint?.(context) || "").trim();
+  return [baseText, hint].filter(Boolean).join("\n\n");
+}
+
+function parseStructuredOutputPayload(payload, context = null) {
+  if (!window.PulseStructuredOutput?.parseStructuredResponse) {
+    return null;
+  }
+  return window.PulseStructuredOutput.parseStructuredResponse(payload, context);
+}
+
+async function requestStructuredRepairOnce(
+  settings,
+  requestEndpoint,
+  context,
+  rawResponseText = "",
+  repairIntent = "structured_output_repair"
+) {
+  if (
+    !context?.enabled ||
+    context.provider !== "deepseek_json" ||
+    !window.PulseStructuredOutput?.buildRepairInstruction
+  ) {
+    return null;
+  }
+  const rawText = String(rawResponseText || "").trim();
+  if (!rawText) {
+    return null;
+  }
+  const repairInstruction = window.PulseStructuredOutput.buildRepairInstruction(
+    context,
+    rawText,
+    "上一次输出不是可解析的目标 JSON。"
+  );
+  if (!repairInstruction) {
+    return null;
+  }
+  const repairSystemPrompt =
+    "你是一个只负责修复 JSON 的格式整理器。不要补充新信息，不要解释原因，只把已有内容整理成合法 JSON。";
+  const repairRequestBody = decorateRequestBodyWithStructuredOutput(
+    buildSingleInstructionRequestBody(settings, repairSystemPrompt, repairInstruction, repairIntent),
+    context
+  );
+  const repairResponse = await fetch(requestEndpoint, {
+    method: "POST",
+    headers: buildRequestHeaders(settings),
+    body: JSON.stringify(repairRequestBody)
+  });
+  const repairRawResponse = await repairResponse.text();
+  let repairPayload = repairRawResponse;
+  try {
+    repairPayload = JSON.parse(repairRawResponse);
+  } catch (_error) {
+    repairPayload = repairRawResponse;
+  }
+  return {
+    ok: repairResponse.ok,
+    status: repairResponse.status,
+    rawResponseText: repairRawResponse,
+    payload: repairPayload,
+    requestBody: repairRequestBody,
+    structuredPayload: parseStructuredOutputPayload(repairPayload, context)
   };
 }
 
@@ -1228,6 +1423,46 @@ function normalizeApiConfigs(configs = []) {
     });
 }
 
+function resolveDedicatedApiSettings(settings, enabledKey, configIdKey) {
+  const normalizedSettings = buildNormalizedSettingsSnapshot(settings);
+  if (!normalizedSettings?.[enabledKey] || !normalizedSettings?.[configIdKey]) {
+    return normalizedSettings;
+  }
+  const config = normalizeApiConfigs(normalizedSettings.apiConfigs || []).find(
+    (item) => item.id === normalizedSettings[configIdKey]
+  );
+  if (!config) {
+    return buildNormalizedSettingsSnapshot({
+      ...normalizedSettings,
+      [enabledKey]: false,
+      [configIdKey]: ""
+    });
+  }
+  return buildNormalizedSettingsSnapshot({
+    ...normalizedSettings,
+    activeApiConfigId: config.id,
+    mode: config.mode,
+    endpoint: config.endpoint,
+    token: config.token,
+    model: config.mode === "generic" ? "" : config.model || getDefaultModelByMode(config.mode)
+  });
+}
+
+function validateApiSettings(settings, purpose = "请求") {
+  const requestEndpoint = resolveApiRequestEndpoint(settings);
+  settings.endpoint = requestEndpoint;
+  if (!requestEndpoint) {
+    throw new Error(`未配置 API 地址，无法执行${purpose}。`);
+  }
+  if (isOpenAICompatibleMode(settings.mode) && !settings.model) {
+    throw new Error("DeepSeek / Grok / OpenAI 兼容模式需要填写模型名称。");
+  }
+  if (normalizeApiMode(settings.mode) === "gemini" && !settings.token) {
+    throw new Error("Gemini 模式需要填写 API Key。");
+  }
+  return requestEndpoint;
+}
+
 function findCustomTabInSettings(settings, tabId) {
   if (!Array.isArray(settings?.customTabs)) {
     return null;
@@ -1536,7 +1771,9 @@ function getCurrentSettings() {
     apiConfigs: normalizeApiConfigs(state.settings.apiConfigs),
     activeApiConfigId: state.settings.activeApiConfigId || "",
     translationApiEnabled: translationApiEnabled && Boolean(translationApiConfigId),
-    translationApiConfigId
+    translationApiConfigId,
+    summaryApiEnabled: Boolean(state.settings.summaryApiEnabled),
+    summaryApiConfigId: String(state.settings.summaryApiConfigId || "").trim()
   };
 }
 
@@ -1578,6 +1815,8 @@ function refreshRuntimeApiSettingsFromStorage() {
     activeApiConfigId: nextSettings.activeApiConfigId || "",
     translationApiEnabled: Boolean(nextSettings.translationApiEnabled),
     translationApiConfigId: nextSettings.translationApiConfigId || "",
+    summaryApiEnabled: Boolean(nextSettings.summaryApiEnabled),
+    summaryApiConfigId: nextSettings.summaryApiConfigId || "",
     floatingApiSwitcherEnabled: Boolean(nextSettings.floatingApiSwitcherEnabled)
   };
   if (modeSelect) {
@@ -1663,6 +1902,11 @@ function buildNormalizedSettingsSnapshot(source, options = {}) {
   merged.translationApiEnabled = Boolean(
     merged.translationApiEnabled && merged.translationApiConfigId
   );
+  if (!merged.apiConfigs.some((item) => item.id === merged.summaryApiConfigId)) {
+    merged.summaryApiConfigId = "";
+    merged.summaryApiEnabled = false;
+  }
+  merged.summaryApiEnabled = Boolean(merged.summaryApiEnabled && merged.summaryApiConfigId);
   return merged;
 }
 
@@ -2612,6 +2856,570 @@ function clearCustomTabGeneratedContent(tabId = "") {
   setHomeStatus(`已清空“${tab.name || "当前页签"}”下的 AI 缓存内容。`, "success");
 }
 
+function getForumBackgroundPanelEntry(tabId = "") {
+  const resolvedTabId = String(tabId || "").trim();
+  if (!resolvedTabId) {
+    return null;
+  }
+  if (!state.forumBackgroundByTab[resolvedTabId]) {
+    state.forumBackgroundByTab[resolvedTabId] = {
+      bundle: null,
+      cards: [],
+      counts: {},
+      lastLoadedAt: 0
+    };
+  }
+  return state.forumBackgroundByTab[resolvedTabId];
+}
+
+function setCustomTabBackgroundStatus(message, tone = "") {
+  if (!customTabBackgroundStatusEl) {
+    return;
+  }
+  customTabBackgroundStatusEl.textContent = message;
+  customTabBackgroundStatusEl.className = "status-text";
+  if (tone) {
+    customTabBackgroundStatusEl.classList.add(tone);
+  }
+}
+
+function formatForumBackgroundLayerLabel(value = "") {
+  const labels = {
+    history_base: "历史基底",
+    recent_campaign: "近期主线",
+    observable_timeline: "公开行程",
+    tab_background: "页签背景",
+    hot_topic: "热点"
+  };
+  return labels[String(value || "").trim()] || String(value || "").trim() || "未知层";
+}
+
+function formatForumBackgroundTruthLabel(value = "") {
+  const labels = {
+    worldbook_fact: "世界书事实",
+    tab_setting: "页签设定",
+    community_viewpoint: "社区观点",
+    community_speculation: "社区推测",
+    interpretation_frame: "解释框架",
+    discussion_structure: "讨论结构"
+  };
+  return labels[String(value || "").trim()] || String(value || "").trim() || "未知类型";
+}
+
+function formatForumBackgroundStatusLabel(value = "") {
+  const labels = {
+    candidate: "待审核",
+    approved: "已确认",
+    stable: "稳定卡",
+    archived: "已归档",
+    worldbook_candidate: "世界书候选"
+  };
+  return labels[String(value || "").trim()] || String(value || "").trim() || "未知状态";
+}
+
+function renderForumBackgroundCardActions(card = {}) {
+  const cardId = String(card.id || "").trim();
+  if (!cardId) {
+    return "";
+  }
+  if (card.status === "candidate") {
+    return `
+      <button class="ghost-chip" type="button" data-action="forum-background-card-status" data-card-id="${escapeHtml(
+        cardId
+      )}" data-next-status="approved">确认</button>
+      <button class="ghost-chip" type="button" data-action="forum-background-card-status" data-card-id="${escapeHtml(
+        cardId
+      )}" data-next-status="worldbook_candidate">标世界书候选</button>
+      <button class="ghost-chip ghost-chip--danger" type="button" data-action="forum-background-card-status" data-card-id="${escapeHtml(
+        cardId
+      )}" data-next-status="archived">归档</button>
+    `;
+  }
+  if (card.status === "approved") {
+    return `
+      <button class="ghost-chip" type="button" data-action="forum-background-card-status" data-card-id="${escapeHtml(
+        cardId
+      )}" data-next-status="stable">设为稳定卡</button>
+      <button class="ghost-chip" type="button" data-action="forum-background-card-status" data-card-id="${escapeHtml(
+        cardId
+      )}" data-next-status="worldbook_candidate">标世界书候选</button>
+      <button class="ghost-chip ghost-chip--danger" type="button" data-action="forum-background-card-status" data-card-id="${escapeHtml(
+        cardId
+      )}" data-next-status="archived">归档</button>
+    `;
+  }
+  if (card.status === "stable") {
+    return `
+      <button class="ghost-chip" type="button" data-action="forum-background-card-status" data-card-id="${escapeHtml(
+        cardId
+      )}" data-next-status="worldbook_candidate">标世界书候选</button>
+      <button class="ghost-chip ghost-chip--danger" type="button" data-action="forum-background-card-status" data-card-id="${escapeHtml(
+        cardId
+      )}" data-next-status="archived">归档</button>
+    `;
+  }
+  if (card.status === "worldbook_candidate") {
+    return `
+      <button class="ghost-chip" type="button" data-action="forum-background-card-status" data-card-id="${escapeHtml(
+        cardId
+      )}" data-next-status="approved">恢复已确认</button>
+      <button class="ghost-chip ghost-chip--danger" type="button" data-action="forum-background-card-status" data-card-id="${escapeHtml(
+        cardId
+      )}" data-next-status="archived">归档</button>
+    `;
+  }
+  return `
+    <button class="ghost-chip" type="button" data-action="forum-background-card-status" data-card-id="${escapeHtml(
+      cardId
+    )}" data-next-status="approved">恢复已确认</button>
+  `;
+}
+
+function renderCustomTabBackgroundPanel(tab = null) {
+  if (
+    !customTabBackgroundListEl ||
+    !customTabBackgroundMetaEl ||
+    !customTabBackgroundExtractBtn ||
+    !customTabBackgroundRefreshBtn
+  ) {
+    return;
+  }
+  const editingTab =
+    tab && typeof tab === "object" && tab.id
+      ? getCustomTab(tab.id) || tab
+      : state.customTabEditingId
+        ? getCustomTab(state.customTabEditingId)
+        : null;
+  const resolvedTabId = String(editingTab?.id || "").trim();
+  const cached = resolvedTabId ? getForumBackgroundPanelEntry(resolvedTabId) : null;
+  const hasSavedTab = Boolean(resolvedTabId && getCustomTab(resolvedTabId));
+  const isBusy = state.forumBackgroundPanelLoading || state.forumBackgroundPanelExtracting;
+  customTabBackgroundExtractBtn.disabled = !hasSavedTab || isBusy;
+  customTabBackgroundRefreshBtn.disabled = !hasSavedTab || isBusy;
+
+  if (!hasSavedTab) {
+    customTabBackgroundMetaEl.textContent =
+      "先保存页签，再基于后端已保存的页签文本、热点和世界书来源做背景卡拆解。";
+    customTabBackgroundListEl.innerHTML =
+      '<p class="empty-state">当前是新增态，背景卡功能只对已保存页签开放。</p>';
+    return;
+  }
+
+  const counts = cached?.counts || {};
+  const latestRun = cached?.bundle?.latestRun || null;
+  const metaParts = [
+    `当前页签：${editingTab?.name || "自定义页签"}`,
+    `候选 ${counts.candidate || 0} / 已确认 ${counts.approved || 0} / 稳定 ${counts.stable || 0} / 归档 ${counts.archived || 0}`
+  ];
+  if (latestRun?.status === "dirty") {
+    metaParts.push("后台检测到当前热点对应的拆卡任务是 dirty，可重跑拆卡。");
+  }
+  if (cached?.bundle?.summaryApiEnabled === false) {
+    metaParts.push("服务端未启用总结预设 API，前端拆卡会回退当前激活配置。");
+  }
+  customTabBackgroundMetaEl.textContent = metaParts.join(" · ");
+
+  if (state.forumBackgroundPanelLoading && !cached?.cards?.length) {
+    customTabBackgroundListEl.innerHTML = '<p class="empty-state">正在读取背景卡与来源状态…</p>';
+    return;
+  }
+
+  const cards = Array.isArray(cached?.cards) ? cached.cards : [];
+  if (!cards.length) {
+    customTabBackgroundListEl.innerHTML =
+      '<p class="empty-state">还没有背景卡。可先点击“提取背景卡”，再在这里确认候选卡。</p>';
+    return;
+  }
+
+  customTabBackgroundListEl.innerHTML = cards
+    .map((card) => {
+      const roles = Array.isArray(card.suitableRoles) ? card.suitableRoles.slice(0, 4).join("、") : "";
+      const meta = [
+        formatForumBackgroundStatusLabel(card.status),
+        formatForumBackgroundLayerLabel(card.sourceLayer),
+        formatForumBackgroundTruthLabel(card.truthLevel),
+        card.knowledgeDomain || ""
+      ]
+        .filter(Boolean)
+        .join("｜");
+      const excerpt = truncate(card.sourceExcerpt || "", 88);
+      const detail = truncate(card.detailText || "", 140);
+      return `
+        <article class="custom-tab-item" data-card-id="${escapeHtml(card.id || "")}">
+          <div>
+            <strong>${escapeHtml(card.summary || "未命名背景卡")}</strong>
+            <p class="tag-stat-meta">${escapeHtml(meta)}</p>
+            ${roles ? `<p class="tag-stat-meta">适用角色：${escapeHtml(roles)}</p>` : ""}
+            ${detail ? `<p class="tag-stat-meta">${escapeHtml(detail)}</p>` : ""}
+            ${excerpt ? `<p class="tag-stat-meta">来源片段：${escapeHtml(excerpt)}</p>` : ""}
+          </div>
+          <div class="custom-tab-item__actions">
+            ${renderForumBackgroundCardActions(card)}
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+async function loadForumBackgroundPanelData(tabId = "", options = {}) {
+  const resolvedTabId = String(tabId || "").trim();
+  if (!resolvedTabId) {
+    return null;
+  }
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const entry = getForumBackgroundPanelEntry(resolvedTabId);
+  if (
+    !requestOptions.force &&
+    entry?.lastLoadedAt &&
+    Date.now() - entry.lastLoadedAt < 20_000 &&
+    (entry.bundle || entry.cards.length)
+  ) {
+    return entry;
+  }
+  state.forumBackgroundPanelLoading = true;
+  renderCustomTabBackgroundPanel(getCustomTab(resolvedTabId));
+  try {
+    const query = new URLSearchParams({
+      tabId: resolvedTabId,
+      status: "candidate,approved,stable,archived,worldbook_candidate"
+    });
+    const [bundlePayload, cardsPayload] = await Promise.all([
+      requestDiscussionStorageApi(`/api/forum/background/source-bundle?tabId=${encodeURIComponent(resolvedTabId)}`),
+      requestDiscussionStorageApi(`/api/forum/background/cards?${query.toString()}`)
+    ]);
+    entry.bundle = {
+      ...bundlePayload,
+      summaryApiEnabled: Boolean(bundlePayload.summaryApiEnabled),
+      summaryApiConfigId: String(bundlePayload.summaryApiConfigId || "").trim()
+    };
+    entry.cards = Array.isArray(cardsPayload.cards) ? cardsPayload.cards : [];
+    entry.counts = cardsPayload.counts && typeof cardsPayload.counts === "object" ? cardsPayload.counts : {};
+    entry.lastLoadedAt = Date.now();
+    return entry;
+  } finally {
+    state.forumBackgroundPanelLoading = false;
+    renderCustomTabBackgroundPanel(getCustomTab(resolvedTabId));
+  }
+}
+
+function buildForumBackgroundExtractionSystemPrompt(bundle = {}) {
+  const tabName = String(bundle?.tab?.name || "当前论坛页签").trim();
+  return [
+    `你是“${tabName}”论坛的背景卡候选拆解器。`,
+    "你的任务不是写摘要，而是把来源拆成可供后端审核的候选背景卡。",
+    "你只能做候选提炼，不能裁定世界观真相。",
+    "必须保留来源层级、原文片段、真实性等级、知识域和适用角色。",
+    "禁止把粉丝推测写成事实。",
+    "禁止把部分观点写成全体共识。",
+    "禁止输出唯一结论。",
+    "热点来源只允许拆成推理卡、争议卡或讨论结构卡，不要硬写成事实卡。",
+    "如果同一条信息可以拆成多种视角，请拆成多张卡，而不是糊成一段总述。"
+  ].join("\n");
+}
+
+function buildForumBackgroundExtractionUserPrompt(bundle = {}) {
+  const tab = bundle?.tab || {};
+  const sources = Array.isArray(bundle?.sources) ? bundle.sources : [];
+  const sourceBlocks = sources.length
+    ? sources
+        .map((source, index) =>
+          [
+            `来源 ${index + 1}`,
+            `- source_type: ${source.sourceType || ""}`,
+            `- source_id: ${source.sourceId || ""}`,
+            `- source_title: ${source.sourceTitle || ""}`,
+            `- source_layer: ${source.sourceLayer || ""}`,
+            source.knowledgeDomains?.length
+              ? `- 建议知识域: ${source.knowledgeDomains.join(", ")}`
+              : "",
+            "- 正文：",
+            source.content || "（空）"
+          ]
+            .filter(Boolean)
+            .join("\n")
+        )
+        .join("\n\n")
+    : "当前没有可拆分的来源。";
+  return [
+    `页签名称：${tab.name || ""}`,
+    `页签用户定位：${tab.audience || ""}`,
+    `页签长期文本：${tab.discussionText || ""}`,
+    `页签当前热点：${tab.hotTopic || ""}`,
+    "",
+    "请基于以上分层来源输出候选背景卡，并满足这些规则：",
+    "1. 只输出 JSON 对象，顶层为 {\"items\":[...]}。",
+    "2. 每张卡必须给出 source_type, source_id, source_layer, source_excerpt, truth_level, knowledge_domain, summary, detail_text, suitable_roles, reason_note。",
+    "3. truth_level 只能使用：worldbook_fact / tab_setting / community_viewpoint / community_speculation / interpretation_frame / discussion_structure。",
+    "4. suitable_roles 请优先使用：newcomer / old_guard / schedule_tracker / career_fan / cp_digger / worldbook_seed / fact_checker。",
+    "5. worldbook_fact 只能来自世界书或明确的公开事实来源；热点里的争议和粉丝判断不要写成 worldbook_fact。",
+    "6. 如果一个点只适合让老角色知道，就不要把 newcomer 塞进去。",
+    "7. detail_text 要写成后端可直接给模型的完整背景说明，不要只是重复 summary。",
+    "8. 最多输出 18 张卡，宁缺毋滥。",
+    "",
+    "可拆来源如下：",
+    sourceBlocks
+  ].join("\n");
+}
+
+async function requestForumBackgroundExtraction(tabId = "") {
+  const resolvedTabId = String(tabId || "").trim();
+  if (!resolvedTabId) {
+    return null;
+  }
+  state.forumBackgroundPanelExtracting = true;
+  setCustomTabBackgroundStatus("正在读取来源包并调用总结预设 API 做候选拆卡…", "");
+  renderCustomTabBackgroundPanel(getCustomTab(resolvedTabId));
+  try {
+    const panelData =
+      (await loadForumBackgroundPanelData(resolvedTabId, { force: true })) ||
+      getForumBackgroundPanelEntry(resolvedTabId);
+    const bundle = panelData?.bundle || null;
+    if (!bundle?.tab?.id) {
+      throw new Error("当前页签还没有可用的后端来源包。");
+    }
+    if (!Array.isArray(bundle.sources) || !bundle.sources.length) {
+      throw new Error("当前页签还没有配置可拆分的背景来源策略。");
+    }
+    const currentSettings = buildNormalizedSettingsSnapshot(getCurrentSettings());
+    const usingSummaryPreset = Boolean(
+      currentSettings.summaryApiEnabled && currentSettings.summaryApiConfigId
+    );
+    const apiSettings = resolveDedicatedApiSettings(
+      currentSettings,
+      "summaryApiEnabled",
+      "summaryApiConfigId"
+    );
+    const requestEndpoint = validateApiSettings(apiSettings, "背景卡拆解");
+    const structuredOutputContext = createStructuredOutputContext(
+      apiSettings,
+      "forum_background_extract_v1"
+    );
+    const runPayload = await requestDiscussionStorageApi("/api/forum/background/extraction-runs", {
+      method: "POST",
+      body: JSON.stringify({
+        tabId: resolvedTabId,
+        triggerReason: "manual_editor_extract",
+        sourceBundle: bundle,
+        sourceBundleHash: bundle.bundleHash || ""
+      })
+    });
+    const systemPrompt = buildForumBackgroundExtractionSystemPrompt(bundle);
+    const userInstruction = appendStructuredOutputPromptHint(
+      buildForumBackgroundExtractionUserPrompt(bundle),
+      structuredOutputContext
+    );
+    const privacySession = createPrivacySession({
+      settings: apiSettings,
+      profile: getCurrentProfile(),
+      sourceBundle: bundle,
+      systemPrompt,
+      userInstruction
+    });
+    const encodedSystemPrompt = preparePromptWithPrivacy(systemPrompt, privacySession);
+    const encodedUserInstruction = encodeTextWithPrivacy(userInstruction, privacySession);
+    const requestBody = decorateRequestBodyWithStructuredOutput(
+      buildSingleInstructionRequestBody(
+        apiSettings,
+        encodedSystemPrompt,
+        encodedUserInstruction,
+        "forum_background_extract"
+      ),
+      structuredOutputContext
+    );
+    const logBase = applyPrivacyToLogEntry(
+      buildDiscussionApiLogBase(
+        "forum_background_extract",
+        apiSettings,
+        requestEndpoint,
+        [encodedSystemPrompt, encodedUserInstruction].join("\n\n"),
+        requestBody,
+        `页签：${bundle.tab.name || resolvedTabId} · 来源 ${Array.isArray(bundle.sources) ? bundle.sources.length : 0} 条`
+      ),
+      privacySession
+    );
+    let logged = false;
+    const response = await fetch(requestEndpoint, {
+      method: "POST",
+      headers: buildRequestHeaders(apiSettings),
+      body: JSON.stringify(requestBody)
+    });
+    const rawResponse = await response.text();
+    let payload = rawResponse;
+    try {
+      payload = JSON.parse(rawResponse);
+    } catch (_error) {
+      payload = rawResponse;
+    }
+    if (!response.ok) {
+      appendApiLog({
+        ...logBase,
+        ...buildGeminiLogFields(apiSettings, payload),
+        status: "error",
+        statusCode: response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        errorMessage: `背景卡拆解请求失败：HTTP ${response.status}`
+      });
+      logged = true;
+      throw new Error(`背景卡拆解请求失败：HTTP ${response.status}`);
+    }
+    let repairResult = null;
+    let structuredPayload = parseStructuredOutputPayload(payload, structuredOutputContext);
+    if (structuredOutputContext.enabled && !structuredPayload) {
+      repairResult = await requestStructuredRepairOnce(
+        apiSettings,
+        requestEndpoint,
+        structuredOutputContext,
+        rawResponse,
+        "forum_background_extract_repair"
+      );
+      if (repairResult?.ok) {
+        structuredPayload = repairResult.structuredPayload;
+      }
+      if (!structuredPayload) {
+        appendApiLog({
+          ...logBase,
+          ...buildGeminiLogFields(apiSettings, payload),
+          status: "error",
+          statusCode: repairResult?.status || response.status,
+          responseText: rawResponse,
+          responseBody: payload,
+          repairAttempted: Boolean(repairResult),
+          repairResponseText: repairResult?.rawResponseText || "",
+          repairResponseBody: repairResult?.payload || null,
+          errorMessage: "背景卡拆解返回了不可解析的结构化内容。"
+        });
+        logged = true;
+        throw new Error("背景卡拆解返回了不可解析的结构化内容。");
+      }
+    }
+    let extractedPayload =
+      structuredPayload || parseStructuredOutputPayload(payload, structuredOutputContext) || null;
+    if (!extractedPayload) {
+      const rawObjectText =
+        extractJsonObject(typeof payload === "string" ? payload : resolveMessage(payload || "")) ||
+        extractJsonObject(rawResponse);
+      if (rawObjectText) {
+        try {
+          extractedPayload = parseJsonObjectWithRepair(
+            rawObjectText,
+            "背景卡拆解 JSON 解析失败。"
+          );
+        } catch (_error) {
+        }
+      }
+    }
+    const items = Array.isArray(extractedPayload?.items) ? extractedPayload.items : [];
+    if (!items.length) {
+      appendApiLog({
+        ...logBase,
+        ...buildGeminiLogFields(apiSettings, repairResult?.payload || payload),
+        status: "success",
+        statusCode: response.status,
+        responseText: repairResult?.rawResponseText || rawResponse,
+        responseBody: repairResult?.payload || payload,
+        summary: encodeTextWithPrivacy(
+          `页签：${bundle.tab.name || resolvedTabId} · 本次未提取到候选背景卡`,
+          privacySession
+        )
+      });
+      logged = true;
+      setCustomTabBackgroundStatus("本次没有提取到候选背景卡，可调整来源文本后重试。", "error");
+      return {
+        ok: true,
+        results: []
+      };
+    }
+    const mergePayload = await requestDiscussionStorageApi(
+      `/api/forum/background/extraction-runs/${encodeURIComponent(runPayload.run?.id || "")}/candidates`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          tabId: resolvedTabId,
+          items
+        })
+      }
+    );
+    appendApiLog({
+      ...logBase,
+      ...buildGeminiLogFields(apiSettings, repairResult?.payload || payload),
+      status: "success",
+      statusCode: response.status,
+      responseText: repairResult?.rawResponseText || rawResponse,
+      responseBody: repairResult?.payload || payload,
+      summary: encodeTextWithPrivacy(
+        `页签：${bundle.tab.name || resolvedTabId} · 已提交 ${items.length} 张候选背景卡`,
+        privacySession
+      )
+    });
+    logged = true;
+    await loadForumBackgroundPanelData(resolvedTabId, { force: true });
+    const fallbackNotice = usingSummaryPreset
+      ? ""
+      : " 当前未启用总结预设 API，已回退到当前激活配置。";
+    setCustomTabBackgroundStatus(
+      `已提交 ${items.length} 张候选卡（新建 ${mergePayload.summary?.createdCount || 0}，强化 ${
+        mergePayload.summary?.reinforcedCount || 0
+      }）。${fallbackNotice}`.trim(),
+      "success"
+    );
+    return mergePayload;
+  } catch (error) {
+    setCustomTabBackgroundStatus(`背景卡提取失败：${error?.message || "请求失败"}`, "error");
+    throw error;
+  } finally {
+    state.forumBackgroundPanelExtracting = false;
+    renderCustomTabBackgroundPanel(getCustomTab(resolvedTabId));
+  }
+}
+
+async function updateForumBackgroundCardStatus(cardId = "", nextStatus = "") {
+  const resolvedCardId = String(cardId || "").trim();
+  const resolvedStatus = String(nextStatus || "").trim();
+  if (!resolvedCardId || !resolvedStatus) {
+    return null;
+  }
+  const tabId = String(state.customTabEditingId || "").trim();
+  const payload = await requestDiscussionStorageApi(
+    `/api/forum/background/cards/${encodeURIComponent(resolvedCardId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        status: resolvedStatus,
+        actorType: "frontend"
+      })
+    }
+  );
+  if (tabId) {
+    await loadForumBackgroundPanelData(tabId, { force: true });
+  }
+  setCustomTabBackgroundStatus(
+    `背景卡已更新为“${formatForumBackgroundStatusLabel(resolvedStatus)}”。`,
+    "success"
+  );
+  return payload;
+}
+
+async function requestForumGenerationContext(tabId = "", payload = {}) {
+  const resolvedTabId = String(tabId || "").trim();
+  if (!resolvedTabId) {
+    return null;
+  }
+  try {
+    return await requestDiscussionStorageApi("/api/forum/generation-context", {
+      method: "POST",
+      body: JSON.stringify({
+        tabId: resolvedTabId,
+        ...payload
+      })
+    });
+  } catch (error) {
+    console.warn("[discussion] failed to load forum generation context", error);
+    return null;
+  }
+}
+
 function openProfilePostEditor(postId) {
   const targetPost = state.profilePosts.find((post) => post.id === postId);
   if (!targetPost) {
@@ -3120,6 +3928,10 @@ function deleteApiConfig(configId) {
     state.settings.translationApiConfigId = "";
     state.settings.translationApiEnabled = false;
   }
+  if (state.settings.summaryApiConfigId === configId) {
+    state.settings.summaryApiConfigId = "";
+    state.settings.summaryApiEnabled = false;
+  }
   saveCurrentSettings();
   setApiConfigStatus(`API 配置“${target.name}”已删除。`, "success");
 }
@@ -3127,8 +3939,10 @@ function deleteApiConfig(configId) {
 function buildPrompt(
   settings,
   feedType = state.activeFeed,
-  count = settings.homeCount || DEFAULT_POST_COUNT
+  count = settings.homeCount || DEFAULT_POST_COUNT,
+  options = {}
 ) {
+  const generationContext = options && typeof options === "object" ? options.generationContext || null : null;
   const resolvedFeedType = getCurrentContentFeed(feedType);
   const feedLabel = getFeedLabel(resolvedFeedType);
   const customTab = findCustomTabInSettings(settings, resolvedFeedType);
@@ -3154,7 +3968,10 @@ function buildPrompt(
         forum_setting: forumSettingText,
         time_awareness: forumPromptContext.timeAwarenessText,
         worldbook_reference: forumPromptContext.worldbookReferenceText,
+        background_cards_context: generationContext?.promptBlocks?.backgroundCardsText || "",
         dominant_hot_topic: dominantHotTopicInstruction,
+        forum_role_knowledge: generationContext?.promptBlocks?.roleKnowledgeText || "",
+        unknown_boundary: generationContext?.promptBlocks?.unknownBoundaryText || "",
         supplemental_topics: forumPromptContext.supplementalTopicTexts.length
           ? `主导即时讨论语境（与页签热点同级，可共同成为主线）：\n${forumPromptContext.supplementalTopicTexts.join(
               "\n\n"
@@ -3251,8 +4068,10 @@ function buildReplyPrompt(
   feedType,
   rootPost,
   parentReply = null,
-  count = settings.replyCount || DEFAULT_REPLY_COUNT
+  count = settings.replyCount || DEFAULT_REPLY_COUNT,
+  options = {}
 ) {
+  const generationContext = options && typeof options === "object" ? options.generationContext || null : null;
   const resolvedFeedType = getCurrentContentFeed(feedType);
   const feedLabel = getFeedLabel(resolvedFeedType);
   const customTab = findCustomTabInSettings(settings, resolvedFeedType);
@@ -3287,9 +4106,12 @@ function buildReplyPrompt(
         forum_setting: forumSettingText,
         time_awareness: forumPromptContext.timeAwarenessText,
         worldbook_reference: forumPromptContext.worldbookReferenceText,
+        background_cards_context: generationContext?.promptBlocks?.backgroundCardsText || "",
         hot_topic: String(customTab?.hotTopic || "").trim()
           ? `当前这个讨论区的主导热点：${customTab.hotTopic}`
           : "",
+        forum_role_knowledge: generationContext?.promptBlocks?.roleKnowledgeText || "",
+        unknown_boundary: generationContext?.promptBlocks?.unknownBoundaryText || "",
         supplemental_topics: forumPromptContext.supplementalTopicTexts.length
           ? `主导即时讨论语境（与页签热点同级，可共同成为主线）：\n${forumPromptContext.supplementalTopicTexts.join(
               "\n\n"
@@ -3470,6 +4292,13 @@ function saveCurrentSettings() {
   ) {
     state.settings.translationApiConfigId = "";
     state.settings.translationApiEnabled = false;
+  }
+  if (
+    state.settings.summaryApiConfigId &&
+    !state.settings.apiConfigs.some((item) => item.id === state.settings.summaryApiConfigId)
+  ) {
+    state.settings.summaryApiConfigId = "";
+    state.settings.summaryApiEnabled = false;
   }
   persistSettings(state.settings);
   updatePromptPreview();
@@ -5605,6 +6434,9 @@ function resetCustomTabForm(preserveStatus = false) {
   if (!preserveStatus) {
     setCustomTabFormStatus("");
   }
+  if (!state.customTabEditingId) {
+    setCustomTabBackgroundStatus("");
+  }
   renderCustomTabsManager();
 }
 
@@ -5637,6 +6469,7 @@ function syncCustomTabEditorChrome() {
 
 function startCustomTabCreate() {
   resetCustomTabForm();
+  setCustomTabBackgroundStatus("");
   setCustomTabFormStatus("正在新增新的自定义页签。", "");
   focusCustomTabNameField();
 }
@@ -5708,6 +6541,9 @@ function startCustomTabEdit(tabId) {
   updateCustomTabFormAdvancedState();
   setCustomTabFormStatus(`正在编辑“${tab.name || "自定义页签"}”`, "");
   renderCustomTabsManager();
+  loadForumBackgroundPanelData(tabId).catch((error) => {
+    setCustomTabBackgroundStatus(`背景卡读取失败：${error?.message || "请求失败"}`, "error");
+  });
   focusCustomTabNameField();
 }
 
@@ -5871,6 +6707,7 @@ function renderCustomTabsManager() {
   }
   updateCustomTabFormAdvancedState();
   syncCustomTabEditorChrome();
+  renderCustomTabBackgroundPanel(currentDraft || null);
   if (disableCreation) {
     setCustomTabFormStatus("已达到自定义页签上限，请删除后再新增。", "error");
   } else if (!isEditing && customTabFormStatusEl?.classList.contains("error")) {
@@ -6294,6 +7131,22 @@ function extractJsonArray(text) {
   return "";
 }
 
+function extractJsonObject(text) {
+  if (!text) {
+    return "";
+  }
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) {
+    return fenced[1].trim();
+  }
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start !== -1 && end !== -1 && end > start) {
+    return text.slice(start, end + 1);
+  }
+  return "";
+}
+
 function repairMalformedJsonArrayText(jsonText) {
   return String(jsonText || "")
     .replace(/,\s*([}\]])/g, "$1")
@@ -6301,11 +7154,31 @@ function repairMalformedJsonArrayText(jsonText) {
     .replace(/([,\[]\s*)(#([^"\],\r\n]+))(?=\s*[,}\]])/g, '$1"$2"');
 }
 
+function repairMalformedJsonObjectText(jsonText) {
+  return repairMalformedJsonArrayText(jsonText);
+}
+
 function parseJsonArrayWithRepair(jsonText, errorMessage) {
   try {
     return JSON.parse(jsonText);
   } catch (originalError) {
     const repairedJsonText = repairMalformedJsonArrayText(jsonText);
+    if (repairedJsonText !== jsonText) {
+      try {
+        return JSON.parse(repairedJsonText);
+      } catch (_repairError) {
+        throw new Error(errorMessage || originalError.message);
+      }
+    }
+    throw originalError;
+  }
+}
+
+function parseJsonObjectWithRepair(jsonText, errorMessage) {
+  try {
+    return JSON.parse(jsonText);
+  } catch (originalError) {
+    const repairedJsonText = repairMalformedJsonObjectText(jsonText);
     if (repairedJsonText !== jsonText) {
       try {
         return JSON.parse(repairedJsonText);
@@ -6489,11 +7362,21 @@ async function requestGeneratedPosts(
     throw new Error("Gemini 模式需要填写 API Key。");
   }
 
-  const prompt = buildPrompt(settings, resolvedFeedType, count);
+  const generationContext = isCustomFeed(resolvedFeedType)
+    ? await requestForumGenerationContext(resolvedFeedType, {
+        generationType: "posts",
+        maxCards: 10,
+        detailLevel: "full"
+      })
+    : null;
+  const prompt = buildPrompt(settings, resolvedFeedType, count, {
+    generationContext
+  });
   const privacySession = createPrivacySession({
     settings,
     profile: getCurrentProfile(),
     resolvedFeedType,
+    generationContext,
     prompt
   });
   const encodedPrompt = preparePromptWithPrivacy(prompt, privacySession);
@@ -7033,13 +7916,23 @@ async function requestGeneratedReplies(
     throw new Error("Gemini 模式需要填写 API Key。");
   }
 
+  const generationContext = isCustomFeed(resolvedFeedType)
+    ? await requestForumGenerationContext(resolvedFeedType, {
+        generationType: "replies",
+        maxCards: 8,
+        detailLevel: "full"
+      })
+    : null;
   const prompt = buildReplyPrompt(
     settings,
     profile,
     resolvedFeedType,
     rootPost,
     parentReply,
-    count
+    count,
+    {
+      generationContext
+    }
   );
   const privacySession = createPrivacySession({
     settings,
@@ -7047,6 +7940,7 @@ async function requestGeneratedReplies(
     rootPost,
     parentReply,
     feedType: resolvedFeedType,
+    generationContext,
     prompt
   });
   const encodedPrompt = preparePromptWithPrivacy(prompt, privacySession);
@@ -7813,6 +8707,64 @@ function attachEvents() {
     customTabsListEl.addEventListener("dragend", () => {
       clearCustomTabDragClasses();
       state.draggingCustomTabId = "";
+    });
+  }
+
+  if (customTabBackgroundRefreshBtn) {
+    customTabBackgroundRefreshBtn.addEventListener("click", async () => {
+      const tabId = String(state.customTabEditingId || "").trim();
+      if (!tabId) {
+        setCustomTabBackgroundStatus("请先进入一个已保存页签的编辑态。", "error");
+        return;
+      }
+      try {
+        setCustomTabBackgroundStatus("正在刷新背景卡数据…", "");
+        await loadForumBackgroundPanelData(tabId, { force: true });
+        setCustomTabBackgroundStatus("背景卡数据已刷新。", "success");
+      } catch (error) {
+        setCustomTabBackgroundStatus(`背景卡刷新失败：${error?.message || "请求失败"}`, "error");
+      }
+    });
+  }
+
+  if (customTabBackgroundExtractBtn) {
+    customTabBackgroundExtractBtn.addEventListener("click", async () => {
+      const tabId = String(state.customTabEditingId || "").trim();
+      if (!tabId) {
+        setCustomTabBackgroundStatus("请先进入一个已保存页签的编辑态。", "error");
+        return;
+      }
+      try {
+        await requestForumBackgroundExtraction(tabId);
+      } catch (_error) {
+      }
+    });
+  }
+
+  if (customTabBackgroundListEl) {
+    customTabBackgroundListEl.addEventListener("click", async (event) => {
+      const target = getEventHTMLElement(event);
+      if (!target) {
+        return;
+      }
+      const actionEl = target.closest("[data-action]");
+      if (!(actionEl instanceof HTMLElement)) {
+        return;
+      }
+      const action = String(actionEl.dataset.action || "").trim();
+      if (action !== "forum-background-card-status") {
+        return;
+      }
+      const cardId = String(actionEl.dataset.cardId || "").trim();
+      const nextStatus = String(actionEl.dataset.nextStatus || "").trim();
+      if (!cardId || !nextStatus) {
+        return;
+      }
+      try {
+        await updateForumBackgroundCardStatus(cardId, nextStatus);
+      } catch (error) {
+        setCustomTabBackgroundStatus(`背景卡更新失败：${error?.message || "请求失败"}`, "error");
+      }
     });
   }
 
