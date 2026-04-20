@@ -193,7 +193,8 @@
                 },
                 summary_faint: {
                   type: "string",
-                  description: "Blurred or vague prompt-ready summary for faint recall."
+                  description:
+                    "Blurred prompt-ready summary for faint recall using third-person wording with explicit charname/username references when possible."
                 },
                 base_importance: {
                   type: "integer",
@@ -259,16 +260,16 @@
       },
       promptHint: [
         "请只返回 json，不要解释，不要 markdown。",
-        'json 示例：{"items":[{"action":"create","memory_type":"relationship","canonical_text":"她会在你说到公开关系时明显紧张。","summary_short":"她对公开关系这件事会紧张。","summary_faint":"你隐约记得她对公开关系有些顾虑。","base_importance":82,"confidence":0.84,"keywords":["公开关系","紧张"],"entity_refs":[],"emotion_intensity":0.58,"emotion_profile":{"紧张":0.74},"interaction_tendency":{"回避":0.46},"emotion_summary":"这件事会让她下意识紧张。","source_excerpt":"她说现在公开会有点慌。","reason_note":"这会持续影响她对亲密关系推进的反应。"}]}'
+        'json 示例：{"items":[{"action":"create","memory_type":"relationship","canonical_text":"charname 在 username 提到公开关系时会明显紧张。","summary_short":"charname 对公开关系这件事会紧张。","summary_faint":"charname 对公开关系似乎仍有些顾虑。","base_importance":82,"confidence":0.84,"keywords":["公开关系","紧张"],"entity_refs":[],"emotion_intensity":0.58,"emotion_profile":{"紧张":0.74},"interaction_tendency":{"回避":0.46},"emotion_summary":"这件事会让 charname 下意识紧张。","source_excerpt":"她说现在公开会有点慌。","reason_note":"这会持续影响 charname 对亲密关系推进的反应。"}]}'
       ].join("\n"),
       repairExample: {
         items: [
           {
             action: "create",
             memory_type: "relationship",
-            canonical_text: "她会在你说到公开关系时明显紧张。",
-            summary_short: "她对公开关系这件事会紧张。",
-            summary_faint: "你隐约记得她对公开关系有些顾虑。",
+            canonical_text: "charname 在 username 提到公开关系时会明显紧张。",
+            summary_short: "charname 对公开关系这件事会紧张。",
+            summary_faint: "charname 对公开关系似乎仍有些顾虑。",
             base_importance: 82,
             confidence: 0.84,
             keywords: ["公开关系", "紧张"],
@@ -280,9 +281,9 @@
             interaction_tendency: {
               回避: 0.46
             },
-            emotion_summary: "这件事会让她下意识紧张。",
+            emotion_summary: "这件事会让 charname 下意识紧张。",
             source_excerpt: "她说现在公开会有点慌。",
-            reason_note: "这会持续影响她对亲密关系推进的反应。"
+            reason_note: "这会持续影响 charname 对亲密关系推进的反应。"
           }
         ]
       },

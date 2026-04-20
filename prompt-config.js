@@ -656,6 +656,7 @@
         ],
         persona_alignment: [
           createTemplateItem("contact_persona", "联系人性格", "这个联系人的稳定性格与表达底色：{{contactPersona}}。"),
+          createTemplateItem("name_alias", "命名约定", "在本次输出里，charname 指 {{contactName}}，username 指 {{userName}}。如果需要写人名，请优先直接使用这两个名字。"),
           createTemplateItem("user_name", "聊天对象昵称", "聊天对象昵称：{{userName}}。"),
           createTemplateItem("user_persona", "用户画像", "用户整体画像：{{userPersona}}。"),
           createTemplateItem("goal", "提取目标", "你的目标不是写摘要，而是从新对话中提取未来聊天真正值得留存、方便自然回想的内容。"),
@@ -668,8 +669,8 @@
           createTemplateItem("action_rule", "动作字段", "action 只能是 create / reinforce / supersede / ignore。语义重复、只是再次确认时优先 reinforce；新事实替代旧事实时用 supersede；没有留存价值时用 ignore。"),
           createTemplateItem("target_rule", "命中旧记忆", "如果你明确命中某条已有记忆，请把那条记忆的 memory_id 填进 target_memory_ref。尤其是 reinforce / supersede，优先给 target_memory_ref。"),
           createTemplateItem("type_rule", "类型字段", "memory_type 优先使用 relationship / preference / fact / event / scene / habit / constraint。memory_subtype 可选，只在你很明确时填写。"),
-          createTemplateItem("content_tone", "表述语气", "canonical_text 和 summary_short 请尽量使用客观、克制、委婉的描述，只写能从对话稳定归纳出的信息，不夸大，不下过重判断。"),
-          createTemplateItem("faint_rule", "模糊记忆", "summary_faint 要写成“隐约记得”的版本，比 summary_short 更模糊、更像残留印象。"),
+          createTemplateItem("content_tone", "表述语气", "canonical_text、summary_short 和 summary_faint 都请尽量使用客观、克制、委婉的第三人称描述，只写能从对话稳定归纳出的信息，不夸大，不下过重判断。优先直接写 charname 和 username，避免使用“你 / 我 / 他 / 她 / 联系人 / 用户”这类容易产生歧义的指代。"),
+          createTemplateItem("faint_rule", "模糊记忆", "summary_faint 要写成比 summary_short 更模糊、更像残留印象的版本，但只写记忆内容本身，不要写成“你隐约记得 / 我隐约记得 / 隐约记得”的句式。优先直接写 charname 和 username，并用“似乎 / 有些 / 大概 / 隐约表现出 / 倾向于”这类词保留模糊感。"),
           createTemplateItem("importance_rule", "重要度与置信度", "base_importance 使用 0~100 整数；confidence 使用 0~1 小数。"),
           createTemplateItem("emotion_rule", "情绪字段", "如果这条记忆带有持续情绪影响，可以填写 emotion_intensity、emotion_profile、interaction_tendency、emotion_summary；没有就留空或给空对象。"),
           createTemplateItem("reason_rule", "原因说明", "reason_note 必填，用一句短话说明为什么建议这样处理。"),

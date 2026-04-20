@@ -11484,12 +11484,15 @@ function normalizeMemoryExtractionScoreMap(value, fallback = {}) {
 }
 
 function buildDefaultFaintMemorySummary(summaryShort = "", canonicalText = "") {
-  const sourceText = String(summaryShort || canonicalText || "").trim();
+  const sourceText = String(summaryShort || canonicalText || "")
+    .replace(/^\s*你隐约记得[：:，,\s]*/u, "")
+    .replace(/^\s*我隐约记得[：:，,\s]*/u, "")
+    .replace(/^\s*隐约记得[：:，,\s]*/u, "")
+    .trim();
   if (!sourceText) {
     return "";
   }
-  const shortenedText = sourceText.length > 48 ? `${sourceText.slice(0, 48)}…` : sourceText;
-  return `你隐约记得：${shortenedText}`;
+  return sourceText.length > 48 ? `${sourceText.slice(0, 48)}…` : sourceText;
 }
 
 function normalizeExtractedMemoryCandidate(item = {}, index = 0, contactId = "") {
