@@ -25,6 +25,7 @@ const MESSAGE_VIDEO_MEDIA_KEY = "x_style_generator_message_video_media_v1";
 const MESSAGE_REPLY_TASKS_KEY = "x_style_generator_message_reply_tasks_v1";
 const MESSAGE_REPLY_RECOVERY_KEY = "x_style_generator_message_reply_recovery_v1";
 const MESSAGE_ACTIVE_VIEW_KEY = "x_style_generator_message_active_view_v1";
+const MESSAGE_CHAT_SYNC_STATE_KEY = "x_style_generator_message_chat_sync_state_v1";
 const MESSAGE_PROACTIVE_TRIGGER_RUNS_KEY = "x_style_generator_message_proactive_trigger_runs_v1";
 const MESSAGE_PROACTIVE_TRIGGER_LOCKS_KEY = "x_style_generator_message_proactive_trigger_locks_v1";
 const PLOT_THREADS_KEY = "x_style_generator_plot_threads_v1";
@@ -110,6 +111,8 @@ const CONVERSATION_STORAGE_TARGET_CHARS = 1400000;
 const CONVERSATION_IMAGE_PAYLOAD_KEEP_COUNT = 20;
 const CONVERSATION_LIST_LONG_PRESS_MS = 560;
 const CONVERSATION_LIST_LONG_PRESS_MOVE_THRESHOLD = 12;
+const CHAT_SYNC_DEBOUNCE_MS = 8000;
+const CHAT_SYNC_STARTUP_RETRY_DELAY_MS = 1200;
 const MESSAGE_REPLY_RECOVERY_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_WORLDVIEW =
   "这是一个强调长期主义、产品洞察和公共讨论质量的中文社交世界。用户习惯像在 X 上一样快速表达观点，但会天然追问效率、增长、AI 和平台变迁。整体语气要真实、犀利、能引发跟帖，不要写成官方通稿。";
@@ -385,6 +388,10 @@ let foregroundReplySyncConversationId = "";
 let foregroundReplySyncUntil = 0;
 let conversationStorageMaintenanceTimerId = 0;
 let voiceCallDurationTimerId = 0;
+let chatSyncFlushTimerId = 0;
+let chatSyncFlushInFlight = false;
+let chatSyncDeferredReason = "";
+let chatSyncDeferredAt = 0;
 const messagesChatClearHistoryBtnEl = document.querySelector("#messages-chat-clear-history-btn");
 const messagesChatClearMemoryBtnEl = document.querySelector("#messages-chat-clear-memory-btn");
 const messagesChatSettingsStatusEl = document.querySelector("#messages-chat-settings-status");
@@ -805,6 +812,8 @@ const state = {
   pendingConversationRenderOptions: null
 };
 
+let chatSyncQueueState = null;
+
 function isEmbeddedView() {
   try {
     const params = new URLSearchParams(window.location.search);
@@ -1016,6 +1025,372 @@ async function requestMessagesStorageApi(pathname, options = {}) {
   }
 
   return payload;
+}
+
+function normalizeChatSyncReason(value = "", fallback = "mutation") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["mutation", "startup_retry", "pagehide", "manual"].includes(normalized)) {
+    return normalized;
+  }
+  return fallback;
+}
+
+function normalizeChatSyncTimestamp(value = 0) {
+  return Math.max(0, Number(value) || 0);
+}
+
+function normalizeChatSyncQueueState(value = null) {
+  const source = value && typeof value === "object" ? value : {};
+  const pendingUpserts = {};
+  const pendingDeletes = {};
+
+  Object.entries(source.pendingUpserts || {}).forEach(([conversationId, entry]) => {
+    const resolvedConversationId = String(conversationId || entry?.conversationId || "").trim();
+    if (!resolvedConversationId) {
+      return;
+    }
+    pendingUpserts[resolvedConversationId] = {
+      conversationId: resolvedConversationId,
+      lastMutatedAt: normalizeChatSyncTimestamp(
+        entry?.lastMutatedAt || entry?.clientUpdatedAt || entry?.updatedAt
+      )
+    };
+  });
+
+  Object.entries(source.pendingDeletes || {}).forEach(([conversationId, entry]) => {
+    const resolvedConversationId = String(conversationId || entry?.conversationId || "").trim();
+    if (!resolvedConversationId) {
+      return;
+    }
+    pendingDeletes[resolvedConversationId] = {
+      conversationId: resolvedConversationId,
+      deletedAt: normalizeChatSyncTimestamp(entry?.deletedAt || entry?.updatedAt)
+    };
+  });
+
+  return {
+    pendingUpserts,
+    pendingDeletes,
+    lastError: String(source.lastError || "").trim(),
+    lastSuccessAt: normalizeChatSyncTimestamp(source.lastSuccessAt)
+  };
+}
+
+function loadChatSyncQueueState() {
+  chatSyncQueueState = normalizeChatSyncQueueState(
+    readStoredJson(MESSAGE_CHAT_SYNC_STATE_KEY, null)
+  );
+  return chatSyncQueueState;
+}
+
+function getChatSyncQueueState() {
+  return chatSyncQueueState ? chatSyncQueueState : loadChatSyncQueueState();
+}
+
+function persistChatSyncQueueState(nextState = null) {
+  const resolvedState = normalizeChatSyncQueueState(nextState || getChatSyncQueueState());
+  chatSyncQueueState = resolvedState;
+  safeSetItem(MESSAGE_CHAT_SYNC_STATE_KEY, JSON.stringify(resolvedState));
+  return resolvedState;
+}
+
+function hasPendingChatSyncEntries(queueState = getChatSyncQueueState()) {
+  return Boolean(
+    Object.keys(queueState.pendingUpserts || {}).length ||
+      Object.keys(queueState.pendingDeletes || {}).length
+  );
+}
+
+function getConversationLastMutatedAt(conversation = null) {
+  if (!conversation || typeof conversation !== "object") {
+    return 0;
+  }
+  return normalizeChatSyncTimestamp(
+    conversation.lastMutatedAt ||
+      conversation.updatedAt ||
+      conversation.messages?.[conversation.messages.length - 1]?.updatedAt ||
+      conversation.messages?.[conversation.messages.length - 1]?.createdAt
+  );
+}
+
+function ensureConversationLastMutatedAt(conversation = null) {
+  if (!conversation || typeof conversation !== "object") {
+    return 0;
+  }
+  const nextValue = getConversationLastMutatedAt(conversation) || Date.now();
+  conversation.lastMutatedAt = nextValue;
+  return nextValue;
+}
+
+function markConversationMutated(conversation = null, timestamp = Date.now()) {
+  if (!conversation || typeof conversation !== "object") {
+    return 0;
+  }
+  const nextValue = Math.max(
+    ensureConversationLastMutatedAt(conversation),
+    normalizeChatSyncTimestamp(timestamp) || Date.now()
+  );
+  conversation.lastMutatedAt = nextValue;
+  return nextValue;
+}
+
+function resolveConversationForChatSync(conversationOrId = null) {
+  const resolvedConversationId =
+    typeof conversationOrId === "string"
+      ? String(conversationOrId || "").trim()
+      : String(conversationOrId?.id || "").trim();
+  if (!resolvedConversationId) {
+    return null;
+  }
+  if (conversationOrId && typeof conversationOrId === "object" && resolvedConversationId) {
+    ensureConversationLastMutatedAt(conversationOrId);
+    return conversationOrId;
+  }
+  return (
+    state.conversations.find((conversation) => String(conversation?.id || "").trim() === resolvedConversationId) ||
+    loadConversations().find((conversation) => String(conversation?.id || "").trim() === resolvedConversationId) ||
+    null
+  );
+}
+
+function cloneConversationForChatSync(conversation = null) {
+  const resolvedConversation = resolveConversationForChatSync(conversation);
+  if (!resolvedConversation) {
+    return null;
+  }
+  const clonedConversation = cloneConversationsForStorage([resolvedConversation])[0] || null;
+  if (!clonedConversation) {
+    return null;
+  }
+  clonedConversation.lastMutatedAt = ensureConversationLastMutatedAt(resolvedConversation);
+  clonedConversation.messages = Array.isArray(clonedConversation.messages)
+    ? clonedConversation.messages.map((message) => ({
+        ...message,
+        updatedAt: normalizeChatSyncTimestamp(message?.updatedAt || message?.createdAt) || Date.now()
+      }))
+    : [];
+  return clonedConversation;
+}
+
+function queueChatSyncFlush(reason = "mutation", delayMs = CHAT_SYNC_DEBOUNCE_MS) {
+  const resolvedReason = normalizeChatSyncReason(reason);
+  const resolvedDelay = Math.max(0, Number(delayMs) || 0);
+  if (chatSyncFlushInFlight) {
+    chatSyncDeferredReason = resolvedReason;
+    chatSyncDeferredAt = Date.now();
+    return false;
+  }
+  if (chatSyncFlushTimerId) {
+    window.clearTimeout(chatSyncFlushTimerId);
+  }
+  chatSyncFlushTimerId = window.setTimeout(() => {
+    chatSyncFlushTimerId = 0;
+    void flushPendingChatSyncQueue({
+      reason: resolvedReason
+    });
+  }, resolvedDelay);
+  return true;
+}
+
+function enqueueConversationChatSyncUpsert(conversationOrId = null, options = {}) {
+  const resolvedConversation = resolveConversationForChatSync(conversationOrId);
+  if (!resolvedConversation) {
+    return false;
+  }
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const queueState = getChatSyncQueueState();
+  const conversationId = String(resolvedConversation.id || "").trim();
+  queueState.pendingUpserts[conversationId] = {
+    conversationId,
+    lastMutatedAt: ensureConversationLastMutatedAt(resolvedConversation)
+  };
+  if (Object.prototype.hasOwnProperty.call(queueState.pendingDeletes, conversationId)) {
+    delete queueState.pendingDeletes[conversationId];
+  }
+  queueState.lastError = "";
+  persistChatSyncQueueState(queueState);
+  if (requestOptions.scheduleFlush !== false) {
+    queueChatSyncFlush(requestOptions.reason || "mutation");
+  }
+  return true;
+}
+
+function enqueueConversationChatSyncDelete(conversationIds = [], options = {}) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const resolvedIds = normalizeObjectArray(conversationIds)
+    .map((conversationId) => String(conversationId || "").trim())
+    .filter(Boolean);
+  if (!resolvedIds.length) {
+    return false;
+  }
+  const queueState = getChatSyncQueueState();
+  const deletedAt = normalizeChatSyncTimestamp(requestOptions.deletedAt) || Date.now();
+  resolvedIds.forEach((conversationId) => {
+    delete queueState.pendingUpserts[conversationId];
+    queueState.pendingDeletes[conversationId] = {
+      conversationId,
+      deletedAt
+    };
+  });
+  queueState.lastError = "";
+  persistChatSyncQueueState(queueState);
+  if (requestOptions.scheduleFlush !== false) {
+    queueChatSyncFlush(requestOptions.reason || "mutation");
+  }
+  return true;
+}
+
+function scheduleChatSyncStartupRetry(delayMs = CHAT_SYNC_STARTUP_RETRY_DELAY_MS) {
+  if (!hasPendingChatSyncEntries()) {
+    return false;
+  }
+  return queueChatSyncFlush("startup_retry", delayMs);
+}
+
+async function flushPendingChatSyncQueue(options = {}) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const reason = normalizeChatSyncReason(requestOptions.reason, "mutation");
+  if (chatSyncFlushTimerId) {
+    window.clearTimeout(chatSyncFlushTimerId);
+    chatSyncFlushTimerId = 0;
+  }
+  if (chatSyncFlushInFlight) {
+    if (requestOptions.rescheduleOnFailure !== false) {
+      chatSyncDeferredReason = reason;
+      chatSyncDeferredAt = Date.now();
+    }
+    return {
+      ok: false,
+      skipped: true,
+      reason: "in_flight"
+    };
+  }
+
+  const queueState = getChatSyncQueueState();
+  if (!hasPendingChatSyncEntries(queueState)) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: "empty"
+    };
+  }
+
+  const mergedConversations = mergePreferredLocalConversations(
+    Array.isArray(state.conversations) ? state.conversations.slice() : [],
+    loadConversations()
+  );
+  const conversationById = new Map(
+    mergedConversations
+      .map((conversation) => [String(conversation?.id || "").trim(), conversation])
+      .filter((entry) => entry[0])
+  );
+  const missingConversationIds = [];
+  const sentUpserts = Object.values(queueState.pendingUpserts || {}).flatMap((entry) => {
+    const conversationId = String(entry?.conversationId || "").trim();
+    const conversation = conversationById.get(conversationId);
+    if (!conversation) {
+      missingConversationIds.push(conversationId);
+      return [];
+    }
+    const conversationSnapshot = cloneConversationForChatSync(conversation);
+    if (!conversationSnapshot) {
+      missingConversationIds.push(conversationId);
+      return [];
+    }
+    return [
+      {
+        conversationId,
+        lastMutatedAt:
+          normalizeChatSyncTimestamp(entry?.lastMutatedAt) ||
+          ensureConversationLastMutatedAt(conversation),
+        conversation: conversationSnapshot
+      }
+    ];
+  });
+  const sentDeletes = Object.values(queueState.pendingDeletes || {}).map((entry) => ({
+    conversationId: String(entry?.conversationId || "").trim(),
+    deletedAt: normalizeChatSyncTimestamp(entry?.deletedAt) || Date.now()
+  }));
+
+  if (!sentUpserts.length && !sentDeletes.length) {
+    const nextState = {
+      ...queueState,
+      lastError: missingConversationIds.length
+        ? `聊天同步失败：未找到会话 ${missingConversationIds.join(", ")}。`
+        : queueState.lastError
+    };
+    persistChatSyncQueueState(nextState);
+    return {
+      ok: false,
+      skipped: true,
+      reason: "no_payload",
+      missingConversationIds
+    };
+  }
+
+  chatSyncFlushInFlight = true;
+  try {
+    const payload = await requestMessagesStorageApi("/api/chat/sync", {
+      method: "POST",
+      body: JSON.stringify({
+        ownerId: "default",
+        reason,
+        upserts: sentUpserts.map((entry) => ({
+          conversation: entry.conversation,
+          lastMutatedAt: entry.lastMutatedAt
+        })),
+        deletes: sentDeletes
+      }),
+      keepalive: Boolean(requestOptions.keepalive)
+    });
+
+    const latestQueueState = loadChatSyncQueueState();
+    sentUpserts.forEach((entry) => {
+      const currentEntry = latestQueueState.pendingUpserts[entry.conversationId];
+      if (
+        currentEntry &&
+        normalizeChatSyncTimestamp(currentEntry.lastMutatedAt) ===
+          normalizeChatSyncTimestamp(entry.lastMutatedAt)
+      ) {
+        delete latestQueueState.pendingUpserts[entry.conversationId];
+      }
+    });
+    sentDeletes.forEach((entry) => {
+      const currentEntry = latestQueueState.pendingDeletes[entry.conversationId];
+      if (
+        currentEntry &&
+        normalizeChatSyncTimestamp(currentEntry.deletedAt) ===
+          normalizeChatSyncTimestamp(entry.deletedAt)
+      ) {
+        delete latestQueueState.pendingDeletes[entry.conversationId];
+      }
+    });
+    latestQueueState.lastError = "";
+    latestQueueState.lastSuccessAt = Date.now();
+    persistChatSyncQueueState(latestQueueState);
+    return payload;
+  } catch (error) {
+    const latestQueueState = loadChatSyncQueueState();
+    latestQueueState.lastError = String(error?.message || "聊天记录同步失败。").trim();
+    persistChatSyncQueueState(latestQueueState);
+    if (requestOptions.rescheduleOnFailure !== false) {
+      queueChatSyncFlush(reason, CHAT_SYNC_DEBOUNCE_MS);
+    }
+    return {
+      ok: false,
+      error
+    };
+  } finally {
+    chatSyncFlushInFlight = false;
+    if (chatSyncDeferredAt) {
+      const deferredReason = chatSyncDeferredReason || "mutation";
+      const elapsed = Math.max(0, Date.now() - chatSyncDeferredAt);
+      const delay = Math.max(0, CHAT_SYNC_DEBOUNCE_MS - elapsed);
+      chatSyncDeferredReason = "";
+      chatSyncDeferredAt = 0;
+      queueChatSyncFlush(deferredReason, delay);
+    }
+  }
 }
 
 function buildMemoryCloudSemanticKey(entry = {}) {
@@ -2356,6 +2731,7 @@ function applyConversationReplyRecovery(conversations = []) {
   const now = Date.now();
   let changed = false;
   let recoveryMapChanged = false;
+  const changedConversationIds = new Set();
   const conversationById = new Map(
     normalizeObjectArray(conversations)
       .map((conversation) => [String(conversation?.id || "").trim(), conversation])
@@ -2425,6 +2801,7 @@ function applyConversationReplyRecovery(conversations = []) {
       );
       if (clearedPendingFlags) {
         changed = true;
+        changedConversationIds.add(resolvedConversationId);
       }
       delete recoveryMap[conversationId];
       recoveryMapChanged = true;
@@ -2439,9 +2816,15 @@ function applyConversationReplyRecovery(conversations = []) {
       recoveryPendingUserMessageIds
     );
     recalculateConversationUpdatedAt(conversation);
+    markConversationMutated(
+      conversation,
+      appendedMessages[appendedMessages.length - 1]?.updatedAt || Date.now()
+    );
     changed = true;
+    changedConversationIds.add(resolvedConversationId);
     if (clearedPendingFlags) {
       changed = true;
+      changedConversationIds.add(resolvedConversationId);
     }
     delete recoveryMap[conversationId];
     recoveryMapChanged = true;
@@ -2450,7 +2833,7 @@ function applyConversationReplyRecovery(conversations = []) {
   if (recoveryMapChanged) {
     persistReplyRecoveryMap(recoveryMap);
   }
-  return changed;
+  return changed ? Array.from(changedConversationIds) : false;
 }
 
 function getReplyTaskPulseAt(task = null) {
@@ -6785,7 +7168,11 @@ function normalizeConversationMessage(message, index = 0) {
       /^\d{1,2}:\d{2}$/.test(String(message?.time || "").trim())
         ? String(message.time).trim()
         : formatLocalTime(),
-    createdAt: Number(message?.createdAt) || Date.now() + index
+    createdAt: Number(message?.createdAt) || Date.now() + index,
+    updatedAt:
+      Number(message?.updatedAt) ||
+      Number(message?.createdAt) ||
+      Date.now() + index
   };
 }
 
@@ -6897,7 +7284,13 @@ function normalizeConversation(conversation, index = 0) {
       source.memorySummaryLastMessageCount,
       messages.length
     ),
-    updatedAt: Number(source.updatedAt) || messages[messages.length - 1]?.createdAt || Date.now()
+    updatedAt: Number(source.updatedAt) || messages[messages.length - 1]?.createdAt || Date.now(),
+    lastMutatedAt:
+      Number(source.lastMutatedAt) ||
+      Number(source.updatedAt) ||
+      messages[messages.length - 1]?.updatedAt ||
+      messages[messages.length - 1]?.createdAt ||
+      Date.now()
   };
 }
 
@@ -7932,7 +8325,8 @@ function createConversation(contact) {
     replyContextVersion: 0,
     memorySummaryCounter: 0,
     memorySummaryLastMessageCount: 0,
-    updatedAt: Date.now()
+    updatedAt: Date.now(),
+    lastMutatedAt: Date.now()
   };
   state.conversations = [conversation, ...state.conversations];
   persistConversations();
@@ -13552,7 +13946,12 @@ function flushPendingAssistantReveal(conversationId = "", options = {}) {
     return [];
   }
   recalculateConversationUpdatedAt(targetConversation);
+  markConversationMutated(
+    targetConversation,
+    appendedRevealMessages[appendedRevealMessages.length - 1]?.updatedAt || Date.now()
+  );
   persistConversations();
+  enqueueConversationChatSyncUpsert(targetConversation);
   const flushOptions = options && typeof options === "object" ? options : {};
   if (
     !flushOptions.suppressRender &&
@@ -13645,10 +14044,15 @@ async function appendAssistantReplyBatch(
       return [];
     }
     recalculateConversationUpdatedAt(activeConversation);
+    markConversationMutated(
+      activeConversation,
+      createdMessages[createdMessages.length - 1]?.updatedAt || Date.now()
+    );
     persistConversations({
       deferMaintenance: true,
       fallbackToMaintenanceOnFailure: false
     });
+    enqueueConversationChatSyncUpsert(activeConversation);
     clearConversationReplyRecovery(conversationId);
     if (state.activeTab === "chat") {
       renderMessagesPage();
@@ -13717,6 +14121,10 @@ async function appendAssistantReplyBatch(
     if (appendedCurrentMessage) {
       appendedMessages.push(appendedCurrentMessage);
       recalculateConversationUpdatedAt(nextConversation);
+      markConversationMutated(
+        nextConversation,
+        appendedCurrentMessage.updatedAt || appendedCurrentMessage.createdAt || Date.now()
+      );
       shouldPersistConversationAfterReveal = true;
     }
     setPendingAssistantReveal(conversationId, createdMessages.slice(index + 1), {
@@ -13745,6 +14153,10 @@ async function appendAssistantReplyBatch(
     const repairedMessages = appendUniqueMessagesToConversation(latestConversation, createdMessages);
     if (repairedMessages.length) {
       recalculateConversationUpdatedAt(latestConversation);
+      markConversationMutated(
+        latestConversation,
+        repairedMessages[repairedMessages.length - 1]?.updatedAt || Date.now()
+      );
       appendedMessages.push(...repairedMessages);
       shouldPersistConversationAfterReveal = true;
     }
@@ -13754,6 +14166,7 @@ async function appendAssistantReplyBatch(
       deferMaintenance: true,
       fallbackToMaintenanceOnFailure: false
     });
+    enqueueConversationChatSyncUpsert(latestConversation || conversationId);
   }
   if (
     latestConversation &&
@@ -19882,15 +20295,24 @@ function editConversationMessage(messageId = "") {
     setMessagesStatus("消息内容不能为空。", "error");
     return;
   }
+  const editedAt = Date.now();
 
   conversation.messages = conversation.messages.map((message) =>
-    message.id === targetMessage.id ? { ...message, text: resolved } : message
+    message.id === targetMessage.id
+      ? {
+          ...message,
+          text: resolved,
+          updatedAt: editedAt
+        }
+      : message
   );
   recalculateConversationUpdatedAt(conversation);
+  markConversationMutated(conversation, editedAt);
   bumpConversationReplyContextVersion(conversation);
   cancelConversationReplyWork(conversation.id);
   state.messageActionMessageId = "";
   persistConversations();
+  enqueueConversationChatSyncUpsert(conversation);
   queueConversationRenderOptions({
     scrollBehavior: "preserve",
     scrollSnapshot
@@ -19937,11 +20359,14 @@ function deleteConversationMessage(messageId = "") {
   ) {
     setInnerThoughtModalOpen(false);
   }
+  const deletedAt = Date.now();
   recalculateConversationUpdatedAt(conversation);
+  markConversationMutated(conversation, deletedAt);
   bumpConversationReplyContextVersion(conversation);
   cancelConversationReplyWork(conversation.id);
   state.messageActionMessageId = "";
   persistConversations();
+  enqueueConversationChatSyncUpsert(conversation);
   queueConversationRenderOptions({
     scrollBehavior: "preserve",
     scrollSnapshot
@@ -19966,6 +20391,7 @@ function clearCurrentConversationHistory() {
   conversation.memorySummaryLastMessageCount = 0;
   conversation.voiceCallState = normalizeVoiceCallState();
   conversation.updatedAt = Date.now();
+  markConversationMutated(conversation, conversation.updatedAt);
   bumpConversationReplyContextVersion(conversation);
   cancelConversationReplyWork(conversation.id);
   resetConversationVisibleMessageCount(conversation.id);
@@ -19976,6 +20402,7 @@ function clearCurrentConversationHistory() {
     setDiscussionShareModalOpen(false);
   }
   persistConversations();
+  enqueueConversationChatSyncUpsert(conversation);
   queueConversationRenderOptions({
     scrollBehavior: "bottom"
   });
@@ -20296,6 +20723,10 @@ function deleteConversationContactBundle(contactId = "", options = {}) {
   persistCommonPlaces();
   persistPresenceState();
   persistConversations();
+  enqueueConversationChatSyncDelete(conversationIds, {
+    reason: "mutation",
+    deletedAt: Date.now()
+  });
   persistContacts();
 
   return {
@@ -20751,11 +21182,13 @@ async function sendConversationImage(file) {
 
   conversation.messages = [...conversation.messages, userMessage];
   conversation.updatedAt = userMessage.createdAt;
+  markConversationMutated(conversation, userMessage.updatedAt || userMessage.createdAt);
   bumpConversationReplyContextVersion(conversation);
   persistConversations({
     deferMaintenance: true,
     fallbackToMaintenanceOnFailure: true
   });
+  enqueueConversationChatSyncUpsert(conversation);
   queueConversationRenderOptions({
     scrollBehavior: "bottom"
   });
@@ -20792,11 +21225,13 @@ function sendConversationPhoto(description = "") {
 
   conversation.messages = [...conversation.messages, userMessage];
   conversation.updatedAt = userMessage.createdAt;
+  markConversationMutated(conversation, userMessage.updatedAt || userMessage.createdAt);
   bumpConversationReplyContextVersion(conversation);
   persistConversations({
     deferMaintenance: true,
     fallbackToMaintenanceOnFailure: true
   });
+  enqueueConversationChatSyncUpsert(conversation);
   setPhotoModalOpen(false);
   queueConversationRenderOptions({
     scrollBehavior: "bottom"
@@ -20836,11 +21271,13 @@ function sendConversationVoice(content = "") {
 
   conversation.messages = [...conversation.messages, userMessage];
   conversation.updatedAt = userMessage.createdAt;
+  markConversationMutated(conversation, userMessage.updatedAt || userMessage.createdAt);
   bumpConversationReplyContextVersion(conversation);
   persistConversations({
     deferMaintenance: true,
     fallbackToMaintenanceOnFailure: true
   });
+  enqueueConversationChatSyncUpsert(conversation);
   setVoiceModalOpen(false);
   queueConversationRenderOptions({
     scrollBehavior: "bottom"
@@ -20880,12 +21317,14 @@ function sendConversationLocation(locationName, coordinates) {
 
   conversation.messages = [...conversation.messages, userMessage];
   conversation.updatedAt = userMessage.createdAt;
+  markConversationMutated(conversation, userMessage.updatedAt || userMessage.createdAt);
   bumpConversationReplyContextVersion(conversation);
   saveRecentLocation(resolvedName, resolvedCoordinates);
   persistConversations({
     deferMaintenance: true,
     fallbackToMaintenanceOnFailure: true
   });
+  enqueueConversationChatSyncUpsert(conversation);
   setLocationModalOpen(false);
   queueConversationRenderOptions({
     scrollBehavior: "bottom"
@@ -21002,11 +21441,13 @@ function finalizeConversationMutation(conversation, renderOptions = {}, statusMe
     return;
   }
   recalculateConversationUpdatedAt(conversation);
+  markConversationMutated(conversation, Date.now());
   bumpConversationReplyContextVersion(conversation);
   persistConversations({
     deferMaintenance: true,
     fallbackToMaintenanceOnFailure: true
   });
+  enqueueConversationChatSyncUpsert(conversation);
   queueConversationRenderOptions(renderOptions);
   renderMessagesPage();
   if (statusMessage) {
@@ -21238,6 +21679,7 @@ function sendConversationMessage(text, options = {}) {
 
   conversation.messages = [...conversation.messages, userMessage];
   conversation.updatedAt = userMessage.createdAt;
+  markConversationMutated(conversation, userMessage.updatedAt || userMessage.createdAt);
   bumpConversationReplyContextVersion(conversation);
   setConversationDraft(conversation.id, "");
   state.quotedMessageId = "";
@@ -21245,6 +21687,7 @@ function sendConversationMessage(text, options = {}) {
     deferMaintenance: true,
     fallbackToMaintenanceOnFailure: true
   });
+  enqueueConversationChatSyncUpsert(conversation);
   queueConversationRenderOptions({
     scrollBehavior: "bottom",
     focusInput: true
@@ -21754,10 +22197,15 @@ async function requestConversationReply(options = {}) {
         );
         if (restoredMessages.length) {
           recalculateConversationUpdatedAt(rollbackConversation);
+          markConversationMutated(
+            rollbackConversation,
+            restoredMessages[restoredMessages.length - 1]?.updatedAt || Date.now()
+          );
           persistConversations({
             deferMaintenance: true,
             fallbackToMaintenanceOnFailure: false
           });
+          enqueueConversationChatSyncUpsert(rollbackConversation);
         }
       }
     }
@@ -21929,6 +22377,7 @@ async function pumpBackgroundReplyTasks() {
 function initBackgroundReplyWorker() {
   requeueStaleProcessingReplyTasks();
   refreshStateFromStorage();
+  scheduleChatSyncStartupRetry();
   window.addEventListener("storage", (event) => {
     const targetKey = String(event?.key || "").trim();
     if (targetKey === MESSAGE_REPLY_TASKS_KEY) {
@@ -22017,6 +22466,13 @@ function refreshStateFromStorage() {
   const recoveredConversationMessages = applyConversationReplyRecovery(state.conversations);
   if (recoveredConversationMessages) {
     persistConversations();
+    (Array.isArray(recoveredConversationMessages) ? recoveredConversationMessages : []).forEach(
+      (conversationId) => {
+      enqueueConversationChatSyncUpsert(String(conversationId || "").trim(), {
+        scheduleFlush: false
+      });
+      }
+    );
   }
   state.contacts = loadContacts(state.conversations);
   const consumedSharedMessages = consumePendingMessageShareInbox();
@@ -22040,6 +22496,7 @@ function refreshStateFromStorage() {
   syncSendingConversationStateFromReplyTasks();
   persistContacts();
   scheduleMemoryCloudBootstrapSync();
+  scheduleChatSyncStartupRetry();
 }
 
 function primeForegroundReplySync(
@@ -24338,6 +24795,11 @@ function attachEvents() {
     flushPendingAssistantReveal("", {
       suppressRender: true
     });
+    void flushPendingChatSyncQueue({
+      reason: "pagehide",
+      keepalive: true,
+      rescheduleOnFailure: false
+    });
   });
 
   document.addEventListener("visibilitychange", () => {
@@ -24345,6 +24807,11 @@ function attachEvents() {
     if (document.hidden) {
       flushPendingAssistantReveal("", {
         suppressRender: true
+      });
+      void flushPendingChatSyncQueue({
+        reason: "pagehide",
+        keepalive: true,
+        rescheduleOnFailure: false
       });
       return;
     }
