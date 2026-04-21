@@ -2917,6 +2917,80 @@ function formatForumBackgroundStatusLabel(value = "") {
   return labels[String(value || "").trim()] || String(value || "").trim() || "未知状态";
 }
 
+function formatForumBackgroundSegmentLabel(value = "") {
+  const labels = {
+    forum_context: "论坛环境",
+    recent_campaign: "近期主线",
+    observable_timeline: "公开行程",
+    history_base: "历史基底"
+  };
+  return labels[String(value || "").trim()] || String(value || "").trim() || "未分段";
+}
+
+function formatForumBackgroundRunStatusLabel(value = "") {
+  const labels = {
+    dirty: "待重跑",
+    pending_submission: "待提交",
+    completed: "已完成",
+    failed: "失败"
+  };
+  return labels[String(value || "").trim()] || String(value || "").trim() || "未知状态";
+}
+
+function buildForumBackgroundSegmentBundle(bundle = {}, segment = null) {
+  const baseBundle = bundle && typeof bundle === "object" ? bundle : {};
+  const resolvedSegment = segment && typeof segment === "object" ? segment : null;
+  if (!resolvedSegment) {
+    return {
+      tab: baseBundle.tab || {},
+      summaryApiEnabled: Boolean(baseBundle.summaryApiEnabled),
+      summaryApiConfigId: String(baseBundle.summaryApiConfigId || "").trim(),
+      segmentKey: "",
+      segmentLabel: "",
+      maxCards: 18,
+      sources: Array.isArray(baseBundle.sources) ? baseBundle.sources : [],
+      bundleHash: String(baseBundle.bundleHash || "").trim()
+    };
+  }
+  return {
+    tab: baseBundle.tab || {},
+    summaryApiEnabled: Boolean(baseBundle.summaryApiEnabled),
+    summaryApiConfigId: String(baseBundle.summaryApiConfigId || "").trim(),
+    segmentKey: String(resolvedSegment.segmentKey || "").trim(),
+    segmentLabel:
+      String(resolvedSegment.segmentLabel || "").trim() ||
+      formatForumBackgroundSegmentLabel(resolvedSegment.segmentKey),
+    maxCards: Math.min(18, Math.max(1, Number(resolvedSegment.maxCards) || 8)),
+    sources: Array.isArray(resolvedSegment.sources) ? resolvedSegment.sources : [],
+    bundleHash: String(resolvedSegment.bundleHash || baseBundle.bundleHash || "").trim(),
+    latestRun: resolvedSegment.latestRun || null,
+    needsExtraction: Boolean(resolvedSegment.needsExtraction)
+  };
+}
+
+function selectForumBackgroundSegmentsForExtraction(bundle = {}) {
+  const segments = Array.isArray(bundle?.segments)
+    ? bundle.segments.filter(
+        (segment) => segment && Array.isArray(segment.sources) && segment.sources.length
+      )
+    : [];
+  if (!segments.length) {
+    return [buildForumBackgroundSegmentBundle(bundle, null)];
+  }
+  const dirtyOrMissingSegments = segments.filter((segment) => {
+    const latestRun = segment?.latestRun || null;
+    return (
+      Boolean(segment?.needsExtraction) ||
+      !latestRun ||
+      String(latestRun.status || "").trim() !== "completed"
+    );
+  });
+  const targetSegments = dirtyOrMissingSegments.length ? dirtyOrMissingSegments : segments;
+  return targetSegments
+    .map((segment) => buildForumBackgroundSegmentBundle(bundle, segment))
+    .filter((segmentBundle) => Array.isArray(segmentBundle.sources) && segmentBundle.sources.length);
+}
+
 function renderForumBackgroundCardActions(card = {}) {
   const cardId = String(card.id || "").trim();
   if (!cardId) {
@@ -3007,11 +3081,26 @@ function renderCustomTabBackgroundPanel(tab = null) {
 
   const counts = cached?.counts || {};
   const latestRun = cached?.bundle?.latestRun || null;
+  const segments = Array.isArray(cached?.bundle?.segments) ? cached.bundle.segments : [];
   const metaParts = [
     `当前页签：${editingTab?.name || "自定义页签"}`,
     `候选 ${counts.candidate || 0} / 已确认 ${counts.approved || 0} / 稳定 ${counts.stable || 0} / 归档 ${counts.archived || 0}`
   ];
-  if (latestRun?.status === "dirty") {
+  if (segments.length) {
+    metaParts.push(
+      segments
+        .map((segment) => {
+          const segmentLabel =
+            String(segment?.segmentLabel || "").trim() ||
+            formatForumBackgroundSegmentLabel(segment?.segmentKey);
+          const runStatus =
+            segment?.latestRun?.status || (segment?.needsExtraction ? "dirty" : "");
+          return `${segmentLabel} ${formatForumBackgroundRunStatusLabel(runStatus)}`.trim();
+        })
+        .filter(Boolean)
+        .join(" / ")
+    );
+  } else if (latestRun?.status === "dirty") {
     metaParts.push("后台检测到当前热点对应的拆卡任务是 dirty，可重跑拆卡。");
   }
   if (cached?.bundle?.summaryApiEnabled === false) {
@@ -3105,8 +3194,10 @@ async function loadForumBackgroundPanelData(tabId = "", options = {}) {
 
 function buildForumBackgroundExtractionSystemPrompt(bundle = {}) {
   const tabName = String(bundle?.tab?.name || "当前论坛页签").trim();
+  const segmentLabel = String(bundle?.segmentLabel || "").trim();
   return [
     `你是“${tabName}”论坛的背景卡候选拆解器。`,
+    segmentLabel ? `当前拆解分段：${segmentLabel}。` : "",
     "你的任务不是写摘要，而是把来源拆成可供后端审核的候选背景卡。",
     "你只能做候选提炼，不能裁定世界观真相。",
     "必须保留来源层级、原文片段、真实性等级、知识域和适用角色。",
@@ -3114,12 +3205,21 @@ function buildForumBackgroundExtractionSystemPrompt(bundle = {}) {
     "禁止把部分观点写成全体共识。",
     "禁止输出唯一结论。",
     "热点来源只允许拆成推理卡、争议卡或讨论结构卡，不要硬写成事实卡。",
+    segmentLabel && String(bundle?.segmentKey || "").trim() !== "forum_context"
+      ? "本轮只处理当前分段提供的来源，不要主动综合未提供的其他世界书、热点或页签长文。"
+      : "",
     "如果同一条信息可以拆成多种视角，请拆成多张卡，而不是糊成一段总述。"
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function buildForumBackgroundExtractionUserPrompt(bundle = {}) {
   const tab = bundle?.tab || {};
+  const segmentKey = String(bundle?.segmentKey || "").trim();
+  const segmentLabel = String(bundle?.segmentLabel || "").trim();
+  const includeFullForumContext = !segmentKey || segmentKey === "forum_context";
+  const maxCards = Math.min(18, Math.max(1, Number(bundle?.maxCards) || 18));
   const sources = Array.isArray(bundle?.sources) ? bundle.sources : [];
   const sourceBlocks = sources.length
     ? sources
@@ -3144,8 +3244,10 @@ function buildForumBackgroundExtractionUserPrompt(bundle = {}) {
   return [
     `页签名称：${tab.name || ""}`,
     `页签用户定位：${tab.audience || ""}`,
-    `页签长期文本：${tab.discussionText || ""}`,
-    `页签当前热点：${tab.hotTopic || ""}`,
+    includeFullForumContext ? `页签长期文本：${tab.discussionText || ""}` : "",
+    includeFullForumContext ? `页签当前热点：${tab.hotTopic || ""}` : "",
+    segmentLabel ? `当前拆卡分段：${segmentLabel}` : "",
+    !includeFullForumContext ? "本轮为分段拆卡，只处理下面给出的来源，不要主动补入其他来源信息。" : "",
     "",
     "请基于以上分层来源输出候选背景卡，并满足这些规则：",
     "1. 只输出 JSON 对象，顶层为 {\"items\":[...]}。",
@@ -3155,11 +3257,173 @@ function buildForumBackgroundExtractionUserPrompt(bundle = {}) {
     "5. worldbook_fact 只能来自世界书或明确的公开事实来源；热点里的争议和粉丝判断不要写成 worldbook_fact。",
     "6. 如果一个点只适合让老角色知道，就不要把 newcomer 塞进去。",
     "7. detail_text 要写成后端可直接给模型的完整背景说明，不要只是重复 summary。",
-    "8. 最多输出 18 张卡，宁缺毋滥。",
+    `8. 最多输出 ${maxCards} 张卡，宁缺毋滥。`,
     "",
     "可拆来源如下：",
     sourceBlocks
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+async function requestForumBackgroundExtractionForBundle(
+  resolvedTabId = "",
+  bundle = {},
+  apiSettings = {}
+) {
+  const requestEndpoint = validateApiSettings(apiSettings, "背景卡拆解");
+  const structuredOutputContext = createStructuredOutputContext(
+    apiSettings,
+    "forum_background_extract_v1"
+  );
+  const runPayload = await requestDiscussionStorageApi("/api/forum/background/extraction-runs", {
+    method: "POST",
+    body: JSON.stringify({
+      tabId: resolvedTabId,
+      triggerReason: "manual_editor_extract",
+      segmentKey: bundle.segmentKey || "",
+      segmentLabel: bundle.segmentLabel || "",
+      sourceBundle: bundle,
+      sourceBundleHash: bundle.bundleHash || ""
+    })
+  });
+  const systemPrompt = buildForumBackgroundExtractionSystemPrompt(bundle);
+  const userInstruction = appendStructuredOutputPromptHint(
+    buildForumBackgroundExtractionUserPrompt(bundle),
+    structuredOutputContext
+  );
+  const privacySession = createPrivacySession({
+    settings: apiSettings,
+    profile: getCurrentProfile(),
+    sourceBundle: bundle,
+    systemPrompt,
+    userInstruction
+  });
+  const encodedSystemPrompt = preparePromptWithPrivacy(systemPrompt, privacySession);
+  const encodedUserInstruction = encodeTextWithPrivacy(userInstruction, privacySession);
+  const requestBody = decorateRequestBodyWithStructuredOutput(
+    buildSingleInstructionRequestBody(
+      apiSettings,
+      encodedSystemPrompt,
+      encodedUserInstruction,
+      "forum_background_extract"
+    ),
+    structuredOutputContext
+  );
+  const logBase = applyPrivacyToLogEntry(
+    buildDiscussionApiLogBase(
+      "forum_background_extract",
+      apiSettings,
+      requestEndpoint,
+      [encodedSystemPrompt, encodedUserInstruction].join("\n\n"),
+      requestBody,
+      `页签：${bundle.tab?.name || resolvedTabId} · 分段：${
+        bundle.segmentLabel || "全量来源"
+      } · 来源 ${Array.isArray(bundle.sources) ? bundle.sources.length : 0} 条`
+    ),
+    privacySession
+  );
+  const response = await fetch(requestEndpoint, {
+    method: "POST",
+    headers: buildRequestHeaders(apiSettings),
+    body: JSON.stringify(requestBody)
+  });
+  const rawResponse = await response.text();
+  let payload = rawResponse;
+  try {
+    payload = JSON.parse(rawResponse);
+  } catch (_error) {
+    payload = rawResponse;
+  }
+  if (!response.ok) {
+    appendApiLog({
+      ...logBase,
+      ...buildGeminiLogFields(apiSettings, payload),
+      status: "error",
+      statusCode: response.status,
+      responseText: rawResponse,
+      responseBody: payload,
+      errorMessage: `背景卡拆解请求失败：HTTP ${response.status}`
+    });
+    throw new Error(`背景卡拆解请求失败：HTTP ${response.status}`);
+  }
+  let repairResult = null;
+  let structuredPayload = parseStructuredOutputPayload(payload, structuredOutputContext);
+  if (structuredOutputContext.enabled && !structuredPayload) {
+    repairResult = await requestStructuredRepairOnce(
+      apiSettings,
+      requestEndpoint,
+      structuredOutputContext,
+      rawResponse,
+      "forum_background_extract_repair"
+    );
+    if (repairResult?.ok) {
+      structuredPayload = repairResult.structuredPayload;
+    }
+    if (!structuredPayload) {
+      appendApiLog({
+        ...logBase,
+        ...buildGeminiLogFields(apiSettings, payload),
+        status: "error",
+        statusCode: repairResult?.status || response.status,
+        responseText: rawResponse,
+        responseBody: payload,
+        repairAttempted: Boolean(repairResult),
+        repairResponseText: repairResult?.rawResponseText || "",
+        repairResponseBody: repairResult?.payload || null,
+        errorMessage: "背景卡拆解返回了不可解析的结构化内容。"
+      });
+      throw new Error("背景卡拆解返回了不可解析的结构化内容。");
+    }
+  }
+  let extractedPayload =
+    structuredPayload || parseStructuredOutputPayload(payload, structuredOutputContext) || null;
+  if (!extractedPayload) {
+    const rawObjectText =
+      extractJsonObject(typeof payload === "string" ? payload : resolveMessage(payload || "")) ||
+      extractJsonObject(rawResponse);
+    if (rawObjectText) {
+      try {
+        extractedPayload = parseJsonObjectWithRepair(
+          rawObjectText,
+          "背景卡拆解 JSON 解析失败。"
+        );
+      } catch (_error) {
+      }
+    }
+  }
+  const items = Array.isArray(extractedPayload?.items) ? extractedPayload.items : [];
+  const mergePayload = await requestDiscussionStorageApi(
+    `/api/forum/background/extraction-runs/${encodeURIComponent(runPayload.run?.id || "")}/candidates`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        tabId: resolvedTabId,
+        items,
+        allowEmpty: !items.length
+      })
+    }
+  );
+  appendApiLog({
+    ...logBase,
+    ...buildGeminiLogFields(apiSettings, repairResult?.payload || payload),
+    status: "success",
+    statusCode: response.status,
+    responseText: repairResult?.rawResponseText || rawResponse,
+    responseBody: repairResult?.payload || payload,
+    summary: encodeTextWithPrivacy(
+      `页签：${bundle.tab?.name || resolvedTabId} · 分段：${
+        bundle.segmentLabel || "全量来源"
+      } · 已提交 ${items.length} 张候选背景卡`,
+      privacySession
+    )
+  });
+  return {
+    ...mergePayload,
+    segmentKey: bundle.segmentKey || "",
+    segmentLabel: bundle.segmentLabel || "",
+    emptyResult: !items.length
+  };
 }
 
 async function requestForumBackgroundExtraction(tabId = "") {
@@ -3168,7 +3432,7 @@ async function requestForumBackgroundExtraction(tabId = "") {
     return null;
   }
   state.forumBackgroundPanelExtracting = true;
-  setCustomTabBackgroundStatus("正在读取来源包并调用总结预设 API 做候选拆卡…", "");
+  setCustomTabBackgroundStatus("正在读取来源包并按分段调用总结预设 API 做候选拆卡…", "");
   renderCustomTabBackgroundPanel(getCustomTab(resolvedTabId));
   try {
     const panelData =
@@ -3181,6 +3445,10 @@ async function requestForumBackgroundExtraction(tabId = "") {
     if (!Array.isArray(bundle.sources) || !bundle.sources.length) {
       throw new Error("当前页签还没有配置可拆分的背景来源策略。");
     }
+    const segmentBundles = selectForumBackgroundSegmentsForExtraction(bundle);
+    if (!segmentBundles.length) {
+      throw new Error("当前页签还没有可拆解的来源分段。");
+    }
     const currentSettings = buildNormalizedSettingsSnapshot(getCurrentSettings());
     const usingSummaryPreset = Boolean(
       currentSettings.summaryApiEnabled && currentSettings.summaryApiConfigId
@@ -3190,181 +3458,46 @@ async function requestForumBackgroundExtraction(tabId = "") {
       "summaryApiEnabled",
       "summaryApiConfigId"
     );
-    const requestEndpoint = validateApiSettings(apiSettings, "背景卡拆解");
-    const structuredOutputContext = createStructuredOutputContext(
-      apiSettings,
-      "forum_background_extract_v1"
-    );
-    const runPayload = await requestDiscussionStorageApi("/api/forum/background/extraction-runs", {
-      method: "POST",
-      body: JSON.stringify({
-        tabId: resolvedTabId,
-        triggerReason: "manual_editor_extract",
-        sourceBundle: bundle,
-        sourceBundleHash: bundle.bundleHash || ""
-      })
-    });
-    const systemPrompt = buildForumBackgroundExtractionSystemPrompt(bundle);
-    const userInstruction = appendStructuredOutputPromptHint(
-      buildForumBackgroundExtractionUserPrompt(bundle),
-      structuredOutputContext
-    );
-    const privacySession = createPrivacySession({
-      settings: apiSettings,
-      profile: getCurrentProfile(),
-      sourceBundle: bundle,
-      systemPrompt,
-      userInstruction
-    });
-    const encodedSystemPrompt = preparePromptWithPrivacy(systemPrompt, privacySession);
-    const encodedUserInstruction = encodeTextWithPrivacy(userInstruction, privacySession);
-    const requestBody = decorateRequestBodyWithStructuredOutput(
-      buildSingleInstructionRequestBody(
-        apiSettings,
-        encodedSystemPrompt,
-        encodedUserInstruction,
-        "forum_background_extract"
-      ),
-      structuredOutputContext
-    );
-    const logBase = applyPrivacyToLogEntry(
-      buildDiscussionApiLogBase(
-        "forum_background_extract",
-        apiSettings,
-        requestEndpoint,
-        [encodedSystemPrompt, encodedUserInstruction].join("\n\n"),
-        requestBody,
-        `页签：${bundle.tab.name || resolvedTabId} · 来源 ${Array.isArray(bundle.sources) ? bundle.sources.length : 0} 条`
-      ),
-      privacySession
-    );
-    let logged = false;
-    const response = await fetch(requestEndpoint, {
-      method: "POST",
-      headers: buildRequestHeaders(apiSettings),
-      body: JSON.stringify(requestBody)
-    });
-    const rawResponse = await response.text();
-    let payload = rawResponse;
-    try {
-      payload = JSON.parse(rawResponse);
-    } catch (_error) {
-      payload = rawResponse;
-    }
-    if (!response.ok) {
-      appendApiLog({
-        ...logBase,
-        ...buildGeminiLogFields(apiSettings, payload),
-        status: "error",
-        statusCode: response.status,
-        responseText: rawResponse,
-        responseBody: payload,
-        errorMessage: `背景卡拆解请求失败：HTTP ${response.status}`
-      });
-      logged = true;
-      throw new Error(`背景卡拆解请求失败：HTTP ${response.status}`);
-    }
-    let repairResult = null;
-    let structuredPayload = parseStructuredOutputPayload(payload, structuredOutputContext);
-    if (structuredOutputContext.enabled && !structuredPayload) {
-      repairResult = await requestStructuredRepairOnce(
-        apiSettings,
-        requestEndpoint,
-        structuredOutputContext,
-        rawResponse,
-        "forum_background_extract_repair"
+    const aggregate = {
+      ok: true,
+      segmentCount: segmentBundles.length,
+      results: [],
+      runs: [],
+      summary: {
+        requestedCount: 0,
+        createdCount: 0,
+        reinforcedCount: 0
+      }
+    };
+    for (const [index, segmentBundle] of segmentBundles.entries()) {
+      setCustomTabBackgroundStatus(
+        `正在拆解 ${segmentBundle.segmentLabel || "背景卡"}（${index + 1}/${segmentBundles.length}）…`,
+        ""
       );
-      if (repairResult?.ok) {
-        structuredPayload = repairResult.structuredPayload;
+      const mergePayload = await requestForumBackgroundExtractionForBundle(
+        resolvedTabId,
+        segmentBundle,
+        apiSettings
+      );
+      aggregate.results.push(...(Array.isArray(mergePayload.results) ? mergePayload.results : []));
+      if (mergePayload.run) {
+        aggregate.runs.push(mergePayload.run);
       }
-      if (!structuredPayload) {
-        appendApiLog({
-          ...logBase,
-          ...buildGeminiLogFields(apiSettings, payload),
-          status: "error",
-          statusCode: repairResult?.status || response.status,
-          responseText: rawResponse,
-          responseBody: payload,
-          repairAttempted: Boolean(repairResult),
-          repairResponseText: repairResult?.rawResponseText || "",
-          repairResponseBody: repairResult?.payload || null,
-          errorMessage: "背景卡拆解返回了不可解析的结构化内容。"
-        });
-        logged = true;
-        throw new Error("背景卡拆解返回了不可解析的结构化内容。");
-      }
+      aggregate.summary.requestedCount += Number(mergePayload.summary?.requestedCount) || 0;
+      aggregate.summary.createdCount += Number(mergePayload.summary?.createdCount) || 0;
+      aggregate.summary.reinforcedCount += Number(mergePayload.summary?.reinforcedCount) || 0;
     }
-    let extractedPayload =
-      structuredPayload || parseStructuredOutputPayload(payload, structuredOutputContext) || null;
-    if (!extractedPayload) {
-      const rawObjectText =
-        extractJsonObject(typeof payload === "string" ? payload : resolveMessage(payload || "")) ||
-        extractJsonObject(rawResponse);
-      if (rawObjectText) {
-        try {
-          extractedPayload = parseJsonObjectWithRepair(
-            rawObjectText,
-            "背景卡拆解 JSON 解析失败。"
-          );
-        } catch (_error) {
-        }
-      }
-    }
-    const items = Array.isArray(extractedPayload?.items) ? extractedPayload.items : [];
-    if (!items.length) {
-      appendApiLog({
-        ...logBase,
-        ...buildGeminiLogFields(apiSettings, repairResult?.payload || payload),
-        status: "success",
-        statusCode: response.status,
-        responseText: repairResult?.rawResponseText || rawResponse,
-        responseBody: repairResult?.payload || payload,
-        summary: encodeTextWithPrivacy(
-          `页签：${bundle.tab.name || resolvedTabId} · 本次未提取到候选背景卡`,
-          privacySession
-        )
-      });
-      logged = true;
-      setCustomTabBackgroundStatus("本次没有提取到候选背景卡，可调整来源文本后重试。", "error");
-      return {
-        ok: true,
-        results: []
-      };
-    }
-    const mergePayload = await requestDiscussionStorageApi(
-      `/api/forum/background/extraction-runs/${encodeURIComponent(runPayload.run?.id || "")}/candidates`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          tabId: resolvedTabId,
-          items
-        })
-      }
-    );
-    appendApiLog({
-      ...logBase,
-      ...buildGeminiLogFields(apiSettings, repairResult?.payload || payload),
-      status: "success",
-      statusCode: response.status,
-      responseText: repairResult?.rawResponseText || rawResponse,
-      responseBody: repairResult?.payload || payload,
-      summary: encodeTextWithPrivacy(
-        `页签：${bundle.tab.name || resolvedTabId} · 已提交 ${items.length} 张候选背景卡`,
-        privacySession
-      )
-    });
-    logged = true;
     await loadForumBackgroundPanelData(resolvedTabId, { force: true });
     const fallbackNotice = usingSummaryPreset
       ? ""
       : " 当前未启用总结预设 API，已回退到当前激活配置。";
     setCustomTabBackgroundStatus(
-      `已提交 ${items.length} 张候选卡（新建 ${mergePayload.summary?.createdCount || 0}，强化 ${
-        mergePayload.summary?.reinforcedCount || 0
+      `已完成 ${segmentBundles.length} 个分段拆卡（新建 ${aggregate.summary.createdCount || 0}，强化 ${
+        aggregate.summary.reinforcedCount || 0
       }）。${fallbackNotice}`.trim(),
       "success"
     );
-    return mergePayload;
+    return aggregate;
   } catch (error) {
     setCustomTabBackgroundStatus(`背景卡提取失败：${error?.message || "请求失败"}`, "error");
     throw error;

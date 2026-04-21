@@ -93,6 +93,35 @@ const FORUM_BACKGROUND_SOURCE_LAYERS = new Set([
   "tab_background",
   "hot_topic"
 ]);
+const FORUM_BACKGROUND_SOURCE_SEGMENTS = [
+  {
+    key: "forum_context",
+    label: "论坛环境",
+    sourceLayers: ["hot_topic", "tab_background"],
+    defaultMaxCards: 8
+  },
+  {
+    key: "recent_campaign",
+    label: "近期主线",
+    sourceLayers: ["recent_campaign"],
+    defaultMaxCards: 6
+  },
+  {
+    key: "observable_timeline",
+    label: "公开行程",
+    sourceLayers: ["observable_timeline"],
+    defaultMaxCards: 5
+  },
+  {
+    key: "history_base",
+    label: "历史基底",
+    sourceLayers: ["history_base"],
+    defaultMaxCards: 8
+  }
+];
+const FORUM_BACKGROUND_SOURCE_SEGMENT_KEYS = new Set(
+  FORUM_BACKGROUND_SOURCE_SEGMENTS.map((item) => item.key)
+);
 const FORUM_BACKGROUND_TRUTH_LEVELS = new Set([
   "worldbook_fact",
   "tab_setting",
@@ -842,6 +871,7 @@ async function ensureBusinessSnapshotTables(db) {
       owner_id text not null,
       id text not null,
       tab_id text not null,
+      source_segment_key text not null default '',
       status text not null default 'dirty',
       trigger_reason text not null default '',
       source_bundle_jsonb jsonb not null default '{}'::jsonb,
@@ -860,6 +890,14 @@ async function ensureBusinessSnapshotTables(db) {
   await db.query(`
     create index if not exists forum_background_extraction_runs_tab_idx
       on forum_background_extraction_runs (owner_id, tab_id, created_at desc);
+  `);
+  await db.query(`
+    alter table forum_background_extraction_runs
+    add column if not exists source_segment_key text not null default '';
+  `);
+  await db.query(`
+    create index if not exists forum_background_extraction_runs_segment_idx
+      on forum_background_extraction_runs (owner_id, tab_id, source_segment_key, created_at desc);
   `);
 }
 
@@ -5322,6 +5360,21 @@ function normalizeForumBackgroundSourceLayer(value = "", fallback = "tab_backgro
   return FORUM_BACKGROUND_SOURCE_LAYERS.has(normalized) ? normalized : fallback;
 }
 
+function normalizeForumBackgroundSourceSegmentKey(value = "", fallback = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return FORUM_BACKGROUND_SOURCE_SEGMENT_KEYS.has(normalized) ? normalized : fallback;
+}
+
+function getForumBackgroundSourceSegmentDefinition(value = "") {
+  const resolvedKey = normalizeForumBackgroundSourceSegmentKey(value, "");
+  return FORUM_BACKGROUND_SOURCE_SEGMENTS.find((item) => item.key === resolvedKey) || null;
+}
+
+function formatForumBackgroundSourceSegmentLabel(value = "") {
+  const definition = getForumBackgroundSourceSegmentDefinition(value);
+  return definition?.label || String(value || "").trim() || "未分段";
+}
+
 function normalizeForumBackgroundTruthLevel(value = "", fallback = "community_viewpoint") {
   const normalized = String(value || "").trim().toLowerCase();
   return FORUM_BACKGROUND_TRUTH_LEVELS.has(normalized) ? normalized : fallback;
@@ -5502,19 +5555,29 @@ function mapForumBackgroundCardEventRow(row = {}) {
 }
 
 function mapForumBackgroundExtractionRunRow(row = {}) {
+  const sourceBundle = normalizeJsonObjectValue(row.source_bundle_jsonb, {});
+  const metadata = normalizeJsonObjectValue(row.metadata, {});
+  const sourceSegmentKey = normalizeForumBackgroundSourceSegmentKey(
+    row.source_segment_key || sourceBundle.segmentKey || metadata.segmentKey,
+    ""
+  );
   return {
     id: String(row.id || "").trim(),
     tabId: String(row.tab_id || "").trim(),
+    sourceSegmentKey,
+    sourceSegmentLabel:
+      String(sourceBundle.segmentLabel || metadata.segmentLabel || "").trim() ||
+      formatForumBackgroundSourceSegmentLabel(sourceSegmentKey),
     status: normalizeForumBackgroundRunStatus(row.status),
     triggerReason: String(row.trigger_reason || "").trim(),
-    sourceBundle: normalizeJsonObjectValue(row.source_bundle_jsonb, {}),
+    sourceBundle,
     sourceBundleHash: String(row.source_bundle_hash || "").trim(),
     hotTopicHash: String(row.hot_topic_hash || "").trim(),
     candidateCount: clampIntegerValue(row.candidate_count, 0, 9999, 0),
     submittedAt: row.submitted_at || null,
     completedAt: row.completed_at || null,
     dirtySince: row.dirty_since || null,
-    metadata: normalizeJsonObjectValue(row.metadata, {}),
+    metadata,
     createdAt: row.created_at || null,
     updatedAt: row.updated_at || null
   };
@@ -5635,6 +5698,127 @@ async function loadForumBackgroundLatestRun(db, ownerId = DEFAULT_STORAGE_OWNER_
     [ownerId, resolvedTabId]
   );
   return result.rows.length ? mapForumBackgroundExtractionRunRow(result.rows[0]) : null;
+}
+
+async function loadForumBackgroundLatestRunBySegment(
+  db,
+  ownerId = DEFAULT_STORAGE_OWNER_ID,
+  tabId = "",
+  sourceSegmentKey = ""
+) {
+  const resolvedTabId = String(tabId || "").trim();
+  const resolvedSegmentKey = normalizeForumBackgroundSourceSegmentKey(sourceSegmentKey, "");
+  if (!resolvedTabId || !resolvedSegmentKey) {
+    return null;
+  }
+  const result = await db.query(
+    `
+      select *
+      from forum_background_extraction_runs
+      where owner_id = $1
+        and tab_id = $2
+        and source_segment_key = $3
+      order by created_at desc
+      limit 1
+    `,
+    [ownerId, resolvedTabId, resolvedSegmentKey]
+  );
+  return result.rows.length ? mapForumBackgroundExtractionRunRow(result.rows[0]) : null;
+}
+
+async function loadForumBackgroundLatestRunsBySegment(
+  db,
+  ownerId = DEFAULT_STORAGE_OWNER_ID,
+  tabId = ""
+) {
+  const resolvedTabId = String(tabId || "").trim();
+  if (!resolvedTabId) {
+    return new Map();
+  }
+  const result = await db.query(
+    `
+      select distinct on (source_segment_key) *
+      from forum_background_extraction_runs
+      where owner_id = $1
+        and tab_id = $2
+        and source_segment_key <> ''
+      order by source_segment_key asc, created_at desc
+    `,
+    [ownerId, resolvedTabId]
+  );
+  return new Map(
+    result.rows.map((row) => {
+      const mapped = mapForumBackgroundExtractionRunRow(row);
+      return [mapped.sourceSegmentKey, mapped];
+    })
+  );
+}
+
+function buildForumBackgroundSegmentBundle(baseBundle = {}, segment = null) {
+  const resolvedSegment = segment && typeof segment === "object" ? segment : null;
+  if (!resolvedSegment?.segmentKey) {
+    return null;
+  }
+  const summaryApi =
+    normalizeJsonObjectValue(baseBundle.summaryApi, null) ||
+    normalizeJsonObjectValue(
+      {
+        enabled: baseBundle.summaryApiEnabled,
+        configId: baseBundle.summaryApiConfigId
+      },
+      {}
+    );
+  return {
+    tab: normalizeJsonObjectValue(baseBundle.tab, {}),
+    summaryApi,
+    summaryApiEnabled: Boolean(summaryApi.enabled),
+    summaryApiConfigId: String(summaryApi.configId || "").trim(),
+    segmentKey: resolvedSegment.segmentKey,
+    segmentLabel:
+      String(resolvedSegment.segmentLabel || "").trim() ||
+      formatForumBackgroundSourceSegmentLabel(resolvedSegment.segmentKey),
+    maxCards: clampIntegerValue(resolvedSegment.maxCards, 1, 18, 8),
+    sources: Array.isArray(resolvedSegment.sources) ? resolvedSegment.sources : [],
+    bundleHash: String(resolvedSegment.bundleHash || "").trim()
+  };
+}
+
+function buildForumBackgroundSourceSegments(baseBundle = {}) {
+  const tab = normalizeJsonObjectValue(baseBundle.tab, {});
+  const sources = Array.isArray(baseBundle.sources) ? baseBundle.sources : [];
+  return FORUM_BACKGROUND_SOURCE_SEGMENTS.map((segmentDefinition) => {
+    const segmentSources = sources.filter((source) =>
+      segmentDefinition.sourceLayers.includes(
+        normalizeForumBackgroundSourceLayer(source?.sourceLayer, "")
+      )
+    );
+    if (!segmentSources.length) {
+      return null;
+    }
+    const bundleHash = hashMemoryText(
+      JSON.stringify(
+        sanitizeJsonbValue({
+          tabId: tab.id || "",
+          segmentKey: segmentDefinition.key,
+          sources: segmentSources.map((source) => ({
+            sourceType: source.sourceType,
+            sourceId: source.sourceId,
+            sourceLayer: source.sourceLayer,
+            sourceTitle: source.sourceTitle,
+            content: source.content
+          }))
+        })
+      )
+    );
+    return {
+      segmentKey: segmentDefinition.key,
+      segmentLabel: segmentDefinition.label,
+      sourceLayers: [...segmentDefinition.sourceLayers],
+      maxCards: segmentDefinition.defaultMaxCards,
+      bundleHash,
+      sources: segmentSources
+    };
+  }).filter(Boolean);
 }
 
 async function resolveXimiluWorldbookMatches(db, ownerId = DEFAULT_STORAGE_OWNER_ID) {
@@ -5768,6 +5952,7 @@ async function buildForumBackgroundSourceBundle(
     })
     .filter(Boolean);
   const latestRun = await loadForumBackgroundLatestRun(db, ownerId, tab.id);
+  const segmentRuns = await loadForumBackgroundLatestRunsBySegment(db, ownerId, tab.id);
   const bundleHash = hashMemoryText(
     JSON.stringify(
       sanitizeJsonbValue({
@@ -5785,6 +5970,30 @@ async function buildForumBackgroundSourceBundle(
       })
     )
   );
+  const segments = buildForumBackgroundSourceSegments({
+    tab: {
+      id: tab.id,
+      name: tab.name,
+      audience: tab.audience,
+      discussionText: tab.discussionText,
+      hotTopic: tab.hotTopic
+    },
+    summaryApi: {
+      enabled: Boolean(settingsState.apiState.summaryApiEnabled),
+      configId: String(settingsState.apiState.summaryApiConfigId || "").trim()
+    },
+    sources
+  }).map((segment) => {
+    const latestSegmentRun = segmentRuns.get(segment.segmentKey) || null;
+    return {
+      ...segment,
+      latestRun: latestSegmentRun,
+      needsExtraction:
+        !latestSegmentRun ||
+        latestSegmentRun.status !== "completed" ||
+        latestSegmentRun.sourceBundleHash !== segment.bundleHash
+    };
+  });
   return {
     tab: {
       id: tab.id,
@@ -5798,80 +6007,100 @@ async function buildForumBackgroundSourceBundle(
       configId: String(settingsState.apiState.summaryApiConfigId || "").trim()
     },
     sources,
+    segments,
     latestRun,
     bundleHash
   };
 }
 
-async function markForumBackgroundDirtyRunIfNeeded(
+async function markForumBackgroundDirtyRunsIfNeeded(
   db,
   ownerId = DEFAULT_STORAGE_OWNER_ID,
   tab = null
 ) {
   const resolvedTab = tab && typeof tab === "object" ? tab : null;
   if (!resolvedTab?.id) {
-    return null;
+    return [];
   }
   const sourceBundle = await buildForumBackgroundSourceBundle(db, ownerId, resolvedTab.id, {
     skipEnsurePolicies: true
   });
   if (!sourceBundle) {
-    return null;
+    return [];
   }
-  const hotTopicHash = hashMemoryText(
-    JSON.stringify({
-      tabId: sourceBundle.tab.id,
-      hotTopic: sourceBundle.tab.hotTopic || ""
-    })
-  );
-  const existing = await db.query(
-    `
-      select *
-      from forum_background_extraction_runs
-      where owner_id = $1
-        and tab_id = $2
-        and hot_topic_hash = $3
-      order by created_at desc
-      limit 1
-    `,
-    [ownerId, sourceBundle.tab.id, hotTopicHash]
-  );
-  if (existing.rows.length) {
-    return mapForumBackgroundExtractionRunRow(existing.rows[0]);
-  }
-  const runId = randomUUID();
-  await db.query(
-    `
-      insert into forum_background_extraction_runs (
-        owner_id,
-        id,
-        tab_id,
-        status,
-        trigger_reason,
-        source_bundle_jsonb,
-        source_bundle_hash,
-        hot_topic_hash,
-        candidate_count,
-        dirty_since,
-        metadata,
-        created_at,
-        updated_at
-      )
-      values ($1, $2, $3, 'dirty', 'hot_topic_changed', $4::jsonb, $5, $6, 0, now(), $7::jsonb, now(), now())
-    `,
-    [
+  const createdRuns = [];
+  const segments = Array.isArray(sourceBundle.segments) ? sourceBundle.segments : [];
+  for (const segment of segments) {
+    const segmentKey = normalizeForumBackgroundSourceSegmentKey(segment.segmentKey, "");
+    if (!segmentKey) {
+      continue;
+    }
+    const latestRunForSegment = await loadForumBackgroundLatestRunBySegment(
+      db,
       ownerId,
-      runId,
       sourceBundle.tab.id,
-      stringifyJsonb(sourceBundle),
-      sourceBundle.bundleHash,
-      hotTopicHash,
-      stringifyJsonb({
-        seededBy: "system_ximilu_v1"
+      segmentKey
+    );
+    if (latestRunForSegment?.sourceBundleHash === segment.bundleHash) {
+      continue;
+    }
+    const runId = randomUUID();
+    const segmentBundle = buildForumBackgroundSegmentBundle(sourceBundle, segment);
+    const hotTopicHash = hashMemoryText(
+      JSON.stringify({
+        tabId: sourceBundle.tab.id,
+        segmentKey,
+        hotTopic: sourceBundle.tab.hotTopic || "",
+        sourceBundleHash: segment.bundleHash
       })
-    ]
-  );
-  return loadForumBackgroundLatestRun(db, ownerId, sourceBundle.tab.id);
+    );
+    await db.query(
+      `
+        insert into forum_background_extraction_runs (
+          owner_id,
+          id,
+          tab_id,
+          source_segment_key,
+          status,
+          trigger_reason,
+          source_bundle_jsonb,
+          source_bundle_hash,
+          hot_topic_hash,
+          candidate_count,
+          dirty_since,
+          metadata,
+          created_at,
+          updated_at
+        )
+        values ($1, $2, $3, $4, 'dirty', $5, $6::jsonb, $7, $8, 0, now(), $9::jsonb, now(), now())
+      `,
+      [
+        ownerId,
+        runId,
+        sourceBundle.tab.id,
+        segmentKey,
+        segmentKey === "forum_context" ? "forum_context_changed" : "source_segment_changed",
+        stringifyJsonb(segmentBundle),
+        segment.bundleHash,
+        hotTopicHash,
+        stringifyJsonb({
+          seededBy: "system_ximilu_v1",
+          segmentKey,
+          segmentLabel: segment.segmentLabel
+        })
+      ]
+    );
+    const createdRun = await loadForumBackgroundLatestRunBySegment(
+      db,
+      ownerId,
+      sourceBundle.tab.id,
+      segmentKey
+    );
+    if (createdRun) {
+      createdRuns.push(createdRun);
+    }
+  }
+  return createdRuns;
 }
 
 async function ensureXimiluBackgroundPolicies(db, ownerId = DEFAULT_STORAGE_OWNER_ID) {
@@ -5972,7 +6201,7 @@ async function ensureXimiluBackgroundPolicies(db, ownerId = DEFAULT_STORAGE_OWNE
       ]
     );
   }
-  await markForumBackgroundDirtyRunIfNeeded(db, ownerId, ximiluTab);
+  await markForumBackgroundDirtyRunsIfNeeded(db, ownerId, ximiluTab);
   return {
     tabId: ximiluTab.id,
     seededCount: systemPolicies.length
@@ -7310,6 +7539,7 @@ app.get("/api/forum/background/source-bundle", async (request, response) => {
       ok: true,
       tab: bundle.tab,
       sources: bundle.sources,
+      segments: bundle.segments,
       summaryApiEnabled: bundle.summaryApi.enabled,
       summaryApiConfigId: bundle.summaryApi.configId,
       latestRun: bundle.latestRun,
@@ -7341,6 +7571,10 @@ app.post("/api/forum/background/extraction-runs", async (request, response) => {
       response.status(404).json(createJsonError("Forum tab was not found."));
       return;
     }
+    const sourceSegmentKey = normalizeForumBackgroundSourceSegmentKey(
+      getInputValue(body, "segmentKey", "segment_key") || sourceBundle.segmentKey,
+      ""
+    );
     const runId = randomUUID();
     await pool.query(
       `
@@ -7348,6 +7582,7 @@ app.post("/api/forum/background/extraction-runs", async (request, response) => {
           owner_id,
           id,
           tab_id,
+          source_segment_key,
           status,
           trigger_reason,
           source_bundle_jsonb,
@@ -7358,12 +7593,13 @@ app.post("/api/forum/background/extraction-runs", async (request, response) => {
           created_at,
           updated_at
         )
-        values ($1, $2, $3, 'pending_submission', $4, $5::jsonb, $6, $7, 0, $8::jsonb, now(), now())
+        values ($1, $2, $3, $4, 'pending_submission', $5, $6::jsonb, $7, $8, 0, $9::jsonb, now(), now())
       `,
       [
         DEFAULT_STORAGE_OWNER_ID,
         runId,
         sourceBundle.tab.id,
+        sourceSegmentKey,
         String(body.triggerReason || body.trigger_reason || "manual_editor_extract").trim() ||
           "manual_editor_extract",
         stringifyJsonb(sourceBundle),
@@ -7371,17 +7607,31 @@ app.post("/api/forum/background/extraction-runs", async (request, response) => {
         hashMemoryText(
           JSON.stringify({
             tabId: sourceBundle.tab.id,
-            hotTopic: sourceBundle.tab.hotTopic || ""
+            segmentKey: sourceSegmentKey,
+            hotTopic: sourceBundle.tab.hotTopic || "",
+            sourceBundleHash:
+              String(body.sourceBundleHash || body.source_bundle_hash || sourceBundle.bundleHash || "").trim()
           })
         ),
         stringifyJsonb(
           normalizeJsonObjectValue(body.metadata, {
-            actorType: "frontend"
+            actorType: "frontend",
+            segmentKey: sourceSegmentKey,
+            segmentLabel:
+              String(body.segmentLabel || body.segment_label || sourceBundle.segmentLabel || "").trim() ||
+              formatForumBackgroundSourceSegmentLabel(sourceSegmentKey)
           })
         )
       ]
     );
-    const created = await loadForumBackgroundLatestRun(pool, DEFAULT_STORAGE_OWNER_ID, sourceBundle.tab.id);
+    const created = sourceSegmentKey
+      ? await loadForumBackgroundLatestRunBySegment(
+          pool,
+          DEFAULT_STORAGE_OWNER_ID,
+          sourceBundle.tab.id,
+          sourceSegmentKey
+        )
+      : await loadForumBackgroundLatestRun(pool, DEFAULT_STORAGE_OWNER_ID, sourceBundle.tab.id);
     response.json({
       ok: true,
       run: created
@@ -7404,6 +7654,7 @@ app.post("/api/forum/background/extraction-runs/:id/candidates", async (request,
     return;
   }
   const body = normalizeJsonObjectValue(request.body, {});
+  const allowEmpty = Boolean(getInputValue(body, "allowEmpty", "allow_empty"));
   const rawItems = Array.isArray(body.items)
     ? body.items
     : Array.isArray(body.candidates)
@@ -7411,7 +7662,7 @@ app.post("/api/forum/background/extraction-runs/:id/candidates", async (request,
       : Array.isArray(body)
         ? body
         : [];
-  if (!rawItems.length) {
+  if (!rawItems.length && !allowEmpty) {
     response.status(400).json(createJsonError('Request body must include an "items" array.'));
     return;
   }
@@ -7433,6 +7684,43 @@ app.post("/api/forum/background/extraction-runs/:id/candidates", async (request,
       return;
     }
     const run = mapForumBackgroundExtractionRunRow(runResult.rows[0]);
+    if (!rawItems.length && allowEmpty) {
+      await client.query(
+        `
+          update forum_background_extraction_runs
+          set status = 'completed',
+              candidate_count = 0,
+              submitted_at = now(),
+              completed_at = now(),
+              updated_at = now()
+          where owner_id = $1 and id = $2
+        `,
+        [DEFAULT_STORAGE_OWNER_ID, runId]
+      );
+      const updatedRunResult = await client.query(
+        `
+          select *
+          from forum_background_extraction_runs
+          where owner_id = $1 and id = $2
+          limit 1
+        `,
+        [DEFAULT_STORAGE_OWNER_ID, runId]
+      );
+      await client.query("commit");
+      response.json({
+        ok: true,
+        run: updatedRunResult.rows.length
+          ? mapForumBackgroundExtractionRunRow(updatedRunResult.rows[0])
+          : run,
+        results: [],
+        summary: {
+          requestedCount: 0,
+          createdCount: 0,
+          reinforcedCount: 0
+        }
+      });
+      return;
+    }
     const sourceBundle = normalizeJsonObjectValue(run.sourceBundle, {});
     const sourceLookup = new Map(
       (Array.isArray(sourceBundle.sources) ? sourceBundle.sources : []).map((item) => [
