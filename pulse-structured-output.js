@@ -445,6 +445,7 @@
                     "recent_campaign",
                     "observable_timeline",
                     "tab_background",
+                    "tab_background_history",
                     "hot_topic"
                   ]
                 },

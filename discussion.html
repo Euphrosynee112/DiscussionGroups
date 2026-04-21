@@ -459,22 +459,20 @@
                       placeholder="输入这个论坛讨论区里最活跃的人大致是什么身份、什么情绪。"
                     ></textarea>
                   </label>
-                  <label>
-                    页签文本
-                    <textarea
-                      id="custom-tab-text-input"
-                      rows="4"
-                      placeholder="输入这个讨论区长期在讨论什么，也可以补充一部分历史讨论点。"
-                    ></textarea>
-                  </label>
-                  <label>
-                    页签热点
-                    <textarea
-                      id="custom-tab-hot-topic-input"
-                      rows="4"
-                      placeholder="可留空；如果填写，这个热点会占据该讨论区绝大部分篇幅。"
-                    ></textarea>
-                  </label>
+                  <section class="custom-tab-content-group">
+                    <div class="custom-tab-content-group__head">
+                      <strong>页签文本</strong>
+                      <small>按条维护普通讨论内容；默认展示最新 10 条，超出的历史条目可单独提炼为背景卡。</small>
+                    </div>
+                    <div id="custom-tab-discussion-items-editor" class="custom-tab-content-editor"></div>
+                  </section>
+                  <section class="custom-tab-content-group">
+                    <div class="custom-tab-content-group__head">
+                      <strong>页签热点</strong>
+                      <small>按条维护当前热点；热点会在后端按天衰退到普通条目。</small>
+                    </div>
+                    <div id="custom-tab-hot-topic-items-editor" class="custom-tab-content-editor"></div>
+                  </section>
                 </section>
 
                 <section class="custom-tab-editor-section">
@@ -555,6 +553,13 @@
                       type="button"
                     >
                       提取背景卡
+                    </button>
+                    <button
+                      id="custom-tab-background-history-extract-btn"
+                      class="ghost-button"
+                      type="button"
+                    >
+                      提炼历史条目
                     </button>
                   </div>
                   <p id="custom-tab-background-meta" class="tag-stat-meta">

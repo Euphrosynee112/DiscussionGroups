@@ -91,6 +91,7 @@ const FORUM_BACKGROUND_SOURCE_LAYERS = new Set([
   "recent_campaign",
   "observable_timeline",
   "tab_background",
+  "tab_background_history",
   "hot_topic"
 ]);
 const FORUM_BACKGROUND_SOURCE_SEGMENTS = [
@@ -111,6 +112,12 @@ const FORUM_BACKGROUND_SOURCE_SEGMENTS = [
     label: "公开行程",
     sourceLayers: ["observable_timeline"],
     defaultMaxCards: 5
+  },
+  {
+    key: "discussion_archive",
+    label: "历史页签文本",
+    sourceLayers: ["tab_background_history"],
+    defaultMaxCards: 6
   },
   {
     key: "history_base",
@@ -153,6 +160,10 @@ const FORUM_BACKGROUND_EXTRACTION_RUN_STATUSES = new Set([
   "completed",
   "failed"
 ]);
+const FORUM_TAB_CONTENT_BUCKETS = new Set(["discussion", "hot_topic"]);
+const FORUM_TAB_DISCUSSION_VISIBLE_LIMIT = 10;
+const FORUM_TAB_HISTORY_BATCH_MAX_ITEMS = 6;
+const FORUM_TAB_HISTORY_BATCH_MAX_CHARS = 1600;
 const FORUM_BACKGROUND_GENERATION_TYPES = new Set(["posts", "replies"]);
 const FORUM_BACKGROUND_DETAIL_LEVELS = new Set(["brief", "standard", "full"]);
 const MEMORY_EVENT_TYPES = new Set([
@@ -807,6 +818,30 @@ async function ensureBusinessSnapshotTables(db) {
   await db.query(`
     create index if not exists forum_background_source_policies_tab_idx
       on forum_background_source_policies (owner_id, tab_id, is_enabled, priority desc, updated_at desc);
+  `);
+  await db.query(`
+    create table if not exists forum_tab_content_items (
+      owner_id text not null,
+      id text not null,
+      tab_id text not null,
+      bucket text not null,
+      content_text text not null default '',
+      entered_bucket_at timestamptz not null default now(),
+      background_extracted_at timestamptz,
+      last_extracted_hash text not null default '',
+      metadata jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (owner_id, id)
+    );
+  `);
+  await db.query(`
+    create index if not exists forum_tab_content_items_bucket_idx
+      on forum_tab_content_items (owner_id, tab_id, bucket, entered_bucket_at desc, created_at desc);
+  `);
+  await db.query(`
+    create index if not exists forum_tab_content_items_extract_idx
+      on forum_tab_content_items (owner_id, tab_id, bucket, background_extracted_at, updated_at desc);
   `);
   await db.query(`
     create table if not exists forum_background_cards (
@@ -5405,6 +5440,11 @@ function normalizeForumBackgroundDetailLevel(value = "", fallback = "standard") 
   return FORUM_BACKGROUND_DETAIL_LEVELS.has(normalized) ? normalized : fallback;
 }
 
+function normalizeForumTabContentBucket(value = "", fallback = "discussion") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return FORUM_TAB_CONTENT_BUCKETS.has(normalized) ? normalized : fallback;
+}
+
 function normalizeForumBackgroundTextArray(value = [], fallback = []) {
   return Array.from(
     new Set(
@@ -5471,6 +5511,59 @@ function findForumTabByName(tabs = [], tabName = "") {
     return null;
   }
   return normalizeForumCustomTabs(tabs).find((item) => item.name === resolvedName) || null;
+}
+
+function parseForumTabLegacyContentText(value = "") {
+  const normalized = String(value || "")
+    .replace(/\r\n?/g, "\n")
+    .trim();
+  if (!normalized) {
+    return [];
+  }
+  const numberedMatches = Array.from(
+    normalized.matchAll(/(?:^|\n)\s*\d+[\.\)、]\s*([\s\S]*?)(?=(?:\n\s*\d+[\.\)、]\s*)|$)/g)
+  )
+    .map((match) => String(match[1] || "").trim())
+    .filter(Boolean);
+  if (numberedMatches.length >= 2) {
+    return numberedMatches;
+  }
+  const lineItems = normalized
+    .split("\n")
+    .map((line) => String(line || "").replace(/^\s*\d+[\.\)、]\s*/, "").trim())
+    .filter(Boolean);
+  if (lineItems.length >= 2) {
+    return lineItems;
+  }
+  return [normalized];
+}
+
+function buildForumTabNumberedContentText(items = []) {
+  return normalizeJsonArrayValue(items, [])
+    .map((item, index) => {
+      const contentText =
+        typeof item === "string"
+          ? String(item || "").trim()
+          : String(item?.contentText || item?.content_text || "").trim();
+      return contentText ? `${index + 1}. ${contentText}` : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function mapForumTabContentItemRow(row = {}) {
+  return {
+    id: String(row.id || "").trim(),
+    tabId: String(row.tab_id || "").trim(),
+    bucket: normalizeForumTabContentBucket(row.bucket, "discussion"),
+    contentText: String(row.content_text || "").trim(),
+    enteredBucketAt: row.entered_bucket_at || null,
+    backgroundExtractedAt: row.background_extracted_at || null,
+    lastExtractedHash: String(row.last_extracted_hash || "").trim(),
+    metadata: normalizeJsonObjectValue(row.metadata, {}),
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null
+  };
 }
 
 function mapForumBackgroundSourcePolicyRow(row = {}) {
@@ -5598,6 +5691,7 @@ function formatForumBackgroundSourceLayerLabel(value = "") {
     recent_campaign: "近期主线",
     observable_timeline: "公开行程时间线",
     tab_background: "页签背景",
+    tab_background_history: "历史页签文本",
     hot_topic: "页签热点"
   };
   return labels[resolved] || resolved;
@@ -5680,6 +5774,309 @@ async function loadForumAppSettingsState(db, ownerId = DEFAULT_STORAGE_OWNER_ID)
     forumSettings: normalizeJsonObjectValue(row.forum_settings, {}),
     apiState: normalizeJsonObjectValue(row.api_state, {})
   };
+}
+
+async function upsertForumCustomTabsState(db, tabs = [], ownerId = DEFAULT_STORAGE_OWNER_ID) {
+  const rawTabs = sanitizeJsonbValue(normalizeJsonArrayValue(tabs, []));
+  await db.query(
+    `
+      insert into app_settings (
+        owner_id,
+        forum_settings,
+        prompt_rules,
+        negative_prompt_constraints,
+        api_state,
+        api_secrets,
+        chat_global_settings,
+        message_prompt_settings,
+        bubble_mount_settings,
+        privacy_state,
+        metadata,
+        created_at,
+        updated_at
+      )
+      values (
+        $1,
+        jsonb_build_object('customTabs', $2::jsonb),
+        '{}'::jsonb,
+        '[]'::jsonb,
+        '{}'::jsonb,
+        '{}'::jsonb,
+        '{}'::jsonb,
+        '{}'::jsonb,
+        '{}'::jsonb,
+        '{}'::jsonb,
+        '{}'::jsonb,
+        now(),
+        now()
+      )
+      on conflict (owner_id) do update
+        set forum_settings = coalesce(app_settings.forum_settings, '{}'::jsonb) || jsonb_build_object('customTabs', $2::jsonb),
+            updated_at = now()
+    `,
+    [ownerId, stringifyJsonb(rawTabs)]
+  );
+}
+
+function buildForumTabContentItemsForMigration(tab = {}) {
+  const discussionItems = parseForumTabLegacyContentText(tab.discussionText || "");
+  const hotTopicItems = parseForumTabLegacyContentText(tab.hotTopic || "");
+  const nowMs = Date.now();
+  return [
+    ...discussionItems.map((contentText, index) => ({
+      id: randomUUID(),
+      bucket: "discussion",
+      contentText,
+      enteredBucketAt: new Date(nowMs - index * 1000).toISOString()
+    })),
+    ...hotTopicItems.map((contentText, index) => ({
+      id: randomUUID(),
+      bucket: "hot_topic",
+      contentText,
+      enteredBucketAt: new Date(nowMs - index * 1000).toISOString()
+    }))
+  ];
+}
+
+async function ensureForumTabContentItemsMigrated(
+  db,
+  ownerId = DEFAULT_STORAGE_OWNER_ID,
+  tabId = "",
+  tabRecord = null
+) {
+  const resolvedTabId = String(tabId || tabRecord?.id || "").trim();
+  if (!resolvedTabId) {
+    return [];
+  }
+  const existingCountResult = await db.query(
+    `
+      select count(*)::int as item_count
+      from forum_tab_content_items
+      where owner_id = $1 and tab_id = $2
+    `,
+    [ownerId, resolvedTabId]
+  );
+  if (Number(existingCountResult.rows[0]?.item_count) > 0) {
+    return [];
+  }
+  const resolvedTab =
+    tabRecord && typeof tabRecord === "object" && tabRecord.id
+      ? normalizeForumTabRecord(tabRecord)
+      : findForumTabById((await loadForumAppSettingsState(db, ownerId)).forumSettings.customTabs || [], resolvedTabId);
+  if (!resolvedTab) {
+    return [];
+  }
+  const migratedItems = buildForumTabContentItemsForMigration(resolvedTab);
+  for (const item of migratedItems) {
+    await db.query(
+      `
+        insert into forum_tab_content_items (
+          owner_id,
+          id,
+          tab_id,
+          bucket,
+          content_text,
+          entered_bucket_at,
+          last_extracted_hash,
+          metadata,
+          created_at,
+          updated_at
+        )
+        values ($1, $2, $3, $4, $5, $6::timestamptz, '', $7::jsonb, now(), now())
+      `,
+      [
+        ownerId,
+        item.id,
+        resolvedTabId,
+        item.bucket,
+        item.contentText,
+        item.enteredBucketAt,
+        stringifyJsonb({
+          migratedFromLegacyField: item.bucket === "hot_topic" ? "hotTopic" : "discussionText"
+        })
+      ]
+    );
+  }
+  return migratedItems;
+}
+
+async function applyDailyHotDecay(db, ownerId = DEFAULT_STORAGE_OWNER_ID, tabId = "") {
+  const resolvedTabId = String(tabId || "").trim();
+  if (!resolvedTabId) {
+    return [];
+  }
+  const result = await db.query(
+    `
+      update forum_tab_content_items
+      set bucket = 'discussion',
+          entered_bucket_at = now(),
+          updated_at = now(),
+          metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('lastDecayedAt', now())
+      where owner_id = $1
+        and tab_id = $2
+        and bucket = 'hot_topic'
+        and entered_bucket_at < date_trunc('day', now())
+      returning *
+    `,
+    [ownerId, resolvedTabId]
+  );
+  return result.rows.map(mapForumTabContentItemRow);
+}
+
+function buildForumTabHistorySources(tab = {}, items = []) {
+  const resolvedItems = normalizeJsonArrayValue(items, []);
+  if (!resolvedItems.length) {
+    return [];
+  }
+  const batches = [];
+  let currentBatch = [];
+  let currentChars = 0;
+  resolvedItems.forEach((item) => {
+    const contentText = String(item?.contentText || "").trim();
+    if (!contentText) {
+      return;
+    }
+    const nextChars = currentChars + contentText.length;
+    if (
+      currentBatch.length &&
+      (currentBatch.length >= FORUM_TAB_HISTORY_BATCH_MAX_ITEMS ||
+        nextChars > FORUM_TAB_HISTORY_BATCH_MAX_CHARS)
+    ) {
+      batches.push(currentBatch);
+      currentBatch = [];
+      currentChars = 0;
+    }
+    currentBatch.push(item);
+    currentChars += contentText.length;
+  });
+  if (currentBatch.length) {
+    batches.push(currentBatch);
+  }
+  return batches.map((batch, index) => {
+    const numberedText = buildForumTabNumberedContentText(batch);
+    return {
+      sourceType: "forum_tab_text",
+      sourceId: `${tab.id}:discussion_history_batch:${index + 1}`,
+      sourceTitle: `${tab.name || "自定义页签"}历史页签文本批次 ${index + 1}`,
+      sourceLayer: "tab_background_history",
+      knowledgeDomains: ["community_atmosphere", "fan_discourse", "historical_discussion"],
+      priority: 90,
+      content: [
+        "下面是当前不再直接展示到 prompt 的历史普通页签文本，请提炼成可长期复用的背景卡：",
+        numberedText
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      metadata: {
+        contentItemIds: batch.map((item) => String(item.id || "").trim()).filter(Boolean),
+        extractionHashes: Object.fromEntries(
+          batch.map((item) => [
+            String(item.id || "").trim(),
+            hashMemoryText(String(item.contentText || "").trim())
+          ])
+        )
+      },
+      updatedAt: batch[0]?.updatedAt || batch[0]?.enteredBucketAt || null
+    };
+  });
+}
+
+async function loadForumTabContentState(
+  db,
+  ownerId = DEFAULT_STORAGE_OWNER_ID,
+  tabId = "",
+  tabRecord = null
+) {
+  const resolvedTabId = String(tabId || tabRecord?.id || "").trim();
+  if (!resolvedTabId) {
+    return null;
+  }
+  await ensureForumTabContentItemsMigrated(db, ownerId, resolvedTabId, tabRecord);
+  await applyDailyHotDecay(db, ownerId, resolvedTabId);
+  const result = await db.query(
+    `
+      select *
+      from forum_tab_content_items
+      where owner_id = $1
+        and tab_id = $2
+      order by
+        case when bucket = 'hot_topic' then 0 else 1 end,
+        entered_bucket_at desc,
+        created_at desc
+    `,
+    [ownerId, resolvedTabId]
+  );
+  const items = result.rows.map(mapForumTabContentItemRow);
+  const hotTopicItems = items.filter((item) => item.bucket === "hot_topic");
+  const discussionItems = items.filter((item) => item.bucket === "discussion");
+  const latestDiscussionItems = discussionItems.slice(0, FORUM_TAB_DISCUSSION_VISIBLE_LIMIT);
+  const olderDiscussionItems = discussionItems.slice(FORUM_TAB_DISCUSSION_VISIBLE_LIMIT);
+  const pendingHistoricalItems = olderDiscussionItems.filter((item) => {
+    const currentHash = hashMemoryText(item.contentText || "");
+    return !item.backgroundExtractedAt || item.lastExtractedHash !== currentHash;
+  });
+  return {
+    items,
+    hotTopicItems,
+    discussionItems,
+    latestDiscussionItems,
+    olderDiscussionItems,
+    pendingHistoricalItems,
+    historySources: buildForumTabHistorySources(tabRecord || { id: resolvedTabId }, pendingHistoricalItems),
+    counts: {
+      hotTopic: hotTopicItems.length,
+      discussion: discussionItems.length,
+      latestDiscussion: latestDiscussionItems.length,
+      olderDiscussion: olderDiscussionItems.length,
+      pendingHistorical: pendingHistoricalItems.length
+    },
+    promptTexts: {
+      hotTopic: buildForumTabNumberedContentText(hotTopicItems),
+      discussion: buildForumTabNumberedContentText(latestDiscussionItems)
+    }
+  };
+}
+
+async function markForumTabHistoricalItemsExtractedByRun(
+  db,
+  ownerId = DEFAULT_STORAGE_OWNER_ID,
+  extractionRun = null
+) {
+  const run = extractionRun && typeof extractionRun === "object" ? extractionRun : null;
+  const sourceBundle = normalizeJsonObjectValue(run?.sourceBundle, {});
+  const sources = Array.isArray(sourceBundle.sources) ? sourceBundle.sources : [];
+  const updates = [];
+  for (const source of sources) {
+    const metadata = normalizeJsonObjectValue(source?.metadata, {});
+    const contentItemIds = normalizeForumBackgroundTextArray(metadata.contentItemIds, []);
+    const extractionHashes = normalizeJsonObjectValue(metadata.extractionHashes, {});
+    if (!contentItemIds.length) {
+      continue;
+    }
+    for (const itemId of contentItemIds) {
+      const extractionHash = String(extractionHashes[itemId] || "").trim();
+      if (!itemId || !extractionHash) {
+        continue;
+      }
+      const updated = await db.query(
+        `
+          update forum_tab_content_items
+          set background_extracted_at = now(),
+              last_extracted_hash = $4,
+              updated_at = now()
+          where owner_id = $1
+            and tab_id = $2
+            and id = $3
+          returning id
+        `,
+        [ownerId, String(run.tabId || "").trim(), itemId, extractionHash]
+      );
+      if (updated.rows[0]?.id) {
+        updates.push(String(updated.rows[0].id || "").trim());
+      }
+    }
+  }
+  return updates;
 }
 
 async function loadForumBackgroundLatestRun(db, ownerId = DEFAULT_STORAGE_OWNER_ID, tabId = "") {
@@ -5870,6 +6267,7 @@ async function buildForumBackgroundSourceBundle(
   if (!tab) {
     return null;
   }
+  const contentState = await loadForumTabContentState(db, ownerId, tab.id, tab);
   const policyResult = await db.query(
     `
       select *
@@ -5905,7 +6303,7 @@ async function buildForumBackgroundSourceBundle(
       if (policy.sourceRefType === "forum_tab_text") {
         const content = [
           tab.audience ? `页签用户定位：${tab.audience}` : "",
-          tab.discussionText ? `页签文本：${tab.discussionText}` : ""
+          contentState?.promptTexts?.discussion ? `页签文本：${contentState.promptTexts.discussion}` : ""
         ]
           .filter(Boolean)
           .join("\n");
@@ -5930,7 +6328,7 @@ async function buildForumBackgroundSourceBundle(
           sourceLayer: policy.sourceLayer,
           knowledgeDomains: policy.knowledgeDomains,
           priority: policy.priority,
-          content: String(tab.hotTopic || "").trim(),
+          content: String(contentState?.promptTexts?.hotTopic || "").trim(),
           updatedAt: policy.updatedAt
         };
       }
@@ -5951,6 +6349,12 @@ async function buildForumBackgroundSourceBundle(
       };
     })
     .filter(Boolean);
+  sources.push(
+    ...normalizeJsonArrayValue(contentState?.historySources, []).map((source, index) => ({
+      policyId: `${tab.id}:history_source:${index + 1}`,
+      ...source
+    }))
+  );
   const latestRun = await loadForumBackgroundLatestRun(db, ownerId, tab.id);
   const segmentRuns = await loadForumBackgroundLatestRunsBySegment(db, ownerId, tab.id);
   const bundleHash = hashMemoryText(
@@ -5958,8 +6362,8 @@ async function buildForumBackgroundSourceBundle(
       sanitizeJsonbValue({
         tabId: tab.id,
         audience: tab.audience,
-        discussionText: tab.discussionText,
-        hotTopic: tab.hotTopic,
+        promptDiscussionText: contentState?.promptTexts?.discussion || "",
+        promptHotTopicText: contentState?.promptTexts?.hotTopic || "",
         sources: sources.map((source) => ({
           sourceType: source.sourceType,
           sourceId: source.sourceId,
@@ -5975,8 +6379,8 @@ async function buildForumBackgroundSourceBundle(
       id: tab.id,
       name: tab.name,
       audience: tab.audience,
-      discussionText: tab.discussionText,
-      hotTopic: tab.hotTopic
+      discussionText: contentState?.promptTexts?.discussion || "",
+      hotTopic: contentState?.promptTexts?.hotTopic || ""
     },
     summaryApi: {
       enabled: Boolean(settingsState.apiState.summaryApiEnabled),
@@ -5999,8 +6403,15 @@ async function buildForumBackgroundSourceBundle(
       id: tab.id,
       name: tab.name,
       audience: tab.audience,
-      discussionText: tab.discussionText,
-      hotTopic: tab.hotTopic
+      discussionText: contentState?.promptTexts?.discussion || "",
+      hotTopic: contentState?.promptTexts?.hotTopic || "",
+      counts: contentState?.counts || {
+        hotTopic: 0,
+        discussion: 0,
+        latestDiscussion: 0,
+        olderDiscussion: 0,
+        pendingHistorical: 0
+      }
     },
     summaryApi: {
       enabled: Boolean(settingsState.apiState.summaryApiEnabled),
@@ -7645,6 +8056,297 @@ app.get("/api/forum/background/source-bundle", async (request, response) => {
   }
 });
 
+app.put("/api/forum/custom-tabs", async (request, response) => {
+  if (!pool) {
+    response.status(500).json(createJsonError("DATABASE_URL is missing. API routes are unavailable."));
+    return;
+  }
+  const body = normalizeJsonObjectValue(request.body, {});
+  const rawTabs = Array.isArray(body.tabs)
+    ? body.tabs
+    : Array.isArray(body.customTabs)
+      ? body.customTabs
+      : null;
+  if (!rawTabs) {
+    response.status(400).json(createJsonError("Request body must include a tabs array."));
+    return;
+  }
+  const normalizedTabs = normalizeForumCustomTabs(rawTabs);
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await upsertForumCustomTabsState(client, rawTabs, DEFAULT_STORAGE_OWNER_ID);
+    if (normalizedTabs.length) {
+      await client.query(
+        `
+          delete from forum_tab_content_items
+          where owner_id = $1
+            and tab_id <> all($2::text[])
+        `,
+        [DEFAULT_STORAGE_OWNER_ID, normalizedTabs.map((tab) => tab.id)]
+      );
+    } else {
+      await client.query(
+        `
+          delete from forum_tab_content_items
+          where owner_id = $1
+        `,
+        [DEFAULT_STORAGE_OWNER_ID]
+      );
+    }
+    await ensureXimiluBackgroundPolicies(client, DEFAULT_STORAGE_OWNER_ID);
+    for (const tab of normalizedTabs) {
+      await markForumBackgroundDirtyRunsIfNeeded(client, DEFAULT_STORAGE_OWNER_ID, tab);
+    }
+    await client.query("commit");
+    response.json({
+      ok: true,
+      tabs: normalizedTabs
+    });
+  } catch (error) {
+    await client.query("rollback");
+    response
+      .status(500)
+      .json(createJsonError("Failed to save forum custom tabs.", error?.message));
+  } finally {
+    client.release();
+  }
+});
+
+app.get("/api/forum/tab-content", async (request, response) => {
+  if (!pool) {
+    response.status(500).json(createJsonError("DATABASE_URL is missing. API routes are unavailable."));
+    return;
+  }
+  const tabId = String(request.query.tabId || request.query.tab_id || "").trim();
+  if (!tabId) {
+    response.status(400).json(createJsonError("tabId is required."));
+    return;
+  }
+  try {
+    const settingsState = await loadForumAppSettingsState(pool, DEFAULT_STORAGE_OWNER_ID);
+    const tabs = normalizeForumCustomTabs(settingsState.forumSettings.customTabs || []);
+    const tab = findForumTabById(tabs, tabId);
+    if (!tab) {
+      response.status(404).json(createJsonError("Forum tab was not found."));
+      return;
+    }
+    const contentState = await loadForumTabContentState(pool, DEFAULT_STORAGE_OWNER_ID, tab.id, tab);
+    response.json({
+      ok: true,
+      tab,
+      hotTopicItems: contentState?.hotTopicItems || [],
+      latestDiscussionItems: contentState?.latestDiscussionItems || [],
+      olderDiscussionItems: contentState?.olderDiscussionItems || [],
+      counts: contentState?.counts || {},
+      promptTexts: contentState?.promptTexts || {},
+      pendingExtractionCount: Number(contentState?.counts?.pendingHistorical) || 0
+    });
+  } catch (error) {
+    response
+      .status(500)
+      .json(createJsonError("Failed to load forum tab content.", error?.message));
+  }
+});
+
+app.post("/api/forum/tab-content/items", async (request, response) => {
+  if (!pool) {
+    response.status(500).json(createJsonError("DATABASE_URL is missing. API routes are unavailable."));
+    return;
+  }
+  const body = normalizeJsonObjectValue(request.body, {});
+  const tabId = normalizeRequiredText(getInputValue(body, "tabId", "tab_id"));
+  const contentText = normalizeRequiredText(getInputValue(body, "contentText", "content_text"));
+  if (!tabId || !contentText) {
+    response.status(400).json(createJsonError("tabId and contentText are required."));
+    return;
+  }
+  const bucket = normalizeForumTabContentBucket(getInputValue(body, "bucket", "bucket"), "discussion");
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const settingsState = await loadForumAppSettingsState(client, DEFAULT_STORAGE_OWNER_ID);
+    const tab = findForumTabById(settingsState.forumSettings.customTabs || [], tabId);
+    if (!tab) {
+      await client.query("rollback");
+      response.status(404).json(createJsonError("Forum tab was not found."));
+      return;
+    }
+    const nextId = randomUUID();
+    const result = await client.query(
+      `
+        insert into forum_tab_content_items (
+          owner_id,
+          id,
+          tab_id,
+          bucket,
+          content_text,
+          entered_bucket_at,
+          last_extracted_hash,
+          metadata,
+          created_at,
+          updated_at
+        )
+        values ($1, $2, $3, $4, $5, now(), '', $6::jsonb, now(), now())
+        returning *
+      `,
+      [
+        DEFAULT_STORAGE_OWNER_ID,
+        nextId,
+        tabId,
+        bucket,
+        contentText,
+        stringifyJsonb(normalizeJsonObjectValue(body.metadata, {}))
+      ]
+    );
+    await markForumBackgroundDirtyRunsIfNeeded(client, DEFAULT_STORAGE_OWNER_ID, tab);
+    await client.query("commit");
+    response.json({
+      ok: true,
+      item: mapForumTabContentItemRow(result.rows[0] || {})
+    });
+  } catch (error) {
+    await client.query("rollback");
+    response
+      .status(500)
+      .json(createJsonError("Failed to create forum tab content item.", error?.message));
+  } finally {
+    client.release();
+  }
+});
+
+app.patch("/api/forum/tab-content/items/:id", async (request, response) => {
+  if (!pool) {
+    response.status(500).json(createJsonError("DATABASE_URL is missing. API routes are unavailable."));
+    return;
+  }
+  const itemId = String(request.params.id || "").trim();
+  if (!itemId) {
+    response.status(400).json(createJsonError("Item id is required."));
+    return;
+  }
+  const body = normalizeJsonObjectValue(request.body, {});
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const existingResult = await client.query(
+      `
+        select *
+        from forum_tab_content_items
+        where owner_id = $1 and id = $2
+        limit 1
+      `,
+      [DEFAULT_STORAGE_OWNER_ID, itemId]
+    );
+    if (!existingResult.rows.length) {
+      await client.query("rollback");
+      response.status(404).json(createJsonError("Forum tab content item was not found."));
+      return;
+    }
+    const existing = mapForumTabContentItemRow(existingResult.rows[0]);
+    const nextBucket = Object.prototype.hasOwnProperty.call(body, "bucket")
+      ? normalizeForumTabContentBucket(getInputValue(body, "bucket", "bucket"), existing.bucket)
+      : existing.bucket;
+    const nextContentText = Object.prototype.hasOwnProperty.call(body, "contentText") ||
+      Object.prototype.hasOwnProperty.call(body, "content_text")
+      ? normalizeRequiredText(getInputValue(body, "contentText", "content_text"))
+      : existing.contentText;
+    if (!nextContentText) {
+      await client.query("rollback");
+      response.status(400).json(createJsonError("contentText cannot be empty."));
+      return;
+    }
+    const result = await client.query(
+      `
+        update forum_tab_content_items
+        set bucket = $3,
+            content_text = $4,
+            entered_bucket_at = case when bucket <> $3 then now() else entered_bucket_at end,
+            updated_at = now(),
+            metadata = $5::jsonb
+        where owner_id = $1
+          and id = $2
+        returning *
+      `,
+      [
+        DEFAULT_STORAGE_OWNER_ID,
+        itemId,
+        nextBucket,
+        nextContentText,
+        stringifyJsonb({
+          ...existing.metadata,
+          ...normalizeJsonObjectValue(body.metadata, {})
+        })
+      ]
+    );
+    const settingsState = await loadForumAppSettingsState(client, DEFAULT_STORAGE_OWNER_ID);
+    const tab = findForumTabById(settingsState.forumSettings.customTabs || [], existing.tabId);
+    if (tab) {
+      await markForumBackgroundDirtyRunsIfNeeded(client, DEFAULT_STORAGE_OWNER_ID, tab);
+    }
+    await client.query("commit");
+    response.json({
+      ok: true,
+      item: mapForumTabContentItemRow(result.rows[0] || {})
+    });
+  } catch (error) {
+    await client.query("rollback");
+    response
+      .status(500)
+      .json(createJsonError("Failed to update forum tab content item.", error?.message));
+  } finally {
+    client.release();
+  }
+});
+
+app.delete("/api/forum/tab-content/items/:id", async (request, response) => {
+  if (!pool) {
+    response.status(500).json(createJsonError("DATABASE_URL is missing. API routes are unavailable."));
+    return;
+  }
+  const itemId = String(request.params.id || "").trim();
+  if (!itemId) {
+    response.status(400).json(createJsonError("Item id is required."));
+    return;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const existingResult = await client.query(
+      `
+        delete from forum_tab_content_items
+        where owner_id = $1
+          and id = $2
+        returning *
+      `,
+      [DEFAULT_STORAGE_OWNER_ID, itemId]
+    );
+    if (!existingResult.rows.length) {
+      await client.query("rollback");
+      response.status(404).json(createJsonError("Forum tab content item was not found."));
+      return;
+    }
+    const existing = mapForumTabContentItemRow(existingResult.rows[0]);
+    const settingsState = await loadForumAppSettingsState(client, DEFAULT_STORAGE_OWNER_ID);
+    const tab = findForumTabById(settingsState.forumSettings.customTabs || [], existing.tabId);
+    if (tab) {
+      await markForumBackgroundDirtyRunsIfNeeded(client, DEFAULT_STORAGE_OWNER_ID, tab);
+    }
+    await client.query("commit");
+    response.json({
+      ok: true,
+      deletedId: existing.id
+    });
+  } catch (error) {
+    await client.query("rollback");
+    response
+      .status(500)
+      .json(createJsonError("Failed to delete forum tab content item.", error?.message));
+  } finally {
+    client.release();
+  }
+});
+
 app.post("/api/forum/background/extraction-runs", async (request, response) => {
   if (!pool) {
     response.status(500).json(createJsonError("DATABASE_URL is missing. API routes are unavailable."));
@@ -7790,6 +8492,7 @@ app.post("/api/forum/background/extraction-runs/:id/candidates", async (request,
         `,
         [DEFAULT_STORAGE_OWNER_ID, runId]
       );
+      await markForumTabHistoricalItemsExtractedByRun(client, DEFAULT_STORAGE_OWNER_ID, run);
       const updatedRunResult = await client.query(
         `
           select *
@@ -7889,6 +8592,7 @@ app.post("/api/forum/background/extraction-runs/:id/candidates", async (request,
       `,
       [DEFAULT_STORAGE_OWNER_ID, runId, mergeResults.length]
     );
+    await markForumTabHistoricalItemsExtractedByRun(client, DEFAULT_STORAGE_OWNER_ID, run);
     const updatedRunResult = await client.query(
       `
         select *
