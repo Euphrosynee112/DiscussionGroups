@@ -561,6 +561,39 @@
                     进入已有页签的编辑态后，可查看当前候选卡、已确认卡和稳定卡。
                   </p>
                   <div
+                    id="custom-tab-background-progress"
+                    class="hidden"
+                    aria-live="polite"
+                  >
+                    <div
+                      style="display:grid;gap:8px;padding:12px 14px;border:1px solid var(--line);border-radius:18px;background:rgba(248,250,252,0.92);"
+                    >
+                      <div
+                        style="display:flex;align-items:center;justify-content:space-between;gap:12px;"
+                      >
+                        <strong style="font-size:14px;">拆卡进度</strong>
+                        <span
+                          id="custom-tab-background-progress-label"
+                          class="tag-stat-meta"
+                          style="margin:0;"
+                        ></span>
+                      </div>
+                      <div
+                        style="height:8px;border-radius:999px;background:rgba(15,23,42,0.08);overflow:hidden;"
+                      >
+                        <div
+                          id="custom-tab-background-progress-bar"
+                          style="width:0%;height:100%;border-radius:999px;background:rgba(var(--color-brand-rgb),0.82);transition:width 160ms ease;"
+                        ></div>
+                      </div>
+                      <div
+                        id="custom-tab-background-progress-list"
+                        class="stack-list"
+                        style="margin-top:0;gap:6px;"
+                      ></div>
+                    </div>
+                  </div>
+                  <div
                     id="custom-tab-background-list"
                     class="stack-list custom-tabs-list"
                     aria-live="polite"
@@ -591,6 +624,6 @@
     <script src="./api-log.js?v=20260405-231617"></script>
     <script src="./pulse-api-switcher.js?v=20260414-141318"></script>
     <script src="./pulse-structured-output.js?v=20260420-210000"></script>
-    <script src="./app.js?v=20260420-210000"></script>
+    <script src="./app.js?v=20260421-111500"></script>
   </body>
 </html>

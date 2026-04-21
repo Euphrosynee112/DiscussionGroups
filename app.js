@@ -256,6 +256,16 @@ const customTabFormStatusEl = document.querySelector("#custom-tab-form-status");
 const customTabBackgroundRefreshBtn = document.querySelector("#custom-tab-background-refresh-btn");
 const customTabBackgroundExtractBtn = document.querySelector("#custom-tab-background-extract-btn");
 const customTabBackgroundMetaEl = document.querySelector("#custom-tab-background-meta");
+const customTabBackgroundProgressEl = document.querySelector("#custom-tab-background-progress");
+const customTabBackgroundProgressBarEl = document.querySelector(
+  "#custom-tab-background-progress-bar"
+);
+const customTabBackgroundProgressLabelEl = document.querySelector(
+  "#custom-tab-background-progress-label"
+);
+const customTabBackgroundProgressListEl = document.querySelector(
+  "#custom-tab-background-progress-list"
+);
 const customTabBackgroundListEl = document.querySelector("#custom-tab-background-list");
 const customTabBackgroundStatusEl = document.querySelector("#custom-tab-background-status");
 const customTabCancelBtn = document.querySelector("#custom-tab-cancel-btn");
@@ -365,7 +375,8 @@ const state = {
   translatingReplies: {},
   forumBackgroundByTab: {},
   forumBackgroundPanelLoading: false,
-  forumBackgroundPanelExtracting: false
+  forumBackgroundPanelExtracting: false,
+  forumBackgroundExtractionProgress: null
 };
 
 function safeGetItem(key) {
@@ -2937,6 +2948,16 @@ function formatForumBackgroundRunStatusLabel(value = "") {
   return labels[String(value || "").trim()] || String(value || "").trim() || "未知状态";
 }
 
+function formatForumBackgroundExtractionStepStatusLabel(value = "") {
+  const labels = {
+    pending: "待执行",
+    running: "进行中",
+    completed: "已完成",
+    failed: "失败"
+  };
+  return labels[String(value || "").trim()] || String(value || "").trim() || "未知状态";
+}
+
 function buildForumBackgroundSegmentBundle(bundle = {}, segment = null) {
   const baseBundle = bundle && typeof bundle === "object" ? bundle : {};
   const resolvedSegment = segment && typeof segment === "object" ? segment : null;
@@ -3049,6 +3070,68 @@ function renderForumBackgroundCardActions(card = {}) {
   `;
 }
 
+function renderCustomTabBackgroundProgress(tabId = "") {
+  if (
+    !customTabBackgroundProgressEl ||
+    !customTabBackgroundProgressBarEl ||
+    !customTabBackgroundProgressLabelEl ||
+    !customTabBackgroundProgressListEl
+  ) {
+    return;
+  }
+  const resolvedTabId = String(tabId || "").trim();
+  const progress = state.forumBackgroundExtractionProgress;
+  if (
+    !resolvedTabId ||
+    !progress ||
+    String(progress.tabId || "").trim() !== resolvedTabId ||
+    !Array.isArray(progress.segments) ||
+    !progress.segments.length
+  ) {
+    customTabBackgroundProgressEl.classList.add("hidden");
+    customTabBackgroundProgressLabelEl.textContent = "";
+    customTabBackgroundProgressBarEl.style.width = "0%";
+    customTabBackgroundProgressListEl.innerHTML = "";
+    return;
+  }
+
+  const segments = progress.segments;
+  const finishedCount = segments.filter(
+    (segment) => segment?.status === "completed" || segment?.status === "failed"
+  ).length;
+  const failedCount = segments.filter((segment) => segment?.status === "failed").length;
+  const runningSegment = segments.find((segment) => segment?.status === "running") || null;
+  const percent = segments.length ? Math.round((finishedCount / segments.length) * 100) : 0;
+  const labelParts = [`${finishedCount} / ${segments.length}`];
+  if (runningSegment?.label) {
+    labelParts.push(`正在处理 ${runningSegment.label}`);
+  } else if (failedCount) {
+    labelParts.push(`${failedCount} 段失败`);
+  } else if (finishedCount === segments.length) {
+    labelParts.push("已完成");
+  }
+
+  customTabBackgroundProgressEl.classList.remove("hidden");
+  customTabBackgroundProgressLabelEl.textContent = labelParts.join(" · ");
+  customTabBackgroundProgressBarEl.style.width = `${percent}%`;
+  customTabBackgroundProgressListEl.innerHTML = segments
+    .map((segment) => {
+      const label = String(segment?.label || "").trim() || "未命名分段";
+      const status = formatForumBackgroundExtractionStepStatusLabel(segment?.status);
+      const note = String(segment?.note || "").trim();
+      const tone =
+        segment?.status === "completed"
+          ? "success"
+          : segment?.status === "failed"
+            ? "error"
+            : "";
+      return `<p class="${tone ? `status-text ${tone}` : "tag-stat-meta"}" style="margin:0;">${escapeHtml(
+        `${label}：${status}${note ? ` · ${note}` : ""}`
+      )}</p>`;
+    })
+    .join("");
+}
+
 function renderCustomTabBackgroundPanel(tab = null) {
   if (
     !customTabBackgroundListEl ||
@@ -3068,6 +3151,7 @@ function renderCustomTabBackgroundPanel(tab = null) {
   const cached = resolvedTabId ? getForumBackgroundPanelEntry(resolvedTabId) : null;
   const hasSavedTab = Boolean(resolvedTabId && getCustomTab(resolvedTabId));
   const isBusy = state.forumBackgroundPanelLoading || state.forumBackgroundPanelExtracting;
+  renderCustomTabBackgroundProgress(resolvedTabId);
   customTabBackgroundExtractBtn.disabled = !hasSavedTab || isBusy;
   customTabBackgroundRefreshBtn.disabled = !hasSavedTab || isBusy;
 
@@ -3432,6 +3516,7 @@ async function requestForumBackgroundExtraction(tabId = "") {
     return null;
   }
   state.forumBackgroundPanelExtracting = true;
+  state.forumBackgroundExtractionProgress = null;
   setCustomTabBackgroundStatus("正在读取来源包并按分段调用总结预设 API 做候选拆卡…", "");
   renderCustomTabBackgroundPanel(getCustomTab(resolvedTabId));
   try {
@@ -3449,6 +3534,18 @@ async function requestForumBackgroundExtraction(tabId = "") {
     if (!segmentBundles.length) {
       throw new Error("当前页签还没有可拆解的来源分段。");
     }
+    state.forumBackgroundExtractionProgress = {
+      tabId: resolvedTabId,
+      segments: segmentBundles.map((segmentBundle, index) => ({
+        key: segmentBundle.segmentKey || `segment-${index + 1}`,
+        label:
+          String(segmentBundle.segmentLabel || "").trim() ||
+          formatForumBackgroundSegmentLabel(segmentBundle.segmentKey),
+        status: "pending",
+        note: ""
+      }))
+    };
+    renderCustomTabBackgroundPanel(getCustomTab(resolvedTabId));
     const currentSettings = buildNormalizedSettingsSnapshot(getCurrentSettings());
     const usingSummaryPreset = Boolean(
       currentSettings.summaryApiEnabled && currentSettings.summaryApiConfigId
@@ -3470,15 +3567,56 @@ async function requestForumBackgroundExtraction(tabId = "") {
       }
     };
     for (const [index, segmentBundle] of segmentBundles.entries()) {
+      if (
+        state.forumBackgroundExtractionProgress?.tabId === resolvedTabId &&
+        state.forumBackgroundExtractionProgress.segments[index]
+      ) {
+        state.forumBackgroundExtractionProgress.segments[index].status = "running";
+        state.forumBackgroundExtractionProgress.segments[index].note = "";
+      }
       setCustomTabBackgroundStatus(
         `正在拆解 ${segmentBundle.segmentLabel || "背景卡"}（${index + 1}/${segmentBundles.length}）…`,
         ""
       );
-      const mergePayload = await requestForumBackgroundExtractionForBundle(
-        resolvedTabId,
-        segmentBundle,
-        apiSettings
-      );
+      renderCustomTabBackgroundPanel(getCustomTab(resolvedTabId));
+      let mergePayload = null;
+      try {
+        mergePayload = await requestForumBackgroundExtractionForBundle(
+          resolvedTabId,
+          segmentBundle,
+          apiSettings
+        );
+      } catch (error) {
+        if (
+          state.forumBackgroundExtractionProgress?.tabId === resolvedTabId &&
+          state.forumBackgroundExtractionProgress.segments[index]
+        ) {
+          state.forumBackgroundExtractionProgress.segments[index].status = "failed";
+          state.forumBackgroundExtractionProgress.segments[index].note =
+            error?.message || "请求失败";
+        }
+        throw error;
+      }
+      if (
+        state.forumBackgroundExtractionProgress?.tabId === resolvedTabId &&
+        state.forumBackgroundExtractionProgress.segments[index]
+      ) {
+        const createdCount = Number(mergePayload.summary?.createdCount) || 0;
+        const reinforcedCount = Number(mergePayload.summary?.reinforcedCount) || 0;
+        const noteParts = [];
+        if (createdCount) {
+          noteParts.push(`新建 ${createdCount}`);
+        }
+        if (reinforcedCount) {
+          noteParts.push(`强化 ${reinforcedCount}`);
+        }
+        if (!noteParts.length && mergePayload.emptyResult) {
+          noteParts.push("无新增候选");
+        }
+        state.forumBackgroundExtractionProgress.segments[index].status = "completed";
+        state.forumBackgroundExtractionProgress.segments[index].note = noteParts.join("，");
+      }
+      renderCustomTabBackgroundPanel(getCustomTab(resolvedTabId));
       aggregate.results.push(...(Array.isArray(mergePayload.results) ? mergePayload.results : []));
       if (mergePayload.run) {
         aggregate.runs.push(mergePayload.run);
