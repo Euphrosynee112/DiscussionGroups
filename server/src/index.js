@@ -7458,6 +7458,99 @@ function normalizeChatSyncDeletes(value) {
   return Array.from(deletesByConversationId.values());
 }
 
+function normalizeChatConversationSnapshotRow(row = {}) {
+  const source = row && typeof row === "object" ? row : {};
+  const snapshot = normalizeSnapshotObject(source.payload_jsonb || source.payload || {});
+  const conversationId = toStorageText(snapshot.id || source.id);
+  const contactId = toStorageText(snapshot.contactId || snapshot.contact_id || source.contact_id);
+  if (!conversationId || !contactId) {
+    return null;
+  }
+  return sanitizeJsonbValue({
+    ...snapshot,
+    id: conversationId,
+    contactId,
+    messages: Array.isArray(snapshot.messages) ? snapshot.messages : [],
+    updatedAt:
+      Number(snapshot.updatedAt) ||
+      Number(snapshot.updated_at) ||
+      Number(snapshot.lastMessageAt) ||
+      Date.parse(String(source.last_message_at || source.client_updated_at || "")) ||
+      Date.now(),
+    lastMutatedAt:
+      Number(snapshot.lastMutatedAt) ||
+      Number(snapshot.last_mutated_at) ||
+      Number(snapshot.updatedAt) ||
+      Number(snapshot.updated_at) ||
+      Date.parse(String(source.client_updated_at || source.updated_at || "")) ||
+      Date.now()
+  });
+}
+
+app.get("/api/chat/conversations", async (_request, response) => {
+  if (!pool) {
+    response.status(500).json(createJsonError("DATABASE_URL is missing. API routes are unavailable."));
+    return;
+  }
+
+  try {
+    const result = await pool.query(
+      `
+        select id, contact_id, payload_jsonb, client_updated_at, updated_at, last_message_at
+        from chat_conversations
+        where owner_id = $1
+        order by client_updated_at desc nulls last, updated_at desc
+      `,
+      [DEFAULT_STORAGE_OWNER_ID]
+    );
+    response.json({
+      ok: true,
+      conversations: result.rows
+        .map((row) => normalizeChatConversationSnapshotRow(row))
+        .filter(Boolean)
+    });
+  } catch (error) {
+    response.status(500).json(createJsonError("Failed to load chat conversations.", error?.message));
+  }
+});
+
+app.get("/api/chat/conversations/:id", async (request, response) => {
+  if (!pool) {
+    response.status(500).json(createJsonError("DATABASE_URL is missing. API routes are unavailable."));
+    return;
+  }
+  const conversationId = toStorageText(request.params.id);
+  if (!conversationId) {
+    response.status(400).json(createJsonError("Conversation id is required."));
+    return;
+  }
+
+  try {
+    const result = await pool.query(
+      `
+        select id, contact_id, payload_jsonb, client_updated_at, updated_at, last_message_at
+        from chat_conversations
+        where owner_id = $1 and id = $2
+        limit 1
+      `,
+      [DEFAULT_STORAGE_OWNER_ID, conversationId]
+    );
+    const conversation = result.rows.length
+      ? normalizeChatConversationSnapshotRow(result.rows[0])
+      : null;
+    if (!conversation) {
+      response.status(404).json(createJsonError("Chat conversation was not found."));
+      return;
+    }
+    response.json({
+      ok: true,
+      conversation
+    });
+  } catch (error) {
+    response.status(500).json(createJsonError("Failed to load chat conversation.", error?.message));
+  }
+});
+
 app.post("/api/chat/sync", async (request, response) => {
   const body = request.body && typeof request.body === "object" ? request.body : {};
   const ownerId = toStorageText(body.ownerId, DEFAULT_STORAGE_OWNER_ID);

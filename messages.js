@@ -753,6 +753,10 @@ const state = {
   worldbookCollapsedGroupIds: [],
   requestingConversationId: "",
   sendingConversationId: "",
+  chatReadonlyMode: false,
+  chatReadonlyReason: "",
+  chatCloudHydrated: false,
+  chatCloudHydrating: false,
   composerPanelOpen: false,
   messageActionMessageId: "",
   regenerateModalOpen: false,
@@ -1025,6 +1029,341 @@ async function requestMessagesStorageApi(pathname, options = {}) {
   }
 
   return payload;
+}
+
+function getChatReadonlyMessage() {
+  return state.chatReadonlyReason || "数据库不可用，仅只读";
+}
+
+function setChatReadonlyMode(enabled, reason = "") {
+  state.chatReadonlyMode = Boolean(enabled);
+  state.chatReadonlyReason = state.chatReadonlyMode
+    ? String(reason || "数据库不可用，仅只读").trim()
+    : "";
+  if (!state.chatReadonlyMode) {
+    state.chatReadonlyReason = "";
+  }
+  return state.chatReadonlyMode;
+}
+
+function ensureChatMutationAllowed(actionLabel = "继续操作") {
+  if (!state.chatReadonlyMode) {
+    return true;
+  }
+  setMessagesStatus(`${getChatReadonlyMessage()}，暂时不能${actionLabel}。`, "error");
+  return false;
+}
+
+function persistConversationMirror(conversations = state.conversations, options = {}) {
+  const persistOptions = options && typeof options === "object" ? options : {};
+  return persistConversations({
+    ...persistOptions,
+    sourceConversations: Array.isArray(conversations) ? conversations : [],
+    mirrorOnly: true
+  });
+}
+
+function normalizeCloudConversationList(conversations = []) {
+  return (Array.isArray(conversations) ? conversations : [])
+    .map((conversation, index) => normalizeConversation(conversation, index))
+    .filter(Boolean);
+}
+
+function replaceConversationListInState(conversations = [], options = {}) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  state.conversations = normalizeCloudConversationList(conversations);
+  if (
+    state.activeConversationId &&
+    !state.conversations.some(
+      (conversation) => String(conversation?.id || "").trim() === String(state.activeConversationId || "").trim()
+    )
+  ) {
+    closeConversationTransientUi();
+    state.activeConversationId = "";
+  }
+  state.contacts = loadContacts(state.conversations);
+  if (requestOptions.persistMirror !== false) {
+    persistConversationMirror(state.conversations);
+  }
+  syncActiveConversationPromptSettings(getConversationById());
+  return state.conversations;
+}
+
+function upsertConversationSnapshotInState(conversation = null, options = {}) {
+  const normalizedConversation = normalizeConversation(conversation, 0);
+  if (!normalizedConversation) {
+    return null;
+  }
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const conversationId = String(normalizedConversation.id || "").trim();
+  const existingIndex = state.conversations.findIndex(
+    (item) => String(item?.id || "").trim() === conversationId
+  );
+  if (existingIndex >= 0) {
+    state.conversations = state.conversations.map((item, index) =>
+      index === existingIndex ? normalizedConversation : item
+    );
+  } else {
+    state.conversations = [normalizedConversation, ...state.conversations];
+  }
+  state.contacts = loadContacts(state.conversations);
+  if (requestOptions.persistMirror !== false) {
+    persistConversationMirror(state.conversations, {
+      deferMaintenance: Boolean(requestOptions.deferMaintenance),
+      fallbackToMaintenanceOnFailure: requestOptions.fallbackToMaintenanceOnFailure !== false
+    });
+  }
+  if (String(state.activeConversationId || "").trim() === conversationId) {
+    syncActiveConversationPromptSettings(normalizedConversation);
+  }
+  return normalizedConversation;
+}
+
+function removeConversationSnapshotsFromState(conversationIds = [], options = {}) {
+  const resolvedIds = new Set(
+    normalizeObjectArray(conversationIds)
+      .map((conversationId) => String(conversationId || "").trim())
+      .filter(Boolean)
+  );
+  if (!resolvedIds.size) {
+    return false;
+  }
+  const requestOptions = options && typeof options === "object" ? options : {};
+  state.conversations = state.conversations.filter(
+    (conversation) => !resolvedIds.has(String(conversation?.id || "").trim())
+  );
+  if (resolvedIds.has(String(state.activeConversationId || "").trim())) {
+    closeConversationTransientUi();
+    state.activeConversationId = "";
+  }
+  state.contacts = loadContacts(state.conversations);
+  if (requestOptions.persistMirror !== false) {
+    persistConversationMirror(state.conversations);
+  }
+  return true;
+}
+
+function cloneConversationSnapshotForCloud(conversation = null) {
+  const normalizedConversation = normalizeConversation(conversation, 0);
+  if (!normalizedConversation) {
+    return null;
+  }
+  ensureConversationLastMutatedAt(normalizedConversation);
+  normalizedConversation.messages = Array.isArray(normalizedConversation.messages)
+    ? normalizedConversation.messages.map((message) => ({
+        ...message,
+        updatedAt: normalizeChatSyncTimestamp(message?.updatedAt || message?.createdAt) || Date.now()
+      }))
+    : [];
+  return cloneConversationsForStorage([normalizedConversation])[0] || null;
+}
+
+function clearChatSyncQueueEntries(options = {}) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const upsertIds = normalizeObjectArray(requestOptions.upsertIds)
+    .map((conversationId) => String(conversationId || "").trim())
+    .filter(Boolean);
+  const deleteIds = normalizeObjectArray(requestOptions.deleteIds)
+    .map((conversationId) => String(conversationId || "").trim())
+    .filter(Boolean);
+  if (!upsertIds.length && !deleteIds.length) {
+    return false;
+  }
+  const queueState = loadChatSyncQueueState();
+  upsertIds.forEach((conversationId) => {
+    delete queueState.pendingUpserts[conversationId];
+    delete queueState.pendingDeletes[conversationId];
+  });
+  deleteIds.forEach((conversationId) => {
+    delete queueState.pendingUpserts[conversationId];
+    delete queueState.pendingDeletes[conversationId];
+  });
+  queueState.lastError = "";
+  queueState.lastSuccessAt = Date.now();
+  persistChatSyncQueueState(queueState);
+  return true;
+}
+
+async function loadCloudConversations() {
+  const payload = await requestMessagesStorageApi("/api/chat/conversations");
+  return normalizeCloudConversationList(payload?.conversations);
+}
+
+async function loadCloudConversationById(conversationId = "") {
+  const resolvedConversationId = String(conversationId || "").trim();
+  if (!resolvedConversationId) {
+    throw new Error("缺少会话 ID。");
+  }
+  const payload = await requestMessagesStorageApi(
+    `/api/chat/conversations/${encodeURIComponent(resolvedConversationId)}`
+  );
+  const conversation = normalizeConversation(payload?.conversation, 0);
+  if (!conversation) {
+    throw new Error("数据库中没有找到这段会话。");
+  }
+  return conversation;
+}
+
+async function refreshConversationSnapshotFromCloud(conversationId = "", options = {}) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const conversation = await loadCloudConversationById(conversationId);
+  upsertConversationSnapshotInState(conversation, {
+    persistMirror: requestOptions.persistMirror !== false
+  });
+  return conversation;
+}
+
+async function syncConversationSnapshotNow(conversation = null, reason = "mutation", options = {}) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const snapshot = cloneConversationSnapshotForCloud(conversation);
+  if (!snapshot?.id) {
+    throw new Error("没有可同步的会话快照。");
+  }
+  const lastMutatedAt = ensureConversationLastMutatedAt(snapshot);
+  const payload = await requestMessagesStorageApi("/api/chat/sync", {
+    method: "POST",
+    body: JSON.stringify({
+      ownerId: "default",
+      reason: normalizeChatSyncReason(reason),
+      upserts: [
+        {
+          conversation: snapshot,
+          lastMutatedAt
+        }
+      ],
+      deletes: []
+    }),
+    keepalive: Boolean(requestOptions.keepalive)
+  });
+  clearChatSyncQueueEntries({
+    upsertIds: [snapshot.id]
+  });
+  return {
+    payload,
+    conversation: snapshot,
+    lastMutatedAt
+  };
+}
+
+async function deleteConversationSnapshotsNow(conversationIds = [], reason = "mutation", options = {}) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const resolvedIds = normalizeObjectArray(conversationIds)
+    .map((conversationId) => String(conversationId || "").trim())
+    .filter(Boolean);
+  if (!resolvedIds.length) {
+    return {
+      ok: true,
+      skipped: true
+    };
+  }
+  const deletedAt = normalizeChatSyncTimestamp(requestOptions.deletedAt) || Date.now();
+  const payload = await requestMessagesStorageApi("/api/chat/sync", {
+    method: "POST",
+    body: JSON.stringify({
+      ownerId: "default",
+      reason: normalizeChatSyncReason(reason),
+      upserts: [],
+      deletes: resolvedIds.map((conversationId) => ({
+        conversationId,
+        deletedAt
+      }))
+    }),
+    keepalive: Boolean(requestOptions.keepalive)
+  });
+  clearChatSyncQueueEntries({
+    deleteIds: resolvedIds
+  });
+  return payload;
+}
+
+async function bootstrapMissingLocalConversations(localConversations = [], cloudConversations = []) {
+  const normalizedLocalConversations = normalizeCloudConversationList(localConversations);
+  const cloudConversationIds = new Set(
+    normalizeCloudConversationList(cloudConversations)
+      .map((conversation) => String(conversation?.id || "").trim())
+      .filter(Boolean)
+  );
+  const missingConversations = normalizedLocalConversations.filter((conversation) => {
+    const conversationId = String(conversation?.id || "").trim();
+    return conversationId && !cloudConversationIds.has(conversationId);
+  });
+  if (!missingConversations.length) {
+    return {
+      missingCount: 0,
+      batchCount: 0
+    };
+  }
+
+  for (let index = 0; index < missingConversations.length; index += 10) {
+    const batch = missingConversations.slice(index, index + 10);
+    const upserts = batch
+      .map((conversation) => cloneConversationSnapshotForCloud(conversation))
+      .filter(Boolean)
+      .map((conversation) => ({
+        conversation,
+        lastMutatedAt: ensureConversationLastMutatedAt(conversation)
+      }));
+    if (!upserts.length) {
+      continue;
+    }
+    await requestMessagesStorageApi("/api/chat/sync", {
+      method: "POST",
+      body: JSON.stringify({
+        ownerId: "default",
+        reason: "startup_retry",
+        upserts,
+        deletes: []
+      })
+    });
+    clearChatSyncQueueEntries({
+      upsertIds: upserts.map((entry) => entry.conversation.id)
+    });
+  }
+
+  return {
+    missingCount: missingConversations.length,
+    batchCount: Math.ceil(missingConversations.length / 10)
+  };
+}
+
+async function hydrateChatConversationsFromCloud(options = {}) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  if (state.chatCloudHydrating) {
+    return false;
+  }
+  state.chatCloudHydrating = true;
+  const localConversations = loadConversations();
+  try {
+    let cloudConversations = await loadCloudConversations();
+    const bootstrapResult = await bootstrapMissingLocalConversations(
+      localConversations,
+      cloudConversations
+    );
+    if (bootstrapResult.missingCount > 0) {
+      cloudConversations = await loadCloudConversations();
+    }
+    setChatReadonlyMode(false);
+    state.chatCloudHydrated = true;
+    replaceConversationListInState(cloudConversations, {
+      persistMirror: true
+    });
+    if (requestOptions.showStatus !== false && bootstrapResult.missingCount > 0) {
+      setMessagesStatus(`已补传 ${bootstrapResult.missingCount} 个本地历史会话到数据库。`, "success");
+    } else if (requestOptions.clearStatus !== false) {
+      setMessagesStatus("");
+    }
+    return true;
+  } catch (error) {
+    console.error("[Pulse Messages] Failed to hydrate cloud conversations:", error);
+    state.chatCloudHydrated = false;
+    setChatReadonlyMode(true, "数据库不可用，仅只读");
+    state.conversations = mergePreferredLocalConversations(state.conversations, localConversations);
+    state.contacts = loadContacts(state.conversations);
+    setMessagesStatus("数据库不可用，仅只读；发送、编辑、删除和重回已暂停。", "error");
+    return false;
+  } finally {
+    state.chatCloudHydrating = false;
+  }
 }
 
 function normalizeChatSyncReason(value = "", fallback = "mutation") {
@@ -7530,24 +7869,32 @@ function pruneOldestConversationBatch(conversations = []) {
 function persistConversations(options = {}) {
   const persistOptions = options && typeof options === "object" ? options : {};
   const shouldDeferMaintenance = Boolean(persistOptions.deferMaintenance);
+  const sourceConversations = Array.isArray(persistOptions.sourceConversations)
+    ? persistOptions.sourceConversations
+    : state.conversations;
+  const shouldUpdateStateAfterPersist =
+    !Boolean(persistOptions.mirrorOnly) &&
+    (Boolean(persistOptions.forceStateRewrite) || !state.chatCloudHydrated || state.chatReadonlyMode);
   const shouldFallbackToMaintenanceOnFailure =
     Object.prototype.hasOwnProperty.call(persistOptions, "fallbackToMaintenanceOnFailure")
       ? Boolean(persistOptions.fallbackToMaintenanceOnFailure)
       : true;
 
   if (shouldDeferMaintenance) {
-    const nextConversations = cloneConversationsForStorage(state.conversations);
+    const nextConversations = cloneConversationsForStorage(sourceConversations);
     const payload = JSON.stringify(nextConversations);
     const persisted = safeSetItem(MESSAGE_THREADS_KEY, payload);
     if (persisted || !shouldFallbackToMaintenanceOnFailure) {
-      state.conversations = nextConversations
-        .map((conversation, index) => normalizeConversation(conversation, index))
-        .filter(Boolean);
+      if (shouldUpdateStateAfterPersist) {
+        state.conversations = nextConversations
+          .map((conversation, index) => normalizeConversation(conversation, index))
+          .filter(Boolean);
+      }
       return persisted;
     }
   }
 
-  let nextConversations = trimConversationMessagesForStorage(state.conversations);
+  let nextConversations = trimConversationMessagesForStorage(sourceConversations);
   let payload = JSON.stringify(nextConversations);
   let attemptedAggressiveImageStrip = false;
 
@@ -7591,9 +7938,11 @@ function persistConversations(options = {}) {
     console.warn("[Pulse Messages] Conversation storage write failed after fallback pruning.");
   }
 
-  state.conversations = nextConversations
-    .map((conversation, index) => normalizeConversation(conversation, index))
-    .filter(Boolean);
+  if (shouldUpdateStateAfterPersist) {
+    state.conversations = nextConversations
+      .map((conversation, index) => normalizeConversation(conversation, index))
+      .filter(Boolean);
+  }
   return persisted;
 }
 
@@ -7607,7 +7956,9 @@ function scheduleConversationStorageMaintenance(delayMs = 120) {
       scheduleConversationStorageMaintenance(delayMs);
       return;
     }
-    persistConversations();
+    persistConversations({
+      mirrorOnly: true
+    });
   }, Math.max(0, Number(delayMs) || 0));
 }
 
@@ -7753,6 +8104,9 @@ function ensureConversationForDiscussionShare(entry = null) {
   }
   const contact = getContactById(targetContactId);
   if (!contact) {
+    return null;
+  }
+  if (state.chatCloudHydrated && !state.chatReadonlyMode) {
     return null;
   }
   return createConversation(contact);
@@ -8331,6 +8685,79 @@ function createConversation(contact) {
   state.conversations = [conversation, ...state.conversations];
   persistConversations();
   return conversation;
+}
+
+function buildConversationSnapshotForContact(contact = null) {
+  const resolvedContact = contact && typeof contact === "object" ? contact : null;
+  if (!resolvedContact?.id) {
+    return null;
+  }
+  const now = Date.now();
+  return normalizeConversation(
+    {
+      id: `conversation_${now}_${hashText(resolvedContact.id)}`,
+      contactId: resolvedContact.id,
+      contactNameSnapshot: resolvedContact.name,
+      contactAvatarImageSnapshot: resolvedContact.avatarImage,
+      contactAvatarTextSnapshot:
+        resolvedContact.avatarText || getContactAvatarFallback(resolvedContact),
+      promptSettings: buildConversationPromptSettingsBase(),
+      sceneMode: "online",
+      allowAiPresenceUpdate: false,
+      allowAiProactiveMessage: false,
+      allowAiAutoSchedule: false,
+      autoScheduleDays: DEFAULT_AUTO_SCHEDULE_DAYS,
+      autoScheduleTime: "",
+      autoScheduleLastRunDate: "",
+      voiceCallState: normalizeVoiceCallState(),
+      messages: [],
+      awarenessCounter: 0,
+      replyContextVersion: 0,
+      memorySummaryCounter: 0,
+      memorySummaryLastMessageCount: 0,
+      updatedAt: now,
+      lastMutatedAt: now
+    },
+    0
+  );
+}
+
+async function ensureConversationAvailableForContact(contact = null, options = {}) {
+  const resolvedContact = contact && typeof contact === "object" ? contact : null;
+  if (!resolvedContact?.id) {
+    return null;
+  }
+  const existingConversation =
+    getConversationByContactId(resolvedContact.id) ||
+    state.conversations.find((item) => String(item?.contactId || "").trim() === String(resolvedContact.id).trim()) ||
+    null;
+  if (existingConversation) {
+    return existingConversation;
+  }
+  if (!ensureChatMutationAllowed("发起新会话")) {
+    return null;
+  }
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const conversation = buildConversationSnapshotForContact(resolvedContact);
+  if (!conversation) {
+    return null;
+  }
+  await syncConversationSnapshotNow(conversation, requestOptions.reason || "mutation");
+  return upsertConversationSnapshotInState(conversation, {
+    persistMirror: true,
+    deferMaintenance: true,
+    fallbackToMaintenanceOnFailure: false
+  });
+}
+
+function buildMutatedConversationSnapshot(conversation = null, mutator = null) {
+  const snapshot = cloneConversationSnapshotForCloud(conversation);
+  if (!snapshot) {
+    return null;
+  }
+  const nextConversation =
+    typeof mutator === "function" ? mutator(snapshot) || snapshot : snapshot;
+  return normalizeConversation(nextConversation, 0);
 }
 
 function normalizeCustomTabs(tabs = []) {
@@ -13894,6 +14321,7 @@ function setPendingAssistantReveal(
     expectedReplyContextVersion: Number.isFinite(parsedExpectedReplyContextVersion)
       ? parsedExpectedReplyContextVersion
       : null,
+    alreadyPersisted: Boolean(revealOptions.alreadyPersisted),
     messages: pendingMessages
   };
   return true;
@@ -13929,6 +14357,20 @@ function flushPendingAssistantReveal(conversationId = "", options = {}) {
   clearPendingAssistantReveal(pendingConversationId);
   if (!revealMessages.length) {
     return [];
+  }
+  if (Boolean(pendingReveal?.alreadyPersisted)) {
+    const flushOptions = options && typeof options === "object" ? options : {};
+    if (
+      !flushOptions.suppressRender &&
+      state.activeTab === "chat" &&
+      String(state.activeConversationId || "").trim() === pendingConversationId
+    ) {
+      queueConversationRenderOptions({
+        scrollBehavior: "bottom"
+      });
+      renderMessagesPage();
+    }
+    return revealMessages;
   }
   const targetConversation = getConversationById(pendingConversationId);
   if (!targetConversation) {
@@ -13966,40 +14408,23 @@ function flushPendingAssistantReveal(conversationId = "", options = {}) {
   return appendedRevealMessages;
 }
 
-async function appendAssistantReplyBatch(
+function buildAssistantReplyMessagesForConversation(
   conversation,
   replyText,
   promptSettings = {},
-  privacySession = null,
-  options = {}
+  privacySession = null
 ) {
-  const requestOptions = options && typeof options === "object" ? options : {};
-  const parsedExpectedReplyContextVersion = Number.parseInt(
-    String(requestOptions.expectedReplyContextVersion || ""),
-    10
-  );
-  const hasExpectedReplyContextVersion = Number.isFinite(parsedExpectedReplyContextVersion);
   const replyItems = buildReplyItems(replyText, promptSettings, privacySession);
   if (!replyItems.length) {
     throw new Error("接口请求成功，但没有可展示的回复内容。");
   }
-  const conversationId = String(conversation?.id || "").trim();
+  const activeConversation = conversation && typeof conversation === "object" ? conversation : null;
+  const baseLength = Array.isArray(activeConversation?.messages)
+    ? activeConversation.messages.length
+    : 0;
   const now = Date.now();
   const timeLabel = formatLocalTime();
-  const activeConversation = conversationId ? getConversationById(conversationId) : conversation;
-  if (!activeConversation) {
-    return [];
-  }
-  if (
-    conversationId &&
-    hasExpectedReplyContextVersion &&
-    getConversationReplyContextVersion(activeConversation) !== parsedExpectedReplyContextVersion
-  ) {
-    return [];
-  }
-
-  const baseLength = Array.isArray(activeConversation.messages) ? activeConversation.messages.length : 0;
-  const createdMessages = replyItems.map((item, index) =>
+  return replyItems.map((item, index) =>
     normalizeConversationMessage(
       {
         id: `message_${now}_${index}_${hashText(item.text || item.locationName || "")}`,
@@ -14024,6 +14449,46 @@ async function appendAssistantReplyBatch(
       baseLength + index
     )
   );
+}
+
+async function appendAssistantReplyBatch(
+  conversation,
+  replyText,
+  promptSettings = {},
+  privacySession = null,
+  options = {}
+) {
+  const requestOptions = options && typeof options === "object" ? options : {};
+  const alreadyPersisted = Boolean(requestOptions.alreadyPersisted);
+  const parsedExpectedReplyContextVersion = Number.parseInt(
+    String(requestOptions.expectedReplyContextVersion || ""),
+    10
+  );
+  const hasExpectedReplyContextVersion = Number.isFinite(parsedExpectedReplyContextVersion);
+  const conversationId = String(conversation?.id || "").trim();
+  const activeConversation = conversationId ? getConversationById(conversationId) : conversation;
+  if (!activeConversation) {
+    return [];
+  }
+  if (
+    conversationId &&
+    hasExpectedReplyContextVersion &&
+    getConversationReplyContextVersion(activeConversation) !== parsedExpectedReplyContextVersion
+  ) {
+    return [];
+  }
+
+  const prebuiltMessages = normalizeObjectArray(requestOptions.prebuiltMessages)
+    .map((message, index) => normalizeConversationMessage(message, index))
+    .filter((message) => message.role === "assistant" && message.text);
+  const createdMessages = prebuiltMessages.length
+    ? prebuiltMessages
+    : buildAssistantReplyMessagesForConversation(
+        activeConversation,
+        replyText,
+        promptSettings,
+        privacySession
+      );
   setConversationReplyRecovery(
     conversationId,
     createdMessages,
@@ -14038,6 +14503,21 @@ async function appendAssistantReplyBatch(
     String(state.activeConversationId || "").trim() === conversationId &&
     !document.hidden;
   if (!shouldAnimateReplyReveal) {
+    if (alreadyPersisted) {
+      clearPendingAssistantReveal(conversationId);
+      if (
+        state.activeTab === "chat" &&
+        String(state.activeConversationId || "").trim() === conversationId &&
+        !Boolean(requestOptions.suppressUi)
+      ) {
+        queueConversationRenderOptions({
+          scrollBehavior: "bottom"
+        });
+        renderMessagesPage();
+      }
+      clearConversationReplyRecovery(conversationId);
+      return createdMessages;
+    }
     clearPendingAssistantReveal(conversationId);
     const appendedDirectMessages = appendUniqueMessagesToConversation(activeConversation, createdMessages);
     if (!appendedDirectMessages.length) {
@@ -14061,7 +14541,8 @@ async function appendAssistantReplyBatch(
   }
 
   setPendingAssistantReveal(conversationId, createdMessages, {
-    expectedReplyContextVersion: parsedExpectedReplyContextVersion
+    expectedReplyContextVersion: parsedExpectedReplyContextVersion,
+    alreadyPersisted
   });
   const appendedMessages = [];
   let shouldPersistConversationAfterReveal = false;
@@ -14116,19 +14597,24 @@ async function appendAssistantReplyBatch(
       };
     }
     const nextMessage = createdMessages[index];
-    const newlyAppendedMessages = appendUniqueMessagesToConversation(nextConversation, [nextMessage]);
+    const newlyAppendedMessages = alreadyPersisted
+      ? [nextMessage]
+      : appendUniqueMessagesToConversation(nextConversation, [nextMessage]);
     const appendedCurrentMessage = newlyAppendedMessages[0] || null;
     if (appendedCurrentMessage) {
       appendedMessages.push(appendedCurrentMessage);
-      recalculateConversationUpdatedAt(nextConversation);
-      markConversationMutated(
-        nextConversation,
-        appendedCurrentMessage.updatedAt || appendedCurrentMessage.createdAt || Date.now()
-      );
-      shouldPersistConversationAfterReveal = true;
+      if (!alreadyPersisted) {
+        recalculateConversationUpdatedAt(nextConversation);
+        markConversationMutated(
+          nextConversation,
+          appendedCurrentMessage.updatedAt || appendedCurrentMessage.createdAt || Date.now()
+        );
+        shouldPersistConversationAfterReveal = true;
+      }
     }
     setPendingAssistantReveal(conversationId, createdMessages.slice(index + 1), {
-      expectedReplyContextVersion: parsedExpectedReplyContextVersion
+      expectedReplyContextVersion: parsedExpectedReplyContextVersion,
+      alreadyPersisted
     });
     if (state.activeTab === "chat" && appendedCurrentMessage) {
       const appendedToVisibleHistory = appendConversationMessageToVisibleHistory(
@@ -14146,6 +14632,7 @@ async function appendAssistantReplyBatch(
 
   const latestConversation = getConversationById(conversationId);
   if (
+    !alreadyPersisted &&
     latestConversation &&
     (!hasExpectedReplyContextVersion ||
       getConversationReplyContextVersion(latestConversation) === parsedExpectedReplyContextVersion)
@@ -16351,6 +16838,16 @@ function renderConversationUtilityIcon(icon) {
 }
 
 function renderConversationUtilityPanel() {
+  const readonlyMutationTools = new Set([
+    "regenerate",
+    "voice",
+    "camera",
+    "image",
+    "phone",
+    "video",
+    "location",
+    "awareness"
+  ]);
   return `
     <div class="messages-conversation__utility ${state.composerPanelOpen ? "is-open" : ""}">
       <button
@@ -16367,6 +16864,11 @@ function renderConversationUtilityPanel() {
               type="button"
               data-action="conversation-tool"
               data-tool-id="${escapeHtml(item.id)}"
+              ${
+                state.chatReadonlyMode && readonlyMutationTools.has(item.id)
+                  ? 'disabled aria-disabled="true"'
+                  : ""
+              }
             >
               <span class="messages-conversation__utility-icon">
                 ${renderConversationUtilityIcon(item.icon)}
@@ -16384,6 +16886,7 @@ function renderConversationMessageMenu(message, isMenuOpen) {
   if (!isMenuOpen) {
     return "";
   }
+  const mutationDisabledAttr = state.chatReadonlyMode ? ' disabled aria-disabled="true"' : "";
   const sceneMode = getConversationSceneMode();
   const isDiscussionShareMessage = isDiscussionShareConversationMessage(message);
   const canQuote =
@@ -16418,6 +16921,7 @@ function renderConversationMessageMenu(message, isMenuOpen) {
             type="button"
             data-action="delete-conversation-message"
             data-message-id="${escapeHtml(message.id)}"
+            ${mutationDisabledAttr}
           >
             删除
           </button>
@@ -16429,6 +16933,7 @@ function renderConversationMessageMenu(message, isMenuOpen) {
             type="button"
             data-action="edit-conversation-message"
             data-message-id="${escapeHtml(message.id)}"
+            ${mutationDisabledAttr}
           >
             编辑
           </button>
@@ -16438,6 +16943,7 @@ function renderConversationMessageMenu(message, isMenuOpen) {
             type="button"
             data-action="delete-conversation-message"
             data-message-id="${escapeHtml(message.id)}"
+            ${mutationDisabledAttr}
           >
             删除
           </button>
@@ -16795,6 +17301,7 @@ function renderActiveVoiceCallScreen(conversation, options = {}) {
   const callState = getConversationVoiceCallState(conversation);
   const durationLabel = formatVoiceCallDurationLabel(getVoiceCallDurationSeconds(callState));
   const isReplyBusy = isConversationReplyBusy(conversation.id);
+  const isReadonly = state.chatReadonlyMode;
   const hasPendingUserMessages = conversation.messages.some(
     (message) => message.role === "user" && message.needsReply
   );
@@ -16837,11 +17344,11 @@ function renderActiveVoiceCallScreen(conversation, options = {}) {
             type="text"
             maxlength="600"
             value="${escapeHtml(draft)}"
-            placeholder="输入消息…"
+            placeholder="${isReadonly ? "数据库不可用，仅只读" : "输入消息…"}"
             autocomplete="off"
-            ${isReplyBusy ? "disabled" : ""}
+            ${isReplyBusy || isReadonly ? "disabled" : ""}
           />
-          <button class="messages-call-screen__send" type="submit" ${isReplyBusy ? "disabled" : ""}>
+          <button class="messages-call-screen__send" type="submit" ${isReplyBusy || isReadonly ? "disabled" : ""}>
             发送
           </button>
           <button
@@ -16851,7 +17358,11 @@ function renderActiveVoiceCallScreen(conversation, options = {}) {
             type="button"
             data-action="request-conversation-reply"
             aria-label="获取语音回复"
-            ${isReplyBusy || (!hasPendingUserMessages && !canRequestContinuation) ? "disabled" : ""}
+            ${
+              isReplyBusy || isReadonly || (!hasPendingUserMessages && !canRequestContinuation)
+                ? "disabled"
+                : ""
+            }
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path
@@ -16870,6 +17381,7 @@ function renderActiveVoiceCallScreen(conversation, options = {}) {
           type="button"
           data-action="hangup-voice-call"
           aria-label="挂断语音通话"
+          ${isReadonly ? "disabled" : ""}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M6.8 14.5c3.5-2.2 6.9-2.2 10.4 0l1.1.7c.6.4.8 1.1.5 1.8l-.6 1.2c-.3.7-.9 1-1.7.8-3-.9-6-.9-9 0-.8.2-1.4-.1-1.7-.8L5.2 17c-.3-.7-.1-1.4.5-1.8l1.1-.7Z" fill="currentColor" />
@@ -16887,6 +17399,7 @@ function renderIncomingVoiceCallRequestScreen(conversation, message) {
     return renderIncomingVideoCallRequestScreen(conversation, message);
   }
   const meta = getConversationMeta(conversation);
+  const isReadonly = state.chatReadonlyMode;
   return `
     <section class="messages-call-screen messages-call-screen--incoming" aria-label="来电请求">
       <div class="messages-call-screen__hero messages-call-screen__hero--incoming">
@@ -16911,6 +17424,7 @@ function renderIncomingVoiceCallRequestScreen(conversation, message) {
             type="button"
             data-action="reject-voice-call-request"
             data-message-id="${escapeHtml(message.id)}"
+            ${isReadonly ? "disabled" : ""}
           >
             拒绝
           </button>
@@ -16919,6 +17433,7 @@ function renderIncomingVoiceCallRequestScreen(conversation, message) {
             type="button"
             data-action="accept-voice-call-request"
             data-message-id="${escapeHtml(message.id)}"
+            ${isReadonly ? "disabled" : ""}
           >
             接通
           </button>
@@ -16942,6 +17457,7 @@ function renderActiveVideoCallScreen(conversation, options = {}) {
   const callState = getConversationVoiceCallState(conversation);
   const durationLabel = formatVoiceCallDurationLabel(getVoiceCallDurationSeconds(callState));
   const isReplyBusy = isConversationReplyBusy(conversation.id);
+  const isReadonly = state.chatReadonlyMode;
   const hasPendingUserMessages = conversation.messages.some(
     (message) => message.role === "user" && message.needsReply
   );
@@ -17001,11 +17517,11 @@ function renderActiveVideoCallScreen(conversation, options = {}) {
             type="text"
             maxlength="600"
             value="${escapeHtml(draft)}"
-            placeholder="输入消息…"
+            placeholder="${isReadonly ? "数据库不可用，仅只读" : "输入消息…"}"
             autocomplete="off"
-            ${isReplyBusy ? "disabled" : ""}
+            ${isReplyBusy || isReadonly ? "disabled" : ""}
           />
-          <button class="messages-call-screen__send" type="submit" ${isReplyBusy ? "disabled" : ""}>
+          <button class="messages-call-screen__send" type="submit" ${isReplyBusy || isReadonly ? "disabled" : ""}>
             发送
           </button>
           <button
@@ -17015,7 +17531,11 @@ function renderActiveVideoCallScreen(conversation, options = {}) {
             type="button"
             data-action="request-conversation-reply"
             aria-label="获取视频回复"
-            ${isReplyBusy || (!hasPendingUserMessages && !canRequestContinuation) ? "disabled" : ""}
+            ${
+              isReplyBusy || isReadonly || (!hasPendingUserMessages && !canRequestContinuation)
+                ? "disabled"
+                : ""
+            }
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path
@@ -17034,6 +17554,7 @@ function renderActiveVideoCallScreen(conversation, options = {}) {
           type="button"
           data-action="hangup-active-call"
           aria-label="挂断视频通话"
+          ${isReadonly ? "disabled" : ""}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M6.8 14.5c3.5-2.2 6.9-2.2 10.4 0l1.1.7c.6.4.8 1.1.5 1.8l-.6 1.2c-.3.7-.9 1-1.7.8-3-.9-6-.9-9 0-.8.2-1.4-.1-1.7-.8L5.2 17c-.3-.7-.1-1.4.5-1.8l1.1-.7Z" fill="currentColor" />
@@ -17049,6 +17570,7 @@ function renderIncomingVideoCallRequestScreen(conversation, message) {
   const remoteImage = getConversationVideoContactDisplayImage(conversation);
   const localImage = getConversationVideoUserDisplayImage(conversation);
   const note = String(message?.callRequestMessage || "").trim();
+  const isReadonly = state.chatReadonlyMode;
   return `
     <section class="messages-call-screen messages-call-screen--video messages-call-screen--incoming-video" aria-label="视频来电请求">
       <div class="messages-call-screen__video-stage">
@@ -17088,6 +17610,7 @@ function renderIncomingVideoCallRequestScreen(conversation, message) {
             type="button"
             data-action="reject-video-call-request"
             data-message-id="${escapeHtml(message.id)}"
+            ${isReadonly ? "disabled" : ""}
           >
             拒绝
           </button>
@@ -17096,6 +17619,7 @@ function renderIncomingVideoCallRequestScreen(conversation, message) {
             type="button"
             data-action="accept-video-call-request"
             data-message-id="${escapeHtml(message.id)}"
+            ${isReadonly ? "disabled" : ""}
           >
             接通
           </button>
@@ -17511,6 +18035,7 @@ function renderConversationDetail(options = {}) {
 
   const isSending = state.sendingConversationId === conversation.id;
   const isReplyBusy = isConversationReplyBusy(conversation.id);
+  const isReadonly = state.chatReadonlyMode;
   repairStalePendingUserMessages(conversation, {
     persist: true,
     skipWhenBusy: true
@@ -17595,10 +18120,11 @@ function renderConversationDetail(options = {}) {
           type="text"
           maxlength="600"
           value="${escapeHtml(composerDraft)}"
-          placeholder="发消息"
+          placeholder="${isReadonly ? "数据库不可用，仅只读" : "发消息"}"
           autocomplete="off"
+          ${isReadonly ? "disabled" : ""}
         />
-        <button class="messages-conversation__send" type="submit" ${isReplyBusy ? "disabled" : ""}>
+        <button class="messages-conversation__send" type="submit" ${isReplyBusy || isReadonly ? "disabled" : ""}>
           发送
         </button>
         <button
@@ -17608,7 +18134,11 @@ function renderConversationDetail(options = {}) {
           type="button"
           data-action="request-conversation-reply"
           aria-label="推送到 API 获取回复或续写"
-          ${isReplyBusy || (!hasPendingUserMessages && !canRequestContinuation) ? "disabled" : ""}
+          ${
+            isReplyBusy || isReadonly || (!hasPendingUserMessages && !canRequestContinuation)
+              ? "disabled"
+              : ""
+          }
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path
@@ -20256,7 +20786,10 @@ function setChatSettingsOpen(isOpen) {
   updateBodyModalState();
 }
 
-function editConversationMessage(messageId = "") {
+async function editConversationMessage(messageId = "") {
+  if (!ensureChatMutationAllowed("编辑消息")) {
+    return;
+  }
   const conversation = getConversationById();
   if (!conversation) {
     return;
@@ -20296,23 +20829,36 @@ function editConversationMessage(messageId = "") {
     return;
   }
   const editedAt = Date.now();
-
-  conversation.messages = conversation.messages.map((message) =>
-    message.id === targetMessage.id
-      ? {
-          ...message,
-          text: resolved,
-          updatedAt: editedAt
-        }
-      : message
-  );
-  recalculateConversationUpdatedAt(conversation);
-  markConversationMutated(conversation, editedAt);
-  bumpConversationReplyContextVersion(conversation);
+  const nextConversation = buildMutatedConversationSnapshot(conversation, (draft) => {
+    draft.messages = draft.messages.map((message) =>
+      message.id === targetMessage.id
+        ? {
+            ...message,
+            text: resolved,
+            updatedAt: editedAt
+          }
+        : message
+    );
+    recalculateConversationUpdatedAt(draft);
+    markConversationMutated(draft, editedAt);
+    bumpConversationReplyContextVersion(draft);
+    return draft;
+  });
+  if (!nextConversation) {
+    setMessagesStatus("未能构造编辑后的会话快照。", "error");
+    return;
+  }
+  try {
+    await syncConversationSnapshotNow(nextConversation, "mutation");
+  } catch (error) {
+    setMessagesStatus(`消息更新失败：${error?.message || "请求失败"}`, "error");
+    return;
+  }
   cancelConversationReplyWork(conversation.id);
   state.messageActionMessageId = "";
-  persistConversations();
-  enqueueConversationChatSyncUpsert(conversation);
+  upsertConversationSnapshotInState(nextConversation, {
+    persistMirror: true
+  });
   queueConversationRenderOptions({
     scrollBehavior: "preserve",
     scrollSnapshot
@@ -20321,7 +20867,10 @@ function editConversationMessage(messageId = "") {
   setMessagesStatus("消息已更新。", "success");
 }
 
-function deleteConversationMessage(messageId = "") {
+async function deleteConversationMessage(messageId = "") {
+  if (!ensureChatMutationAllowed("删除消息")) {
+    return;
+  }
   const conversation = getConversationById();
   if (!conversation) {
     return;
@@ -20337,7 +20886,24 @@ function deleteConversationMessage(messageId = "") {
     return;
   }
 
-  conversation.messages = conversation.messages.filter((message) => message.id !== targetMessage.id);
+  const deletedAt = Date.now();
+  const nextConversation = buildMutatedConversationSnapshot(conversation, (draft) => {
+    draft.messages = draft.messages.filter((message) => message.id !== targetMessage.id);
+    recalculateConversationUpdatedAt(draft);
+    markConversationMutated(draft, deletedAt);
+    bumpConversationReplyContextVersion(draft);
+    return draft;
+  });
+  if (!nextConversation) {
+    setMessagesStatus("未能构造删除后的会话快照。", "error");
+    return;
+  }
+  try {
+    await syncConversationSnapshotNow(nextConversation, "mutation");
+  } catch (error) {
+    setMessagesStatus(`消息删除失败：${error?.message || "请求失败"}`, "error");
+    return;
+  }
   if (String(state.quotedMessageId || "").trim() === targetMessage.id) {
     state.quotedMessageId = "";
   }
@@ -20359,14 +20925,11 @@ function deleteConversationMessage(messageId = "") {
   ) {
     setInnerThoughtModalOpen(false);
   }
-  const deletedAt = Date.now();
-  recalculateConversationUpdatedAt(conversation);
-  markConversationMutated(conversation, deletedAt);
-  bumpConversationReplyContextVersion(conversation);
   cancelConversationReplyWork(conversation.id);
   state.messageActionMessageId = "";
-  persistConversations();
-  enqueueConversationChatSyncUpsert(conversation);
+  upsertConversationSnapshotInState(nextConversation, {
+    persistMirror: true
+  });
   queueConversationRenderOptions({
     scrollBehavior: "preserve",
     scrollSnapshot
@@ -20375,7 +20938,10 @@ function deleteConversationMessage(messageId = "") {
   setMessagesStatus("消息已删除。", "success");
 }
 
-function clearCurrentConversationHistory() {
+async function clearCurrentConversationHistory() {
+  if (!ensureChatMutationAllowed("清空聊天记录")) {
+    return;
+  }
   const conversation = getConversationById();
   if (!conversation) {
     setEditorStatus(messagesChatSettingsStatusEl, "未找到当前会话。", "error");
@@ -20386,13 +20952,29 @@ function clearCurrentConversationHistory() {
     return;
   }
 
-  conversation.messages = [];
-  conversation.memorySummaryCounter = 0;
-  conversation.memorySummaryLastMessageCount = 0;
-  conversation.voiceCallState = normalizeVoiceCallState();
-  conversation.updatedAt = Date.now();
-  markConversationMutated(conversation, conversation.updatedAt);
-  bumpConversationReplyContextVersion(conversation);
+  const clearedAt = Date.now();
+  const nextConversation = buildMutatedConversationSnapshot(conversation, (draft) => {
+    draft.messages = [];
+    draft.memorySummaryCounter = 0;
+    draft.memorySummaryLastMessageCount = 0;
+    draft.voiceCallState = normalizeVoiceCallState();
+    draft.updatedAt = clearedAt;
+    markConversationMutated(draft, clearedAt);
+    bumpConversationReplyContextVersion(draft);
+    return draft;
+  });
+  if (!nextConversation) {
+    setEditorStatus(messagesChatSettingsStatusEl, "未能构造清空后的会话快照。", "error");
+    return;
+  }
+  try {
+    await syncConversationSnapshotNow(nextConversation, "mutation");
+  } catch (error) {
+    const errorMessage = `聊天记录清空失败：${error?.message || "请求失败"}`;
+    setEditorStatus(messagesChatSettingsStatusEl, errorMessage, "error");
+    setMessagesStatus(errorMessage, "error");
+    return;
+  }
   cancelConversationReplyWork(conversation.id);
   resetConversationVisibleMessageCount(conversation.id);
   state.messageActionMessageId = "";
@@ -20401,8 +20983,9 @@ function clearCurrentConversationHistory() {
   if (state.discussionShareModalOpen) {
     setDiscussionShareModalOpen(false);
   }
-  persistConversations();
-  enqueueConversationChatSyncUpsert(conversation);
+  upsertConversationSnapshotInState(nextConversation, {
+    persistMirror: true
+  });
   queueConversationRenderOptions({
     scrollBehavior: "bottom"
   });
@@ -20617,9 +21200,12 @@ function cleanupRaisingRecordsForDeletedContact(contactId = "") {
   return records.length - nextRecords.length;
 }
 
-function deleteConversationContactBundle(contactId = "", options = {}) {
+async function deleteConversationContactBundle(contactId = "", options = {}) {
   const resolvedContactId = String(contactId || "").trim();
   if (!resolvedContactId) {
+    return null;
+  }
+  if (!ensureChatMutationAllowed("删除会话")) {
     return null;
   }
   const requestOptions = options && typeof options === "object" ? options : {};
@@ -20630,6 +21216,16 @@ function deleteConversationContactBundle(contactId = "", options = {}) {
     (conversation) => String(conversation.contactId || "").trim() === resolvedContactId
   );
   const conversationIds = conversationsToDelete.map((conversation) => String(conversation.id || "").trim()).filter(Boolean);
+  if (conversationIds.length) {
+    try {
+      await deleteConversationSnapshotsNow(conversationIds, "mutation", {
+        deletedAt: Date.now()
+      });
+    } catch (error) {
+      setMessagesStatus(`会话删除失败：${error?.message || "请求失败"}`, "error");
+      return null;
+    }
+  }
   const activeForegroundTask = state.activeForegroundReplyTaskId
     ? loadReplyTasks().find((task) => task.id === state.activeForegroundReplyTaskId) || null
     : null;
@@ -20722,11 +21318,7 @@ function deleteConversationContactBundle(contactId = "", options = {}) {
   persistJournalEntries();
   persistCommonPlaces();
   persistPresenceState();
-  persistConversations();
-  enqueueConversationChatSyncDelete(conversationIds, {
-    reason: "mutation",
-    deletedAt: Date.now()
-  });
+  persistConversationMirror(state.conversations);
   persistContacts();
 
   return {
@@ -20741,7 +21333,7 @@ function deleteConversationContactBundle(contactId = "", options = {}) {
   };
 }
 
-function handleConversationRowLongPress(conversationId = "") {
+async function handleConversationRowLongPress(conversationId = "") {
   const resolvedConversationId = String(conversationId || "").trim();
   const conversation = getConversationById(resolvedConversationId);
   if (!conversation) {
@@ -20775,7 +21367,7 @@ function handleConversationRowLongPress(conversationId = "") {
 
   const memoryCount = state.memories.filter((item) => item.contactId === contactId).length;
   const journalCount = state.journalEntries.filter((item) => item.contactId === contactId).length;
-  const result = deleteConversationContactBundle(contactId, {
+  const result = await deleteConversationContactBundle(contactId, {
     preserveContact: true,
     removeRelatedCompanionEntries
   });
@@ -20806,7 +21398,7 @@ function handleConversationRowLongPress(conversationId = "") {
   );
 }
 
-function handleDeleteContactFromEditor() {
+async function handleDeleteContactFromEditor() {
   const contactId = String(state.contactEditorId || "").trim();
   const contact = contactId ? getContactById(contactId) : null;
   if (!contact) {
@@ -20836,7 +21428,7 @@ function handleDeleteContactFromEditor() {
     return;
   }
 
-  const result = deleteConversationContactBundle(contactId, {
+  const result = await deleteConversationContactBundle(contactId, {
     preserveContact: false,
     removeRelatedCompanionEntries: false
   });
@@ -20955,6 +21547,10 @@ function handleConversationToolAction(toolId = "") {
   }
 
   if (resolvedToolId === "location") {
+    if (!ensureChatMutationAllowed("发送位置")) {
+      renderConversationDetail();
+      return;
+    }
     const conversation = getConversationById();
     if (!conversation) {
       setMessagesStatus("请先进入一个聊天，再发送位置。", "error");
@@ -20967,6 +21563,10 @@ function handleConversationToolAction(toolId = "") {
   }
 
   if (resolvedToolId === "voice") {
+    if (!ensureChatMutationAllowed("发送语音")) {
+      renderConversationDetail();
+      return;
+    }
     const conversation = getConversationById();
     if (!conversation) {
       setMessagesStatus("请先进入一个聊天，再发送语音。", "error");
@@ -20979,6 +21579,10 @@ function handleConversationToolAction(toolId = "") {
   }
 
   if (resolvedToolId === "phone") {
+    if (!ensureChatMutationAllowed("发起语音通话")) {
+      renderConversationDetail();
+      return;
+    }
     const conversation = getConversationById();
     if (!conversation) {
       setMessagesStatus("请先进入一个聊天，再发起语音通话。", "error");
@@ -20990,6 +21594,10 @@ function handleConversationToolAction(toolId = "") {
   }
 
   if (resolvedToolId === "video") {
+    if (!ensureChatMutationAllowed("发起视频通话")) {
+      renderConversationDetail();
+      return;
+    }
     const conversation = getConversationById();
     if (!conversation) {
       setMessagesStatus("请先进入一个聊天，再发起视频通话。", "error");
@@ -21001,6 +21609,10 @@ function handleConversationToolAction(toolId = "") {
   }
 
   if (resolvedToolId === "camera") {
+    if (!ensureChatMutationAllowed("发送图片")) {
+      renderConversationDetail();
+      return;
+    }
     const conversation = getConversationById();
     if (!conversation) {
       setMessagesStatus("请先进入一个聊天，再发送图片。", "error");
@@ -21013,6 +21625,10 @@ function handleConversationToolAction(toolId = "") {
   }
 
   if (resolvedToolId === "image") {
+    if (!ensureChatMutationAllowed("发送图片")) {
+      renderConversationDetail();
+      return;
+    }
     const conversation = getConversationById();
     if (!conversation) {
       setMessagesStatus("请先进入一个聊天，再发送图片。", "error");
@@ -21025,6 +21641,10 @@ function handleConversationToolAction(toolId = "") {
   }
 
   if (resolvedToolId === "awareness") {
+    if (!ensureChatMutationAllowed("调整察觉")) {
+      renderConversationDetail();
+      return;
+    }
     const conversation = getConversationById();
     if (!conversation) {
       setMessagesStatus("请先进入一个聊天，再设置察觉。", "error");
@@ -21037,6 +21657,10 @@ function handleConversationToolAction(toolId = "") {
   }
 
   if (resolvedToolId === "regenerate") {
+    if (!ensureChatMutationAllowed("重回回复")) {
+      renderConversationDetail();
+      return;
+    }
     const conversation = getConversationById();
     if (!conversation) {
       return;
@@ -21146,6 +21770,9 @@ async function sendConversationImage(file) {
   if (!file) {
     return;
   }
+  if (!ensureChatMutationAllowed("发送图片")) {
+    return;
+  }
   const conversation = getConversationById();
   if (!conversation) {
     setMessagesStatus("请先进入一个聊天，再发送图片。", "error");
@@ -21165,30 +21792,43 @@ async function sendConversationImage(file) {
     return;
   }
 
-  closeConversationTransientUi();
+  const createdAt = Date.now();
   const userMessage = normalizeConversationMessage(
     {
-      id: `message_${Date.now()}_${hashText(`${file.name || "image"}_${imageDataUrl.slice(0, 48)}`)}`,
+      id: `message_${createdAt}_${hashText(`${file.name || "image"}_${imageDataUrl.slice(0, 48)}`)}`,
       role: "user",
       messageType: "image",
       imageDataUrl,
       text: buildImageMessageText(),
       needsReply: true,
       time: formatLocalTime(),
-      createdAt: Date.now()
+      createdAt
     },
     conversation.messages.length
   );
-
-  conversation.messages = [...conversation.messages, userMessage];
-  conversation.updatedAt = userMessage.createdAt;
-  markConversationMutated(conversation, userMessage.updatedAt || userMessage.createdAt);
-  bumpConversationReplyContextVersion(conversation);
-  persistConversations({
-    deferMaintenance: true,
-    fallbackToMaintenanceOnFailure: true
+  const nextConversation = buildMutatedConversationSnapshot(conversation, (draft) => {
+    draft.messages = [...draft.messages, userMessage];
+    draft.updatedAt = userMessage.createdAt;
+    markConversationMutated(draft, userMessage.updatedAt || userMessage.createdAt);
+    bumpConversationReplyContextVersion(draft);
+    return draft;
   });
-  enqueueConversationChatSyncUpsert(conversation);
+  if (!nextConversation) {
+    setMessagesStatus("未能构造图片消息快照。", "error");
+    return;
+  }
+  try {
+    await syncConversationSnapshotNow(nextConversation, "mutation");
+  } catch (error) {
+    setMessagesStatus(`图片写入数据库失败：${error?.message || "请求失败"}`, "error");
+    return;
+  }
+  closeConversationTransientUi();
+  upsertConversationSnapshotInState(nextConversation, {
+    persistMirror: true,
+    deferMaintenance: true,
+    fallbackToMaintenanceOnFailure: false
+  });
   queueConversationRenderOptions({
     scrollBehavior: "bottom"
   });
@@ -21196,10 +21836,13 @@ async function sendConversationImage(file) {
   setMessagesStatus("图片已加入对话，点击右侧圆标向 API 请求回复。", "success");
 }
 
-function sendConversationPhoto(description = "") {
+async function sendConversationPhoto(description = "") {
   const resolvedDescription = String(description || "").trim();
   if (!resolvedDescription) {
     setPhotoStatus("请先描述这张照片的内容。", "error");
+    return;
+  }
+  if (!ensureChatMutationAllowed("发送图片")) {
     return;
   }
   const conversation = getConversationById();
@@ -21208,30 +21851,43 @@ function sendConversationPhoto(description = "") {
     return;
   }
 
-  closeConversationTransientUi();
+  const createdAt = Date.now();
   const userMessage = normalizeConversationMessage(
     {
-      id: `message_${Date.now()}_${hashText(resolvedDescription)}`,
+      id: `message_${createdAt}_${hashText(resolvedDescription)}`,
       role: "user",
       messageType: "image",
       imageDescription: resolvedDescription,
       text: buildImageMessageText(resolvedDescription),
       needsReply: true,
       time: formatLocalTime(),
-      createdAt: Date.now()
+      createdAt
     },
     conversation.messages.length
   );
-
-  conversation.messages = [...conversation.messages, userMessage];
-  conversation.updatedAt = userMessage.createdAt;
-  markConversationMutated(conversation, userMessage.updatedAt || userMessage.createdAt);
-  bumpConversationReplyContextVersion(conversation);
-  persistConversations({
-    deferMaintenance: true,
-    fallbackToMaintenanceOnFailure: true
+  const nextConversation = buildMutatedConversationSnapshot(conversation, (draft) => {
+    draft.messages = [...draft.messages, userMessage];
+    draft.updatedAt = userMessage.createdAt;
+    markConversationMutated(draft, userMessage.updatedAt || userMessage.createdAt);
+    bumpConversationReplyContextVersion(draft);
+    return draft;
   });
-  enqueueConversationChatSyncUpsert(conversation);
+  if (!nextConversation) {
+    setMessagesStatus("未能构造图片消息快照。", "error");
+    return;
+  }
+  try {
+    await syncConversationSnapshotNow(nextConversation, "mutation");
+  } catch (error) {
+    setMessagesStatus(`图片写入数据库失败：${error?.message || "请求失败"}`, "error");
+    return;
+  }
+  closeConversationTransientUi();
+  upsertConversationSnapshotInState(nextConversation, {
+    persistMirror: true,
+    deferMaintenance: true,
+    fallbackToMaintenanceOnFailure: false
+  });
   setPhotoModalOpen(false);
   queueConversationRenderOptions({
     scrollBehavior: "bottom"
@@ -21240,10 +21896,13 @@ function sendConversationPhoto(description = "") {
   setMessagesStatus("图片已加入对话，点击右侧圆标向 API 请求回复。", "success");
 }
 
-function sendConversationVoice(content = "") {
+async function sendConversationVoice(content = "") {
   const resolvedContent = String(content || "").trim();
   if (!resolvedContent) {
     setVoiceStatus("请输入语音转文字内容。", "error");
+    return;
+  }
+  if (!ensureChatMutationAllowed("发送语音")) {
     return;
   }
   const conversation = getConversationById();
@@ -21253,10 +21912,10 @@ function sendConversationVoice(content = "") {
   }
 
   const durationSeconds = estimateVoiceMessageDurationSeconds(resolvedContent);
-  closeConversationTransientUi();
+  const createdAt = Date.now();
   const userMessage = normalizeConversationMessage(
     {
-      id: `message_${Date.now()}_${hashText(`voice_${resolvedContent}`)}`,
+      id: `message_${createdAt}_${hashText(`voice_${resolvedContent}`)}`,
       role: "user",
       messageType: "voice",
       voiceText: resolvedContent,
@@ -21264,20 +21923,33 @@ function sendConversationVoice(content = "") {
       text: buildVoiceMessageText(resolvedContent, durationSeconds),
       needsReply: true,
       time: formatLocalTime(),
-      createdAt: Date.now()
+      createdAt
     },
     conversation.messages.length
   );
-
-  conversation.messages = [...conversation.messages, userMessage];
-  conversation.updatedAt = userMessage.createdAt;
-  markConversationMutated(conversation, userMessage.updatedAt || userMessage.createdAt);
-  bumpConversationReplyContextVersion(conversation);
-  persistConversations({
-    deferMaintenance: true,
-    fallbackToMaintenanceOnFailure: true
+  const nextConversation = buildMutatedConversationSnapshot(conversation, (draft) => {
+    draft.messages = [...draft.messages, userMessage];
+    draft.updatedAt = userMessage.createdAt;
+    markConversationMutated(draft, userMessage.updatedAt || userMessage.createdAt);
+    bumpConversationReplyContextVersion(draft);
+    return draft;
   });
-  enqueueConversationChatSyncUpsert(conversation);
+  if (!nextConversation) {
+    setMessagesStatus("未能构造语音消息快照。", "error");
+    return;
+  }
+  try {
+    await syncConversationSnapshotNow(nextConversation, "mutation");
+  } catch (error) {
+    setMessagesStatus(`语音写入数据库失败：${error?.message || "请求失败"}`, "error");
+    return;
+  }
+  closeConversationTransientUi();
+  upsertConversationSnapshotInState(nextConversation, {
+    persistMirror: true,
+    deferMaintenance: true,
+    fallbackToMaintenanceOnFailure: false
+  });
   setVoiceModalOpen(false);
   queueConversationRenderOptions({
     scrollBehavior: "bottom"
@@ -21286,10 +21958,13 @@ function sendConversationVoice(content = "") {
   setMessagesStatus("语音已加入对话，点击右侧圆标向 API 请求回复。", "success");
 }
 
-function sendConversationLocation(locationName, coordinates) {
+async function sendConversationLocation(locationName, coordinates) {
   const resolvedName = String(locationName || "").trim();
   if (!resolvedName) {
     setLocationStatus("请输入位置名称。", "error");
+    return;
+  }
+  if (!ensureChatMutationAllowed("发送定位")) {
     return;
   }
 
@@ -21300,31 +21975,44 @@ function sendConversationLocation(locationName, coordinates) {
     return;
   }
 
-  closeConversationTransientUi();
+  const createdAt = Date.now();
   const userMessage = normalizeConversationMessage(
     {
-      id: `message_${Date.now()}_${hashText(`${resolvedName}_${resolvedCoordinates}`)}`,
+      id: `message_${createdAt}_${hashText(`${resolvedName}_${resolvedCoordinates}`)}`,
       role: "user",
       messageType: "location",
       locationName: resolvedName,
       coordinates: resolvedCoordinates,
       needsReply: true,
       time: formatLocalTime(),
-      createdAt: Date.now()
+      createdAt
     },
     conversation.messages.length
   );
-
-  conversation.messages = [...conversation.messages, userMessage];
-  conversation.updatedAt = userMessage.createdAt;
-  markConversationMutated(conversation, userMessage.updatedAt || userMessage.createdAt);
-  bumpConversationReplyContextVersion(conversation);
-  saveRecentLocation(resolvedName, resolvedCoordinates);
-  persistConversations({
-    deferMaintenance: true,
-    fallbackToMaintenanceOnFailure: true
+  const nextConversation = buildMutatedConversationSnapshot(conversation, (draft) => {
+    draft.messages = [...draft.messages, userMessage];
+    draft.updatedAt = userMessage.createdAt;
+    markConversationMutated(draft, userMessage.updatedAt || userMessage.createdAt);
+    bumpConversationReplyContextVersion(draft);
+    return draft;
   });
-  enqueueConversationChatSyncUpsert(conversation);
+  if (!nextConversation) {
+    setMessagesStatus("未能构造定位消息快照。", "error");
+    return;
+  }
+  try {
+    await syncConversationSnapshotNow(nextConversation, "mutation");
+  } catch (error) {
+    setMessagesStatus(`定位写入数据库失败：${error?.message || "请求失败"}`, "error");
+    return;
+  }
+  closeConversationTransientUi();
+  saveRecentLocation(resolvedName, resolvedCoordinates);
+  upsertConversationSnapshotInState(nextConversation, {
+    persistMirror: true,
+    deferMaintenance: true,
+    fallbackToMaintenanceOnFailure: false
+  });
   setLocationModalOpen(false);
   queueConversationRenderOptions({
     scrollBehavior: "bottom"
@@ -21638,10 +22326,13 @@ function hangupActiveVoiceCall() {
   );
 }
 
-function sendConversationMessage(text, options = {}) {
+async function sendConversationMessage(text, options = {}) {
   const content = String(text || "").trim();
   if (!content) {
     setMessagesStatus("请输入消息内容后再发送。", "error");
+    return;
+  }
+  if (!ensureChatMutationAllowed("发送消息")) {
     return;
   }
 
@@ -21657,14 +22348,14 @@ function sendConversationMessage(text, options = {}) {
   }
 
   const sendOptions = options && typeof options === "object" ? options : {};
-  closeConversationTransientUi();
   const quotedMessage =
     !isConversationVoiceCallActive(conversation) && getConversationSceneMode(conversation) === "online"
       ? getQuotedConversationMessage(conversation)
       : null;
+  const createdAt = Date.now();
   const userMessage = normalizeConversationMessage(
     {
-      id: `message_${Date.now()}_${hashText(content)}`,
+      id: `message_${createdAt}_${hashText(content)}`,
       role: "user",
       messageType: quotedMessage ? "quote" : "text",
       quotedText: quotedMessage ? getConversationMessagePreviewText(quotedMessage) : "",
@@ -21672,22 +22363,35 @@ function sendConversationMessage(text, options = {}) {
       text: content,
       needsReply: true,
       time: formatLocalTime(),
-      createdAt: Date.now()
+      createdAt
     },
     conversation.messages.length
   );
-
-  conversation.messages = [...conversation.messages, userMessage];
-  conversation.updatedAt = userMessage.createdAt;
-  markConversationMutated(conversation, userMessage.updatedAt || userMessage.createdAt);
-  bumpConversationReplyContextVersion(conversation);
-  setConversationDraft(conversation.id, "");
-  state.quotedMessageId = "";
-  persistConversations({
-    deferMaintenance: true,
-    fallbackToMaintenanceOnFailure: true
+  const nextConversation = buildMutatedConversationSnapshot(conversation, (draft) => {
+    draft.messages = [...draft.messages, userMessage];
+    draft.updatedAt = userMessage.createdAt;
+    markConversationMutated(draft, userMessage.updatedAt || userMessage.createdAt);
+    bumpConversationReplyContextVersion(draft);
+    return draft;
   });
-  enqueueConversationChatSyncUpsert(conversation);
+  if (!nextConversation) {
+    setMessagesStatus("未能构造待发送的会话快照。", "error");
+    return;
+  }
+  try {
+    await syncConversationSnapshotNow(nextConversation, "mutation");
+  } catch (error) {
+    setMessagesStatus(`消息写入数据库失败：${error?.message || "请求失败"}`, "error");
+    return;
+  }
+  closeConversationTransientUi();
+  upsertConversationSnapshotInState(nextConversation, {
+    persistMirror: true,
+    deferMaintenance: true,
+    fallbackToMaintenanceOnFailure: false
+  });
+  setConversationDraft(nextConversation.id, "");
+  state.quotedMessageId = "";
   queueConversationRenderOptions({
     scrollBehavior: "bottom",
     focusInput: true
@@ -21700,13 +22404,18 @@ function sendConversationMessage(text, options = {}) {
     "success"
   );
   if (sendOptions.requestReplyAfterSend) {
-    void requestConversationReply();
+    void requestConversationReply({
+      conversationId: nextConversation.id
+    });
   }
 }
 
 async function requestConversationReply(options = {}) {
   syncProfileStateFromStorage();
   const requestOptions = options && typeof options === "object" ? options : {};
+  if (!ensureChatMutationAllowed("请求回复")) {
+    return;
+  }
   const backgroundWorkerMode = String(
     requestOptions.backgroundWorkerMode || getBackgroundWorkerMode() || ""
   )
@@ -21718,7 +22427,7 @@ async function requestConversationReply(options = {}) {
   if (!conversationId) {
     return;
   }
-  const conversation = getConversationById(conversationId);
+  let conversation = getConversationById(conversationId);
   if (!conversation) {
     return;
   }
@@ -21793,6 +22502,22 @@ async function requestConversationReply(options = {}) {
     return pendingTask;
   }
 
+  try {
+    conversation = await refreshConversationSnapshotFromCloud(conversation.id, {
+      persistMirror: true
+    });
+  } catch (error) {
+    setChatReadonlyMode(true, "数据库不可用，仅只读");
+    if (!suppressUi) {
+      setMessagesStatus(`数据库会话刷新失败：${error?.message || "请求失败"}`, "error");
+      renderMessagesPage();
+    }
+    if (suppressUi) {
+      throw error;
+    }
+    return;
+  }
+
   const contact = getResolvedConversationContact(conversation);
   if (!contact) {
     if (!suppressUi) {
@@ -21810,7 +22535,7 @@ async function requestConversationReply(options = {}) {
     });
   }
   let history = [];
-  let removedReplyBatch = [];
+  let regenerateReplyBatch = null;
   const currentAwarenessCounter = Math.max(
     0,
     Number.parseInt(String(conversation.awarenessCounter || 0), 10) || 0
@@ -21869,6 +22594,7 @@ async function requestConversationReply(options = {}) {
       }
       return;
     }
+    regenerateReplyBatch = latestReplyBatch;
   } else {
     repairStalePendingUserMessages(conversation, {
       persist: true,
@@ -21966,15 +22692,23 @@ async function requestConversationReply(options = {}) {
     clearForegroundReplySync(conversation.id);
     if (isRegenerate) {
       replyContextVersion = bumpConversationReplyContextVersion(conversation);
-      const latestReplyBatch = getLatestAssistantReplyBatch(conversation);
-      removedReplyBatch = latestReplyBatch.messages.map((message) => ({ ...message }));
-      conversation.messages = conversation.messages.slice(0, latestReplyBatch.startIndex);
-      recalculateConversationUpdatedAt(conversation);
-      persistConversations({
-        deferMaintenance: true,
-        fallbackToMaintenanceOnFailure: false
+      const latestReplyBatch = regenerateReplyBatch || getLatestAssistantReplyBatch(conversation);
+      if (!latestReplyBatch || latestReplyBatch.blocked) {
+        if (!suppressUi) {
+          setMessagesStatus("当前没有可重回的上一轮回复。", "error");
+        }
+        return;
+      }
+      regenerateReplyBatch = latestReplyBatch;
+      const workingConversation = buildMutatedConversationSnapshot(conversation, (draft) => {
+        draft.messages = draft.messages.slice(0, latestReplyBatch.startIndex);
+        recalculateConversationUpdatedAt(draft);
+        return draft;
       });
-      history = selectConversationHistory(conversation.messages, promptSettings.historyRounds);
+      history = selectConversationHistory(
+        workingConversation?.messages || [],
+        promptSettings.historyRounds
+      );
     } else {
       state.requestingConversationId = conversation.id;
       if (!suppressUi) {
@@ -22047,36 +22781,96 @@ async function requestConversationReply(options = {}) {
       }
     }
 
-    const createdMessages = await appendAssistantReplyBatch(
-      updatedConversation,
+    const replyMessageBaseConversation = isRegenerate
+      ? buildMutatedConversationSnapshot(updatedConversation, (draft) => {
+          const latestReplyBatch = regenerateReplyBatch || getLatestAssistantReplyBatch(draft);
+          draft.messages = latestReplyBatch
+            ? draft.messages.slice(0, latestReplyBatch.startIndex)
+            : draft.messages;
+          return draft;
+        })
+      : updatedConversation;
+    const createdMessages = buildAssistantReplyMessagesForConversation(
+      replyMessageBaseConversation || updatedConversation,
       replyResult.text,
       promptSettings,
-      replyResult.privacySession,
-      {
-        expectedReplyContextVersion: replyContextVersion,
-        pendingUserMessageIds: isRegenerate ? [] : requestedPendingUserMessageIds
-      }
+      replyResult.privacySession
     );
     if (!createdMessages.length) {
       return;
     }
+    const nextAwarenessCounter =
+      !isRegenerate && hasAwarenessMonitor && !hasManualAwarenessTrigger
+        ? currentAwarenessCounter + 1
+        : currentAwarenessCounter;
+    const finalConversation = buildMutatedConversationSnapshot(updatedConversation, (draft) => {
+      if (isRegenerate) {
+        const latestReplyBatch = regenerateReplyBatch || getLatestAssistantReplyBatch(draft);
+        if (latestReplyBatch && !latestReplyBatch.blocked) {
+          draft.messages = draft.messages.slice(0, latestReplyBatch.startIndex);
+        }
+      }
+      draft.messages = [...draft.messages, ...createdMessages];
+      recalculateConversationUpdatedAt(draft);
+      markConversationMutated(
+        draft,
+        createdMessages[createdMessages.length - 1]?.updatedAt ||
+          createdMessages[createdMessages.length - 1]?.createdAt ||
+          Date.now()
+      );
+      if (!isRegenerate) {
+        clearConversationPendingReplyFlags(draft, requestedPendingUserMessageIds);
+        draft.awarenessCounter = nextAwarenessCounter;
+        draft.memorySummaryCounter = (Number(draft.memorySummaryCounter) || 0) + 1;
+      }
+      return draft;
+    });
+    if (!finalConversation) {
+      return;
+    }
+    await syncConversationSnapshotNow(finalConversation, "mutation");
+    upsertConversationSnapshotInState(finalConversation, {
+      persistMirror: true,
+      deferMaintenance: true,
+      fallbackToMaintenanceOnFailure: false
+    });
     const latestConversation = getConversationById(conversation.id);
     if (!latestConversation) {
       return;
     }
-    if (!isRegenerate) {
-      const clearedPendingFlags = clearConversationPendingReplyFlags(
-        latestConversation,
-        requestedPendingUserMessageIds
-      );
-      if (clearedPendingFlags) {
-        persistConversations({
-          deferMaintenance: true,
-          fallbackToMaintenanceOnFailure: false
-        });
-      }
-    }
     if (!isConversationReplyContextCurrent(conversation.id, replyContextVersion)) {
+      return;
+    }
+    if (
+      isRegenerate &&
+      !suppressUi &&
+      state.activeTab === "chat" &&
+      String(state.activeConversationId || "").trim() === conversation.id
+    ) {
+      setPendingAssistantReveal(conversation.id, createdMessages, {
+        expectedReplyContextVersion: replyContextVersion,
+        alreadyPersisted: true
+      });
+      queueConversationRenderOptions({
+        scrollBehavior: "preserve",
+        scrollSnapshot: captureConversationScrollSnapshot()
+      });
+      renderMessagesPage();
+    }
+    const revealedMessages = await appendAssistantReplyBatch(
+      latestConversation,
+      replyResult.text,
+      promptSettings,
+      replyResult.privacySession,
+      {
+        alreadyPersisted: true,
+        prebuiltMessages: createdMessages,
+        expectedReplyContextVersion: replyContextVersion,
+        pendingUserMessageIds: isRegenerate ? [] : requestedPendingUserMessageIds,
+        suppressUi
+      }
+    );
+    if (!revealedMessages.length) {
       return;
     }
     if (replyResult.assistantPresenceUpdate && latestConversation.contactId) {
@@ -22091,10 +22885,6 @@ async function requestConversationReply(options = {}) {
     pushConversationReplyNotification(contact, latestConversation, createdMessages);
     repairPersistedChatWorldbookMounts(promptSettings, latestConversation);
     if (!isRegenerate) {
-      const nextAwarenessCounter =
-        hasAwarenessMonitor && !hasManualAwarenessTrigger
-          ? currentAwarenessCounter + 1
-          : currentAwarenessCounter;
       latestConversation.awarenessCounter = nextAwarenessCounter;
       if (
         hasStoredManualAwarenessTrigger ||
@@ -22167,12 +22957,6 @@ async function requestConversationReply(options = {}) {
           persistContacts();
         }
       }
-      latestConversation.memorySummaryCounter =
-        (Number(latestConversation.memorySummaryCounter) || 0) + 1;
-      persistConversations({
-        deferMaintenance: true,
-        fallbackToMaintenanceOnFailure: false
-      });
       if (!shouldUseReplyWorkerLightMode) {
         void maybeExtractConversationMemories(latestConversation.id, settings, promptSettings);
       }
@@ -22188,27 +22972,6 @@ async function requestConversationReply(options = {}) {
       );
     }
   } catch (error) {
-    if (isRegenerate) {
-      const rollbackConversation = getConversationById(conversation.id);
-      if (rollbackConversation && removedReplyBatch.length) {
-        const restoredMessages = appendUniqueMessagesToConversation(
-          rollbackConversation,
-          removedReplyBatch
-        );
-        if (restoredMessages.length) {
-          recalculateConversationUpdatedAt(rollbackConversation);
-          markConversationMutated(
-            rollbackConversation,
-            restoredMessages[restoredMessages.length - 1]?.updatedAt || Date.now()
-          );
-          persistConversations({
-            deferMaintenance: true,
-            fallbackToMaintenanceOnFailure: false
-          });
-          enqueueConversationChatSyncUpsert(rollbackConversation);
-        }
-      }
-    }
     if (!suppressUi) {
       setMessagesStatus(
         `${isProactiveTrigger ? "主动消息生成失败" : "回复失败"}：${error?.message || "请求失败"}`,
@@ -22458,24 +23221,38 @@ function initBackgroundMessagesWorker() {
   initBackgroundAutomationWorker();
 }
 
-function refreshStateFromStorage() {
+function refreshStateFromStorage(options = {}) {
+  const requestOptions = options && typeof options === "object" ? options : {};
   const settings = loadSettings();
   const currentConversations = Array.isArray(state.conversations) ? state.conversations.slice() : [];
+  const loadedLocalConversations = loadConversations();
+  const shouldLoadLocalConversations =
+    Boolean(requestOptions.forceLocalConversations) ||
+    state.chatReadonlyMode ||
+    !state.chatCloudHydrated ||
+    isBackgroundMessagesWorker();
   state.profile = loadProfile();
-  state.conversations = mergePreferredLocalConversations(currentConversations, loadConversations());
-  const recoveredConversationMessages = applyConversationReplyRecovery(state.conversations);
-  if (recoveredConversationMessages) {
-    persistConversations();
-    (Array.isArray(recoveredConversationMessages) ? recoveredConversationMessages : []).forEach(
-      (conversationId) => {
-      enqueueConversationChatSyncUpsert(String(conversationId || "").trim(), {
-        scheduleFlush: false
-      });
-      }
+  if (shouldLoadLocalConversations) {
+    state.conversations = mergePreferredLocalConversations(
+      currentConversations,
+      loadedLocalConversations
     );
+    const recoveredConversationMessages = applyConversationReplyRecovery(state.conversations);
+    if (recoveredConversationMessages) {
+      persistConversationMirror(state.conversations);
+      (Array.isArray(recoveredConversationMessages) ? recoveredConversationMessages : []).forEach(
+        (conversationId) => {
+          enqueueConversationChatSyncUpsert(String(conversationId || "").trim(), {
+            scheduleFlush: false
+          });
+        }
+      );
+    }
+  } else {
+    state.conversations = normalizeCloudConversationList(currentConversations);
   }
   state.contacts = loadContacts(state.conversations);
-  const consumedSharedMessages = consumePendingMessageShareInbox();
+  const consumedSharedMessages = shouldLoadLocalConversations ? consumePendingMessageShareInbox() : 0;
   if (consumedSharedMessages) {
     state.contacts = loadContacts(state.conversations);
   }
@@ -23007,7 +23784,6 @@ function attachEvents() {
           return;
         }
         cancelConversationListLongPress();
-        refreshStateFromStorage();
         closeConversationTransientUi();
         state.expandedImageMessageId = "";
         state.expandedVoiceMessageId = "";
@@ -23017,6 +23793,17 @@ function attachEvents() {
         syncConversationPresenceFromSchedules(state.activeConversationId);
         setMessagesStatus("");
         renderMessagesPage();
+        void refreshConversationSnapshotFromCloud(nextConversationId)
+          .then(() => {
+            if (String(state.activeConversationId || "").trim() === nextConversationId) {
+              renderMessagesPage();
+            }
+          })
+          .catch((error) => {
+            setChatReadonlyMode(true, "数据库不可用，仅只读");
+            setMessagesStatus(`数据库会话刷新失败：${error?.message || "请求失败"}`, "error");
+            renderMessagesPage();
+          });
         return;
       }
 
@@ -23294,7 +24081,7 @@ function attachEvents() {
   }
 
   if (messagesPickerListEl) {
-    messagesPickerListEl.addEventListener("click", (event) => {
+    messagesPickerListEl.addEventListener("click", async (event) => {
       const target = event.target;
       if (!(target instanceof Element)) {
         return;
@@ -23307,7 +24094,10 @@ function attachEvents() {
       if (!contact) {
         return;
       }
-      const conversation = createConversation(contact);
+      const conversation = await ensureConversationAvailableForContact(contact);
+      if (!conversation) {
+        return;
+      }
       state.activeTab = "chat";
       state.activeConversationId = conversation.id;
       syncActiveConversationPromptSettings(conversation);
@@ -24774,6 +25564,12 @@ function attachEvents() {
       return;
     }
     refreshStateFromStorage();
+    if (state.chatCloudHydrated && !state.chatReadonlyMode) {
+      await hydrateChatConversationsFromCloud({
+        showStatus: false,
+        clearStatus: false
+      });
+    }
     renderMessagesPage();
     if (
       document.hidden ||
@@ -25052,15 +25848,20 @@ function init() {
   ensureVoiceCallDurationClock();
   attachEvents();
   renderMessagesPage();
-  window.setTimeout(() => {
+  window.setTimeout(async () => {
     try {
-      refreshStateFromStorage();
+      refreshStateFromStorage({
+        forceLocalConversations: true
+      });
       sanitizePresenceStateReferences();
       persistPresenceState();
-      persistConversations();
+      persistConversationMirror(state.conversations);
       initAutoScheduleClock();
       initProactiveTriggerClock();
       initForegroundReplySyncClock();
+      await hydrateChatConversationsFromCloud({
+        showStatus: true
+      });
       renderMessagesPage();
       if (launchView === "memory") {
         setMemoryViewerOpen(true);
