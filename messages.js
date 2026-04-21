@@ -1334,6 +1334,18 @@ async function hydrateChatConversationsFromCloud(options = {}) {
   state.chatCloudHydrating = true;
   const localConversations = loadConversations();
   try {
+    if (hasPendingChatSyncEntries()) {
+      const pendingSyncResult = await flushPendingChatSyncQueue({
+        reason: "startup_retry",
+        rescheduleOnFailure: true
+      });
+      if (
+        pendingSyncResult?.ok === false &&
+        pendingSyncResult?.skipped !== true
+      ) {
+        throw pendingSyncResult.error || new Error("待同步聊天消息写入数据库失败。");
+      }
+    }
     let cloudConversations = await loadCloudConversations();
     const bootstrapResult = await bootstrapMissingLocalConversations(
       localConversations,
@@ -1438,6 +1450,15 @@ function hasPendingChatSyncEntries(queueState = getChatSyncQueueState()) {
     Object.keys(queueState.pendingUpserts || {}).length ||
       Object.keys(queueState.pendingDeletes || {}).length
   );
+}
+
+function hasPendingConversationChatSyncUpsert(conversationId = "") {
+  const resolvedConversationId = String(conversationId || "").trim();
+  if (!resolvedConversationId) {
+    return false;
+  }
+  const queueState = getChatSyncQueueState();
+  return Boolean(queueState.pendingUpserts?.[resolvedConversationId]);
 }
 
 function getConversationLastMutatedAt(conversation = null) {
@@ -22378,17 +22399,15 @@ async function sendConversationMessage(text, options = {}) {
     setMessagesStatus("未能构造待发送的会话快照。", "error");
     return;
   }
-  try {
-    await syncConversationSnapshotNow(nextConversation, "mutation");
-  } catch (error) {
-    setMessagesStatus(`消息写入数据库失败：${error?.message || "请求失败"}`, "error");
-    return;
-  }
   closeConversationTransientUi();
   upsertConversationSnapshotInState(nextConversation, {
     persistMirror: true,
     deferMaintenance: true,
     fallbackToMaintenanceOnFailure: false
+  });
+  enqueueConversationChatSyncUpsert(nextConversation, {
+    reason: "mutation",
+    scheduleFlush: false
   });
   setConversationDraft(nextConversation.id, "");
   state.quotedMessageId = "";
@@ -22500,6 +22519,26 @@ async function requestConversationReply(options = {}) {
     syncSendingConversationStateFromReplyTasks();
   } else if (pendingTask) {
     return pendingTask;
+  }
+
+  if (
+    !isRegenerate &&
+    (hasPendingConversationChatSyncUpsert(conversation.id) ||
+      hasConversationPendingReplyMessages(conversation))
+  ) {
+    try {
+      await syncConversationSnapshotNow(conversation, "mutation");
+    } catch (error) {
+      setChatReadonlyMode(true, "数据库不可用，仅只读");
+      if (!suppressUi) {
+        setMessagesStatus(`消息写入数据库失败：${error?.message || "请求失败"}`, "error");
+        renderMessagesPage();
+      }
+      if (suppressUi) {
+        throw error;
+      }
+      return;
+    }
   }
 
   try {
