@@ -6824,12 +6824,22 @@ function renderCustomTabContentEditor() {
   const olderDiscussionItems = discussionItems.slice(CUSTOM_TAB_DISCUSSION_VISIBLE_LIMIT);
   const disableEditing = !state.customTabEditingId && state.customTabs.length >= CUSTOM_TAB_LIMIT;
 
-  const renderItem = (item, targetBucket) => {
+  const renderItem = (item, targetBucket, displayIndex = 0, promptIncluded = true) => {
     const isDiscussion = targetBucket === "discussion";
     const moveLabel = isDiscussion ? "移到热点" : "移到普通";
     const moveTargetBucket = isDiscussion ? "hot_topic" : "discussion";
+    const sequenceLabel = isDiscussion
+      ? promptIncluded
+        ? `普通 prompt #${displayIndex}`
+        : `普通历史 #${displayIndex}`
+      : `热点 prompt #${displayIndex}`;
     return `
       <article class="custom-tab-content-item" data-item-id="${escapeHtml(item.id || "")}">
+        <div class="custom-tab-content-item__meta">
+          <strong>${escapeHtml(`${displayIndex}.`)}</strong>
+          <span>${escapeHtml(sequenceLabel)}</span>
+          <small>${promptIncluded ? "会带进 prompt" : "不直接带进 prompt，可历史提炼"}</small>
+        </div>
         <textarea
           rows="3"
           data-action="edit-custom-tab-content-item"
@@ -6860,10 +6870,11 @@ function renderCustomTabContentEditor() {
 
   customTabDiscussionItemsEditorEl.innerHTML = `
     <div class="custom-tab-content-editor__toolbar">
-      <span class="tag-stat-meta">普通条目 ${discussionItems.length} 条 · prompt 默认带最新 ${Math.min(
-        CUSTOM_TAB_DISCUSSION_VISIBLE_LIMIT,
-        discussionItems.length
-      )} 条</span>
+      <span class="tag-stat-meta">普通条目 ${discussionItems.length} 条 · ${
+        latestDiscussionItems.length
+          ? `当前 prompt 顺序 1-${latestDiscussionItems.length}`
+          : "当前 prompt 无条目"
+      }，共带入 ${latestDiscussionItems.length} 条</span>
       <button
         class="ghost-chip"
         type="button"
@@ -6875,7 +6886,9 @@ function renderCustomTabContentEditor() {
     <div class="custom-tab-content-editor__list">
       ${
         latestDiscussionItems.length
-          ? latestDiscussionItems.map((item) => renderItem(item, "discussion")).join("")
+          ? latestDiscussionItems
+              .map((item, index) => renderItem(item, "discussion", index + 1, true))
+              .join("")
           : '<p class="empty-state">还没有普通条目，先新增至少 1 条。</p>'
       }
     </div>
@@ -6891,7 +6904,14 @@ function renderCustomTabContentEditor() {
             ${
               draft.historyExpanded
                 ? `<div class="custom-tab-content-editor__list">${olderDiscussionItems
-                    .map((item) => renderItem(item, "discussion"))
+                    .map((item, index) =>
+                      renderItem(
+                        item,
+                        "discussion",
+                        CUSTOM_TAB_DISCUSSION_VISIBLE_LIMIT + index + 1,
+                        false
+                      )
+                    )
                     .join("")}</div>`
                 : ""
             }
@@ -6903,7 +6923,7 @@ function renderCustomTabContentEditor() {
 
   customTabHotTopicItemsEditorEl.innerHTML = `
     <div class="custom-tab-content-editor__toolbar">
-      <span class="tag-stat-meta">热点条目 ${hotTopicItems.length} 条</span>
+      <span class="tag-stat-meta">热点条目 ${hotTopicItems.length} 条 · 当前热点 prompt 共带入 ${hotTopicItems.length} 条</span>
       <button
         class="ghost-chip"
         type="button"
@@ -6915,7 +6935,9 @@ function renderCustomTabContentEditor() {
     <div class="custom-tab-content-editor__list">
       ${
         hotTopicItems.length
-          ? hotTopicItems.map((item) => renderItem(item, "hot_topic")).join("")
+          ? hotTopicItems
+              .map((item, index) => renderItem(item, "hot_topic", index + 1, true))
+              .join("")
           : '<p class="empty-state">当前没有热点条目，可留空。</p>'
       }
     </div>
