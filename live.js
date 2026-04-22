@@ -43,15 +43,21 @@ const state = {
   queuedRequests: [],
   apiPending: false,
   bulletTimer: 0,
+  bulletSeedTimers: [],
   viewerTimer: 0,
   autoReplyTimer: 0,
   viewers: 0,
-  bulletSeq: 0
+  bulletSeq: 0,
+  apiViewerCommentPool: [],
+  apiCommentBatchSeq: 0,
+  lastApiViewerCommentText: ""
 };
 
 const LIVE_BULLET_LIMIT = 8;
 const LIVE_BULLET_LIFETIME_MS = 14000;
+const LIVE_BULLET_INTERVAL_MS = 2600;
 const LIVE_HISTORY_LIMIT = 16;
+const LIVE_API_COMMENT_POOL_LIMIT = 120;
 
 function isEmbeddedView() {
   try {
@@ -633,6 +639,16 @@ function ensureViewerCommentLine(text = "") {
   return hasViewerIdPrefix(line) ? line : `${createRandomViewerId()}：${line}`;
 }
 
+function clearBulletSeedTimers() {
+  state.bulletSeedTimers.forEach((timerId) => window.clearTimeout(timerId));
+  state.bulletSeedTimers = [];
+}
+
+function clearBulletTicker() {
+  window.clearInterval(state.bulletTimer);
+  state.bulletTimer = 0;
+}
+
 function createBullet(text, options = {}) {
   if (!liveBulletLayerEl) {
     return;
@@ -696,18 +712,83 @@ function buildAudienceTextPool() {
   ].filter(Boolean);
 }
 
+function pickAmbientBulletText(pool = buildAudienceTextPool()) {
+  const next = pool[Math.floor(Math.random() * pool.length)];
+  return next ? ensureViewerCommentLine(next) : "";
+}
+
+function addApiViewerComments(lines = []) {
+  const normalizedLines = lines.map(ensureViewerCommentLine).filter(Boolean);
+  if (!normalizedLines.length) {
+    return;
+  }
+  clearBulletSeedTimers();
+  state.apiCommentBatchSeq += 1;
+  const batchId = state.apiCommentBatchSeq;
+  const createdAt = Date.now();
+  const nextItems = normalizedLines.map((text, index) => ({
+    id: `${batchId}_${index}_${hashText(text)}`,
+    text,
+    batchId,
+    createdAt,
+    shownCount: 0,
+    lastShownAt: 0
+  }));
+  state.apiViewerCommentPool = [...nextItems, ...state.apiViewerCommentPool]
+    .filter((item, index, array) => array.findIndex((candidate) => candidate.text === item.text) === index)
+    .slice(0, LIVE_API_COMMENT_POOL_LIMIT);
+}
+
+function pickApiViewerCommentText() {
+  const pool = state.apiViewerCommentPool;
+  if (!pool.length) {
+    return "";
+  }
+  let selected = pool[0];
+  const attempts = Math.min(pool.length, 8);
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const index = Math.min(pool.length - 1, Math.floor(Math.pow(Math.random(), 2.1) * pool.length));
+    const candidate = pool[index] || pool[0];
+    if (pool.length === 1 || candidate.text !== state.lastApiViewerCommentText) {
+      selected = candidate;
+      break;
+    }
+  }
+  selected.shownCount = Number(selected.shownCount || 0) + 1;
+  selected.lastShownAt = Date.now();
+  state.lastApiViewerCommentText = selected.text;
+  return selected.text;
+}
+
+function pickLiveBulletText(pool = buildAudienceTextPool()) {
+  return state.apiViewerCommentPool.length ? pickApiViewerCommentText() : pickAmbientBulletText(pool);
+}
+
+function startBulletTicker(pool = buildAudienceTextPool()) {
+  clearBulletTicker();
+  state.bulletTimer = window.setInterval(() => {
+    const isApiComment = Boolean(state.apiViewerCommentPool.length);
+    const next = pickLiveBulletText(pool);
+    if (next) {
+      createBullet(next);
+      if (isApiComment) {
+        pushLiveMessage("viewer", next, { trigger: "cached_api" });
+      }
+    }
+  }, LIVE_BULLET_INTERVAL_MS);
+}
+
 function seedAmbientBullets() {
   const pool = buildAudienceTextPool();
   pool.slice(0, 4).forEach((item, index) => {
-    window.setTimeout(() => createBullet(ensureViewerCommentLine(item)), 240 * index + 120);
+    const timerId = window.setTimeout(() => {
+      if (!state.apiViewerCommentPool.length) {
+        createBullet(ensureViewerCommentLine(item));
+      }
+    }, 240 * index + 120);
+    state.bulletSeedTimers.push(timerId);
   });
-  window.clearInterval(state.bulletTimer);
-  state.bulletTimer = window.setInterval(() => {
-    const next = pool[Math.floor(Math.random() * pool.length)];
-    if (next) {
-      createBullet(ensureViewerCommentLine(next));
-    }
-  }, 2600);
+  startBulletTicker(pool);
 }
 
 function startViewerTicker() {
@@ -1230,12 +1311,7 @@ async function requestLiveApiReply(trigger = "auto", latestUserText = "") {
       throw new Error("直播回复为空。");
     }
 
-    replyLines.forEach((line, index) => {
-      window.setTimeout(() => {
-        createBullet(line);
-      }, index * 380);
-      pushLiveMessage("viewer", line, { trigger });
-    });
+    addApiViewerComments(replyLines);
     appendApiLog({
       ...logBase,
       ...buildGeminiLogFields(settings, payload),
