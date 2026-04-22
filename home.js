@@ -5,8 +5,8 @@ const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GROK_MODEL = "grok-4";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 const DEFAULT_TEMPERATURE = 0.85;
-const APP_BUILD_VERSION = "20260422-182000";
-const APP_BUILD_UPDATED_AT = "2026-04-22 18:20:00";
+const APP_BUILD_VERSION = "20260422-193800";
+const APP_BUILD_UPDATED_AT = "2026-04-22 19:38:00";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -107,6 +107,11 @@ const homeRulesNegativeInputEl = document.querySelector("#home-rules-negative-in
 const homeRulesNegativeStatusEl = document.querySelector("#home-rules-negative-status");
 const homeRulesNegativeSaveBtn = document.querySelector("#home-rules-negative-save-btn");
 const homeRulesNegativeCancelBtn = document.querySelector("#home-rules-negative-cancel-btn");
+const homeLiveLobbyModalEl = document.querySelector("#home-live-lobby-modal");
+const homeLiveLobbyCloseBtn = document.querySelector("#home-live-lobby-close-btn");
+const homeLiveLobbyListEl = document.querySelector("#home-live-lobby-list");
+const homeLiveLobbyStatusEl = document.querySelector("#home-live-lobby-status");
+const homeLiveLobbyUserBtn = document.querySelector("#home-live-lobby-user-btn");
 const homeLiveEntryModalEl = document.querySelector("#home-live-entry-modal");
 const homeLiveEntryCloseBtn = document.querySelector("#home-live-entry-close-btn");
 const homeLiveEntryTopicInputEl = document.querySelector("#home-live-entry-topic-input");
@@ -250,7 +255,9 @@ const homeState = {
   timeModalOpen: false,
   rulesModalOpen: false,
   rulesNegativeModalOpen: false,
+  liveLobbyModalOpen: false,
   liveEntryModalOpen: false,
+  liveEntryReturnToLobby: false,
   browserOpen: false,
   activeAppUrl: "",
   activeAppTab: "home",
@@ -7561,6 +7568,119 @@ function setHomeRulesNegativeModalOpen(isOpen) {
   refreshBodyModalState();
 }
 
+function setHomeLiveLobbyStatus(message, tone = "") {
+  if (!homeLiveLobbyStatusEl) {
+    return;
+  }
+  homeLiveLobbyStatusEl.textContent = message;
+  homeLiveLobbyStatusEl.className = "home-settings-status";
+  if (tone) {
+    homeLiveLobbyStatusEl.classList.add(tone);
+  }
+}
+
+function getHomeLiveLobbyContacts() {
+  return normalizeObjectArray(readStoredJson(MESSAGE_CONTACTS_KEY, []))
+    .map((contact) => ({
+      id: String(contact.id || "").trim(),
+      name: String(contact.name || "").trim(),
+      avatarImage: String(contact.avatarImage || "").trim(),
+      avatarText: String(contact.avatarText || "").trim() || buildContactAvatarTextFallback(contact),
+      description: truncateText(
+        String(contact.personaPrompt || contact.specialUserPersona || "角色直播入口已预留。").trim(),
+        56
+      )
+    }))
+    .filter((contact) => contact.id && contact.name);
+}
+
+function renderHomeLiveLobbyModal() {
+  if (!homeLiveLobbyListEl) {
+    return;
+  }
+  const contacts = getHomeLiveLobbyContacts();
+  if (!contacts.length) {
+    homeLiveLobbyListEl.innerHTML =
+      '<div class="home-live-lobby-empty">当前还没有通讯录角色。先去 Chat 的通讯录创建角色，后续这里会直接显示对应直播卡片。</div>';
+    return;
+  }
+  homeLiveLobbyListEl.innerHTML = contacts
+    .map(
+      (contact) => `
+        <button
+          class="home-live-lobby-card"
+          type="button"
+          data-live-contact-id="${escapeHtml(contact.id)}"
+          aria-label="查看 ${escapeHtml(contact.name)} 的角色直播入口"
+        >
+          <span class="home-live-lobby-card__badge">
+            <span class="home-live-lobby-card__dot"></span>
+            角色直播
+          </span>
+          <span class="home-live-lobby-card__cover" aria-hidden="true"></span>
+          <span class="home-live-lobby-card__body">
+            <strong class="home-live-lobby-card__title">${escapeHtml(contact.name)} 的直播间</strong>
+            <span class="home-live-lobby-card__desc">${escapeHtml(contact.description)}</span>
+            <span class="home-live-lobby-card__meta">
+              <span class="home-live-lobby-card__avatar">
+                ${
+                  contact.avatarImage
+                    ? `<img src="${escapeHtml(contact.avatarImage)}" alt="${escapeHtml(contact.name)} 的头像" />`
+                    : escapeHtml(contact.avatarText || buildContactAvatarTextFallback(contact))
+                }
+              </span>
+              <span class="home-live-lobby-card__meta-text">
+                <strong>${escapeHtml(contact.name)}</strong>
+                <span>入口已预留</span>
+              </span>
+            </span>
+          </span>
+        </button>
+      `
+    )
+    .join("");
+}
+
+function setHomeLiveLobbyModalOpen(isOpen) {
+  homeState.liveLobbyModalOpen = Boolean(isOpen);
+  if (!homeLiveLobbyModalEl) {
+    return;
+  }
+  if (homeState.liveLobbyModalOpen) {
+    if (homeState.modalOpen) {
+      setHomeSettingsModalOpen(false);
+    }
+    if (homeState.timeModalOpen) {
+      setHomeTimeModalOpen(false);
+    }
+    if (homeState.rulesModalOpen) {
+      setHomeRulesModalOpen(false);
+    }
+    if (homeState.rulesNegativeModalOpen) {
+      setHomeRulesNegativeModalOpen(false);
+    }
+    if (homeState.liveEntryModalOpen) {
+      setHomeLiveEntryModalOpen(false, { returnToLobby: false });
+    }
+    setHomeLiveLobbyStatus("");
+    renderHomeLiveLobbyModal();
+    showHomeLayer(homeLiveLobbyModalEl, "grid");
+    refreshBodyModalState();
+    window.setTimeout(() => {
+      homeLiveLobbyUserBtn?.focus();
+    }, 0);
+    return;
+  }
+  hideHomeLayer(homeLiveLobbyModalEl);
+  refreshBodyModalState();
+}
+
+function openHomeLiveEntryFromLobby() {
+  homeState.liveEntryReturnToLobby = true;
+  setHomeLiveLobbyModalOpen(false);
+  setHomeLiveEntryModalOpen(true);
+}
+
 function setHomeLiveEntryStatus(message, tone = "") {
   if (!homeLiveEntryStatusEl) {
     return;
@@ -7660,7 +7780,7 @@ function renderHomeLiveEntryModal(config = loadLiveEntryConfig()) {
   }
 }
 
-function setHomeLiveEntryModalOpen(isOpen) {
+function setHomeLiveEntryModalOpen(isOpen, options = {}) {
   homeState.liveEntryModalOpen = Boolean(isOpen);
   if (!homeLiveEntryModalEl) {
     return;
@@ -7675,6 +7795,9 @@ function setHomeLiveEntryModalOpen(isOpen) {
     if (homeState.rulesModalOpen) {
       setHomeRulesModalOpen(false);
     }
+    if (homeState.liveLobbyModalOpen) {
+      setHomeLiveLobbyModalOpen(false);
+    }
     setHomeLiveEntryStatus("");
     renderHomeLiveEntryModal(loadLiveEntryConfig());
     showHomeLayer(homeLiveEntryModalEl, "grid");
@@ -7685,7 +7808,13 @@ function setHomeLiveEntryModalOpen(isOpen) {
     return;
   }
   hideHomeLayer(homeLiveEntryModalEl);
+  const shouldReturnToLobby =
+    homeState.liveEntryReturnToLobby && options.returnToLobby !== false;
+  homeState.liveEntryReturnToLobby = false;
   refreshBodyModalState();
+  if (shouldReturnToLobby) {
+    setHomeLiveLobbyModalOpen(true);
+  }
 }
 
 function openConfiguredLiveApp() {
@@ -7774,6 +7903,7 @@ function refreshBodyModalState() {
       homeState.timeModalOpen ||
       homeState.rulesModalOpen ||
       homeState.rulesNegativeModalOpen ||
+      homeState.liveLobbyModalOpen ||
       homeState.liveEntryModalOpen ||
       homeState.browserOpen ||
       homeState.privacyAddModalOpen
@@ -7800,8 +7930,11 @@ function setHomeBrowserModalOpen(
     if (homeState.rulesModalOpen) {
       setHomeRulesModalOpen(false);
     }
+    if (homeState.liveLobbyModalOpen) {
+      setHomeLiveLobbyModalOpen(false);
+    }
     if (homeState.liveEntryModalOpen) {
-      setHomeLiveEntryModalOpen(false);
+      setHomeLiveEntryModalOpen(false, { returnToLobby: false });
     }
     const resolvedAppMeta = appMeta || getHomeAppMeta(homeState.activeAppTab);
     homeState.activeAppUrl = url || homeState.activeAppUrl || "./discussion.html?tab=home";
@@ -7894,7 +8027,11 @@ function openHomeApp(tabName) {
   }
 
   if (tabName === "live") {
-    setHomeLiveEntryModalOpen(true);
+    setHomeBrowserModalOpen(
+      true,
+      `./live-lobby.html?embed=1&v=${APP_BUILD_VERSION}`,
+      getHomeAppMeta("live")
+    );
     return;
   }
 
@@ -8020,6 +8157,39 @@ function attachHomeSettingsEvents() {
     });
   }
 
+  if (homeLiveLobbyCloseBtn) {
+    homeLiveLobbyCloseBtn.addEventListener("click", () => {
+      setHomeLiveLobbyModalOpen(false);
+    });
+  }
+
+  if (homeLiveLobbyUserBtn) {
+    homeLiveLobbyUserBtn.addEventListener("click", () => {
+      openHomeLiveEntryFromLobby();
+    });
+  }
+
+  if (homeLiveLobbyListEl) {
+    homeLiveLobbyListEl.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      const actionEl = target.closest("[data-live-contact-id]");
+      if (!(actionEl instanceof HTMLElement)) {
+        return;
+      }
+      const contactId = String(actionEl.getAttribute("data-live-contact-id") || "").trim();
+      const contact = getHomeLiveLobbyContacts().find((item) => item.id === contactId);
+      if (!contact) {
+        return;
+      }
+      setHomeLiveLobbyStatus(
+        `「${contact.name}」的角色直播入口已预留。当前先使用底部 + 号发起用户直播，后续会在这里直接进入角色直播。`
+      );
+    });
+  }
+
   if (homeLiveEntryCloseBtn) {
     homeLiveEntryCloseBtn.addEventListener("click", () => {
       setHomeLiveEntryModalOpen(false);
@@ -8094,7 +8264,7 @@ function attachHomeSettingsEvents() {
         ...draft,
         updatedAt: Date.now()
       });
-      setHomeLiveEntryModalOpen(false);
+      setHomeLiveEntryModalOpen(false, { returnToLobby: false });
       openConfiguredLiveApp();
     });
   }
@@ -8155,6 +8325,18 @@ function attachHomeSettingsEvents() {
       }
       if (target.hasAttribute("data-close-home-live-entry")) {
         setHomeLiveEntryModalOpen(false);
+      }
+    });
+  }
+
+  if (homeLiveLobbyModalEl) {
+    homeLiveLobbyModalEl.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      if (target.hasAttribute("data-close-home-live-lobby")) {
+        setHomeLiveLobbyModalOpen(false);
       }
     });
   }
@@ -8830,6 +9012,14 @@ function attachHomeSettingsEvents() {
       setHomeRulesNegativeModalOpen(false);
       return;
     }
+    if (event.key === "Escape" && homeState.liveEntryModalOpen) {
+      setHomeLiveEntryModalOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && homeState.liveLobbyModalOpen) {
+      setHomeLiveLobbyModalOpen(false);
+      return;
+    }
     if (event.key === "Escape" && homeState.timeModalOpen) {
       setHomeTimeModalOpen(false);
       return;
@@ -8853,6 +9043,8 @@ function initHome() {
   hideHomeLayer(homeTimeModalEl);
   hideHomeLayer(homeRulesModalEl);
   hideHomeLayer(homeRulesNegativeModalEl);
+  hideHomeLayer(homeLiveLobbyModalEl);
+  hideHomeLayer(homeLiveEntryModalEl);
   hideHomeLayer(homeBrowserModalEl);
   hideHomeLayer(privacyAppAddModalEl);
   resetPrivacyAddForm();
