@@ -3748,7 +3748,12 @@ async function requestForumGenerationContext(tabId = "", payload = {}) {
   }
 }
 
-function findForumPersonaFromGenerationContext(postLike = {}, generationContext = null) {
+function findForumPersonaFromGenerationContext(postLike = {}, generationContext = null, itemIndex = -1) {
+  const personaSlots = Array.isArray(generationContext?.personaSlots) ? generationContext.personaSlots : [];
+  const slotPersona = Number.isInteger(itemIndex) && itemIndex >= 0 ? personaSlots[itemIndex] : null;
+  if (slotPersona) {
+    return slotPersona;
+  }
   const personaPool = Array.isArray(generationContext?.personaPool) ? generationContext.personaPool : [];
   const displayName = String(postLike?.displayName || "").trim().toLowerCase();
   const handle = String(postLike?.handle || "").trim().toLowerCase();
@@ -3761,15 +3766,17 @@ function findForumPersonaFromGenerationContext(postLike = {}, generationContext 
   );
 }
 
-function attachForumGenerationMetadata(item = {}, generationContext = null, kind = "post") {
+function attachForumGenerationMetadata(item = {}, generationContext = null, kind = "post", itemIndex = -1) {
   if (!generationContext || typeof generationContext !== "object") {
     return item;
   }
-  const persona = findForumPersonaFromGenerationContext(item, generationContext);
+  const persona = findForumPersonaFromGenerationContext(item, generationContext, itemIndex);
   const selectedItem = generationContext?.selectedItem || null;
   const baseMetadata = item?.metadata && typeof item.metadata === "object" ? { ...item.metadata } : {};
   return {
     ...item,
+    displayName: String(persona?.displayName || item?.displayName || "").trim(),
+    handle: String(persona?.handle || item?.handle || "").trim(),
     metadata: {
       ...baseMetadata,
       forumPersonaId: String(persona?.id || generationContext?.selectedPersona?.id || "").trim(),
@@ -6847,8 +6854,27 @@ function getCustomTabContentItemTimestamp(item = {}) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function getCustomTabContentItemSortOrder(item = {}) {
+  const parsed = Number(item?.sortOrder);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function sortCustomTabContentItems(items = []) {
   return [...(Array.isArray(items) ? items : [])].sort((left, right) => {
+    const leftSortOrder = getCustomTabContentItemSortOrder(left);
+    const rightSortOrder = getCustomTabContentItemSortOrder(right);
+    if (leftSortOrder !== null || rightSortOrder !== null) {
+      if (leftSortOrder === null) {
+        return 1;
+      }
+      if (rightSortOrder === null) {
+        return -1;
+      }
+      const orderDiff = leftSortOrder - rightSortOrder;
+      if (orderDiff !== 0) {
+        return orderDiff;
+      }
+    }
     const timeDiff = getCustomTabContentItemTimestamp(right) - getCustomTabContentItemTimestamp(left);
     if (timeDiff !== 0) {
       return timeDiff;
@@ -6864,6 +6890,7 @@ function cloneCustomTabContentItem(item = {}) {
     bucket: normalizeCustomTabContentBucket(item.bucket, "discussion"),
     contentText: String(item.contentText || "").trim(),
     enteredBucketAt: String(item.enteredBucketAt || "").trim() || new Date().toISOString(),
+    sortOrder: getCustomTabContentItemSortOrder(item),
     topicTags: normalizeForumTopicTags(item.topicTags, []),
     summaryText: String(item.summaryText || "").trim(),
     summaryUpdatedAt: String(item.summaryUpdatedAt || "").trim(),
@@ -6887,6 +6914,7 @@ function createLocalCustomTabContentItem(bucket = "discussion", contentText = ""
     bucket: normalizeCustomTabContentBucket(bucket, "discussion"),
     contentText: String(contentText || "").trim(),
     enteredBucketAt: nowIso,
+    sortOrder: null,
     topicTags: [],
     summaryText: "",
     summaryUpdatedAt: "",
@@ -6940,6 +6968,63 @@ function validateDraftItemTopicTags(item = {}) {
     topicTags.length <= CUSTOM_TAB_TOPIC_TAG_MAX_COUNT;
 }
 
+function getNextCustomTabTopSortOrder(items = [], bucket = "discussion") {
+  const bucketItems = sortCustomTabContentItems(items).filter(
+    (item) => item.bucket === normalizeCustomTabContentBucket(bucket, "discussion")
+  );
+  const firstOrder = getCustomTabContentItemSortOrder(bucketItems[0]);
+  return Number.isFinite(firstOrder) ? firstOrder - 1000 : -1000;
+}
+
+function applyCustomTabBucketSortOrders(items = [], bucket = "discussion") {
+  const resolvedBucket = normalizeCustomTabContentBucket(bucket, "discussion");
+  const sortedBucketItems = sortCustomTabContentItems(items).filter((item) => item.bucket === resolvedBucket);
+  const orderMap = new Map(
+    sortedBucketItems.map((item, index) => [item.id, (index + 1) * 1000])
+  );
+  return (Array.isArray(items) ? items : []).map((item) =>
+    orderMap.has(item.id)
+      ? {
+          ...item,
+          sortOrder: orderMap.get(item.id),
+          updatedAt: new Date().toISOString()
+        }
+      : item
+  );
+}
+
+function moveCustomTabDraftItemOrder(itemId = "", direction = "up") {
+  const draft = getCustomTabContentDraftState();
+  const resolvedItemId = String(itemId || "").trim();
+  const targetItem = (draft.items || []).find((item) => item.id === resolvedItemId);
+  if (!targetItem) {
+    return;
+  }
+  const bucket = targetItem.bucket;
+  const bucketItems = sortCustomTabContentItems(draft.items || []).filter((item) => item.bucket === bucket);
+  const currentIndex = bucketItems.findIndex((item) => item.id === resolvedItemId);
+  const nextIndex = direction === "down" ? currentIndex + 1 : currentIndex - 1;
+  if (currentIndex < 0 || nextIndex < 0 || nextIndex >= bucketItems.length) {
+    return;
+  }
+  const reordered = [...bucketItems];
+  const [movedItem] = reordered.splice(currentIndex, 1);
+  reordered.splice(nextIndex, 0, movedItem);
+  const orderMap = new Map(reordered.map((item, index) => [item.id, (index + 1) * 1000]));
+  draft.items = sortCustomTabContentItems(
+    (draft.items || []).map((item) =>
+      item.bucket === bucket && orderMap.has(item.id)
+        ? {
+            ...item,
+            sortOrder: orderMap.get(item.id),
+            updatedAt: new Date().toISOString()
+          }
+        : item
+    )
+  );
+  renderCustomTabContentEditor();
+}
+
 function renderCustomTabContentEditor() {
   if (!customTabDiscussionItemsEditorEl || !customTabHotTopicItemsEditorEl) {
     return;
@@ -6953,7 +7038,7 @@ function renderCustomTabContentEditor() {
   const olderDiscussionItems = discussionItems.slice(CUSTOM_TAB_DISCUSSION_VISIBLE_LIMIT);
   const disableEditing = !state.customTabEditingId && state.customTabs.length >= CUSTOM_TAB_LIMIT;
 
-  const renderItem = (item, targetBucket, displayIndex = 0, promptIncluded = true) => {
+  const renderItem = (item, targetBucket, displayIndex = 0, promptIncluded = true, orderOptions = {}) => {
     const isDiscussion = targetBucket === "discussion";
     const moveLabel = isDiscussion ? "移到热点" : "移到普通";
     const moveTargetBucket = isDiscussion ? "hot_topic" : "discussion";
@@ -7011,6 +7096,22 @@ function renderCustomTabContentEditor() {
           <button
             class="ghost-chip"
             type="button"
+            data-action="move-custom-tab-content-order"
+            data-direction="up"
+            data-item-id="${escapeHtml(item.id || "")}"
+            ${disableEditing || !orderOptions.canMoveUp ? "disabled" : ""}
+          >上移</button>
+          <button
+            class="ghost-chip"
+            type="button"
+            data-action="move-custom-tab-content-order"
+            data-direction="down"
+            data-item-id="${escapeHtml(item.id || "")}"
+            ${disableEditing || !orderOptions.canMoveDown ? "disabled" : ""}
+          >下移</button>
+          <button
+            class="ghost-chip"
+            type="button"
             data-action="move-custom-tab-content-item"
             data-item-id="${escapeHtml(item.id || "")}"
             data-target-bucket="${escapeHtml(moveTargetBucket)}"
@@ -7047,7 +7148,10 @@ function renderCustomTabContentEditor() {
       ${
         latestDiscussionItems.length
           ? latestDiscussionItems
-              .map((item, index) => renderItem(item, "discussion", index + 1, true))
+              .map((item, index) => renderItem(item, "discussion", index + 1, true, {
+                canMoveUp: index > 0,
+                canMoveDown: index < discussionItems.length - 1
+              }))
               .join("")
           : '<p class="empty-state">还没有普通条目，先新增至少 1 条。</p>'
       }
@@ -7069,7 +7173,11 @@ function renderCustomTabContentEditor() {
                         item,
                         "discussion",
                         CUSTOM_TAB_DISCUSSION_VISIBLE_LIMIT + index + 1,
-                        false
+                        false,
+                        {
+                          canMoveUp: CUSTOM_TAB_DISCUSSION_VISIBLE_LIMIT + index > 0,
+                          canMoveDown: CUSTOM_TAB_DISCUSSION_VISIBLE_LIMIT + index < discussionItems.length - 1
+                        }
                       )
                     )
                     .join("")}</div>`
@@ -7096,7 +7204,10 @@ function renderCustomTabContentEditor() {
       ${
         hotTopicItems.length
           ? hotTopicItems
-              .map((item, index) => renderItem(item, "hot_topic", index + 1, true))
+              .map((item, index) => renderItem(item, "hot_topic", index + 1, true, {
+                canMoveUp: index > 0,
+                canMoveDown: index < hotTopicItems.length - 1
+              }))
               .join("")
           : '<p class="empty-state">当前没有热点条目，可留空。</p>'
       }
@@ -7110,14 +7221,16 @@ function seedCustomTabContentDraftFromTab(tab = null) {
     (contentText, index) => ({
       ...createLocalCustomTabContentItem("discussion", contentText),
       tabId: String(resolvedTab.id || "").trim(),
-      enteredBucketAt: new Date(Date.now() - index * 1000).toISOString()
+      enteredBucketAt: new Date(Date.now() - index * 1000).toISOString(),
+      sortOrder: (index + 1) * 1000
     })
   );
   const hotTopicItems = parseCustomTabLegacyContentText(resolvedTab.hotTopic || "").map(
     (contentText, index) => ({
       ...createLocalCustomTabContentItem("hot_topic", contentText),
       tabId: String(resolvedTab.id || "").trim(),
-      enteredBucketAt: new Date(Date.now() - index * 1000).toISOString()
+      enteredBucketAt: new Date(Date.now() - index * 1000).toISOString(),
+      sortOrder: (index + 1) * 1000
     })
   );
   state.customTabContentDraft = {
@@ -7163,6 +7276,9 @@ function updateCustomTabDraftItem(itemId = "", patch = {}) {
             ...item,
             ...patch,
             bucket: normalizeCustomTabContentBucket(patch.bucket || item.bucket, item.bucket),
+            sortOrder: Object.prototype.hasOwnProperty.call(patch, "sortOrder")
+              ? getCustomTabContentItemSortOrder(patch)
+              : getCustomTabContentItemSortOrder(item),
             topicTags: Object.prototype.hasOwnProperty.call(patch, "topicTags")
               ? normalizeForumTopicTags(patch.topicTags, [])
               : normalizeForumTopicTags(item.topicTags, []),
@@ -7176,8 +7292,11 @@ function updateCustomTabDraftItem(itemId = "", patch = {}) {
 
 function addCustomTabDraftItem(bucket = "discussion") {
   const draft = getCustomTabContentDraftState();
+  const resolvedBucket = normalizeCustomTabContentBucket(bucket, "discussion");
+  const nextItem = createLocalCustomTabContentItem(resolvedBucket);
+  nextItem.sortOrder = getNextCustomTabTopSortOrder(draft.items || [], resolvedBucket);
   draft.items = sortCustomTabContentItems([
-    createLocalCustomTabContentItem(bucket),
+    nextItem,
     ...(draft.items || [])
   ]);
   renderCustomTabContentEditor();
@@ -7284,6 +7403,7 @@ async function syncCustomTabContentDraftWithServer(tabId = "") {
           tabId: resolvedTabId,
           bucket: item.bucket,
           contentText: item.contentText,
+          sortOrder: getCustomTabContentItemSortOrder(item),
           topicTags: normalizeForumTopicTags(item.topicTags, [])
         })
       });
@@ -7297,6 +7417,7 @@ async function syncCustomTabContentDraftWithServer(tabId = "") {
           tabId: resolvedTabId,
           bucket: item.bucket,
           contentText: item.contentText,
+          sortOrder: getCustomTabContentItemSortOrder(item),
           topicTags: normalizeForumTopicTags(item.topicTags, [])
         })
       });
@@ -7305,6 +7426,7 @@ async function syncCustomTabContentDraftWithServer(tabId = "") {
     if (
       originalItem.bucket !== item.bucket ||
       String(originalItem.contentText || "").trim() !== String(item.contentText || "").trim() ||
+      getCustomTabContentItemSortOrder(originalItem) !== getCustomTabContentItemSortOrder(item) ||
       JSON.stringify(normalizeForumTopicTags(originalItem.topicTags, [])) !==
         JSON.stringify(normalizeForumTopicTags(item.topicTags, []))
     ) {
@@ -7315,6 +7437,7 @@ async function syncCustomTabContentDraftWithServer(tabId = "") {
           body: JSON.stringify({
             bucket: item.bucket,
             contentText: item.contentText,
+            sortOrder: getCustomTabContentItemSortOrder(item),
             topicTags: normalizeForumTopicTags(item.topicTags, [])
           })
         }
@@ -8485,8 +8608,8 @@ async function requestGeneratedPosts(
       )
     });
     logged = true;
-    const parsedPosts = parseGeneratedPosts(message, count, resolvedFeedType).map((item) =>
-      attachForumGenerationMetadata(item, generationContext, "post")
+    const parsedPosts = parseGeneratedPosts(message, count, resolvedFeedType).map((item, index) =>
+      attachForumGenerationMetadata(item, generationContext, "post", index)
     );
     return decodeValueWithPrivacy(
       parsedPosts,
@@ -9045,7 +9168,7 @@ async function requestGeneratedReplies(
       message,
       count,
       `${rootPost.id}-${parentReply?.id || "root"}`
-    ).map((item) => attachForumGenerationMetadata(item, generationContext, "reply"));
+    ).map((item, index) => attachForumGenerationMetadata(item, generationContext, "reply", index));
     return decodeValueWithPrivacy(
       parsedReplies,
       privacySession
@@ -9643,10 +9766,23 @@ function attachEvents() {
         return;
       }
       if (action === "move-custom-tab-content-item") {
+        const targetBucket = normalizeCustomTabContentBucket(actionEl.dataset.targetBucket || "discussion", "discussion");
+        const draft = getCustomTabContentDraftState();
         updateCustomTabDraftItem(actionEl.dataset.itemId || "", {
-          bucket: actionEl.dataset.targetBucket || "discussion",
-          enteredBucketAt: new Date().toISOString()
+          bucket: targetBucket,
+          enteredBucketAt: new Date().toISOString(),
+          sortOrder: getNextCustomTabTopSortOrder(
+            (draft.items || []).filter((item) => item.id !== String(actionEl.dataset.itemId || "").trim()),
+            targetBucket
+          )
         });
+        return;
+      }
+      if (action === "move-custom-tab-content-order") {
+        moveCustomTabDraftItemOrder(
+          actionEl.dataset.itemId || "",
+          actionEl.dataset.direction === "down" ? "down" : "up"
+        );
         return;
       }
       if (action === "toggle-custom-tab-content-tag") {
