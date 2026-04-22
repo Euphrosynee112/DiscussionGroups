@@ -473,6 +473,16 @@ function normalizeLiveEntryConfig(source = {}) {
   );
   return {
     topic: safeTrim(raw.topic || ""),
+    openingDescription: safeTrim(
+      raw.openingDescription || raw.initialDescription || raw.liveOpeningText || ""
+    ),
+    autoReplyIntervalSeconds: normalizeLiveAutoReplyIntervalSeconds(
+      raw.autoReplyIntervalSeconds ||
+        raw.intervalSeconds ||
+        raw.liveAutoReplyIntervalSeconds ||
+        DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS,
+      DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS
+    ),
     forumEnabled: Boolean(raw.forumEnabled),
     forumTabId: validForumIds.has(forumTabId) ? forumTabId : fallbackForumId,
     bubbleEnabled: Boolean(raw.bubbleEnabled),
@@ -605,6 +615,24 @@ function pushLiveMessage(role, text, options = {}) {
   }
 }
 
+function createRandomViewerId() {
+  const number = Math.floor(1000 + Math.random() * 9000);
+  const suffix = Math.random().toString(36).slice(2, 4);
+  return `@u${number}${suffix}`;
+}
+
+function hasViewerIdPrefix(text = "") {
+  return /^@[A-Za-z0-9_\-]{2,18}\s*[：:]/.test(safeTrim(text));
+}
+
+function ensureViewerCommentLine(text = "") {
+  const line = safeTrim(text);
+  if (!line) {
+    return "";
+  }
+  return hasViewerIdPrefix(line) ? line : `${createRandomViewerId()}：${line}`;
+}
+
 function createBullet(text, options = {}) {
   if (!liveBulletLayerEl) {
     return;
@@ -671,13 +699,13 @@ function buildAudienceTextPool() {
 function seedAmbientBullets() {
   const pool = buildAudienceTextPool();
   pool.slice(0, 4).forEach((item, index) => {
-    window.setTimeout(() => createBullet(item), 240 * index + 120);
+    window.setTimeout(() => createBullet(ensureViewerCommentLine(item)), 240 * index + 120);
   });
   window.clearInterval(state.bulletTimer);
   state.bulletTimer = window.setInterval(() => {
     const next = pool[Math.floor(Math.random() * pool.length)];
     if (next) {
-      createBullet(next);
+      createBullet(ensureViewerCommentLine(next));
     }
   }, 2600);
 }
@@ -700,7 +728,7 @@ function syncCaption() {
   }
   liveCaptionTitleEl.textContent = liveTopic || "随便聊聊今天的状态";
   if (liveCaptionHintEl) {
-    liveCaptionHintEl.textContent = "发送文字会以弹幕形式出现在左下角";
+    liveCaptionHintEl.textContent = "发送主播内容后，会生成观众弹幕";
   }
   if (liveCaptionMetaEl) {
     const summaryItems = buildLiveCaptionSummary();
@@ -715,7 +743,7 @@ function setLiveHint(message = "") {
   if (!liveCaptionHintEl) {
     return;
   }
-  liveCaptionHintEl.textContent = message || "发送文字会以弹幕形式出现在左下角";
+  liveCaptionHintEl.textContent = message || "发送主播内容后，会生成观众弹幕";
 }
 
 function buildNegativePromptConstraintBlock(settings = state.settings) {
@@ -799,11 +827,16 @@ function buildWorldbookContextText() {
 function buildRecentLiveHistoryText() {
   const items = state.liveMessages.slice(-12);
   if (!items.length) {
-    return "当前直播刚开始，还没有真实观众弹幕。";
+    return "当前直播刚开始，还没有真实主播发言或观众弹幕。";
   }
   return items
     .map((item) => {
-      const roleLabel = item.role === "host" ? "主播" : item.role === "user" ? "用户弹幕" : "系统";
+      const roleLabel =
+        item.role === "streamer" || item.role === "host"
+          ? "主播发言"
+          : item.role === "viewer" || item.role === "user"
+            ? "观众弹幕"
+            : "系统";
       return `${roleLabel}：${item.text}`;
     })
     .join("\n");
@@ -815,9 +848,11 @@ function buildLiveSystemPrompt(trigger = "auto", latestUserText = "") {
   const selectedForumTab = getSelectedForumTab();
   const forumAudience = safeTrim(selectedForumTab?.audience || "");
   const topic = safeTrim(config.topic || "随便聊聊今天的状态");
+  const openingDescription = safeTrim(config.openingDescription || "");
   const negativeBlock = buildNegativePromptConstraintBlock(state.settings);
   const contextLibrary = [
     `直播主题：${topic}`,
+    openingDescription ? `初始直播描写：${openingDescription}` : "",
     buildForumContextText(),
     buildBubbleContextText(),
     buildWorldbookContextText()
@@ -825,29 +860,37 @@ function buildLiveSystemPrompt(trigger = "auto", latestUserText = "") {
     .filter(Boolean)
     .join("\n\n");
   const personaAlignment = [
-    `你是正在手机直播间和观众聊天的主播：${profile.username}（${profile.userId}）。`,
-    profile.signature ? `账号简介：${profile.signature}` : "",
-    profile.personaPrompt ? `主播表达参考：${profile.personaPrompt}` : "",
-    "你面对的是直播间观众，不是一对一私聊。回复要像主播自然接弹幕、顺着主题聊天，不要像助手完成任务。"
+    `直播发起人 / 主播是用户：${profile.username}（${profile.userId}）。`,
+    profile.signature ? `主播账号简介：${profile.signature}` : "",
+    profile.personaPrompt ? `主播人设与表达参考：${profile.personaPrompt}` : "",
+    "你不是主播本人，也不要替主播发言；你要模拟直播间里不同观众的即时弹幕反应。"
   ]
     .filter(Boolean)
     .join("\n");
   const currentStateAwareness = [
     `当前直播主题：${topic}`,
+    openingDescription ? `开场画面 / 初始状态：${openingDescription}` : "",
     forumAudience
       ? `当前直播观众定位：${forumAudience}（来自唯一挂载论坛页签「${selectedForumTab.name}」，不要串用其他页签用户定位。）`
       : "",
-    latestUserText ? `最新用户弹幕：${latestUserText}` : "最新用户弹幕：暂无新的用户弹幕。",
-    `本次触发：${trigger === "user" ? "用户刚发送弹幕，需要优先回应这条弹幕。" : "直播自动续聊，需要围绕主题自然抛话题或接住当前氛围。"}`,
+    latestUserText ? `最新主播发言：${latestUserText}` : "最新主播发言：暂无新的主播发言。",
+    `本次触发：${
+      trigger === "streamer"
+        ? "主播刚发送内容，需要生成观众对这句话的即时弹幕。"
+        : "直播间自动刷弹幕，需要基于主题、初始描写和最近互动生成自然观众弹幕。"
+    }`,
     "最近真实互动：",
     buildRecentLiveHistoryText()
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
   const outputStandard = [
-    "只输出主播接下来要说的话，不要输出 JSON、Markdown、列表、编号、角色标签或解释。",
-    "当前聊天主题和用户的实际弹幕优先级最高；如果有最新用户弹幕，先接住弹幕里的情绪、语气和潜台词，再自然回应内容。",
-    "如果没有新的用户弹幕，就围绕直播主题自然续聊、抛一个轻松话题，像真实主播维持直播间氛围。",
-    "可以有口语、停顿、语气词和一点临场感，但不要复述设定，不要总结背景，不要长篇说明。",
-    "输出 1 到 3 行；每一行会作为一条主播弹幕显示。"
+    "只输出观众弹幕，不要输出主播发言，不要输出 JSON、Markdown、列表、编号、角色标签或解释。",
+    "一次必须生成 15 条互不相同的观众弹幕；每一行就是一条弹幕。",
+    "每条弹幕必须自带随机观众 ID，格式固定为：@u1234：弹幕内容。",
+    "弹幕要像不同观众同时在直播间刷屏，可以有短句、追问、玩笑、惊讶、接梗、情绪反应和轻微跑题。",
+    "当前直播主题、初始直播描写和主播的实际发言优先级最高；如果有最新主播发言，先围绕这句话生成观众反应。",
+    "不要复述设定，不要总结背景，不要长篇说明，不要让 15 条弹幕语气完全一样。"
   ].join("\n");
   return [
     negativeBlock,
@@ -861,9 +904,9 @@ function buildLiveSystemPrompt(trigger = "auto", latestUserText = "") {
 }
 
 function buildLiveUserInstruction(trigger = "auto") {
-  return trigger === "user"
-    ? "请根据最新用户弹幕，生成主播在直播间的即时回应。"
-    : "请根据当前直播主题和直播间氛围，生成主播的下一段自然发言。";
+  return trigger === "streamer"
+    ? "请根据最新主播发言，生成 15 条不同观众弹幕。每条单独一行，并带随机观众 ID。"
+    : "请根据当前直播主题、初始直播描写和最近互动，生成 15 条不同观众弹幕。每条单独一行，并带随机观众 ID。";
 }
 
 function buildGeminiSafetySettings() {
@@ -1028,19 +1071,52 @@ function buildLiveApiLogBase(action, settings, endpoint, prompt, requestBody, su
   };
 }
 
-function parseLiveReplyLines(text = "") {
-  return String(text || "")
+function extractLiveReplyLineCandidates(text = "") {
+  const raw = String(text || "")
     .replace(/```[a-z]*\s*/gi, "")
     .replace(/```/g, "")
-    .split(/\r?\n/g)
+    .trim();
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.map((item) =>
+        typeof item === "string" ? item : item?.text || item?.content || item?.comment || ""
+      );
+    }
+    if (Array.isArray(parsed?.items)) {
+      return parsed.items.map((item) =>
+        typeof item === "string" ? item : item?.text || item?.content || item?.comment || ""
+      );
+    }
+    if (Array.isArray(parsed?.comments)) {
+      return parsed.comments.map((item) =>
+        typeof item === "string" ? item : item?.text || item?.content || item?.comment || ""
+      );
+    }
+  } catch (_error) {
+  }
+  return raw.split(/\r?\n/g);
+}
+
+function parseLiveReplyLines(text = "") {
+  return extractLiveReplyLineCandidates(text)
     .map((line) =>
-      safeTrim(line)
+      safeTrim(String(line || ""))
+        .replace(/```[a-z]*\s*/gi, "")
+        .replace(/```/g, "")
+        .replace(/^\d+[\).、]\s*/, "")
         .replace(/^[-*•]\s*/, "")
-        .replace(/^(主播|我|AI|assistant|Assistant)\s*[：:]/i, "")
+        .replace(/^(观众|弹幕|用户|viewer|audience)[A-Za-z0-9_\-\u4e00-\u9fa5]*\s*[：:]/i, "")
+        .replace(/^(AI|assistant|Assistant)\s*[：:]/i, "")
+        .replace(/^(u[0-9a-z_-]{2,18})\s*([：:])/i, "@$1$2")
         .trim()
     )
+    .map(ensureViewerCommentLine)
     .filter(Boolean)
-    .slice(0, 3);
+    .slice(0, 15);
 }
 
 function clearAutoReplyTimer() {
@@ -1050,10 +1126,14 @@ function clearAutoReplyTimer() {
 
 function scheduleNextAutoReply(delayMs = null) {
   clearAutoReplyTimer();
+  const configuredInterval =
+    state.liveEntryConfig?.autoReplyIntervalSeconds ??
+    state.settings?.liveAutoReplyIntervalSeconds ??
+    DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS;
   const intervalMs =
     delayMs == null
       ? normalizeLiveAutoReplyIntervalSeconds(
-          state.settings?.liveAutoReplyIntervalSeconds,
+          configuredInterval,
           DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS
         ) * 1000
       : delayMs;
@@ -1064,7 +1144,7 @@ function scheduleNextAutoReply(delayMs = null) {
 
 async function requestLiveApiReply(trigger = "auto", latestUserText = "") {
   if (state.apiPending) {
-    if (trigger === "user") {
+    if (trigger === "streamer") {
       state.queuedRequests.push({ trigger, latestUserText: safeTrim(latestUserText) });
     }
     return;
@@ -1072,7 +1152,7 @@ async function requestLiveApiReply(trigger = "auto", latestUserText = "") {
 
   clearAutoReplyTimer();
   state.apiPending = true;
-  setLiveHint("主播正在看弹幕…");
+  setLiveHint("直播间正在刷弹幕…");
 
   const settings = loadSettings();
   state.settings = settings;
@@ -1092,12 +1172,12 @@ async function requestLiveApiReply(trigger = "auto", latestUserText = "") {
   const requestBody = buildLiveRequestBody(settings, encodedSystemPrompt, encodedUserInstruction);
   const logBase = applyPrivacyToLogEntry(
     buildLiveApiLogBase(
-      trigger === "user" ? "live_reply_user" : "live_reply_auto",
+      trigger === "streamer" ? "live_comments_streamer" : "live_comments_auto",
       settings,
       requestEndpoint,
       [encodedSystemPrompt, encodedUserInstruction].join("\n\n"),
       requestBody,
-      `直播：${state.liveEntryConfig?.topic || "未命名直播"} · ${trigger === "user" ? "用户弹幕触发" : "自动续聊"}`
+      `直播：${state.liveEntryConfig?.topic || "未命名直播"} · ${trigger === "streamer" ? "主播发言触发" : "自动弹幕"}`
     ),
     privacySession
   );
@@ -1152,9 +1232,9 @@ async function requestLiveApiReply(trigger = "auto", latestUserText = "") {
 
     replyLines.forEach((line, index) => {
       window.setTimeout(() => {
-        createBullet(`${state.profile.username}：${line}`, { isHost: true });
-      }, index * 520);
-      pushLiveMessage("host", line, { trigger });
+        createBullet(line);
+      }, index * 380);
+      pushLiveMessage("viewer", line, { trigger });
     });
     appendApiLog({
       ...logBase,
@@ -1166,7 +1246,7 @@ async function requestLiveApiReply(trigger = "auto", latestUserText = "") {
       decodedResponseText: decodedText
     });
     logged = true;
-    setLiveHint("发送文字会以弹幕形式出现在左下角");
+    setLiveHint("发送主播内容后，会生成观众弹幕");
   } catch (error) {
     if (!logged) {
       appendApiLog({
@@ -1197,13 +1277,14 @@ function handleSendBullet(event) {
     liveComposerInputEl?.focus();
     return;
   }
-  createBullet(`我：${text}`, { isUser: true });
-  pushLiveMessage("user", text, { trigger: "user" });
+  const streamerLabel = safeTrim(state.profile?.username || "我");
+  createBullet(`${streamerLabel}（主播）：${text}`, { isUser: true });
+  pushLiveMessage("streamer", text, { trigger: "streamer" });
   state.viewers = Math.max(36, state.viewers + 1);
   renderViewerCount();
   liveComposerInputEl.value = "";
   liveComposerInputEl.focus();
-  requestLiveApiReply("user", text);
+  requestLiveApiReply("streamer", text);
 }
 
 function bindEvents() {
