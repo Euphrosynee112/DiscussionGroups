@@ -38,6 +38,23 @@ const CHAT_SHARE_STORAGE_MIN_MESSAGE_LIMIT = 80;
 const CHAT_SHARE_STORAGE_IMAGE_KEEP_COUNT = 20;
 const THREAD_SHARE_STORAGE_RESERVE_CHARS = 48000;
 const CUSTOM_TAB_DISCUSSION_VISIBLE_LIMIT = 10;
+const CUSTOM_TAB_TOPIC_TAG_MIN_COUNT = 1;
+const CUSTOM_TAB_TOPIC_TAG_MAX_COUNT = 3;
+const FORUM_TOPIC_TAG_CATALOG = [
+  { id: "chart_sales", label: "榜单/销量", description: "榜单、销量、一位、商业成绩" },
+  { id: "stage_live", label: "舞台/现场", description: "舞台表现、开麦、唱跳、巡演现场" },
+  { id: "music_work", label: "作品内容", description: "歌曲、专辑、作品内容本身" },
+  { id: "schedule_travel", label: "行程/赶场", description: "行程、赶场、两国飞、工作安排" },
+  { id: "health_official", label: "健康/官宣", description: "身体状态、工作室声明、退出活动、复工安排" },
+  { id: "visual_style", label: "造型/视觉", description: "造型、妆发、穿搭、颜值图" },
+  { id: "social_update", label: "社媒动态", description: "泡泡、微博、ins、直播发言、公开互动" },
+  { id: "offline_sighting", label: "线下目击", description: "机场、医院、签售、路透、线下目击" },
+  { id: "dating_rumor", label: "恋情传闻", description: "恋情爆料、约会传闻、绯闻链路" },
+  { id: "cp_interaction", label: "CP互动", description: "同框张力、互动糖、舞台嗑点" },
+  { id: "fandom_dynamics", label: "饭圈风向", description: "站姐、脱粉、控评、粉圈风向、粉丝情绪" },
+  { id: "public_buzz", label: "公共讨论", description: "热搜、营销号、外网讨论、行业规则、公共舆论" }
+];
+const FORUM_TOPIC_TAG_IDS = new Set(FORUM_TOPIC_TAG_CATALOG.map((item) => item.id));
 const HOME_FEED_LABELS = {
   entertainment: "系统内容",
   tags: "热门标签"
@@ -3346,7 +3363,6 @@ function buildForumBackgroundExtractionUserPrompt(bundle = {}) {
     : "当前没有可拆分的来源。";
   return [
     `页签名称：${tab.name || ""}`,
-    `页签用户定位：${tab.audience || ""}`,
     includeFullForumContext ? `页签长期文本：${tab.discussionText || ""}` : "",
     includeFullForumContext ? `页签当前热点：${tab.hotTopic || ""}` : "",
     segmentLabel ? `当前拆卡分段：${segmentLabel}` : "",
@@ -3730,6 +3746,55 @@ async function requestForumGenerationContext(tabId = "", payload = {}) {
     console.warn("[discussion] failed to load forum generation context", error);
     return null;
   }
+}
+
+function findForumPersonaFromGenerationContext(postLike = {}, generationContext = null) {
+  const personaPool = Array.isArray(generationContext?.personaPool) ? generationContext.personaPool : [];
+  const displayName = String(postLike?.displayName || "").trim().toLowerCase();
+  const handle = String(postLike?.handle || "").trim().toLowerCase();
+  return (
+    personaPool.find(
+      (persona) =>
+        String(persona?.displayName || "").trim().toLowerCase() === displayName ||
+        String(persona?.handle || "").trim().toLowerCase() === handle
+    ) || generationContext?.selectedPersona || null
+  );
+}
+
+function attachForumGenerationMetadata(item = {}, generationContext = null, kind = "post") {
+  if (!generationContext || typeof generationContext !== "object") {
+    return item;
+  }
+  const persona = findForumPersonaFromGenerationContext(item, generationContext);
+  const selectedItem = generationContext?.selectedItem || null;
+  const baseMetadata = item?.metadata && typeof item.metadata === "object" ? { ...item.metadata } : {};
+  return {
+    ...item,
+    metadata: {
+      ...baseMetadata,
+      forumPersonaId: String(persona?.id || generationContext?.selectedPersona?.id || "").trim(),
+      forumPersonaDisplayName: String(
+        persona?.displayName || generationContext?.selectedPersona?.displayName || ""
+      ).trim(),
+      sourceItemId: String(selectedItem?.id || "").trim(),
+      sourceItemTags: Array.isArray(selectedItem?.topicTags) ? [...selectedItem.topicTags] : [],
+      sourceBucket: String(selectedItem?.bucket || selectedItem?.sourceKind || "").trim(),
+      knowledgeLevel: String(
+        persona?.knowledgeLevel || generationContext?.selectedPersona?.knowledgeLevel || ""
+      ).trim(),
+      personaLanguageCode: String(
+        persona?.languageCode || generationContext?.selectedPersona?.languageCode || ""
+      ).trim(),
+      personaEnteredForumAt: String(
+        persona?.enteredForumAt || generationContext?.selectedPersona?.enteredForumAt || ""
+      ).trim(),
+      ...(kind === "reply"
+        ? {
+            replyMode: String(generationContext?.selectedReplyMode?.key || "").trim()
+          }
+        : {})
+    }
+  };
 }
 
 function openProfilePostEditor(postId) {
@@ -4284,8 +4349,10 @@ function buildPrompt(
         time_awareness: forumPromptContext.timeAwarenessText,
         worldbook_reference: forumPromptContext.worldbookReferenceText,
         background_cards_context: generationContext?.promptBlocks?.backgroundCardsText || "",
+        source_item_context: generationContext?.promptBlocks?.sourceItemText || "",
         dominant_hot_topic: dominantHotTopicInstruction,
         forum_role_knowledge: generationContext?.promptBlocks?.roleKnowledgeText || "",
+        forum_persona_seed: generationContext?.promptBlocks?.personaText || "",
         unknown_boundary: generationContext?.promptBlocks?.unknownBoundaryText || "",
         supplemental_topics: forumPromptContext.supplementalTopicTexts.length
           ? `主导即时讨论语境（与页签热点同级，可共同成为主线）：\n${forumPromptContext.supplementalTopicTexts.join(
@@ -4440,10 +4507,12 @@ function buildReplyPrompt(
         time_awareness: forumPromptContext.timeAwarenessText,
         worldbook_reference: forumPromptContext.worldbookReferenceText,
         background_cards_context: generationContext?.promptBlocks?.backgroundCardsText || "",
+        source_item_context: generationContext?.promptBlocks?.sourceItemText || "",
         hot_topic: String(runtimeCustomTab?.hotTopic || "").trim()
           ? `当前这个讨论区的主导热点：${runtimeCustomTab.hotTopic}`
           : "",
         forum_role_knowledge: generationContext?.promptBlocks?.roleKnowledgeText || "",
+        forum_persona_seed: generationContext?.promptBlocks?.personaText || "",
         unknown_boundary: generationContext?.promptBlocks?.unknownBoundaryText || "",
         supplemental_topics: forumPromptContext.supplementalTopicTexts.length
           ? `主导即时讨论语境（与页签热点同级，可共同成为主线）：\n${forumPromptContext.supplementalTopicTexts.join(
@@ -4529,7 +4598,8 @@ function normalizeReply(item, index = 0, seed = "root") {
     authorOwned: Boolean(item?.authorOwned),
     children: Array.isArray(item?.children) ? item.children : [],
     expanded: Boolean(item?.expanded),
-    loading: Boolean(item?.loading)
+    loading: Boolean(item?.loading),
+    metadata: item?.metadata && typeof item.metadata === "object" ? { ...item.metadata } : {}
   };
 }
 
@@ -5123,7 +5193,8 @@ function normalizePost(item, index = 0, fallbackFeedType = DEFAULT_CONTENT_FEED)
     edited: Boolean(item?.edited),
     authorOwned: Boolean(item?.authorOwned),
     feedType: resolvedFeedType,
-    repostSource
+    repostSource,
+    metadata: item?.metadata && typeof item.metadata === "object" ? { ...item.metadata } : {}
   };
 }
 
@@ -6717,6 +6788,35 @@ function normalizeCustomTabContentBucket(value = "", fallback = "discussion") {
   return normalized === "hot_topic" || normalized === "discussion" ? normalized : fallback;
 }
 
+function normalizeForumTopicTags(value = [], fallback = []) {
+  const rawValues = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? String(value)
+          .split(/[|,]/g)
+          .map((item) => item.trim())
+      : [];
+  const normalized = rawValues
+    .map((item) => String(item || "").trim().toLowerCase())
+    .filter((item) => FORUM_TOPIC_TAG_IDS.has(item));
+  const unique = Array.from(new Set(normalized));
+  return unique.length ? unique : [...fallback];
+}
+
+function getAvailableForumTopicTags(value = []) {
+  const incoming = Array.isArray(value) ? value : [];
+  const normalizedIncoming = incoming
+    .map((item) => ({
+      id: String(item?.id || "").trim().toLowerCase(),
+      label: String(item?.label || "").trim(),
+      description: String(item?.description || "").trim()
+    }))
+    .filter((item) => FORUM_TOPIC_TAG_IDS.has(item.id));
+  return normalizedIncoming.length
+    ? normalizedIncoming
+    : FORUM_TOPIC_TAG_CATALOG.map((item) => ({ ...item }));
+}
+
 function parseCustomTabLegacyContentText(value = "") {
   const normalized = String(value || "")
     .replace(/\r\n?/g, "\n")
@@ -6764,6 +6864,13 @@ function cloneCustomTabContentItem(item = {}) {
     bucket: normalizeCustomTabContentBucket(item.bucket, "discussion"),
     contentText: String(item.contentText || "").trim(),
     enteredBucketAt: String(item.enteredBucketAt || "").trim() || new Date().toISOString(),
+    topicTags: normalizeForumTopicTags(item.topicTags, []),
+    summaryText: String(item.summaryText || "").trim(),
+    summaryUpdatedAt: String(item.summaryUpdatedAt || "").trim(),
+    summarySourceHash: String(item.summarySourceHash || "").trim(),
+    originBucket: normalizeCustomTabContentBucket(item.originBucket || item.bucket, "discussion"),
+    lastHotTopicAt: String(item.lastHotTopicAt || "").trim(),
+    archivedAt: String(item.archivedAt || "").trim(),
     backgroundExtractedAt: String(item.backgroundExtractedAt || "").trim(),
     lastExtractedHash: String(item.lastExtractedHash || "").trim(),
     metadata: item.metadata && typeof item.metadata === "object" ? { ...item.metadata } : {},
@@ -6780,6 +6887,13 @@ function createLocalCustomTabContentItem(bucket = "discussion", contentText = ""
     bucket: normalizeCustomTabContentBucket(bucket, "discussion"),
     contentText: String(contentText || "").trim(),
     enteredBucketAt: nowIso,
+    topicTags: [],
+    summaryText: "",
+    summaryUpdatedAt: "",
+    summarySourceHash: "",
+    originBucket: normalizeCustomTabContentBucket(bucket, "discussion"),
+    lastHotTopicAt: bucket === "hot_topic" ? nowIso : "",
+    archivedAt: "",
     backgroundExtractedAt: "",
     lastExtractedHash: "",
     metadata: {},
@@ -6806,10 +6920,24 @@ function getCustomTabContentDraftState() {
       originalItems: [],
       loadedFromServer: false,
       loading: false,
-      historyExpanded: false
+      historyExpanded: false,
+      availableTopicTags: getAvailableForumTopicTags()
     };
   }
   return state.customTabContentDraft;
+}
+
+function getCustomTabTopicTagLabel(tagId = "", availableTopicTags = getAvailableForumTopicTags()) {
+  return (
+    availableTopicTags.find((item) => item.id === String(tagId || "").trim())?.label ||
+    String(tagId || "").trim()
+  );
+}
+
+function validateDraftItemTopicTags(item = {}) {
+  const topicTags = normalizeForumTopicTags(item.topicTags, []);
+  return topicTags.length >= CUSTOM_TAB_TOPIC_TAG_MIN_COUNT &&
+    topicTags.length <= CUSTOM_TAB_TOPIC_TAG_MAX_COUNT;
 }
 
 function renderCustomTabContentEditor() {
@@ -6817,6 +6945,7 @@ function renderCustomTabContentEditor() {
     return;
   }
   const draft = getCustomTabContentDraftState();
+  const availableTopicTags = getAvailableForumTopicTags(draft.availableTopicTags);
   const items = sortCustomTabContentItems(draft.items || []);
   const discussionItems = items.filter((item) => item.bucket === "discussion");
   const hotTopicItems = items.filter((item) => item.bucket === "hot_topic");
@@ -6833,6 +6962,8 @@ function renderCustomTabContentEditor() {
         ? `普通 prompt #${displayIndex}`
         : `普通历史 #${displayIndex}`
       : `热点 prompt #${displayIndex}`;
+    const topicTags = normalizeForumTopicTags(item.topicTags, []);
+    const hasValidTags = validateDraftItemTopicTags(item);
     return `
       <article class="custom-tab-content-item" data-item-id="${escapeHtml(item.id || "")}">
         <div class="custom-tab-content-item__meta">
@@ -6847,6 +6978,35 @@ function renderCustomTabContentEditor() {
           placeholder="${isDiscussion ? "输入一条普通讨论内容。" : "输入一条热点内容。"}"
           ${disableEditing ? "disabled" : ""}
         >${escapeHtml(item.contentText || "")}</textarea>
+        <div class="custom-tab-content-item__tag-row">
+          <div class="custom-tab-content-item__tag-meta">
+            <span>${escapeHtml(
+              topicTags.length
+                ? `已选 ${topicTags.length} 个标签：${topicTags
+                    .map((tag) => getCustomTabTopicTagLabel(tag, availableTopicTags))
+                    .join(" / ")}`
+                : `请选择 ${CUSTOM_TAB_TOPIC_TAG_MIN_COUNT}-${CUSTOM_TAB_TOPIC_TAG_MAX_COUNT} 个标签`
+            )}</span>
+            ${hasValidTags ? "" : "<small>未满足 1~3 个标签，暂不能进入新生成链路</small>"}
+          </div>
+          <div class="custom-tab-content-item__tags">
+            ${availableTopicTags
+              .map(
+                (tag) => `
+                  <button
+                    class="topic-tag-chip ${topicTags.includes(tag.id) ? "is-active" : ""}"
+                    type="button"
+                    data-action="toggle-custom-tab-content-tag"
+                    data-item-id="${escapeHtml(item.id || "")}"
+                    data-tag-id="${escapeHtml(tag.id)}"
+                    title="${escapeHtml(tag.description || tag.label || tag.id)}"
+                    ${disableEditing ? "disabled" : ""}
+                  >${escapeHtml(tag.label)}</button>
+                `
+              )
+              .join("")}
+          </div>
+        </div>
         <div class="custom-tab-content-item__actions">
           <button
             class="ghost-chip"
@@ -6966,7 +7126,8 @@ function seedCustomTabContentDraftFromTab(tab = null) {
     originalItems: [],
     loadedFromServer: false,
     loading: false,
-    historyExpanded: false
+    historyExpanded: false,
+    availableTopicTags: getAvailableForumTopicTags()
   };
   renderCustomTabContentEditor();
 }
@@ -6983,7 +7144,8 @@ function applyCustomTabContentPayloadToDraft(payload = {}, tabId = "") {
     originalItems: items.map((item) => cloneCustomTabContentItem(item)),
     loadedFromServer: true,
     loading: false,
-    historyExpanded: false
+    historyExpanded: false,
+    availableTopicTags: getAvailableForumTopicTags(payload?.availableTopicTags)
   };
   renderCustomTabContentEditor();
 }
@@ -7001,6 +7163,9 @@ function updateCustomTabDraftItem(itemId = "", patch = {}) {
             ...item,
             ...patch,
             bucket: normalizeCustomTabContentBucket(patch.bucket || item.bucket, item.bucket),
+            topicTags: Object.prototype.hasOwnProperty.call(patch, "topicTags")
+              ? normalizeForumTopicTags(patch.topicTags, [])
+              : normalizeForumTopicTags(item.topicTags, []),
             updatedAt: new Date().toISOString()
           }
         : item
@@ -7084,6 +7249,7 @@ async function syncCustomTabContentDraftWithServer(tabId = "") {
             : []),
           ...(Array.isArray(existingPayload.hotTopicItems) ? existingPayload.hotTopicItems : [])
         ].map((item) => cloneCustomTabContentItem(item));
+        draft.availableTopicTags = getAvailableForumTopicTags(existingPayload.availableTopicTags);
       }
     } catch (_error) {
     }
@@ -7117,7 +7283,8 @@ async function syncCustomTabContentDraftWithServer(tabId = "") {
         body: JSON.stringify({
           tabId: resolvedTabId,
           bucket: item.bucket,
-          contentText: item.contentText
+          contentText: item.contentText,
+          topicTags: normalizeForumTopicTags(item.topicTags, [])
         })
       });
       continue;
@@ -7129,14 +7296,17 @@ async function syncCustomTabContentDraftWithServer(tabId = "") {
         body: JSON.stringify({
           tabId: resolvedTabId,
           bucket: item.bucket,
-          contentText: item.contentText
+          contentText: item.contentText,
+          topicTags: normalizeForumTopicTags(item.topicTags, [])
         })
       });
       continue;
     }
     if (
       originalItem.bucket !== item.bucket ||
-      String(originalItem.contentText || "").trim() !== String(item.contentText || "").trim()
+      String(originalItem.contentText || "").trim() !== String(item.contentText || "").trim() ||
+      JSON.stringify(normalizeForumTopicTags(originalItem.topicTags, [])) !==
+        JSON.stringify(normalizeForumTopicTags(item.topicTags, []))
     ) {
       await requestDiscussionStorageApi(
         `/api/forum/tab-content/items/${encodeURIComponent(item.id)}`,
@@ -7144,7 +7314,8 @@ async function syncCustomTabContentDraftWithServer(tabId = "") {
           method: "PATCH",
           body: JSON.stringify({
             bucket: item.bucket,
-            contentText: item.contentText
+            contentText: item.contentText,
+            topicTags: normalizeForumTopicTags(item.topicTags, [])
           })
         }
       );
@@ -7189,7 +7360,8 @@ function resetCustomTabForm(preserveStatus = false) {
     originalItems: [],
     loadedFromServer: false,
     loading: false,
-    historyExpanded: false
+    historyExpanded: false,
+    availableTopicTags: getAvailableForumTopicTags()
   };
   if (customTabNameInput) {
     customTabNameInput.value = "";
@@ -7541,6 +7713,9 @@ async function handleCustomTabFormSubmit() {
   const draft = getCurrentCustomTabFormDraft();
   const draftItems = sortCustomTabContentItems(getCustomTabContentDraftState().items || []);
   const discussionCount = draftItems.filter((item) => item.bucket === "discussion" && item.contentText).length;
+  const invalidTaggedItems = draftItems.filter(
+    (item) => String(item.contentText || "").trim() && !validateDraftItemTopicTags(item)
+  );
   const { name, audience } = draft;
   if (!audience) {
     setCustomTabFormStatus("请填写页签用户定位，用于告诉 AI 这个论坛里活跃的是什么人。", "error");
@@ -7548,6 +7723,10 @@ async function handleCustomTabFormSubmit() {
   }
   if (!discussionCount) {
     setCustomTabFormStatus("请至少添加 1 条普通页签文本，用于生成该讨论区的整体讨论内容。", "error");
+    return;
+  }
+  if (invalidTaggedItems.length) {
+    setCustomTabFormStatus("每条普通/热点内容都需要选择 1~3 个标签。", "error");
     return;
   }
   const saveButton = customTabForm.querySelector("#custom-tab-save-btn");
@@ -8201,6 +8380,7 @@ async function requestGeneratedPosts(
   const generationContext = isCustomFeed(resolvedFeedType)
     ? await requestForumGenerationContext(resolvedFeedType, {
         generationType: "posts",
+        requestedCount: count,
         maxCards: 10,
         detailLevel: "full"
       })
@@ -8305,8 +8485,11 @@ async function requestGeneratedPosts(
       )
     });
     logged = true;
+    const parsedPosts = parseGeneratedPosts(message, count, resolvedFeedType).map((item) =>
+      attachForumGenerationMetadata(item, generationContext, "post")
+    );
     return decodeValueWithPrivacy(
-      parseGeneratedPosts(message, count, resolvedFeedType),
+      parsedPosts,
       privacySession
     );
   } catch (error) {
@@ -8755,8 +8938,12 @@ async function requestGeneratedReplies(
   const generationContext = isCustomFeed(resolvedFeedType)
     ? await requestForumGenerationContext(resolvedFeedType, {
         generationType: "replies",
+        requestedCount: count,
         maxCards: 8,
-        detailLevel: "full"
+        detailLevel: "full",
+        rootPostMetadata: rootPost?.metadata || {},
+        rootPostTags: Array.isArray(rootPost?.tags) ? rootPost.tags : [],
+        parentReplyMetadata: parentReply?.metadata || {}
       })
     : null;
   const prompt = buildReplyPrompt(
@@ -8854,8 +9041,13 @@ async function requestGeneratedReplies(
       )
     });
     logged = true;
+    const parsedReplies = parseGeneratedReplies(
+      message,
+      count,
+      `${rootPost.id}-${parentReply?.id || "root"}`
+    ).map((item) => attachForumGenerationMetadata(item, generationContext, "reply"));
     return decodeValueWithPrivacy(
-      parseGeneratedReplies(message, count, `${rootPost.id}-${parentReply?.id || "root"}`),
+      parsedReplies,
       privacySession
     );
   } catch (error) {
@@ -9455,6 +9647,28 @@ function attachEvents() {
           bucket: actionEl.dataset.targetBucket || "discussion",
           enteredBucketAt: new Date().toISOString()
         });
+        return;
+      }
+      if (action === "toggle-custom-tab-content-tag") {
+        const itemId = String(actionEl.dataset.itemId || "").trim();
+        const tagId = String(actionEl.dataset.tagId || "").trim();
+        const draft = getCustomTabContentDraftState();
+        const targetItem = (draft.items || []).find((item) => item.id === itemId);
+        if (!targetItem || !FORUM_TOPIC_TAG_IDS.has(tagId)) {
+          return;
+        }
+        const currentTags = normalizeForumTopicTags(targetItem.topicTags, []);
+        const nextTags = currentTags.includes(tagId)
+          ? currentTags.filter((tag) => tag !== tagId)
+          : currentTags.length >= CUSTOM_TAB_TOPIC_TAG_MAX_COUNT
+            ? [...currentTags.slice(1), tagId]
+            : [...currentTags, tagId];
+        updateCustomTabDraftItem(itemId, {
+          topicTags: nextTags
+        });
+        if (customTabFormStatusEl?.classList.contains("error")) {
+          setCustomTabFormStatus("");
+        }
         return;
       }
       if (action === "delete-custom-tab-content-item") {
