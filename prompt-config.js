@@ -256,7 +256,9 @@
           createDynamicItem("unknown_boundary", "未知边界", "读取推测与事实边界"),
           createDynamicItem("supplemental_topics", "即时讨论语境", "读取 Bubble / 转发挂载"),
           createDynamicItem("repost_hint", "转发原帖提示", "读取最近论坛动态挂载"),
-          createDynamicItem("history_avoidance", "历史去重提示", "读取最近缓存帖子")
+          createDynamicItem("history_avoidance", "历史去重提示", "读取最近缓存帖子"),
+          createDynamicItem("forum_batch_public_context", "批次公共上下文", "读取 <public_context> block"),
+          createDynamicItem("forum_batch_generation_tasks", "批次任务块", "读取 <generation_tasks> block")
         ],
         persona_alignment: [
           createTemplateItem(
@@ -335,7 +337,8 @@
             "uniqueness",
             "去重要求",
             "请保证 {{count}} 条内容不重复，角度不同；即使围绕同一大主题，也要主动拆出不同争议点、不同立场、不同细节切口。"
-          )
+          ),
+          createDynamicItem("forum_batch_output_contract", "批次输出约束", "读取 <output_contract> block")
         ]
       }
     },
@@ -362,7 +365,9 @@
           createTemplateItem("root_post_intro", "主楼前缀", "主楼内容："),
           createDynamicItem("root_post_text", "主楼正文", "读取主楼正文"),
           createDynamicItem("reply_target_intro", "回复目标前缀", "根据是否楼中楼生成"),
-          createDynamicItem("reply_target_text", "回复目标正文", "读取当前回复目标")
+          createDynamicItem("reply_target_text", "回复目标正文", "读取当前回复目标"),
+          createDynamicItem("forum_batch_public_context", "批次公共上下文", "读取 <public_context> block"),
+          createDynamicItem("forum_batch_generation_tasks", "批次任务块", "读取 <generation_tasks> block")
         ],
         persona_alignment: [
           createTemplateItem(
@@ -408,7 +413,8 @@
             "如果上文给了固定 persona 槽位，则 JSON 数组必须按顺序使用对应槽位的 displayName、handle 和 language。"
           ),
           createTemplateItem("readability", "可读性", "避免整段灌水，优先短句，必要时用换行提升可读性。"),
-          createTemplateItem("thread_cohesion", "楼层连贯", "请避免重复句式，并保持楼中讨论的连贯性。")
+          createTemplateItem("thread_cohesion", "楼层连贯", "请避免重复句式，并保持楼中讨论的连贯性。"),
+          createDynamicItem("forum_batch_output_contract", "批次输出约束", "读取 <output_contract> block")
         ]
       }
     },

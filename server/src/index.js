@@ -166,6 +166,18 @@ const FORUM_TAB_HISTORY_BATCH_MAX_ITEMS = 6;
 const FORUM_TAB_HISTORY_BATCH_MAX_CHARS = 1600;
 const FORUM_BACKGROUND_GENERATION_TYPES = new Set(["posts", "replies"]);
 const FORUM_BACKGROUND_DETAIL_LEVELS = new Set(["brief", "standard", "full"]);
+const FORUM_REFERENCE_TYPES = new Set([
+  "forum_item",
+  "worldbook_entry",
+  "history_digest",
+  "background_card"
+]);
+const FORUM_REFERENCE_PREFIX_RULES = Object.freeze({
+  forum_item: { prefix: "F", start: 10001 },
+  worldbook_entry: { prefix: "W", start: 20001 },
+  history_digest: { prefix: "B", start: 30001 },
+  background_card: { prefix: "B", start: 30001 }
+});
 const FORUM_TOPIC_TAG_MIN_COUNT = 1;
 const FORUM_TOPIC_TAG_MAX_COUNT = 3;
 const FORUM_TOPIC_TAG_CATALOG = [
@@ -243,6 +255,26 @@ const FORUM_TOPIC_TAG_CATALOG = [
   }
 ];
 const FORUM_TOPIC_TAG_IDS = new Set(FORUM_TOPIC_TAG_CATALOG.map((item) => item.id));
+const FORUM_TOPIC_TAG_WEAK_RELATIONS = Object.freeze({
+  stage_live: ["music_work"],
+  music_work: ["stage_live"],
+  dating_rumor: ["cp_interaction"],
+  cp_interaction: ["dating_rumor"],
+  schedule_travel: ["health_official"],
+  health_official: ["schedule_travel"],
+  public_buzz: ["fandom_dynamics"],
+  fandom_dynamics: ["public_buzz"],
+  visual_style: ["offline_sighting", "social_update"],
+  offline_sighting: ["visual_style", "social_update"],
+  social_update: ["visual_style", "offline_sighting"]
+});
+const FORUM_BATCH_HOT_SUMMARY_MAX_CHARS = 120;
+const FORUM_BATCH_MAIN_SOURCE_MAX_CHARS = 800;
+const FORUM_BATCH_CURRENT_DISCUSSION_LIMITS = Object.freeze({
+  strong: 4,
+  weak: 2,
+  noise: 1
+});
 const FORUM_PERSONA_KNOWLEDGE_LEVELS = new Set(["surface", "recent", "deep", "legacy"]);
 const FORUM_PERSONA_LANGUAGE_CODES = new Set(["zh", "ja", "ko", "en"]);
 const FORUM_GENERATION_SCOPE_TYPES = new Set(["global", "tab"]);
@@ -967,8 +999,10 @@ async function ensureBusinessSnapshotTables(db) {
       tab_id text not null,
       bucket text not null,
       content_text text not null default '',
+      discussion_date date,
       entered_bucket_at timestamptz not null default now(),
       sort_order integer,
+      ref_key text not null default '',
       topic_tags_jsonb jsonb not null default '[]'::jsonb,
       summary_text text not null default '',
       summary_updated_at timestamptz,
@@ -994,7 +1028,9 @@ async function ensureBusinessSnapshotTables(db) {
   `);
   await db.query(`
     alter table forum_tab_content_items
+      add column if not exists discussion_date date,
       add column if not exists sort_order integer,
+      add column if not exists ref_key text not null default '',
       add column if not exists topic_tags_jsonb jsonb not null default '[]'::jsonb,
       add column if not exists summary_text text not null default '',
       add column if not exists summary_updated_at timestamptz,
@@ -1011,6 +1047,14 @@ async function ensureBusinessSnapshotTables(db) {
   await db.query(`
     create index if not exists forum_tab_content_items_sort_idx
       on forum_tab_content_items (owner_id, tab_id, bucket, sort_order asc, entered_bucket_at desc);
+  `);
+  await db.query(`
+    create index if not exists forum_tab_content_items_ref_key_idx
+      on forum_tab_content_items (owner_id, ref_key);
+  `);
+  await db.query(`
+    create index if not exists forum_tab_content_items_discussion_date_idx
+      on forum_tab_content_items (owner_id, tab_id, discussion_date desc, bucket, sort_order asc);
   `);
   await db.query(`
     create index if not exists forum_tab_content_items_archive_idx
@@ -1103,6 +1147,51 @@ async function ensureBusinessSnapshotTables(db) {
   await db.query(`
     alter table forum_user_personas
       add column if not exists language_code text not null default 'zh';
+  `);
+  await db.query(`
+    create table if not exists forum_reference_registry (
+      owner_id text not null,
+      ref_key text not null,
+      ref_type text not null,
+      source_id text not null,
+      tab_id text not null default '',
+      title text not null default '',
+      topic_tags_jsonb jsonb not null default '[]'::jsonb,
+      ref_date date,
+      metadata jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (owner_id, ref_key)
+    );
+  `);
+  await db.query(`
+    create unique index if not exists forum_reference_registry_source_idx
+      on forum_reference_registry (owner_id, ref_type, source_id, tab_id);
+  `);
+  await db.query(`
+    create index if not exists forum_reference_registry_tab_idx
+      on forum_reference_registry (owner_id, tab_id, ref_type, ref_date desc, updated_at desc);
+  `);
+  await db.query(`
+    create table if not exists forum_persona_reference_links (
+      owner_id text not null,
+      tab_id text not null,
+      persona_id text not null,
+      ref_key text not null,
+      match_type text not null default 'strong',
+      match_score double precision not null default 0,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (owner_id, tab_id, persona_id, ref_key)
+    );
+  `);
+  await db.query(`
+    create index if not exists forum_persona_reference_links_persona_idx
+      on forum_persona_reference_links (owner_id, tab_id, persona_id, match_score desc, updated_at desc);
+  `);
+  await db.query(`
+    create index if not exists forum_persona_reference_links_ref_idx
+      on forum_persona_reference_links (owner_id, tab_id, ref_key, updated_at desc);
   `);
   await db.query(`
     do $$
@@ -5731,6 +5820,35 @@ function normalizeForumTabContentSortOrder(value = null, fallback = null) {
   return clampIntegerValue(Math.round(parsed), -2147483648, 2147483647, fallback ?? 0);
 }
 
+function formatForumDateOnlyValue(value = null, fallback = "") {
+  if (!value) {
+    return fallback;
+  }
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value.trim())) {
+    return value.trim();
+  }
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) {
+    return fallback;
+  }
+  return parsed.toISOString().slice(0, 10);
+}
+
+function normalizeForumDiscussionDate(value = "", fallback = "") {
+  const normalized = formatForumDateOnlyValue(value, "");
+  return normalized || formatForumDateOnlyValue(fallback, "");
+}
+
+function normalizeForumReferenceType(value = "", fallback = "forum_item") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return FORUM_REFERENCE_TYPES.has(normalized) ? normalized : fallback;
+}
+
+function getForumReferenceRule(refType = "forum_item") {
+  const resolvedType = normalizeForumReferenceType(refType, "forum_item");
+  return FORUM_REFERENCE_PREFIX_RULES[resolvedType] || FORUM_REFERENCE_PREFIX_RULES.forum_item;
+}
+
 function normalizeForumTopicTag(value = "", fallback = "") {
   const normalized = String(value || "").trim().toLowerCase();
   return FORUM_TOPIC_TAG_IDS.has(normalized) ? normalized : fallback;
@@ -5893,8 +6011,10 @@ function mapForumTabContentItemRow(row = {}) {
     tabId: String(row.tab_id || "").trim(),
     bucket: normalizeForumTabContentBucket(row.bucket, "discussion"),
     contentText: String(row.content_text || "").trim(),
+    discussionDate: formatForumDateOnlyValue(row.discussion_date, ""),
     enteredBucketAt: row.entered_bucket_at || null,
     sortOrder: Number.isFinite(Number(row.sort_order)) ? Number(row.sort_order) : null,
+    refKey: String(row.ref_key || "").trim(),
     topicTags: normalizeForumTopicTags(row.topic_tags_jsonb, []),
     summaryText: String(row.summary_text || "").trim(),
     summaryUpdatedAt: row.summary_updated_at || null,
@@ -5905,6 +6025,33 @@ function mapForumTabContentItemRow(row = {}) {
     backgroundExtractedAt: row.background_extracted_at || null,
     lastExtractedHash: String(row.last_extracted_hash || "").trim(),
     metadata: normalizeJsonObjectValue(row.metadata, {}),
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null
+  };
+}
+
+function mapForumReferenceRegistryRow(row = {}) {
+  return {
+    refKey: String(row.ref_key || "").trim(),
+    refType: normalizeForumReferenceType(row.ref_type, "forum_item"),
+    sourceId: String(row.source_id || "").trim(),
+    tabId: String(row.tab_id || "").trim(),
+    title: String(row.title || "").trim(),
+    topicTags: normalizeForumTopicTags(row.topic_tags_jsonb, []),
+    refDate: formatForumDateOnlyValue(row.ref_date, ""),
+    metadata: normalizeJsonObjectValue(row.metadata, {}),
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null
+  };
+}
+
+function mapForumPersonaReferenceLinkRow(row = {}) {
+  return {
+    tabId: String(row.tab_id || "").trim(),
+    personaId: String(row.persona_id || "").trim(),
+    refKey: String(row.ref_key || "").trim(),
+    matchType: String(row.match_type || "").trim() || "strong",
+    matchScore: normalizeFiniteNumber(row.match_score, 0),
     createdAt: row.created_at || null,
     updatedAt: row.updated_at || null
   };
@@ -6285,6 +6432,187 @@ function buildForumTabContentItemsForMigration(tab = {}) {
   ];
 }
 
+function buildForumReferenceSourceId(refType = "forum_item", sourceId = "", options = {}) {
+  const resolvedType = normalizeForumReferenceType(refType, "forum_item");
+  const resolvedSourceId = String(sourceId || "").trim();
+  const normalizedOptions = normalizeJsonObjectValue(options, {});
+  if (resolvedType === "history_digest") {
+    const digestId = String(normalizedOptions.digestId || resolvedSourceId || "").trim();
+    return digestId ? `history_digest:${digestId}` : "";
+  }
+  if (resolvedType === "background_card") {
+    return resolvedSourceId ? `background_card:${resolvedSourceId}` : "";
+  }
+  return resolvedSourceId;
+}
+
+function buildForumReferenceTitle(refType = "forum_item", source = {}) {
+  const resolvedType = normalizeForumReferenceType(refType, "forum_item");
+  if (resolvedType === "forum_item") {
+    const bucket = normalizeForumTabContentBucket(source.bucket, "discussion");
+    return bucket === "hot_topic" ? "论坛热点条目" : "论坛讨论条目";
+  }
+  if (resolvedType === "history_digest") {
+    const cardKind = String(source.cardKind || "").trim();
+    return cardKind === "interpretation_frame" ? "论坛解释框架" : "论坛历史摘要";
+  }
+  if (resolvedType === "background_card") {
+    return String(source.sourceTitle || source.title || "").trim() || "论坛背景卡";
+  }
+  return String(source.sourceTitle || source.title || source.name || "").trim() || "世界书来源";
+}
+
+async function allocateNextForumReferenceKey(
+  db,
+  ownerId = DEFAULT_STORAGE_OWNER_ID,
+  refType = "forum_item"
+) {
+  const rule = getForumReferenceRule(refType);
+  const result = await db.query(
+    `
+      select coalesce(max(substring(ref_key from 2)::bigint), 0) as max_suffix
+      from forum_reference_registry
+      where owner_id = $1
+        and ref_key like $2
+    `,
+    [ownerId, `${rule.prefix}%`]
+  );
+  const currentMax = Number(result.rows[0]?.max_suffix || 0);
+  const nextValue = Math.max(rule.start - 1, currentMax) + 1;
+  return `${rule.prefix}${nextValue}`;
+}
+
+async function upsertForumReferenceRegistryEntry(
+  db,
+  ownerId = DEFAULT_STORAGE_OWNER_ID,
+  options = {}
+) {
+  const refType = normalizeForumReferenceType(options.refType, "forum_item");
+  const tabId = String(options.tabId || "").trim();
+  const sourceId = buildForumReferenceSourceId(refType, options.sourceId, options);
+  if (!sourceId) {
+    return null;
+  }
+  const title = String(options.title || "").trim() || buildForumReferenceTitle(refType, options);
+  const topicTags = normalizeForumTopicTags(options.topicTags, []);
+  const refDate = normalizeForumDiscussionDate(options.refDate, "");
+  const metadata = normalizeJsonObjectValue(options.metadata, {});
+  let refKey = String(options.refKey || "").trim();
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    if (!refKey) {
+      refKey = await allocateNextForumReferenceKey(db, ownerId, refType);
+    }
+    try {
+      const result = await db.query(
+        `
+          insert into forum_reference_registry (
+            owner_id,
+            ref_key,
+            ref_type,
+            source_id,
+            tab_id,
+            title,
+            topic_tags_jsonb,
+            ref_date,
+            metadata,
+            created_at,
+            updated_at
+          )
+          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::date, $9::jsonb, now(), now())
+          on conflict (owner_id, ref_type, source_id, tab_id) do update
+            set title = excluded.title,
+                topic_tags_jsonb = excluded.topic_tags_jsonb,
+                ref_date = coalesce(excluded.ref_date, forum_reference_registry.ref_date),
+                metadata = coalesce(forum_reference_registry.metadata, '{}'::jsonb) || excluded.metadata,
+                updated_at = now()
+          returning *
+        `,
+        [
+          ownerId,
+          refKey,
+          refType,
+          sourceId,
+          tabId,
+          title,
+          stringifyJsonb(topicTags),
+          refDate || null,
+          stringifyJsonb(metadata)
+        ]
+      );
+      return mapForumReferenceRegistryRow(result.rows[0] || {});
+    } catch (error) {
+      if (error?.code === "23505") {
+        refKey = "";
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error(`Failed to allocate forum reference key for ${refType}:${sourceId}`);
+}
+
+async function ensureForumTabContentItemRowsHydrated(
+  db,
+  ownerId = DEFAULT_STORAGE_OWNER_ID,
+  rows = []
+) {
+  const hydratedRows = [];
+  for (const row of normalizeJsonArrayValue(rows, [])) {
+    const mapped = mapForumTabContentItemRow(row);
+    if (!mapped.id || !mapped.tabId) {
+      hydratedRows.push(row);
+      continue;
+    }
+    const nextDiscussionDate = normalizeForumDiscussionDate(
+      mapped.discussionDate,
+      formatForumDateOnlyValue(
+        mapped.enteredBucketAt || mapped.createdAt || row.entered_bucket_at || row.created_at,
+        new Date().toISOString().slice(0, 10)
+      )
+    );
+    const registryRow = await upsertForumReferenceRegistryEntry(db, ownerId, {
+      refKey: mapped.refKey,
+      refType: "forum_item",
+      sourceId: mapped.id,
+      tabId: mapped.tabId,
+      title: buildForumReferenceTitle("forum_item", mapped),
+      topicTags: mapped.topicTags,
+      refDate: nextDiscussionDate,
+      metadata: {
+        bucket: mapped.bucket,
+        originBucket: mapped.originBucket,
+        discussionDate: nextDiscussionDate
+      }
+    });
+    const ensuredRefKey = String(registryRow?.refKey || mapped.refKey || "").trim();
+    const needsUpdate =
+      nextDiscussionDate !== mapped.discussionDate ||
+      ensuredRefKey !== mapped.refKey;
+    if (!needsUpdate) {
+      hydratedRows.push({
+        ...row,
+        discussion_date: nextDiscussionDate,
+        ref_key: ensuredRefKey
+      });
+      continue;
+    }
+    const updatedResult = await db.query(
+      `
+        update forum_tab_content_items
+        set discussion_date = $3::date,
+            ref_key = $4,
+            updated_at = now()
+        where owner_id = $1
+          and id = $2
+        returning *
+      `,
+      [ownerId, mapped.id, nextDiscussionDate || null, ensuredRefKey]
+    );
+    hydratedRows.push(updatedResult.rows[0] || row);
+  }
+  return hydratedRows;
+}
+
 async function ensureForumTabContentItemsMigrated(
   db,
   ownerId = DEFAULT_STORAGE_OWNER_ID,
@@ -6323,6 +6651,7 @@ async function ensureForumTabContentItemsMigrated(
           tab_id,
           bucket,
           content_text,
+          discussion_date,
           entered_bucket_at,
           sort_order,
           topic_tags_jsonb,
@@ -6335,7 +6664,7 @@ async function ensureForumTabContentItemsMigrated(
           created_at,
           updated_at
         )
-        values ($1, $2, $3, $4, $5, $6::timestamptz, $8, '[]'::jsonb, '', '', $4, case when $4 = 'hot_topic' then $6::timestamptz else null end, '', $7::jsonb, now(), now())
+        values ($1, $2, $3, $4, $5, $6::date, $7::timestamptz, $9, '[]'::jsonb, '', '', $4, case when $4 = 'hot_topic' then $7::timestamptz else null end, '', $8::jsonb, now(), now())
       `,
       [
         ownerId,
@@ -6343,6 +6672,7 @@ async function ensureForumTabContentItemsMigrated(
         resolvedTabId,
         item.bucket,
         item.contentText,
+        formatForumDateOnlyValue(item.enteredBucketAt, new Date().toISOString().slice(0, 10)),
         item.enteredBucketAt,
         stringifyJsonb({
           migratedFromLegacyField: item.bucket === "hot_topic" ? "hotTopic" : "discussionText"
@@ -6384,6 +6714,7 @@ async function applyDailyHotDecay(db, ownerId = DEFAULT_STORAGE_OWNER_ID, tabId 
       set bucket = 'discussion',
           entered_bucket_at = now(),
           sort_order = (select min_sort_order from target_order) - candidates.decay_rank::int * 1000,
+          archived_at = null,
           origin_bucket = case
             when coalesce(origin_bucket, '') <> '' then origin_bucket
             else 'hot_topic'
@@ -6434,6 +6765,43 @@ async function markForumDiscussionItemsArchived(db, ownerId = DEFAULT_STORAGE_OW
   return result.rows.map(mapForumTabContentItemRow);
 }
 
+async function restoreVisibleForumDiscussionItems(
+  db,
+  ownerId = DEFAULT_STORAGE_OWNER_ID,
+  tabId = ""
+) {
+  const resolvedTabId = String(tabId || "").trim();
+  if (!resolvedTabId) {
+    return [];
+  }
+  const result = await db.query(
+    `
+      with ranked as (
+        select
+          id,
+          row_number() over (
+            order by sort_order asc nulls last, entered_bucket_at desc, created_at desc, id desc
+          ) as row_num
+        from forum_tab_content_items
+        where owner_id = $1
+          and tab_id = $2
+          and bucket = 'discussion'
+      )
+      update forum_tab_content_items target
+      set archived_at = null,
+          updated_at = now()
+      from ranked
+      where target.owner_id = $1
+        and target.id = ranked.id
+        and ranked.row_num <= $3
+        and target.archived_at is not null
+      returning target.*
+    `,
+    [ownerId, resolvedTabId, FORUM_TAB_DISCUSSION_VISIBLE_LIMIT]
+  );
+  return result.rows.map(mapForumTabContentItemRow);
+}
+
 function buildForumTabHistoryNumberedText(items = []) {
   return normalizeJsonArrayValue(items, [])
     .map((item, index) => {
@@ -6443,6 +6811,12 @@ function buildForumTabHistoryNumberedText(items = []) {
       }
       const topicTags = normalizeForumTopicTags(item?.topicTags, []);
       const prefixParts = [];
+      if (String(item?.refKey || "").trim()) {
+        prefixParts.push(`引用:${item.refKey}`);
+      }
+      if (String(item?.discussionDate || "").trim()) {
+        prefixParts.push(`讨论日期:${item.discussionDate}`);
+      }
       if (topicTags.length) {
         prefixParts.push(`标签:${topicTags.join(",")}`);
       }
@@ -6536,6 +6910,7 @@ async function loadForumTabContentState(
   await ensureForumTabContentItemsMigrated(db, ownerId, resolvedTabId, tabRecord);
   await applyDailyHotDecay(db, ownerId, resolvedTabId);
   await markForumDiscussionItemsArchived(db, ownerId, resolvedTabId);
+  await restoreVisibleForumDiscussionItems(db, ownerId, resolvedTabId);
   const result = await db.query(
     `
       select *
@@ -6550,7 +6925,8 @@ async function loadForumTabContentState(
     `,
     [ownerId, resolvedTabId]
   );
-  const items = result.rows.map(mapForumTabContentItemRow);
+  const hydratedRows = await ensureForumTabContentItemRowsHydrated(db, ownerId, result.rows);
+  const items = hydratedRows.map(mapForumTabContentItemRow);
   const hotTopicItems = items.filter((item) => item.bucket === "hot_topic");
   const discussionItems = items.filter((item) => item.bucket === "discussion");
   const latestDiscussionItems = discussionItems.slice(0, FORUM_TAB_DISCUSSION_VISIBLE_LIMIT);
@@ -7299,7 +7675,8 @@ function normalizeForumBackgroundGenerationInput(payload = {}) {
     parentReplyMetadata: normalizeJsonObjectValue(
       getInputValue(source, "parentReplyMetadata", "parent_reply_metadata"),
       {}
-    )
+    ),
+    isNestedReply: Boolean(getInputValue(source, "isNestedReply", "is_nested_reply"))
   };
 }
 
@@ -7840,11 +8217,15 @@ function createForumGenerationSourceFromItem(item = {}, sourceKind = "latest_dis
   const mapped = item && typeof item === "object" ? item : {};
   return {
     id: String(mapped.id || "").trim(),
+    refKey: String(mapped.refKey || "").trim(),
+    refType: "forum_item",
     sourceKind,
     bucket: mapped.bucket || (sourceKind === "hot_topic" ? "hot_topic" : "discussion"),
+    title: buildForumReferenceTitle("forum_item", mapped),
     contentText: String(mapped.contentText || "").trim(),
     summaryText: String(mapped.summaryText || "").trim(),
     topicTags: normalizeForumTopicTags(mapped.topicTags, []),
+    discussionDate: normalizeForumDiscussionDate(mapped.discussionDate, ""),
     originBucket: normalizeForumTabContentBucket(mapped.originBucket || mapped.bucket, "discussion"),
     enteredBucketAt: mapped.enteredBucketAt || null,
     sortOrder: normalizeForumTabContentSortOrder(mapped.sortOrder, null),
@@ -7861,13 +8242,19 @@ function createForumHistoryDigestFromItem(item = {}) {
   }
   return {
     id: `item:${String(item.id || "").trim()}`,
+    refKey: "",
+    refType: "history_digest",
     sourceKind: "history_digest",
     cardKind: "discussion_digest",
+    title: buildForumReferenceTitle("history_digest", {
+      cardKind: "discussion_digest"
+    }),
     sourceItemIds: [String(item.id || "").trim()].filter(Boolean),
     contentText: String(item.contentText || "").trim(),
     summaryText,
     detailText: summaryText,
     topicTags: normalizeForumTopicTags(item.topicTags, []),
+    discussionDate: normalizeForumDiscussionDate(item.discussionDate, ""),
     archivedAt: item.archivedAt || null,
     updatedAt: item.summaryUpdatedAt || item.updatedAt || null,
     sourceItems: [item]
@@ -7883,13 +8270,20 @@ function createForumHistoryDigestFromCard(card = {}, contentItemMap = new Map())
   const sourceItems = sourceItemIds.map((id) => contentItemMap.get(id)).filter(Boolean);
   return {
     id: `card:${String(card.id || "").trim()}`,
+    refKey: "",
+    refType: cardKind === "interpretation_frame" ? "background_card" : "history_digest",
     sourceKind: "history_digest",
     cardKind,
+    title: buildForumReferenceTitle(
+      cardKind === "interpretation_frame" ? "background_card" : "history_digest",
+      card
+    ),
     sourceItemIds,
     contentText: String(card.sourceExcerpt || "").trim(),
     summaryText: String(card.summary || "").trim(),
     detailText: String(card.detailText || card.summary || "").trim(),
     topicTags: normalizeForumTopicTags(card.topicTags, []),
+    discussionDate: normalizeForumDiscussionDate(sourceItems[0]?.discussionDate, ""),
     archivedAt: card.archivedAt || sourceItems[0]?.archivedAt || null,
     updatedAt: card.updatedAt || null,
     sourceItems,
@@ -7917,25 +8311,305 @@ function buildForumHistoryDigests(contentState = {}, cards = []) {
   });
 }
 
+function countForumWeakTopicTagMatches(left = [], right = []) {
+  const rightTags = new Set(normalizeForumTopicTags(right, []));
+  return normalizeForumTopicTags(left, []).filter((tag) => {
+    const relatedTags = Array.isArray(FORUM_TOPIC_TAG_WEAK_RELATIONS[tag])
+      ? FORUM_TOPIC_TAG_WEAK_RELATIONS[tag]
+      : [];
+    return relatedTags.some((relatedTag) => rightTags.has(relatedTag));
+  }).length;
+}
+
+function buildForumReferencePreviewText(reference = {}, maxLength = 160) {
+  const source = reference && typeof reference === "object" ? reference : {};
+  const text =
+    String(source.summaryText || "").trim() ||
+    String(source.detailText || "").trim() ||
+    String(source.contentText || "").trim();
+  return truncateForumBackgroundText(text, maxLength);
+}
+
+function serializeForumReferenceForResponse(reference = null) {
+  if (!reference) {
+    return null;
+  }
+  const source = reference && typeof reference === "object" ? reference : {};
+  return {
+    id: String(source.id || "").trim(),
+    refKey: String(source.refKey || "").trim(),
+    refType: normalizeForumReferenceType(source.refType, "forum_item"),
+    sourceKind: String(source.sourceKind || "").trim(),
+    bucket: String(source.bucket || "").trim(),
+    title: String(source.title || "").trim(),
+    contentText: String(source.contentText || "").trim(),
+    summaryText: String(source.summaryText || "").trim(),
+    detailText: String(source.detailText || "").trim(),
+    previewText: buildForumReferencePreviewText(source, 220),
+    topicTags: normalizeForumTopicTags(source.topicTags, []),
+    discussionDate: normalizeForumDiscussionDate(source.discussionDate, ""),
+    refDate: normalizeForumDiscussionDate(source.refDate || source.discussionDate, ""),
+    originBucket: String(source.originBucket || "").trim(),
+    enteredBucketAt: source.enteredBucketAt || null,
+    archivedAt: source.archivedAt || null,
+    lastHotTopicAt: source.lastHotTopicAt || null,
+    cardKind: String(source.cardKind || "").trim(),
+    sourceItemIds: normalizeForumBackgroundTextArray(source.sourceItemIds, []),
+    matchType: String(source.matchType || "").trim(),
+    matchScore: normalizeFiniteNumber(source.matchScore, 0),
+    metadata: normalizeJsonObjectValue(source.metadata, {})
+  };
+}
+
+async function ensureForumWorldbookReferenceRows(
+  db,
+  ownerId = DEFAULT_STORAGE_OWNER_ID,
+  tabId = "",
+  sources = []
+) {
+  const rows = new Map();
+  for (const source of normalizeJsonArrayValue(sources, [])) {
+    if (normalizeForumBackgroundSourceType(source.sourceType, "") !== "worldbook_entry") {
+      continue;
+    }
+    const registryRow = await upsertForumReferenceRegistryEntry(db, ownerId, {
+      refType: "worldbook_entry",
+      sourceId: source.sourceId,
+      tabId,
+      title: source.sourceTitle || buildForumReferenceTitle("worldbook_entry", source),
+      topicTags: normalizeForumTopicTags(source.topicTags, []),
+      refDate: normalizeForumDiscussionDate(source.updatedAt, ""),
+      metadata: {
+        sourceLayer: source.sourceLayer,
+        knowledgeDomains: normalizeForumBackgroundTextArray(source.knowledgeDomains, []),
+        sourceTitle: source.sourceTitle || ""
+      }
+    });
+    if (registryRow?.refKey) {
+      rows.set(String(source.sourceId || "").trim(), registryRow);
+    }
+  }
+  return rows;
+}
+
+async function ensureForumHistoryDigestReferenceRows(
+  db,
+  ownerId = DEFAULT_STORAGE_OWNER_ID,
+  tabId = "",
+  historyDigests = []
+) {
+  const rows = new Map();
+  for (const digest of normalizeJsonArrayValue(historyDigests, [])) {
+    const digestId = String(digest.id || "").trim();
+    if (!digestId) {
+      continue;
+    }
+    const isCardDigest = digestId.startsWith("card:");
+    const registryRow = await upsertForumReferenceRegistryEntry(db, ownerId, {
+      refType: isCardDigest && digest.cardKind === "interpretation_frame"
+        ? "background_card"
+        : "history_digest",
+      sourceId: isCardDigest ? digestId.slice(5) : digestId.slice(5) || digestId,
+      digestId,
+      tabId,
+      title: buildForumReferenceTitle(
+        isCardDigest && digest.cardKind === "interpretation_frame"
+          ? "background_card"
+          : "history_digest",
+        digest
+      ),
+      topicTags: digest.topicTags,
+      refDate: normalizeForumDiscussionDate(
+        digest.discussionDate || digest.archivedAt || digest.updatedAt,
+        ""
+      ),
+      metadata: {
+        cardKind: digest.cardKind || "",
+        sourceItemIds: normalizeForumBackgroundTextArray(digest.sourceItemIds, []),
+        sourceKind: digest.sourceKind || "history_digest"
+      }
+    });
+    if (registryRow?.refKey) {
+      rows.set(digestId, registryRow);
+    }
+  }
+  return rows;
+}
+
+function buildForumHistoryFallbackReferences(contentState = {}) {
+  return normalizeJsonArrayValue(contentState?.olderDiscussionItems, [])
+    .filter((item) => !String(item?.summaryText || "").trim())
+    .map((item) => ({
+      ...createForumGenerationSourceFromItem(item, "history_digest"),
+      refDate: normalizeForumDiscussionDate(item.discussionDate, ""),
+      title: buildForumReferenceTitle("forum_item", item)
+    }))
+    .filter((item) => item.id && item.refKey && item.contentText);
+}
+
+function buildForumHistoryReferenceCandidates(contentState = {}, historyDigests = [], digestRefMap = new Map()) {
+  const digestCandidates = normalizeJsonArrayValue(historyDigests, [])
+    .map((digest) => {
+      const registryRow = digestRefMap.get(String(digest.id || "").trim()) || null;
+      return {
+        ...digest,
+        refKey: String(registryRow?.refKey || digest.refKey || "").trim(),
+        refDate: normalizeForumDiscussionDate(
+          registryRow?.refDate || digest.discussionDate || digest.archivedAt || digest.updatedAt,
+          ""
+        ),
+        title: String(registryRow?.title || digest.title || "").trim() || buildForumReferenceTitle("history_digest", digest)
+      };
+    })
+    .filter((digest) => digest.refKey && (digest.summaryText || digest.detailText || digest.contentText));
+  return [
+    ...digestCandidates,
+    ...buildForumHistoryFallbackReferences(contentState)
+  ];
+}
+
 function isForumHistoryDigestVisibleToPersona(digest = {}, persona = {}) {
-  const enteredAtMs = Date.parse(String(persona.enteredForumAt || "").trim());
-  if (!Number.isFinite(enteredAtMs)) {
+  const enteredDate = normalizeForumDiscussionDate(persona.enteredForumAt, "");
+  if (!enteredDate) {
     return true;
   }
   const sourceItems = normalizeJsonArrayValue(digest.sourceItems, []);
   if (!sourceItems.length) {
-    const archivedAtMs = Date.parse(String(digest.archivedAt || "").trim());
-    return !Number.isFinite(archivedAtMs) || archivedAtMs >= enteredAtMs;
+    const visibleDate = normalizeForumDiscussionDate(
+      digest.discussionDate || digest.refDate || digest.archivedAt,
+      ""
+    );
+    return !visibleDate || visibleDate >= enteredDate;
   }
   return sourceItems.some((item) => {
-    const archivedAtMs = Date.parse(String(item?.archivedAt || "").trim());
-    return !Number.isFinite(archivedAtMs) || archivedAtMs >= enteredAtMs;
+    const visibleDate = normalizeForumDiscussionDate(
+      item?.discussionDate || item?.archivedAt,
+      ""
+    );
+    return !visibleDate || visibleDate >= enteredDate;
   });
 }
 
 function countForumTopicTagMatches(left = [], right = []) {
   const rightSet = new Set(normalizeForumTopicTags(right, []));
   return normalizeForumTopicTags(left, []).filter((tag) => rightSet.has(tag)).length;
+}
+
+function compareForumDateStrings(left = "", right = "") {
+  const normalizedLeft = normalizeForumDiscussionDate(left, "");
+  const normalizedRight = normalizeForumDiscussionDate(right, "");
+  if (!normalizedLeft || !normalizedRight) {
+    return 0;
+  }
+  if (normalizedLeft === normalizedRight) {
+    return 0;
+  }
+  return normalizedLeft < normalizedRight ? -1 : 1;
+}
+
+function computeForumReferencePersonaMatch(persona = {}, reference = {}) {
+  const interestMatches = countForumTopicTagMatches(reference.topicTags, persona.interestTags);
+  const weakMatches = countForumWeakTopicTagMatches(reference.topicTags, persona.interestTags);
+  const avoidMatches = countForumTopicTagMatches(reference.topicTags, persona.avoidTags);
+  const matchType = interestMatches > 0 ? "strong" : weakMatches > 0 ? "weak" : "";
+  return {
+    matchType,
+    matchScore:
+      interestMatches * 42 +
+      weakMatches * 18 -
+      avoidMatches * 36 +
+      (reference.cardKind === "interpretation_frame" ? 6 : 0)
+  };
+}
+
+async function refreshForumPersonaReferenceLinks(
+  db,
+  ownerId = DEFAULT_STORAGE_OWNER_ID,
+  tabId = "",
+  personas = [],
+  historyReferences = []
+) {
+  const resolvedTabId = String(tabId || "").trim();
+  const personaIds = normalizeJsonArrayValue(personas, [])
+    .map((persona) => String(persona?.id || "").trim())
+    .filter(Boolean);
+  if (!resolvedTabId || !personaIds.length) {
+    return new Map();
+  }
+  await db.query(
+    `
+      delete from forum_persona_reference_links
+      where owner_id = $1
+        and tab_id = $2
+        and persona_id = any($3::text[])
+    `,
+    [ownerId, resolvedTabId, personaIds]
+  );
+  for (const persona of normalizeJsonArrayValue(personas, [])) {
+    const personaId = String(persona?.id || "").trim();
+    const enteredDate = normalizeForumDiscussionDate(persona?.enteredForumAt, "");
+    if (!personaId) {
+      continue;
+    }
+    for (const reference of normalizeJsonArrayValue(historyReferences, [])) {
+      const refKey = String(reference?.refKey || "").trim();
+      const refDate = normalizeForumDiscussionDate(
+        reference?.discussionDate || reference?.refDate,
+        ""
+      );
+      if (!refKey) {
+        continue;
+      }
+      if (enteredDate && refDate && compareForumDateStrings(refDate, enteredDate) < 0) {
+        continue;
+      }
+      const match = computeForumReferencePersonaMatch(persona, reference);
+      if (!match.matchType || match.matchScore <= 0) {
+        continue;
+      }
+      await db.query(
+        `
+          insert into forum_persona_reference_links (
+            owner_id,
+            tab_id,
+            persona_id,
+            ref_key,
+            match_type,
+            match_score,
+            created_at,
+            updated_at
+          )
+          values ($1, $2, $3, $4, $5, $6, now(), now())
+          on conflict (owner_id, tab_id, persona_id, ref_key) do update
+            set match_type = excluded.match_type,
+                match_score = excluded.match_score,
+                updated_at = now()
+        `,
+        [ownerId, resolvedTabId, personaId, refKey, match.matchType, match.matchScore]
+      );
+    }
+  }
+  const result = await db.query(
+    `
+      select *
+      from forum_persona_reference_links
+      where owner_id = $1
+        and tab_id = $2
+      order by persona_id asc, match_score desc, updated_at desc
+    `,
+    [ownerId, resolvedTabId]
+  );
+  const map = new Map();
+  result.rows.map(mapForumPersonaReferenceLinkRow).forEach((row) => {
+    if (!row.personaId) {
+      return;
+    }
+    if (!map.has(row.personaId)) {
+      map.set(row.personaId, []);
+    }
+    map.get(row.personaId).push(row);
+  });
+  return map;
 }
 
 function scoreForumPersonaForSource(persona = {}, source = {}, generationType = "posts", options = {}) {
@@ -7958,8 +8632,9 @@ function scoreForumPersonaForSource(persona = {}, source = {}, generationType = 
     }
   }
   const interestMatches = countForumTopicTagMatches(persona.interestTags, sourceTags);
+  const weakMatches = countForumWeakTopicTagMatches(persona.interestTags, sourceTags);
   const avoidMatches = countForumTopicTagMatches(persona.avoidTags, sourceTags);
-  let score = 24 + interestMatches * 28 - avoidMatches * 34;
+  let score = 24 + interestMatches * 28 + weakMatches * 12 - avoidMatches * 34;
   const sourceWeight = generationType === "replies" ? persona.replyWeight : persona.postWeight;
   score += Math.max(0, normalizeFiniteNumber(sourceWeight, 1)) * 8;
   if (source.sourceKind === "history_digest") {
@@ -8108,8 +8783,398 @@ function resolveForumReplyMode(topicTags = [], settings = {}) {
   return {
     key: pickWeightedForumItem([...FORUM_REPLY_MODES], (mode) => weights[mode] || 0) || "agree_extend",
     groupKey,
-    weights
+      weights
   };
+}
+
+function buildForumGenerationSourceCatalog(contentState = {}, historyReferences = []) {
+  const hotRefs = normalizeJsonArrayValue(contentState?.hotTopicItems, [])
+    .map((item) => createForumGenerationSourceFromItem(item, "hot_topic"))
+    .filter((item) => item.refKey && item.contentText && item.topicTags.length);
+  const currentDiscussionRefs = normalizeJsonArrayValue(contentState?.latestDiscussionItems, [])
+    .map((item) => createForumGenerationSourceFromItem(item, "latest_discussion"))
+    .filter((item) => item.refKey && item.contentText && item.topicTags.length);
+  const historyRefs = normalizeJsonArrayValue(historyReferences, [])
+    .map((reference) => ({
+      ...reference,
+      sourceKind: "history_digest",
+      bucket: "history_digest"
+    }))
+    .filter((item) => item.refKey && (item.summaryText || item.detailText || item.contentText) && item.topicTags.length);
+  return {
+    hotRefs,
+    currentDiscussionRefs,
+    historyRefs,
+    allRefs: [...hotRefs, ...currentDiscussionRefs, ...historyRefs]
+  };
+}
+
+function scoreForumSourceRecency(source = {}) {
+  const timeMs = Date.parse(
+    String(source.enteredBucketAt || source.updatedAt || source.archivedAt || source.refDate || "").trim()
+  );
+  if (!Number.isFinite(timeMs)) {
+    return 0;
+  }
+  return Math.max(0, 1 - (Date.now() - timeMs) / (14 * 24 * 60 * 60 * 1000));
+}
+
+function selectForumMainSourceForPost(catalog = {}, weights = {}, usedSourceKeys = new Set()) {
+  const hotRefs = normalizeJsonArrayValue(catalog.hotRefs, []);
+  const currentRefs = normalizeJsonArrayValue(catalog.currentDiscussionRefs, []);
+  const historyRefs = normalizeJsonArrayValue(catalog.historyRefs, []);
+  const sourceWeights = hotRefs.length
+    ? weights.postSourceWeightsHotPresent
+    : weights.postSourceWeightsNoHot;
+  const bucket = pickWeightedForumItem(
+    [
+      { key: "hot_topic", items: hotRefs },
+      { key: "latest_discussion", items: currentRefs },
+      { key: "history_digest", items: historyRefs }
+    ].filter((entry) => entry.items.length),
+    (entry) => sourceWeights?.[entry.key] || 0
+  );
+  if (!bucket) {
+    return null;
+  }
+  return pickWeightedForumItem(bucket.items, (item) => {
+    const base = item.sourceKind === "hot_topic" ? 3 : item.sourceKind === "latest_discussion" ? 2 : 1;
+    const repeatPenalty = usedSourceKeys.has(item.refKey || item.id) ? 0.35 : 1;
+    return (base + scoreForumSourceRecency(item)) * repeatPenalty;
+  });
+}
+
+function findForumSourceByIdOrRef(catalog = {}, sourceId = "", refKey = "") {
+  const resolvedSourceId = String(sourceId || "").trim();
+  const resolvedRefKey = String(refKey || "").trim();
+  if (!resolvedSourceId && !resolvedRefKey) {
+    return null;
+  }
+  return normalizeJsonArrayValue(catalog.allRefs, []).find((item) => {
+    const itemId = String(item.id || "").trim();
+    const itemRefKey = String(item.refKey || "").trim();
+    const itemSourceItemIds = normalizeForumBackgroundTextArray(item.sourceItemIds, []);
+    return (
+      (resolvedRefKey && itemRefKey === resolvedRefKey) ||
+      (resolvedSourceId && itemId === resolvedSourceId) ||
+      (resolvedSourceId && itemSourceItemIds.includes(resolvedSourceId))
+    );
+  }) || null;
+}
+
+function selectForumMainSourceForReply(catalog = {}, requestInput = {}) {
+  const rootPostMetadata = normalizeJsonObjectValue(requestInput.rootPostMetadata, {});
+  const rootSource =
+    findForumSourceByIdOrRef(
+      catalog,
+      rootPostMetadata.sourceItemId,
+      rootPostMetadata.sourceItemRefKey
+    ) ||
+    findForumSourceByIdOrRef(
+      catalog,
+      rootPostMetadata.sourceItemId,
+      rootPostMetadata.sourceRefKey
+    );
+  if (rootSource) {
+    return rootSource;
+  }
+  const rootTags = normalizeForumTopicTags(
+    rootPostMetadata.sourceItemTags || requestInput.rootPostTags,
+    []
+  );
+  if (rootTags.length) {
+    const scored = normalizeJsonArrayValue(catalog.allRefs, [])
+      .map((item) => ({
+        item,
+        score:
+          countForumTopicTagMatches(item.topicTags, rootTags) * 36 +
+          countForumWeakTopicTagMatches(item.topicTags, rootTags) * 12 +
+          (item.sourceKind === "hot_topic" ? 8 : 0) +
+          scoreForumSourceRecency(item)
+      }))
+      .filter((entry) => entry.score > 0)
+      .sort((left, right) => right.score - left.score);
+    if (scored.length) {
+      return scored[0].item;
+    }
+  }
+  return catalog.hotRefs?.[0] || catalog.currentDiscussionRefs?.[0] || catalog.historyRefs?.[0] || null;
+}
+
+function selectForumPersonaForSource(
+  personas = [],
+  source = {},
+  generationType = "posts",
+  options = {}
+) {
+  const usedPersonaIds = new Set(normalizeJsonArrayValue(options.usedPersonaIds, []));
+  const excludedPersonaIds = new Set(normalizeJsonArrayValue(options.excludedPersonaIds, []));
+  const scoreWithFilters = (ignoreUsed = false) =>
+    normalizeJsonArrayValue(personas, [])
+      .filter((persona) => persona?.isEnabled !== false)
+      .filter((persona) => !excludedPersonaIds.has(String(persona.id || "").trim()))
+      .filter((persona) => ignoreUsed || !usedPersonaIds.has(String(persona.id || "").trim()))
+      .map((persona) => ({
+        persona,
+        score: scoreForumPersonaForSource(persona, source, generationType, {
+          excludedPersonaIds: [...excludedPersonaIds]
+        })
+      }))
+      .filter((entry) => Number.isFinite(entry.score))
+      .sort((left, right) => right.score - left.score);
+  let scored = scoreWithFilters(false);
+  if (!scored.length) {
+    scored = scoreWithFilters(true);
+  }
+  if (!scored.length) {
+    return null;
+  }
+  return pickWeightedForumItem(
+    scored.slice(0, 18),
+    (entry) => Math.max(1, entry.score)
+  )?.persona || scored[0].persona;
+}
+
+function selectForumCurrentDiscussionRefsForPersona(
+  persona = {},
+  mainSource = {},
+  currentRefs = []
+) {
+  const mainRefKey = String(mainSource?.refKey || "").trim();
+  const sourceTags = normalizeForumTopicTags(mainSource?.topicTags, []);
+  const scored = normalizeJsonArrayValue(currentRefs, [])
+    .filter((reference) => reference.refKey && reference.refKey !== mainRefKey)
+    .map((reference) => {
+      const interestMatches = countForumTopicTagMatches(reference.topicTags, persona.interestTags);
+      const sourceMatches = countForumTopicTagMatches(reference.topicTags, sourceTags);
+      const weakMatches =
+        countForumWeakTopicTagMatches(reference.topicTags, persona.interestTags) +
+        countForumWeakTopicTagMatches(reference.topicTags, sourceTags);
+      const avoidMatches = countForumTopicTagMatches(reference.topicTags, persona.avoidTags);
+      const matchType = interestMatches || sourceMatches ? "strong" : weakMatches ? "weak" : "noise";
+      return {
+        reference,
+        matchType,
+        score:
+          interestMatches * 42 +
+          sourceMatches * 26 +
+          weakMatches * 14 -
+          avoidMatches * 30 +
+          scoreForumSourceRecency(reference)
+      };
+    })
+    .sort((left, right) => right.score - left.score);
+  const selected = [];
+  const usedKeys = new Set();
+  const takeByType = (matchType, limit) => {
+    scored
+      .filter((entry) => entry.matchType === matchType)
+      .forEach((entry) => {
+        if (selected.length >= FORUM_BATCH_CURRENT_DISCUSSION_LIMITS.strong +
+          FORUM_BATCH_CURRENT_DISCUSSION_LIMITS.weak +
+          FORUM_BATCH_CURRENT_DISCUSSION_LIMITS.noise
+        ) {
+          return;
+        }
+        if (limit <= 0 || usedKeys.has(entry.reference.refKey)) {
+          return;
+        }
+        selected.push({
+          ...entry.reference,
+          matchType,
+          matchScore: entry.score
+        });
+        usedKeys.add(entry.reference.refKey);
+        limit -= 1;
+      });
+  };
+  takeByType("strong", FORUM_BATCH_CURRENT_DISCUSSION_LIMITS.strong);
+  takeByType("weak", FORUM_BATCH_CURRENT_DISCUSSION_LIMITS.weak);
+  takeByType("noise", FORUM_BATCH_CURRENT_DISCUSSION_LIMITS.noise);
+  return selected;
+}
+
+function selectForumPrivateBackgroundRefsForPersona(
+  persona = {},
+  mainSource = {},
+  historyRefs = [],
+  personaLinkMap = new Map(),
+  settings = {}
+) {
+  const level = normalizeForumPersonaKnowledgeLevel(persona.knowledgeLevel, "surface");
+  const rawLimit = normalizeJsonObjectValue(settings.knowledgeLimits?.[level], DEFAULT_FORUM_KNOWLEDGE_LIMITS[level]);
+  const maxDigests = clampIntegerValue(rawLimit.maxHistoryDigests, 0, 10, 0);
+  const maxFrames = clampIntegerValue(rawLimit.maxInterpretationFrames, 0, 5, 0);
+  if (!maxDigests && !maxFrames) {
+    return [];
+  }
+  const linkMap = new Map(
+    normalizeJsonArrayValue(personaLinkMap.get(persona.id) || [], [])
+      .map((link) => [String(link.refKey || "").trim(), link])
+      .filter(([refKey]) => refKey)
+  );
+  const sourceTags = normalizeForumTopicTags(mainSource?.topicTags, []);
+  const scored = normalizeJsonArrayValue(historyRefs, [])
+    .map((reference) => {
+      const link = linkMap.get(String(reference.refKey || "").trim());
+      if (!link) {
+        return null;
+      }
+      return {
+        reference: {
+          ...reference,
+          matchType: link.matchType,
+          matchScore: link.matchScore
+        },
+        score:
+          normalizeFiniteNumber(link.matchScore, 0) +
+          countForumTopicTagMatches(reference.topicTags, sourceTags) * 22 +
+          countForumWeakTopicTagMatches(reference.topicTags, sourceTags) * 9 +
+          (reference.cardKind === "interpretation_frame" ? 8 : 0)
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => right.score - left.score);
+  const selectedDigests = [];
+  const selectedFrames = [];
+  scored.forEach((entry) => {
+    if (entry.reference.cardKind === "interpretation_frame") {
+      if (selectedFrames.length < maxFrames) {
+        selectedFrames.push(entry.reference);
+      }
+      return;
+    }
+    if (selectedDigests.length < maxDigests) {
+      selectedDigests.push(entry.reference);
+    }
+  });
+  return [...selectedDigests, ...selectedFrames];
+}
+
+function buildForumGenerationBatchSizes(generationType = "posts", count = 1, requestInput = {}) {
+  const requestedCount = clampIntegerValue(count, 1, 20, 1);
+  if (generationType === "replies") {
+    const isNestedReply =
+      Boolean(requestInput.isNestedReply) ||
+      Object.keys(normalizeJsonObjectValue(requestInput.parentReplyMetadata, {})).length > 0;
+    const size = isNestedReply ? 1 : 2;
+    const sizes = [];
+    for (let remaining = requestedCount; remaining > 0; remaining -= size) {
+      sizes.push(Math.min(size, remaining));
+    }
+    return sizes;
+  }
+  const sizes = [];
+  let remaining = requestedCount;
+  while (remaining > 0) {
+    if (remaining === 4) {
+      sizes.push(2, 2);
+      break;
+    }
+    const size = Math.min(3, remaining);
+    sizes.push(size);
+    remaining -= size;
+  }
+  return sizes;
+}
+
+function buildForumGenerationBatches(options = {}) {
+  const sourceBundle = normalizeJsonObjectValue(options.sourceBundle, {});
+  const contentState = normalizeJsonObjectValue(options.contentState, {});
+  const requestInput = normalizeJsonObjectValue(options.requestInput, {});
+  const personas = normalizeJsonArrayValue(options.personas, []);
+  const weightSettings = normalizeJsonObjectValue(options.weightSettings, {});
+  const historyReferences = normalizeJsonArrayValue(options.historyReferences, []);
+  const personaLinkMap = options.personaLinkMap instanceof Map ? options.personaLinkMap : new Map();
+  const generationType = normalizeForumBackgroundGenerationType(requestInput.generationType, "posts");
+  const requestedCount = clampIntegerValue(Number(requestInput.requestedCount) || 1, 1, 20, 1);
+  if (!personas.length) {
+    return null;
+  }
+  const catalog = buildForumGenerationSourceCatalog(contentState, historyReferences);
+  if (!catalog.allRefs.length) {
+    return null;
+  }
+  const batchSizes = buildForumGenerationBatchSizes(generationType, requestedCount, requestInput);
+  const usedPersonaIds = new Set();
+  const usedSourceKeys = new Set();
+  const excludedReplyPersonaIds = generationType === "replies"
+    ? [
+        normalizeJsonObjectValue(requestInput.rootPostMetadata, {}).forumPersonaId,
+        normalizeJsonObjectValue(requestInput.parentReplyMetadata, {}).forumPersonaId
+      ]
+        .map((id) => String(id || "").trim())
+        .filter(Boolean)
+    : [];
+  const replyMainSource = generationType === "replies"
+    ? selectForumMainSourceForReply(catalog, requestInput)
+    : null;
+  const batches = [];
+  let slotIndex = 1;
+  batchSizes.forEach((batchSize, batchIndex) => {
+    const tasks = [];
+    for (let index = 0; index < batchSize; index += 1) {
+      const mainSource = generationType === "replies"
+        ? replyMainSource
+        : selectForumMainSourceForPost(catalog, weightSettings, usedSourceKeys);
+      if (!mainSource) {
+        continue;
+      }
+      const persona = selectForumPersonaForSource(personas, mainSource, generationType, {
+        usedPersonaIds: [...usedPersonaIds],
+        excludedPersonaIds: excludedReplyPersonaIds
+      });
+      if (!persona) {
+        continue;
+      }
+      usedPersonaIds.add(persona.id);
+      usedSourceKeys.add(mainSource.refKey || mainSource.id);
+      const replyMode = generationType === "replies"
+        ? resolveForumReplyMode(
+            normalizeForumTopicTags(
+              normalizeJsonObjectValue(requestInput.rootPostMetadata, {}).sourceItemTags ||
+                requestInput.rootPostTags ||
+                mainSource.topicTags,
+              []
+            ).length
+              ? normalizeForumTopicTags(
+                  normalizeJsonObjectValue(requestInput.rootPostMetadata, {}).sourceItemTags ||
+                    requestInput.rootPostTags,
+                  []
+                )
+              : mainSource.topicTags,
+            weightSettings
+          )
+        : null;
+      tasks.push({
+        slotIndex,
+        persona,
+        mainSource,
+        publicHotRefs: catalog.hotRefs,
+        filteredCurrentDiscussionRefs: selectForumCurrentDiscussionRefsForPersona(
+          persona,
+          mainSource,
+          catalog.currentDiscussionRefs
+        ),
+        privateBackgroundRefs: selectForumPrivateBackgroundRefsForPersona(
+          persona,
+          mainSource,
+          catalog.historyRefs,
+          personaLinkMap,
+          weightSettings
+        ),
+        replyMode
+      });
+      slotIndex += 1;
+    }
+    if (tasks.length) {
+      batches.push({
+        batchIndex: batchIndex + 1,
+        tasks
+      });
+    }
+  });
+  return batches.length ? batches : null;
 }
 
 function formatForumSpeakingTone(persona = {}) {
@@ -8232,12 +9297,18 @@ function serializeForumSourceItemForResponse(item = null) {
   }
   return {
     id: item.id,
+    refKey: String(item.refKey || "").trim(),
+    refType: normalizeForumReferenceType(item.refType, "forum_item"),
     sourceKind: item.sourceKind,
     bucket: item.bucket,
+    title: String(item.title || "").trim(),
     contentText: item.contentText || "",
     summaryText: item.summaryText || "",
     detailText: item.detailText || "",
+    previewText: buildForumReferencePreviewText(item, 220),
     topicTags: normalizeForumTopicTags(item.topicTags, []),
+    discussionDate: normalizeForumDiscussionDate(item.discussionDate, ""),
+    refDate: normalizeForumDiscussionDate(item.refDate || item.discussionDate, ""),
     originBucket: item.originBucket || "",
     enteredBucketAt: item.enteredBucketAt || null,
     sortOrder: normalizeForumTabContentSortOrder(item.sortOrder, null),
@@ -8253,54 +9324,76 @@ function buildForumPersonaGenerationContextPayload(options = {}) {
   const contentState = normalizeJsonObjectValue(options.contentState, {});
   const requestInput = normalizeJsonObjectValue(options.requestInput, {});
   const personas = normalizeJsonArrayValue(options.personas, []);
-  const historyDigests = normalizeJsonArrayValue(options.historyDigests, []);
+  const historyReferences = normalizeJsonArrayValue(options.historyReferences, []);
+  const personaLinkMap = options.personaLinkMap instanceof Map ? options.personaLinkMap : new Map();
   const weightSettings = normalizeJsonObjectValue(options.weightSettings, {});
   if (!personas.length) {
     return null;
   }
-  let selectedItem = chooseForumSourceItem(contentState, historyDigests, weightSettings);
-  if (!selectedItem) {
+  const generationBatches = buildForumGenerationBatches({
+    sourceBundle,
+    contentState,
+    requestInput,
+    personas,
+    historyReferences,
+    personaLinkMap,
+    weightSettings
+  });
+  if (!generationBatches?.length) {
     return null;
   }
-  let personaPool = chooseForumPersonaPool(personas, selectedItem, requestInput);
-  if (!personaPool.length && selectedItem.sourceKind === "history_digest") {
-    selectedItem = chooseForumSourceItem(contentState, [], weightSettings);
-    personaPool = selectedItem ? chooseForumPersonaPool(personas, selectedItem, requestInput) : [];
-  }
-  if (!selectedItem || !personaPool.length) {
-    return null;
-  }
-  const requestedCount = clampIntegerValue(Number(requestInput.requestedCount) || 4, 1, 20, 4);
-  const personaSlots = personaPool.slice(0, Math.min(requestedCount, personaPool.length));
-  const selectedPersona = personaSlots[0] || personaPool[0] || null;
-  const selectedHistoryDigests = selectedPersona
-    ? selectForumHistoryDigestsForPersona(
-        selectedPersona,
-        historyDigests,
-        selectedItem.topicTags,
-        weightSettings
-      )
-    : [];
-  const replyMode = requestInput.generationType === "replies"
-    ? resolveForumReplyMode(
-        normalizeForumTopicTags(
-          requestInput.rootPostMetadata?.sourceItemTags || requestInput.rootPostTags || selectedItem.topicTags,
-          []
-        ).length
-          ? normalizeForumTopicTags(requestInput.rootPostMetadata?.sourceItemTags || requestInput.rootPostTags, [])
-          : selectedItem.topicTags,
-        weightSettings
-      )
-    : null;
+  const flatTasks = generationBatches.flatMap((batch) => normalizeJsonArrayValue(batch.tasks, []));
+  const personaSlots = flatTasks.map((task) => task.persona).filter(Boolean);
+  const selectedTask = flatTasks[0] || null;
+  const selectedPersona = selectedTask?.persona || personaSlots[0] || null;
+  const selectedItem = selectedTask?.mainSource || null;
+  const selectedPrivateRefs = selectedTask?.privateBackgroundRefs || [];
+  const personaPool = Array.from(
+    new Map(
+      [...personaSlots, ...personas]
+        .filter((persona) => persona?.id)
+        .map((persona) => [String(persona.id || "").trim(), persona])
+    ).values()
+  ).slice(0, 24);
+  const replyMode = selectedTask?.replyMode || null;
   const personaText = buildForumPersonaPromptText(personaPool, selectedPersona, requestInput, personaSlots);
-  const sourceItemText = buildForumSourceItemPromptText(selectedItem, selectedHistoryDigests, replyMode);
-  const historyDigestsText = buildForumHistoryDigestsPromptText(selectedHistoryDigests);
+  const sourceItemText = buildForumSourceItemPromptText(selectedItem, selectedPrivateRefs, replyMode);
+  const historyDigestsText = buildForumHistoryDigestsPromptText(selectedPrivateRefs);
+  const hasUnknownBoundary = flatTasks.some((task) =>
+    normalizeForumTopicTags(task?.mainSource?.topicTags, []).some((tag) =>
+      ["dating_rumor", "cp_interaction"].includes(tag)
+    )
+  );
+  const serializedBatches = generationBatches.map((batch) => ({
+    batchIndex: batch.batchIndex,
+    tasks: normalizeJsonArrayValue(batch.tasks, []).map((task) => ({
+      slotIndex: task.slotIndex,
+      persona: serializeForumPersonaForResponse(task.persona),
+      mainSource: serializeForumReferenceForResponse(task.mainSource),
+      publicHotRefs: normalizeJsonArrayValue(task.publicHotRefs, [])
+        .map(serializeForumReferenceForResponse)
+        .filter(Boolean),
+      filteredCurrentDiscussionRefs: normalizeJsonArrayValue(task.filteredCurrentDiscussionRefs, [])
+        .map(serializeForumReferenceForResponse)
+        .filter(Boolean),
+      privateBackgroundRefs: normalizeJsonArrayValue(task.privateBackgroundRefs, [])
+        .map(serializeForumReferenceForResponse)
+        .filter(Boolean),
+      replyMode: task.replyMode
+        ? {
+            key: task.replyMode.key,
+            groupKey: task.replyMode.groupKey,
+            weights: task.replyMode.weights
+          }
+        : null
+    }))
+  }));
   return {
     tab: sourceBundle.tab || null,
     cards: [],
     roleKnowledgePack: null,
     roleBuckets: [],
-    unknownBoundaries: selectedItem.topicTags?.some((tag) => ["dating_rumor", "cp_interaction"].includes(tag))
+    unknownBoundaries: hasUnknownBoundary
       ? ["恋情、CP 与粉圈推理只能写成不同用户的判断或猜测，不能写成已确认事实。"]
       : [],
     fallbackUsed: false,
@@ -8315,14 +9408,15 @@ function buildForumPersonaGenerationContextPayload(options = {}) {
           weights: replyMode.weights
         }
       : null,
-    historyDigests: selectedHistoryDigests.map(serializeForumSourceItemForResponse),
+    historyDigests: normalizeJsonArrayValue(selectedPrivateRefs, []).map(serializeForumSourceItemForResponse),
+    generationBatches: serializedBatches,
     promptBlocks: {
       backgroundCardsText: historyDigestsText,
       roleKnowledgeText: personaText,
       personaText,
       sourceItemText,
       historyDigestsText,
-      unknownBoundaryText: selectedItem.topicTags?.some((tag) => ["dating_rumor", "cp_interaction"].includes(tag))
+      unknownBoundaryText: hasUnknownBoundary
         ? "边界提醒：恋情、CP 与粉圈推理只能写成不同用户的判断或猜测，不能写成已确认事实。"
         : "",
       fallbackReferenceText: ""
@@ -9464,6 +10558,10 @@ app.post("/api/forum/tab-content/items", async (request, response) => {
       [DEFAULT_STORAGE_OWNER_ID, tabId, bucket]
     );
     const nextSortOrder = requestedSortOrder ?? Number(fallbackSortOrderResult.rows[0]?.next_sort_order || -1000);
+    const discussionDate = normalizeForumDiscussionDate(
+      getInputValue(body, "discussionDate", "discussion_date"),
+      new Date().toISOString().slice(0, 10)
+    );
     const result = await client.query(
       `
         insert into forum_tab_content_items (
@@ -9472,6 +10570,7 @@ app.post("/api/forum/tab-content/items", async (request, response) => {
           tab_id,
           bucket,
           content_text,
+          discussion_date,
           entered_bucket_at,
           sort_order,
           topic_tags_jsonb,
@@ -9484,7 +10583,7 @@ app.post("/api/forum/tab-content/items", async (request, response) => {
           created_at,
           updated_at
         )
-        values ($1, $2, $3, $4, $5, now(), $8, $6::jsonb, '', '', $4, case when $4 = 'hot_topic' then now() else null end, '', $7::jsonb, now(), now())
+        values ($1, $2, $3, $4, $5, $6::date, now(), $9, $7::jsonb, '', '', $4, case when $4 = 'hot_topic' then now() else null end, '', $8::jsonb, now(), now())
         returning *
       `,
       [
@@ -9493,16 +10592,24 @@ app.post("/api/forum/tab-content/items", async (request, response) => {
         tabId,
         bucket,
         contentText,
+        discussionDate || null,
         stringifyJsonb(topicTagsValidation.topicTags),
         stringifyJsonb(normalizeJsonObjectValue(body.metadata, {})),
         nextSortOrder
       ]
     );
+    const hydratedRows = await ensureForumTabContentItemRowsHydrated(
+      client,
+      DEFAULT_STORAGE_OWNER_ID,
+      result.rows
+    );
+    await markForumDiscussionItemsArchived(client, DEFAULT_STORAGE_OWNER_ID, tabId);
+    await restoreVisibleForumDiscussionItems(client, DEFAULT_STORAGE_OWNER_ID, tabId);
     await markForumBackgroundDirtyRunsIfNeeded(client, DEFAULT_STORAGE_OWNER_ID, tab);
     await client.query("commit");
     response.json({
       ok: true,
-      item: mapForumTabContentItemRow(result.rows[0] || {})
+      item: mapForumTabContentItemRow(hydratedRows[0] || result.rows[0] || {})
     });
   } catch (error) {
     await client.query("rollback");
@@ -9586,11 +10693,18 @@ app.patch("/api/forum/tab-content/items/:id", async (request, response) => {
     const nextSortOrder = hasSortOrderPatch
       ? normalizeForumTabContentSortOrder(getInputValue(body, "sortOrder", "sort_order"), existing.sortOrder)
       : existing.sortOrder;
+    const hasDiscussionDatePatch =
+      Object.prototype.hasOwnProperty.call(body, "discussionDate") ||
+      Object.prototype.hasOwnProperty.call(body, "discussion_date");
+    const nextDiscussionDate = hasDiscussionDatePatch
+      ? normalizeForumDiscussionDate(getInputValue(body, "discussionDate", "discussion_date"), "")
+      : existing.discussionDate;
     const result = await client.query(
       `
         update forum_tab_content_items
         set bucket = $3,
             content_text = $4,
+            discussion_date = $10::date,
             entered_bucket_at = case when bucket <> $3 then now() else entered_bucket_at end,
             sort_order = $9,
             topic_tags_jsonb = $5::jsonb,
@@ -9607,6 +10721,10 @@ app.patch("/api/forum/tab-content/items/:id", async (request, response) => {
             last_hot_topic_at = case
               when bucket <> $3 and $3 = 'hot_topic' then now()
               else last_hot_topic_at
+            end,
+            archived_at = case
+              when bucket <> $3 then null
+              else archived_at
             end,
             updated_at = now(),
             metadata = $8::jsonb
@@ -9626,18 +10744,26 @@ app.patch("/api/forum/tab-content/items/:id", async (request, response) => {
           ...existing.metadata,
           ...normalizeJsonObjectValue(body.metadata, {})
         }),
-        nextSortOrder
+        nextSortOrder,
+        nextDiscussionDate || null
       ]
+    );
+    const hydratedRows = await ensureForumTabContentItemRowsHydrated(
+      client,
+      DEFAULT_STORAGE_OWNER_ID,
+      result.rows
     );
     const settingsState = await loadForumAppSettingsState(client, DEFAULT_STORAGE_OWNER_ID);
     const tab = findForumTabById(settingsState.forumSettings.customTabs || [], existing.tabId);
     if (tab) {
+      await markForumDiscussionItemsArchived(client, DEFAULT_STORAGE_OWNER_ID, existing.tabId);
+      await restoreVisibleForumDiscussionItems(client, DEFAULT_STORAGE_OWNER_ID, existing.tabId);
       await markForumBackgroundDirtyRunsIfNeeded(client, DEFAULT_STORAGE_OWNER_ID, tab);
     }
     await client.query("commit");
     response.json({
       ok: true,
-      item: mapForumTabContentItemRow(result.rows[0] || {})
+      item: mapForumTabContentItemRow(hydratedRows[0] || result.rows[0] || {})
     });
   } catch (error) {
     await client.query("rollback");
@@ -9680,6 +10806,8 @@ app.delete("/api/forum/tab-content/items/:id", async (request, response) => {
     const settingsState = await loadForumAppSettingsState(client, DEFAULT_STORAGE_OWNER_ID);
     const tab = findForumTabById(settingsState.forumSettings.customTabs || [], existing.tabId);
     if (tab) {
+      await markForumDiscussionItemsArchived(client, DEFAULT_STORAGE_OWNER_ID, existing.tabId);
+      await restoreVisibleForumDiscussionItems(client, DEFAULT_STORAGE_OWNER_ID, existing.tabId);
       await markForumBackgroundDirtyRunsIfNeeded(client, DEFAULT_STORAGE_OWNER_ID, tab);
     }
     await client.query("commit");
@@ -10255,12 +11383,59 @@ app.post("/api/forum/generation-context", async (request, response) => {
       sourceBundle.tab.id
     );
     const historyDigests = buildForumHistoryDigests(contentState, allCards);
+    const worldbookRefMap = await ensureForumWorldbookReferenceRows(
+      pool,
+      DEFAULT_STORAGE_OWNER_ID,
+      sourceBundle.tab.id,
+      sourceBundle.sources
+    );
+    const historyDigestRefMap = await ensureForumHistoryDigestReferenceRows(
+      pool,
+      DEFAULT_STORAGE_OWNER_ID,
+      sourceBundle.tab.id,
+      historyDigests
+    );
+    const historyReferences = buildForumHistoryReferenceCandidates(
+      contentState,
+      historyDigests,
+      historyDigestRefMap
+    );
+    const personaLinkMap = await refreshForumPersonaReferenceLinks(
+      pool,
+      DEFAULT_STORAGE_OWNER_ID,
+      sourceBundle.tab.id,
+      personas,
+      historyReferences
+    );
+    const worldbookRefs = normalizeJsonArrayValue(sourceBundle.sources, [])
+      .filter((source) => normalizeForumBackgroundSourceType(source.sourceType, "") === "worldbook_entry")
+      .map((source) => {
+        const registryRow = worldbookRefMap.get(String(source.sourceId || "").trim()) || null;
+        return {
+          id: String(source.sourceId || "").trim(),
+          refKey: String(registryRow?.refKey || "").trim(),
+          refType: "worldbook_entry",
+          sourceKind: "worldbook_entry",
+          title: String(source.sourceTitle || registryRow?.title || "").trim(),
+          contentText: String(source.content || "").trim(),
+          summaryText: "",
+          detailText: "",
+          topicTags: normalizeForumTopicTags(source.topicTags, []),
+          refDate: normalizeForumDiscussionDate(registryRow?.refDate || source.updatedAt, ""),
+          metadata: {
+            sourceLayer: source.sourceLayer,
+            knowledgeDomains: normalizeForumBackgroundTextArray(source.knowledgeDomains, [])
+          }
+        };
+      })
+      .filter((reference) => reference.refKey);
     const personaGenerationContext = buildForumPersonaGenerationContextPayload({
       sourceBundle,
       contentState,
       requestInput: input,
       personas,
-      historyDigests,
+      historyReferences,
+      personaLinkMap,
       weightSettings
     });
     const generationContext =
@@ -10281,6 +11456,10 @@ app.post("/api/forum/generation-context", async (request, response) => {
       selectedItem: generationContext.selectedItem || null,
       selectedReplyMode: generationContext.selectedReplyMode || null,
       historyDigests: Array.isArray(generationContext.historyDigests) ? generationContext.historyDigests : [],
+      generationBatches: Array.isArray(generationContext.generationBatches)
+        ? generationContext.generationBatches
+        : [],
+      worldbookRefs: worldbookRefs.map(serializeForumReferenceForResponse).filter(Boolean),
       promptBlocks: generationContext.promptBlocks,
       latestRun: sourceBundle.latestRun,
       personasAvailable: personas.length

@@ -673,10 +673,41 @@ body.embedded .embedded-close-btn {
   color: var(--muted);
 }
 
+.custom-tab-content-item__ref {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .custom-tab-content-item textarea {
   width: 100%;
   min-height: 88px;
   resize: vertical;
+}
+
+.custom-tab-content-item__date-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.custom-tab-content-item__date-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.custom-tab-content-item__date-label input {
+  width: auto;
+  min-width: 140px;
+  padding: 6px 8px;
+  border-radius: 10px;
 }
 
 .custom-tab-content-item__tag-row {

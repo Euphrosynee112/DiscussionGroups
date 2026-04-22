@@ -528,6 +528,11 @@ function formatForumTimestamp(value = Date.now()) {
   );
 }
 
+function normalizeDateInputValue(value = "") {
+  const normalized = String(value || "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : "";
+}
+
 function formatAwarenessDateTime(now = new Date()) {
   const date = new Intl.DateTimeFormat("zh-CN", {
     year: "numeric",
@@ -3748,7 +3753,22 @@ async function requestForumGenerationContext(tabId = "", payload = {}) {
   }
 }
 
+function getForumBatchTaskFromGenerationContext(generationContext = null, itemIndex = -1) {
+  const batchTasks = Array.isArray(generationContext?.batchTasks)
+    ? generationContext.batchTasks
+    : Array.isArray(generationContext?.generationBatches)
+      ? generationContext.generationBatches.flatMap((batch) =>
+          Array.isArray(batch?.tasks) ? batch.tasks : []
+        )
+      : [];
+  return Number.isInteger(itemIndex) && itemIndex >= 0 ? batchTasks[itemIndex] || null : null;
+}
+
 function findForumPersonaFromGenerationContext(postLike = {}, generationContext = null, itemIndex = -1) {
+  const batchTask = getForumBatchTaskFromGenerationContext(generationContext, itemIndex);
+  if (batchTask?.persona) {
+    return batchTask.persona;
+  }
   const personaSlots = Array.isArray(generationContext?.personaSlots) ? generationContext.personaSlots : [];
   const slotPersona = Number.isInteger(itemIndex) && itemIndex >= 0 ? personaSlots[itemIndex] : null;
   if (slotPersona) {
@@ -3771,7 +3791,9 @@ function attachForumGenerationMetadata(item = {}, generationContext = null, kind
     return item;
   }
   const persona = findForumPersonaFromGenerationContext(item, generationContext, itemIndex);
-  const selectedItem = generationContext?.selectedItem || null;
+  const batchTask = getForumBatchTaskFromGenerationContext(generationContext, itemIndex);
+  const selectedItem = batchTask?.mainSource || generationContext?.selectedItem || null;
+  const selectedReplyMode = batchTask?.replyMode || generationContext?.selectedReplyMode || null;
   const baseMetadata = item?.metadata && typeof item.metadata === "object" ? { ...item.metadata } : {};
   return {
     ...item,
@@ -3784,6 +3806,7 @@ function attachForumGenerationMetadata(item = {}, generationContext = null, kind
         persona?.displayName || generationContext?.selectedPersona?.displayName || ""
       ).trim(),
       sourceItemId: String(selectedItem?.id || "").trim(),
+      sourceItemRefKey: String(selectedItem?.refKey || "").trim(),
       sourceItemTags: Array.isArray(selectedItem?.topicTags) ? [...selectedItem.topicTags] : [],
       sourceBucket: String(selectedItem?.bucket || selectedItem?.sourceKind || "").trim(),
       knowledgeLevel: String(
@@ -3797,7 +3820,7 @@ function attachForumGenerationMetadata(item = {}, generationContext = null, kind
       ).trim(),
       ...(kind === "reply"
         ? {
-            replyMode: String(generationContext?.selectedReplyMode?.key || "").trim()
+            replyMode: String(selectedReplyMode?.key || "").trim()
           }
         : {})
     }
@@ -4320,6 +4343,164 @@ function deleteApiConfig(configId) {
   setApiConfigStatus(`API 配置“${target.name}”已删除。`, "success");
 }
 
+function buildForumBatchReferenceLine(reference = {}, maxChars = 160) {
+  const refKey = String(reference?.refKey || "").trim();
+  const topicTags = normalizeForumTopicTags(reference?.topicTags, []);
+  const previewText =
+    String(reference?.previewText || "").trim() ||
+    String(reference?.summaryText || "").trim() ||
+    String(reference?.detailText || "").trim() ||
+    String(reference?.contentText || "").trim();
+  const tagText = topicTags.length ? ` [${topicTags.join("/")}]` : "";
+  const bodyText = truncate(previewText.replace(/\s+/g, " ").trim(), maxChars);
+  return `${refKey || "REF"}${tagText} ${bodyText}`.trim();
+}
+
+function buildForumBatchPublicContextText(
+  settings = {},
+  feedType = state.activeFeed,
+  generationContext = null,
+  options = {}
+) {
+  const resolvedFeedType = getCurrentContentFeed(feedType);
+  const customTab = resolvePromptRuntimeCustomTab(
+    findCustomTabInSettings(settings, resolvedFeedType),
+    generationContext
+  );
+  const currentDateTime = typeof formatAwarenessDateTime === "function"
+    ? formatAwarenessDateTime(getPromptNow(settings))
+    : formatDateTime(getPromptNow(settings));
+  const hotRefs = Array.isArray(options.hotRefs) ? options.hotRefs : [];
+  const worldbookRefs = Array.isArray(generationContext?.worldbookRefs) ? generationContext.worldbookRefs : [];
+  const lines = [
+    "<public_context>",
+    `当前论坛：${String(customTab?.name || getFeedLabel(resolvedFeedType) || "论坛").trim()}`,
+    customTab?.audience ? `页签用户定位：${String(customTab.audience || "").trim()}` : "",
+    `当前日期：${currentDateTime}`,
+    hotRefs.length
+      ? [
+          "当前热点摘要：",
+          ...hotRefs.map((reference) => buildForumBatchReferenceLine(reference, 120))
+        ].join("\n")
+      : "当前热点摘要：无",
+    worldbookRefs.length
+      ? [
+          "必要世界书参考：",
+          ...worldbookRefs.map((reference) => buildForumBatchReferenceLine(reference, 160))
+        ].join("\n")
+      : "",
+    generationContext?.promptBlocks?.unknownBoundaryText
+      ? generationContext.promptBlocks.unknownBoundaryText
+      : "",
+    "</public_context>"
+  ];
+  return lines.filter(Boolean).join("\n");
+}
+
+function buildForumBatchTasksText(batch = {}, generationType = "posts") {
+  const tasks = Array.isArray(batch?.tasks) ? batch.tasks : [];
+  const lines = ["<generation_tasks>"];
+  tasks.forEach((task) => {
+    const persona = task?.persona || {};
+    const mainSource = task?.mainSource || {};
+    const currentRefs = Array.isArray(task?.filteredCurrentDiscussionRefs)
+      ? task.filteredCurrentDiscussionRefs
+      : [];
+    const privateRefs = Array.isArray(task?.privateBackgroundRefs)
+      ? task.privateBackgroundRefs
+      : [];
+    lines.push(
+      [
+        `<task slotIndex="${Number(task?.slotIndex) || 0}">`,
+        `固定用户：displayName=${String(persona.displayName || "").trim()}, handle=${String(persona.handle || "").trim()}, language=${String(persona.languageCode || "zh").trim()}`,
+        persona.speakingTone ? `语气：${String(persona.speakingTone || "").trim()}` : "",
+        Array.isArray(persona.interestTags) && persona.interestTags.length
+          ? `兴趣标签：${persona.interestTags.join(", ")}`
+          : "",
+        Array.isArray(persona.avoidTags) && persona.avoidTags.length
+          ? `回避标签：${persona.avoidTags.join(", ")}`
+          : "",
+        persona.hotStancePrompt ? `热点态度：${String(persona.hotStancePrompt || "").trim()}` : "",
+        persona.personaPrompt ? `用户设定：${String(persona.personaPrompt || "").trim()}` : "",
+        `主来源全文：${buildForumBatchReferenceLine(mainSource, 800)}`,
+        currentRefs.length
+          ? `可参考当前 discussion：\n${currentRefs
+              .map((reference) => `- ${buildForumBatchReferenceLine(reference, 180)}`)
+              .join("\n")}`
+          : "可参考当前 discussion：无",
+        privateRefs.length
+          ? `私有历史背景：\n${privateRefs
+              .map((reference) => `- ${buildForumBatchReferenceLine(reference, 180)}`)
+              .join("\n")}`
+          : "私有历史背景：无",
+        generationType === "replies" && task?.replyMode?.key
+          ? `回复模式：${String(task.replyMode.key || "").trim()}`
+          : "",
+        `规则：只能把本 task 的私有背景用于 slotIndex=${Number(task?.slotIndex) || 0}，不要传给其他 task。`,
+        "</task>"
+      ]
+        .filter(Boolean)
+        .join("\n")
+    );
+  });
+  lines.push("</generation_tasks>");
+  return lines.join("\n");
+}
+
+function buildForumBatchOutputContractText(batch = {}, generationType = "posts") {
+  const tasks = Array.isArray(batch?.tasks) ? batch.tasks : [];
+  const requiredFields = generationType === "replies"
+    ? "slotIndex, displayName, handle, text, likes, replies"
+    : "slotIndex, displayName, handle, text, tags, replies, reposts, likes, views";
+  return [
+    "<output_contract>",
+    `输出 JSON 数组，长度必须等于 ${tasks.length}。`,
+    "数组中的每个对象都必须包含 slotIndex，并严格对应同编号 task。",
+    `每个对象必须包含字段：${requiredFields}。`,
+    "必须使用对应 task 指定的 displayName / handle / language；不要擅自换人。",
+    "如果 slotIndex 对应的是中文 persona，就不要输出英文正文；其它语言同理。",
+    "</output_contract>"
+  ].join("\n");
+}
+
+function buildForumBatchScopedGenerationContext(
+  settings = {},
+  feedType = state.activeFeed,
+  generationContext = null,
+  batch = null,
+  options = {}
+) {
+  const tasks = Array.isArray(batch?.tasks) ? batch.tasks : [];
+  const generationType = String(options.generationType || generationContext?.generationType || "posts").trim();
+  const hotRefs = tasks[0]?.publicHotRefs || [];
+  const selectedPersona = tasks[0]?.persona || null;
+  const selectedItem = tasks[0]?.mainSource || null;
+  return {
+    ...(generationContext && typeof generationContext === "object" ? generationContext : {}),
+    selectedPersona,
+    selectedItem,
+    selectedReplyMode: tasks[0]?.replyMode || null,
+    personaSlots: tasks.map((task) => task.persona).filter(Boolean),
+    batchTasks: tasks,
+    promptBlocks: {
+      ...(generationContext?.promptBlocks || {}),
+      backgroundCardsText: "",
+      sourceItemText: "",
+      roleKnowledgeText: "",
+      personaText: "",
+      historyDigestsText: "",
+      forumBatchPublicContext: buildForumBatchPublicContextText(
+        settings,
+        feedType,
+        generationContext,
+        { hotRefs }
+      ),
+      forumBatchGenerationTasks: buildForumBatchTasksText(batch, generationType),
+      forumBatchOutputContract: buildForumBatchOutputContractText(batch, generationType)
+    }
+  };
+}
+
 function buildPrompt(
   settings,
   feedType = state.activeFeed,
@@ -4327,6 +4508,7 @@ function buildPrompt(
   options = {}
 ) {
   const generationContext = options && typeof options === "object" ? options.generationContext || null : null;
+  const isBatchPrompt = Array.isArray(generationContext?.batchTasks) && generationContext.batchTasks.length > 0;
   const resolvedFeedType = getCurrentContentFeed(feedType);
   const feedLabel = getFeedLabel(resolvedFeedType);
   const customTab = findCustomTabInSettings(settings, resolvedFeedType);
@@ -4336,7 +4518,14 @@ function buildPrompt(
     ? buildCustomTabSourceText(runtimeCustomTab).trim()
     : buildFeedSourceText(settings, resolvedFeedType).trim();
   const forumSettingText = feedSource
-    ? [
+    ? isBatchPrompt
+      ? [
+          `当前论坛讨论区：${feedLabel}`,
+          runtimeCustomTab?.audience ? `页签用户定位：${String(runtimeCustomTab.audience || "").trim()}` : ""
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : [
         `当前论坛讨论区：${feedLabel}`,
         "当前论坛讨论区一手设定（优先级高于世界书辅助背景）：",
         feedSource
@@ -4353,24 +4542,31 @@ function buildPrompt(
       context_library: {
         worldview_content: settings.worldview || DEFAULT_SETTINGS.worldview,
         forum_setting: forumSettingText,
-        time_awareness: forumPromptContext.timeAwarenessText,
-        worldbook_reference: forumPromptContext.worldbookReferenceText,
+        time_awareness: isBatchPrompt ? "" : forumPromptContext.timeAwarenessText,
+        worldbook_reference: isBatchPrompt ? "" : forumPromptContext.worldbookReferenceText,
         background_cards_context: generationContext?.promptBlocks?.backgroundCardsText || "",
         source_item_context: generationContext?.promptBlocks?.sourceItemText || "",
-        dominant_hot_topic: dominantHotTopicInstruction,
+        dominant_hot_topic: isBatchPrompt ? "" : dominantHotTopicInstruction,
         forum_role_knowledge: generationContext?.promptBlocks?.roleKnowledgeText || "",
         forum_persona_seed: generationContext?.promptBlocks?.personaText || "",
         unknown_boundary: generationContext?.promptBlocks?.unknownBoundaryText || "",
-        supplemental_topics: forumPromptContext.supplementalTopicTexts.length
+        supplemental_topics: !isBatchPrompt && forumPromptContext.supplementalTopicTexts.length
           ? `主导即时讨论语境（与页签热点同级，可共同成为主线）：\n${forumPromptContext.supplementalTopicTexts.join(
               "\n\n"
             )}`
           : "",
-        repost_hint: forumPromptContext.repostSource
+        repost_hint: !isBatchPrompt && forumPromptContext.repostSource
           ? "如果需要围绕用户最近一条论坛动态展开，请把它作为被转发原帖来写，再在外层加上不同用户各自的评论。"
           : "",
         history_avoidance:
-          historyAvoidanceText || "如果没有历史缓存，可自由生成，但仍要让每条帖子讨论方向明显不同。"
+          isBatchPrompt
+            ? ""
+            : historyAvoidanceText || "如果没有历史缓存，可自由生成，但仍要让每条帖子讨论方向明显不同。",
+        forum_batch_public_context: generationContext?.promptBlocks?.forumBatchPublicContext || "",
+        forum_batch_generation_tasks: generationContext?.promptBlocks?.forumBatchGenerationTasks || ""
+      },
+      output_standard: {
+        forum_batch_output_contract: generationContext?.promptBlocks?.forumBatchOutputContract || ""
       }
     },
     {
@@ -4478,6 +4674,7 @@ function buildReplyPrompt(
   options = {}
 ) {
   const generationContext = options && typeof options === "object" ? options.generationContext || null : null;
+  const isBatchPrompt = Array.isArray(generationContext?.batchTasks) && generationContext.batchTasks.length > 0;
   const resolvedFeedType = getCurrentContentFeed(feedType);
   const feedLabel = getFeedLabel(resolvedFeedType);
   const customTab = findCustomTabInSettings(settings, resolvedFeedType);
@@ -4491,7 +4688,14 @@ function buildReplyPrompt(
       }).trim()
     : buildFeedSourceText(settings, resolvedFeedType).trim();
   const forumSettingText = feedSourceText
-    ? [
+    ? isBatchPrompt
+      ? [
+          `当前论坛讨论区：${feedLabel}`,
+          runtimeCustomTab?.audience ? `页签用户定位：${String(runtimeCustomTab.audience || "").trim()}` : ""
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : [
         `当前论坛讨论区：${feedLabel}`,
         "当前论坛讨论区一手设定（回复时必须纳入判断，优先级高于世界书辅助背景）：",
         feedSourceText
@@ -4511,17 +4715,17 @@ function buildReplyPrompt(
       context_library: {
         worldview_content: settings.worldview || DEFAULT_SETTINGS.worldview,
         forum_setting: forumSettingText,
-        time_awareness: forumPromptContext.timeAwarenessText,
-        worldbook_reference: forumPromptContext.worldbookReferenceText,
+        time_awareness: isBatchPrompt ? "" : forumPromptContext.timeAwarenessText,
+        worldbook_reference: isBatchPrompt ? "" : forumPromptContext.worldbookReferenceText,
         background_cards_context: generationContext?.promptBlocks?.backgroundCardsText || "",
         source_item_context: generationContext?.promptBlocks?.sourceItemText || "",
-        hot_topic: String(runtimeCustomTab?.hotTopic || "").trim()
+        hot_topic: !isBatchPrompt && String(runtimeCustomTab?.hotTopic || "").trim()
           ? `当前这个讨论区的主导热点：${runtimeCustomTab.hotTopic}`
           : "",
         forum_role_knowledge: generationContext?.promptBlocks?.roleKnowledgeText || "",
         forum_persona_seed: generationContext?.promptBlocks?.personaText || "",
         unknown_boundary: generationContext?.promptBlocks?.unknownBoundaryText || "",
-        supplemental_topics: forumPromptContext.supplementalTopicTexts.length
+        supplemental_topics: !isBatchPrompt && forumPromptContext.supplementalTopicTexts.length
           ? `主导即时讨论语境（与页签热点同级，可共同成为主线）：\n${forumPromptContext.supplementalTopicTexts.join(
               "\n\n"
             )}`
@@ -4536,7 +4740,9 @@ function buildReplyPrompt(
           : "",
         root_post_text: resolvedRootText,
         reply_target_intro: parentReply ? "当前正在回复的上一层内容：" : "当前需要围绕主楼展开讨论的内容：",
-        reply_target_text: resolvedTargetText
+        reply_target_text: resolvedTargetText,
+        forum_batch_public_context: generationContext?.promptBlocks?.forumBatchPublicContext || "",
+        forum_batch_generation_tasks: generationContext?.promptBlocks?.forumBatchGenerationTasks || ""
       },
       persona_alignment: {
         forum_audience_text: String(runtimeCustomTab?.audience || "").trim()
@@ -4545,6 +4751,9 @@ function buildReplyPrompt(
             ).trim()}。生成回复时要自然体现这种人群的视角、措辞、关注点和情绪密度。`
           : "",
         author_persona_text: profile?.personaPrompt || DEFAULT_PROFILE.personaPrompt
+      },
+      output_standard: {
+        forum_batch_output_contract: generationContext?.promptBlocks?.forumBatchOutputContract || ""
       }
     },
     {
@@ -6889,8 +7098,10 @@ function cloneCustomTabContentItem(item = {}) {
     tabId: String(item.tabId || "").trim(),
     bucket: normalizeCustomTabContentBucket(item.bucket, "discussion"),
     contentText: String(item.contentText || "").trim(),
+    discussionDate: normalizeDateInputValue(item.discussionDate || item.discussion_date || ""),
     enteredBucketAt: String(item.enteredBucketAt || "").trim() || new Date().toISOString(),
     sortOrder: getCustomTabContentItemSortOrder(item),
+    refKey: String(item.refKey || item.ref_key || "").trim(),
     topicTags: normalizeForumTopicTags(item.topicTags, []),
     summaryText: String(item.summaryText || "").trim(),
     summaryUpdatedAt: String(item.summaryUpdatedAt || "").trim(),
@@ -6913,8 +7124,10 @@ function createLocalCustomTabContentItem(bucket = "discussion", contentText = ""
     tabId: String(state.customTabEditingId || "").trim(),
     bucket: normalizeCustomTabContentBucket(bucket, "discussion"),
     contentText: String(contentText || "").trim(),
+    discussionDate: "",
     enteredBucketAt: nowIso,
     sortOrder: null,
+    refKey: "",
     topicTags: [],
     summaryText: "",
     summaryUpdatedAt: "",
@@ -7049,11 +7262,14 @@ function renderCustomTabContentEditor() {
       : `热点 prompt #${displayIndex}`;
     const topicTags = normalizeForumTopicTags(item.topicTags, []);
     const hasValidTags = validateDraftItemTopicTags(item);
+    const refKey = String(item.refKey || "").trim();
+    const discussionDate = normalizeDateInputValue(item.discussionDate || "");
     return `
       <article class="custom-tab-content-item" data-item-id="${escapeHtml(item.id || "")}">
         <div class="custom-tab-content-item__meta">
           <strong>${escapeHtml(`${displayIndex}.`)}</strong>
           <span>${escapeHtml(sequenceLabel)}</span>
+          ${refKey ? `<code class="custom-tab-content-item__ref">${escapeHtml(refKey)}</code>` : ""}
           <small>${promptIncluded ? "会带进 prompt" : "不直接带进 prompt，可历史提炼"}</small>
         </div>
         <textarea
@@ -7063,6 +7279,19 @@ function renderCustomTabContentEditor() {
           placeholder="${isDiscussion ? "输入一条普通讨论内容。" : "输入一条热点内容。"}"
           ${disableEditing ? "disabled" : ""}
         >${escapeHtml(item.contentText || "")}</textarea>
+        <div class="custom-tab-content-item__date-row">
+          <label class="custom-tab-content-item__date-label">
+            <span>讨论日期</span>
+            <input
+              type="date"
+              data-action="edit-custom-tab-content-date"
+              data-item-id="${escapeHtml(item.id || "")}"
+              value="${escapeHtml(discussionDate)}"
+              ${disableEditing ? "disabled" : ""}
+            />
+          </label>
+          <small>${discussionDate ? "用于 seed 背景可见性判断" : "留空则保存时按创建日期补默认值"}</small>
+        </div>
         <div class="custom-tab-content-item__tag-row">
           <div class="custom-tab-content-item__tag-meta">
             <span>${escapeHtml(
@@ -7403,6 +7632,7 @@ async function syncCustomTabContentDraftWithServer(tabId = "") {
           tabId: resolvedTabId,
           bucket: item.bucket,
           contentText: item.contentText,
+          discussionDate: normalizeDateInputValue(item.discussionDate || ""),
           sortOrder: getCustomTabContentItemSortOrder(item),
           topicTags: normalizeForumTopicTags(item.topicTags, [])
         })
@@ -7417,6 +7647,7 @@ async function syncCustomTabContentDraftWithServer(tabId = "") {
           tabId: resolvedTabId,
           bucket: item.bucket,
           contentText: item.contentText,
+          discussionDate: normalizeDateInputValue(item.discussionDate || ""),
           sortOrder: getCustomTabContentItemSortOrder(item),
           topicTags: normalizeForumTopicTags(item.topicTags, [])
         })
@@ -7426,6 +7657,8 @@ async function syncCustomTabContentDraftWithServer(tabId = "") {
     if (
       originalItem.bucket !== item.bucket ||
       String(originalItem.contentText || "").trim() !== String(item.contentText || "").trim() ||
+      normalizeDateInputValue(originalItem.discussionDate || "") !==
+        normalizeDateInputValue(item.discussionDate || "") ||
       getCustomTabContentItemSortOrder(originalItem) !== getCustomTabContentItemSortOrder(item) ||
       JSON.stringify(normalizeForumTopicTags(originalItem.topicTags, [])) !==
         JSON.stringify(normalizeForumTopicTags(item.topicTags, []))
@@ -7437,6 +7670,7 @@ async function syncCustomTabContentDraftWithServer(tabId = "") {
           body: JSON.stringify({
             bucket: item.bucket,
             contentText: item.contentText,
+            discussionDate: normalizeDateInputValue(item.discussionDate || ""),
             sortOrder: getCustomTabContentItemSortOrder(item),
             topicTags: normalizeForumTopicTags(item.topicTags, [])
           })
@@ -8480,69 +8714,83 @@ function submitHomePost() {
   );
 }
 
-async function requestGeneratedPosts(
-  settings,
-  feedType = state.activeFeed,
-  count = settings.homeCount || DEFAULT_POST_COUNT
-) {
-  const resolvedFeedType = getCurrentContentFeed(feedType);
-  const requestEndpoint = resolveApiRequestEndpoint(settings);
-  settings.endpoint = requestEndpoint;
-
-  if (!requestEndpoint) {
-    throw new Error("未配置 API 地址，无法生成讨论流。");
-  }
-
-  if (isOpenAICompatibleMode(settings.mode) && !settings.model) {
-    throw new Error("DeepSeek / Grok / OpenAI 兼容模式需要填写模型名称。");
-  }
-  if (normalizeApiMode(settings.mode) === "gemini" && !settings.token) {
-    throw new Error("Gemini 模式需要填写 API Key。");
-  }
-
-  const generationContext = isCustomFeed(resolvedFeedType)
-    ? await requestForumGenerationContext(resolvedFeedType, {
-        generationType: "posts",
-        requestedCount: count,
-        maxCards: 10,
-        detailLevel: "full"
-      })
-    : null;
-  const prompt = buildPrompt(settings, resolvedFeedType, count, {
-    generationContext
+function orderGeneratedBatchItemsBySlot(items = [], batchTasks = []) {
+  const normalizedItems = Array.isArray(items) ? items : [];
+  const tasks = Array.isArray(batchTasks) ? batchTasks : [];
+  const slotMap = new Map();
+  normalizedItems.forEach((item) => {
+    const slotIndex = Number(item?.slotIndex);
+    if (Number.isFinite(slotIndex) && !slotMap.has(slotIndex)) {
+      slotMap.set(slotIndex, item);
+    }
   });
-  const privacySession = createPrivacySession({
-    settings,
-    profile: getCurrentProfile(),
-    resolvedFeedType,
-    generationContext,
-    prompt
-  });
-  const encodedPrompt = preparePromptWithPrivacy(prompt, privacySession);
-  const headers = buildRequestHeaders(settings);
-  const requestBody = buildRequestBody(settings, encodedPrompt, count);
-  const logBase = applyPrivacyToLogEntry(
-    buildDiscussionApiLogBase(
-      "generate_posts",
-      settings,
-      requestEndpoint,
-      encodedPrompt,
-      requestBody,
-      `页签：${getFeedLabel(resolvedFeedType)} · 数量：${count}`
-    ),
-    privacySession
+  if (!slotMap.size) {
+    return normalizedItems;
+  }
+  const ordered = tasks
+    .map((task) => slotMap.get(Number(task?.slotIndex)))
+    .filter(Boolean);
+  const consumedSlots = new Set(ordered.map((item) => Number(item?.slotIndex)));
+  const extras = normalizedItems.filter((item) => !consumedSlots.has(Number(item?.slotIndex)));
+  return [...ordered, ...extras];
+}
+
+function parseGeneratedPostsForBatch(rawText, batch = null, feedType = DEFAULT_CONTENT_FEED) {
+  const jsonText = extractJsonArray(rawText);
+  if (!jsonText) {
+    throw new Error("接口已返回内容，但没有找到 JSON 数组。");
+  }
+  const parsed = parseJsonArrayWithRepair(
+    jsonText,
+    "接口返回的 JSON 解析失败，请检查 tags 是否都使用双引号包裹。"
   );
+  if (!Array.isArray(parsed) || !parsed.length) {
+    throw new Error("接口返回的 JSON 不是有效的讨论数组。");
+  }
+  const ordered = orderGeneratedBatchItemsBySlot(parsed, batch?.tasks || []);
+  const expectedCount = Array.isArray(batch?.tasks) ? batch.tasks.length : parsed.length;
+  return ordered
+    .slice(0, expectedCount)
+    .map((item, index) => normalizePost(item, index, feedType));
+}
+
+function parseGeneratedRepliesForBatch(rawText, batch = null, seed = "reply") {
+  const jsonText = extractJsonArray(rawText);
+  if (!jsonText) {
+    throw new Error("接口已返回内容，但没有找到 JSON 数组。");
+  }
+  const parsed = parseJsonArrayWithRepair(jsonText, "接口返回的回复 JSON 解析失败。");
+  if (!Array.isArray(parsed) || !parsed.length) {
+    throw new Error("接口返回的 JSON 不是有效的回复数组。");
+  }
+  const ordered = orderGeneratedBatchItemsBySlot(parsed, batch?.tasks || []);
+  const expectedCount = Array.isArray(batch?.tasks) ? batch.tasks.length : parsed.length;
+  return ordered
+    .slice(0, expectedCount)
+    .map((item, index) => normalizeReply(item, index, `${seed}-${index}`));
+}
+
+async function executeDiscussionGenerationBatchRequest(options = {}) {
+  const settings = options.settings || {};
+  const requestEndpoint = String(options.requestEndpoint || "").trim();
+  const prompt = String(options.prompt || "").trim();
+  const requestBody = options.requestBody || {};
+  const privacySession = options.privacySession || null;
+  const logBase = options.logBase || {};
+  const parseItems = typeof options.parseItems === "function" ? options.parseItems : () => [];
+  const successSummary = String(options.successSummary || "").trim();
+  const emptyMessage = String(options.emptyMessage || "接口请求成功，但响应中没有可解析的文本。").trim();
+  const httpErrorPrefix = String(options.httpErrorPrefix || "接口请求失败").trim();
   let logged = false;
 
   try {
     const response = await fetch(requestEndpoint, {
       method: "POST",
-      headers,
+      headers: buildRequestHeaders(settings),
       body: JSON.stringify(requestBody)
     });
     const rawResponse = await response.text();
     let payload = rawResponse;
-
     try {
       payload = JSON.parse(rawResponse);
     } catch (_error) {
@@ -8574,10 +8822,10 @@ async function requestGeneratedPosts(
         statusCode: response.status,
         responseText: rawResponse,
         responseBody: payload,
-        errorMessage: `接口请求失败：HTTP ${response.status}`
+        errorMessage: `${httpErrorPrefix}：HTTP ${response.status}`
       });
       logged = true;
-      throw new Error(`接口请求失败：HTTP ${response.status}`);
+      throw new Error(`${httpErrorPrefix}：HTTP ${response.status}`);
     }
 
     const message = resolveMessage(payload);
@@ -8589,12 +8837,13 @@ async function requestGeneratedPosts(
         statusCode: response.status,
         responseText: rawResponse,
         responseBody: payload,
-        errorMessage: "接口请求成功，但响应中没有可解析的文本。"
+        errorMessage: emptyMessage
       });
       logged = true;
-      throw new Error("接口请求成功，但响应中没有可解析的文本。");
+      throw new Error(emptyMessage);
     }
 
+    const parsedItems = parseItems(message);
     appendApiLog({
       ...logBase,
       ...buildGeminiLogFields(settings, payload),
@@ -8602,19 +8851,10 @@ async function requestGeneratedPosts(
       statusCode: response.status,
       responseText: rawResponse,
       responseBody: payload,
-      summary: encodeTextWithPrivacy(
-        `页签：${getFeedLabel(resolvedFeedType)} · 已生成 ${count} 条帖子`,
-        privacySession
-      )
+      summary: encodeTextWithPrivacy(successSummary, privacySession)
     });
     logged = true;
-    const parsedPosts = parseGeneratedPosts(message, count, resolvedFeedType).map((item, index) =>
-      attachForumGenerationMetadata(item, generationContext, "post", index)
-    );
-    return decodeValueWithPrivacy(
-      parsedPosts,
-      privacySession
-    );
+    return decodeValueWithPrivacy(parsedItems, privacySession);
   } catch (error) {
     if (!logged) {
       appendApiLog({
@@ -8625,6 +8865,130 @@ async function requestGeneratedPosts(
     }
     throw error;
   }
+}
+
+async function requestGeneratedPosts(
+  settings,
+  feedType = state.activeFeed,
+  count = settings.homeCount || DEFAULT_POST_COUNT
+) {
+  const resolvedFeedType = getCurrentContentFeed(feedType);
+  const requestEndpoint = resolveApiRequestEndpoint(settings);
+  settings.endpoint = requestEndpoint;
+
+  if (!requestEndpoint) {
+    throw new Error("未配置 API 地址，无法生成讨论流。");
+  }
+
+  if (isOpenAICompatibleMode(settings.mode) && !settings.model) {
+    throw new Error("DeepSeek / Grok / OpenAI 兼容模式需要填写模型名称。");
+  }
+  if (normalizeApiMode(settings.mode) === "gemini" && !settings.token) {
+    throw new Error("Gemini 模式需要填写 API Key。");
+  }
+
+  const generationContext = isCustomFeed(resolvedFeedType)
+    ? await requestForumGenerationContext(resolvedFeedType, {
+        generationType: "posts",
+        requestedCount: count,
+        maxCards: 10,
+        detailLevel: "full"
+      })
+    : null;
+  if (Array.isArray(generationContext?.generationBatches) && generationContext.generationBatches.length) {
+    const mergedPosts = [];
+    for (const batch of generationContext.generationBatches) {
+      const batchCount = Array.isArray(batch?.tasks) ? batch.tasks.length : 0;
+      if (!batchCount) {
+        continue;
+      }
+      const batchContext = buildForumBatchScopedGenerationContext(
+        settings,
+        resolvedFeedType,
+        generationContext,
+        batch,
+        { generationType: "posts" }
+      );
+      const prompt = buildPrompt(settings, resolvedFeedType, batchCount, {
+        generationContext: batchContext
+      });
+      const privacySession = createPrivacySession({
+        settings,
+        profile: getCurrentProfile(),
+        resolvedFeedType,
+        generationContext: batchContext,
+        prompt
+      });
+      const encodedPrompt = preparePromptWithPrivacy(prompt, privacySession);
+      const requestBody = buildRequestBody(settings, encodedPrompt, batchCount);
+      const logBase = applyPrivacyToLogEntry(
+        buildDiscussionApiLogBase(
+          "generate_posts",
+          settings,
+          requestEndpoint,
+          encodedPrompt,
+          requestBody,
+          `页签：${getFeedLabel(resolvedFeedType)} · 批次 ${Number(batch.batchIndex) || 1} · 数量：${batchCount}`
+        ),
+        privacySession
+      );
+      const batchItems = await executeDiscussionGenerationBatchRequest({
+        settings,
+        requestEndpoint,
+        prompt,
+        requestBody,
+        privacySession,
+        logBase,
+        parseItems: (message) =>
+          parseGeneratedPostsForBatch(message, batch, resolvedFeedType).map((item, index) =>
+            attachForumGenerationMetadata(item, batchContext, "post", index)
+          ),
+        successSummary: `页签：${getFeedLabel(resolvedFeedType)} · 批次 ${Number(batch.batchIndex) || 1} 已生成 ${batchCount} 条帖子`,
+        emptyMessage: "接口请求成功，但响应中没有可解析的文本。",
+        httpErrorPrefix: "接口请求失败"
+      });
+      mergedPosts.push(...batchItems);
+    }
+    return mergedPosts.slice(0, count);
+  }
+  const prompt = buildPrompt(settings, resolvedFeedType, count, {
+    generationContext
+  });
+  const privacySession = createPrivacySession({
+    settings,
+    profile: getCurrentProfile(),
+    resolvedFeedType,
+    generationContext,
+    prompt
+  });
+  const encodedPrompt = preparePromptWithPrivacy(prompt, privacySession);
+  const requestBody = buildRequestBody(settings, encodedPrompt, count);
+  const logBase = applyPrivacyToLogEntry(
+    buildDiscussionApiLogBase(
+      "generate_posts",
+      settings,
+      requestEndpoint,
+      encodedPrompt,
+      requestBody,
+      `页签：${getFeedLabel(resolvedFeedType)} · 数量：${count}`
+    ),
+    privacySession
+  );
+  return executeDiscussionGenerationBatchRequest({
+    settings,
+    requestEndpoint,
+    prompt,
+    requestBody,
+    privacySession,
+    logBase,
+    parseItems: (message) =>
+      parseGeneratedPosts(message, count, resolvedFeedType).map((item, index) =>
+        attachForumGenerationMetadata(item, generationContext, "post", index)
+      ),
+    successSummary: `页签：${getFeedLabel(resolvedFeedType)} · 已生成 ${count} 条帖子`,
+    emptyMessage: "接口请求成功，但响应中没有可解析的文本。",
+    httpErrorPrefix: "接口请求失败"
+  });
 }
 
 function buildTranslatePrompt(sourceText) {
@@ -9066,9 +9430,80 @@ async function requestGeneratedReplies(
         detailLevel: "full",
         rootPostMetadata: rootPost?.metadata || {},
         rootPostTags: Array.isArray(rootPost?.tags) ? rootPost.tags : [],
-        parentReplyMetadata: parentReply?.metadata || {}
+        parentReplyMetadata: parentReply?.metadata || {},
+        isNestedReply: Boolean(parentReply)
       })
     : null;
+  if (Array.isArray(generationContext?.generationBatches) && generationContext.generationBatches.length) {
+    const mergedReplies = [];
+    for (const batch of generationContext.generationBatches) {
+      const batchCount = Array.isArray(batch?.tasks) ? batch.tasks.length : 0;
+      if (!batchCount) {
+        continue;
+      }
+      const batchContext = buildForumBatchScopedGenerationContext(
+        settings,
+        resolvedFeedType,
+        generationContext,
+        batch,
+        { generationType: "replies" }
+      );
+      const prompt = buildReplyPrompt(
+        settings,
+        profile,
+        resolvedFeedType,
+        rootPost,
+        parentReply,
+        batchCount,
+        {
+          generationContext: batchContext
+        }
+      );
+      const privacySession = createPrivacySession({
+        settings,
+        profile,
+        rootPost,
+        parentReply,
+        feedType: resolvedFeedType,
+        generationContext: batchContext,
+        prompt
+      });
+      const encodedPrompt = preparePromptWithPrivacy(prompt, privacySession);
+      const requestBody = buildRequestBody(settings, encodedPrompt, batchCount, {
+        images: [rootPost?.imageDataUrl].filter(Boolean)
+      });
+      const logBase = applyPrivacyToLogEntry(
+        buildDiscussionApiLogBase(
+          "generate_replies",
+          settings,
+          requestEndpoint,
+          encodedPrompt,
+          requestBody,
+          `页签：${getFeedLabel(resolvedFeedType)} · 批次 ${Number(batch.batchIndex) || 1} · 主贴：${truncate(rootPost?.text || "图片帖子", 48)}${parentReply ? " · 楼中楼" : ""}`
+        ),
+        privacySession
+      );
+      const batchItems = await executeDiscussionGenerationBatchRequest({
+        settings,
+        requestEndpoint,
+        prompt,
+        requestBody,
+        privacySession,
+        logBase,
+        parseItems: (message) =>
+          parseGeneratedRepliesForBatch(
+            message,
+            batch,
+            `${rootPost.id}-${parentReply?.id || "root"}-${Number(batch.batchIndex) || 1}`
+          ).map((item, index) => attachForumGenerationMetadata(item, batchContext, "reply", index)),
+        successSummary: `页签：${getFeedLabel(resolvedFeedType)} · 批次 ${Number(batch.batchIndex) || 1} 已生成 ${batchCount} 条论坛回复${parentReply ? "（楼中楼）" : ""}`,
+        emptyMessage: "接口返回成功，但没有可解析的回复内容。",
+        httpErrorPrefix: "回复请求失败"
+      });
+      mergedReplies.push(...batchItems);
+    }
+    return mergedReplies.slice(0, count);
+  }
   const prompt = buildReplyPrompt(
     settings,
     profile,
@@ -9090,7 +9525,6 @@ async function requestGeneratedReplies(
     prompt
   });
   const encodedPrompt = preparePromptWithPrivacy(prompt, privacySession);
-  const headers = buildRequestHeaders(settings);
   const requestBody = buildRequestBody(settings, encodedPrompt, count, {
     images: [rootPost?.imageDataUrl].filter(Boolean)
   });
@@ -9105,84 +9539,23 @@ async function requestGeneratedReplies(
     ),
     privacySession
   );
-  let logged = false;
-
-  try {
-    const response = await fetch(requestEndpoint, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(requestBody)
-    });
-    const rawResponse = await response.text();
-    let payload = rawResponse;
-
-    try {
-      payload = JSON.parse(rawResponse);
-    } catch (_error) {
-      payload = rawResponse;
-    }
-
-    if (!response.ok) {
-      appendApiLog({
-        ...logBase,
-        ...buildGeminiLogFields(settings, payload),
-        status: "error",
-        statusCode: response.status,
-        responseText: rawResponse,
-        responseBody: payload,
-        errorMessage: `回复请求失败：HTTP ${response.status}`
-      });
-      logged = true;
-      throw new Error(`回复请求失败：HTTP ${response.status}`);
-    }
-
-    const message = resolveMessage(payload);
-    if (!message) {
-      appendApiLog({
-        ...logBase,
-        ...buildGeminiLogFields(settings, payload),
-        status: "error",
-        statusCode: response.status,
-        responseText: rawResponse,
-        responseBody: payload,
-        errorMessage: "接口返回成功，但没有可解析的回复内容。"
-      });
-      logged = true;
-      throw new Error("接口返回成功，但没有可解析的回复内容。");
-    }
-
-    appendApiLog({
-      ...logBase,
-      ...buildGeminiLogFields(settings, payload),
-      status: "success",
-      statusCode: response.status,
-      responseText: rawResponse,
-      responseBody: payload,
-      summary: encodeTextWithPrivacy(
-        `页签：${getFeedLabel(resolvedFeedType)} · 已生成 ${count} 条论坛回复${parentReply ? "（楼中楼）" : ""}`,
-        privacySession
-      )
-    });
-    logged = true;
-    const parsedReplies = parseGeneratedReplies(
-      message,
-      count,
-      `${rootPost.id}-${parentReply?.id || "root"}`
-    ).map((item, index) => attachForumGenerationMetadata(item, generationContext, "reply", index));
-    return decodeValueWithPrivacy(
-      parsedReplies,
-      privacySession
-    );
-  } catch (error) {
-    if (!logged) {
-      appendApiLog({
-        ...logBase,
-        status: "error",
-        errorMessage: error?.message || "请求失败"
-      });
-    }
-    throw error;
-  }
+  return executeDiscussionGenerationBatchRequest({
+    settings,
+    requestEndpoint,
+    prompt,
+    requestBody,
+    privacySession,
+    logBase,
+    parseItems: (message) =>
+      parseGeneratedReplies(
+        message,
+        count,
+        `${rootPost.id}-${parentReply?.id || "root"}`
+      ).map((item, index) => attachForumGenerationMetadata(item, generationContext, "reply", index)),
+    successSummary: `页签：${getFeedLabel(resolvedFeedType)} · 已生成 ${count} 条论坛回复${parentReply ? "（楼中楼）" : ""}`,
+    emptyMessage: "接口返回成功，但没有可解析的回复内容。",
+    httpErrorPrefix: "回复请求失败"
+  });
 }
 
 async function expandPostDiscussion(postId, bucketName = state.activeFeed) {
@@ -9731,23 +10104,28 @@ function attachEvents() {
 
     customTabForm.addEventListener("input", (event) => {
       const target = event.target;
-      if (!(target instanceof HTMLTextAreaElement)) {
+      const action = String(target?.dataset?.action || "").trim();
+      if (target instanceof HTMLTextAreaElement && action === "edit-custom-tab-content-item") {
+        const draft = getCustomTabContentDraftState();
+        const targetItem = (draft.items || []).find(
+          (item) => item.id === String(target.dataset.itemId || "").trim()
+        );
+        if (targetItem) {
+          targetItem.contentText = String(target.value || "");
+          targetItem.updatedAt = new Date().toISOString();
+        }
+        if (customTabFormStatusEl?.classList.contains("error")) {
+          setCustomTabFormStatus("");
+        }
         return;
       }
-      const action = String(target.dataset.action || "").trim();
-      if (action !== "edit-custom-tab-content-item") {
-        return;
-      }
-      const draft = getCustomTabContentDraftState();
-      const targetItem = (draft.items || []).find(
-        (item) => item.id === String(target.dataset.itemId || "").trim()
-      );
-      if (targetItem) {
-        targetItem.contentText = String(target.value || "");
-        targetItem.updatedAt = new Date().toISOString();
-      }
-      if (customTabFormStatusEl?.classList.contains("error")) {
-        setCustomTabFormStatus("");
+      if (target instanceof HTMLInputElement && action === "edit-custom-tab-content-date") {
+        updateCustomTabDraftItem(target.dataset.itemId || "", {
+          discussionDate: normalizeDateInputValue(target.value || "")
+        });
+        if (customTabFormStatusEl?.classList.contains("error")) {
+          setCustomTabFormStatus("");
+        }
       }
     });
 
