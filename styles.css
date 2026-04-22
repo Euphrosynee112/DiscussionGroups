@@ -679,6 +679,62 @@ body.embedded .embedded-close-btn {
   resize: vertical;
 }
 
+.custom-tab-content-item__tag-row {
+  display: grid;
+  gap: 8px;
+}
+
+.custom-tab-content-item__tag-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.custom-tab-content-item__tag-meta span {
+  color: var(--text);
+}
+
+.custom-tab-content-item__tag-meta small {
+  color: #b45309;
+}
+
+.custom-tab-content-item__tags {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.topic-tag-chip {
+  padding: 6px 10px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.topic-tag-chip:hover {
+  border-color: rgba(236, 72, 153, 0.4);
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
+.topic-tag-chip.is-active {
+  border-color: rgba(236, 72, 153, 0.6);
+  background: rgba(252, 231, 243, 0.95);
+  color: #be185d;
+}
+
 .custom-tab-content-item__actions {
   display: flex;
   justify-content: flex-end;

@@ -249,8 +249,10 @@
           createDynamicItem("time_awareness", "时间感知", "读取当前生效时间"),
           createDynamicItem("worldbook_reference", "世界书辅助背景", "读取挂载世界书"),
           createDynamicItem("background_cards_context", "背景卡上下文", "读取后端确认背景卡或来源回退摘要"),
+          createDynamicItem("source_item_context", "当前主讨论来源", "读取后端挑选的标签条目或历史摘要"),
           createDynamicItem("dominant_hot_topic", "主导热点说明", "读取页签热点"),
           createDynamicItem("forum_role_knowledge", "角色知识分层", "读取不同角色知道多少背景"),
+          createDynamicItem("forum_persona_seed", "论坛用户画像", "读取后端挑选的论坛用户种子"),
           createDynamicItem("unknown_boundary", "未知边界", "读取推测与事实边界"),
           createDynamicItem("supplemental_topics", "即时讨论语境", "读取 Bubble / 转发挂载"),
           createDynamicItem("repost_hint", "转发原帖提示", "读取最近论坛动态挂载"),
@@ -305,6 +307,11 @@
             "每一条帖子必须全文保持单一语言，只能四选一：中文、日文、韩文、英文。不要在同一条帖子里混用多种语言，也不要出现中文正文里夹几句英文或日文的情况。"
           ),
           createTemplateItem(
+            "persona_language_consistency",
+            "角色语言一致",
+            "如果上文给了论坛 persona 种子，则每条对象都必须绑定其中一个 persona，并保持 displayName、handle、正文语言与该 persona 的 language 一致。"
+          ),
+          createTemplateItem(
             "multiline_style",
             "排版要求",
             "text 要避免整段大段文字，尽量拆成短句；每条至少 2 段，可使用换行或空一行让版式更像真人发帖。"
@@ -344,8 +351,10 @@
           createDynamicItem("time_awareness", "时间感知", "读取当前生效时间"),
           createDynamicItem("worldbook_reference", "世界书辅助背景", "读取挂载世界书"),
           createDynamicItem("background_cards_context", "背景卡上下文", "读取后端确认背景卡或来源回退摘要"),
+          createDynamicItem("source_item_context", "当前主讨论来源", "读取后端挑选的标签条目或历史摘要"),
           createDynamicItem("hot_topic", "主导热点", "读取页签热点"),
           createDynamicItem("forum_role_knowledge", "角色知识分层", "读取不同角色知道多少背景"),
+          createDynamicItem("forum_persona_seed", "论坛用户画像", "读取后端挑选的论坛用户种子"),
           createDynamicItem("unknown_boundary", "未知边界", "读取推测与事实边界"),
           createDynamicItem("supplemental_topics", "即时讨论语境", "读取 Bubble / 转发挂载"),
           createDynamicItem("root_image_hint", "主楼图片说明", "根据主楼是否附图生成"),
@@ -393,6 +402,11 @@
           createTemplateItem("reply_length", "回复长度", "回复语气要像真实网友跟帖，长度控制在 18 到 80 字之间，可以有赞同、反对、补充和追问。"),
           createTemplateItem("region_style", "地区风格", "不同回复可以分别模拟来自中国、日本、韩国、美国社区的用户发言风格。"),
           createTemplateItem("single_language", "单语要求", "每一条回复必须全文保持单一语言，只能四选一：中文、日文、韩文、英文。不要在同一条回复里混用多种语言。"),
+          createTemplateItem(
+            "persona_language_consistency",
+            "角色语言一致",
+            "如果上文给了论坛 persona 种子，则每条回复都必须绑定其中一个 persona，并保持 displayName、handle、正文语言与该 persona 的 language 一致。"
+          ),
           createTemplateItem("readability", "可读性", "避免整段灌水，优先短句，必要时用换行提升可读性。"),
           createTemplateItem("thread_cohesion", "楼层连贯", "请避免重复句式，并保持楼中讨论的连贯性。")
         ]
