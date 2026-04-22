@@ -49,8 +49,9 @@ const state = {
   viewers: 0,
   bulletSeq: 0,
   apiViewerCommentPool: [],
+  apiViewerCommentQueue: [],
   apiCommentBatchSeq: 0,
-  lastApiViewerCommentText: ""
+  apiCommentRecycleIndex: 0
 };
 
 const LIVE_BULLET_LIMIT = 8;
@@ -718,7 +719,16 @@ function pickAmbientBulletText(pool = buildAudienceTextPool()) {
 }
 
 function addApiViewerComments(lines = []) {
-  const normalizedLines = lines.map(ensureViewerCommentLine).filter(Boolean);
+  const seenTexts = new Set();
+  const normalizedLines = lines
+    .map(ensureViewerCommentLine)
+    .filter((line) => {
+      if (!line || seenTexts.has(line)) {
+        return false;
+      }
+      seenTexts.add(line);
+      return true;
+    });
   if (!normalizedLines.length) {
     return;
   }
@@ -726,38 +736,55 @@ function addApiViewerComments(lines = []) {
   state.apiCommentBatchSeq += 1;
   const batchId = state.apiCommentBatchSeq;
   const createdAt = Date.now();
-  const nextItems = normalizedLines.map((text, index) => ({
-    id: `${batchId}_${index}_${hashText(text)}`,
-    text,
-    batchId,
-    createdAt,
-    shownCount: 0,
-    lastShownAt: 0
-  }));
+  const existingTexts = new Set(state.apiViewerCommentPool.map((item) => item.text));
+  const nextItems = normalizedLines
+    .filter((text) => !existingTexts.has(text))
+    .map((text, index) => ({
+      id: `${batchId}_${index}_${hashText(text)}`,
+      text,
+      batchId,
+      createdAt,
+      shownCount: 0,
+      lastShownAt: 0
+    }));
+  if (!nextItems.length) {
+    return;
+  }
   state.apiViewerCommentPool = [...nextItems, ...state.apiViewerCommentPool]
     .filter((item, index, array) => array.findIndex((candidate) => candidate.text === item.text) === index)
     .slice(0, LIVE_API_COMMENT_POOL_LIMIT);
+  state.apiViewerCommentQueue = [
+    ...nextItems,
+    ...state.apiViewerCommentQueue.filter((item) => !nextItems.some((candidate) => candidate.text === item.text))
+  ].slice(0, LIVE_API_COMMENT_POOL_LIMIT);
+  state.apiCommentRecycleIndex = 0;
+}
+
+function markApiViewerCommentShown(selected) {
+  if (!selected) {
+    return "";
+  }
+  selected.shownCount = Number(selected.shownCount || 0) + 1;
+  selected.lastShownAt = Date.now();
+  const poolIndex = state.apiViewerCommentPool.findIndex((item) => item.text === selected.text);
+  if (poolIndex >= 0) {
+    state.apiViewerCommentPool[poolIndex].shownCount = selected.shownCount;
+    state.apiViewerCommentPool[poolIndex].lastShownAt = selected.lastShownAt;
+    state.apiCommentRecycleIndex = (poolIndex + 1) % Math.max(1, state.apiViewerCommentPool.length);
+  }
+  return selected.text;
 }
 
 function pickApiViewerCommentText() {
+  if (state.apiViewerCommentQueue.length) {
+    return markApiViewerCommentShown(state.apiViewerCommentQueue.shift());
+  }
   const pool = state.apiViewerCommentPool;
   if (!pool.length) {
     return "";
   }
-  let selected = pool[0];
-  const attempts = Math.min(pool.length, 8);
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const index = Math.min(pool.length - 1, Math.floor(Math.pow(Math.random(), 2.1) * pool.length));
-    const candidate = pool[index] || pool[0];
-    if (pool.length === 1 || candidate.text !== state.lastApiViewerCommentText) {
-      selected = candidate;
-      break;
-    }
-  }
-  selected.shownCount = Number(selected.shownCount || 0) + 1;
-  selected.lastShownAt = Date.now();
-  state.lastApiViewerCommentText = selected.text;
-  return selected.text;
+  const index = state.apiCommentRecycleIndex % pool.length;
+  return markApiViewerCommentShown(pool[index] || pool[0]);
 }
 
 function pickLiveBulletText(pool = buildAudienceTextPool()) {
