@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta
+      charset="UTF-8"
+    />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <title>Pulse Generator · 直播</title>
+    <link rel="stylesheet" href="./theme.css?v=20260422-193800" />
+    <link rel="stylesheet" href="./live-lobby.css?v=20260422-193800" />
+  </head>
+  <body>
+    <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
+
+    <main class="live-lobby-app">
+      <section class="live-lobby-shell" aria-label="直播入口">
+        <header class="live-lobby-topbar">
+          <button
+            id="live-lobby-back-btn"
+            class="live-lobby-topbar__button"
+            type="button"
+            aria-label="返回"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M15 6l-6 6 6 6"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+
+          <div class="live-lobby-topbar__body">
+            <p class="live-lobby-topbar__kicker">Live</p>
+            <h1 class="live-lobby-topbar__title">直播</h1>
+          </div>
+        </header>
+
+        <p id="live-lobby-status" class="live-lobby-status" aria-live="polite"></p>
+
+        <section class="live-lobby-view" aria-label="直播入口列表">
+          <div class="live-lobby-hero">
+            <p class="live-lobby-hero__eyebrow">Live Rooms</p>
+            <h2 class="live-lobby-hero__title">选择一个直播间入口</h2>
+            <p class="live-lobby-hero__desc">
+              角色直播卡片会从通讯录同步显示。点击底部 + 可以直接发起我的直播，后续角色直播流程再接进来。
+            </p>
+          </div>
+
+          <div id="live-lobby-card-list" class="live-lobby-card-list" aria-live="polite"></div>
+        </section>
+
+        <div class="live-lobby-launcher">
+          <button
+            id="live-lobby-user-create-btn"
+            class="live-lobby-launcher__button"
+            type="button"
+            aria-label="发起我的直播"
+          >
+            <span class="live-lobby-launcher__icon">+</span>
+            <span class="live-lobby-launcher__meta">
+              <strong>我的直播</strong>
+              <span>使用当前用户资料开播</span>
+            </span>
+          </button>
+        </div>
+      </section>
+    </main>
+
+    <section
+      id="live-lobby-setup-modal"
+      class="live-lobby-modal"
+      hidden
+      aria-hidden="true"
+    >
+      <div class="live-lobby-modal__backdrop" data-close-live-lobby-setup></div>
+      <div
+        class="live-lobby-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="直播预设"
+      >
+        <div class="live-lobby-modal__head">
+          <div>
+            <p class="live-lobby-modal__eyebrow">Live Setup</p>
+            <h2 class="live-lobby-modal__title">直播预设</h2>
+          </div>
+          <button
+            id="live-lobby-setup-close-btn"
+            class="live-lobby-modal__close"
+            type="button"
+            aria-label="关闭直播预设"
+          >
+            ×
+          </button>
+        </div>
+
+        <div class="live-lobby-modal__body">
+          <label class="live-lobby-field">
+            <span>直播主题</span>
+            <input
+              id="live-lobby-topic-input"
+              type="text"
+              maxlength="40"
+              placeholder="例如：深夜随便聊聊 / 新歌首听 / 今天的碎碎念"
+            />
+            <small>建议写一个简短主题，进入直播页后会显示在用户信息下方。</small>
+          </label>
+
+          <label class="live-lobby-field">
+            <span>初始直播描写（可选）</span>
+            <textarea
+              id="live-lobby-opening-input"
+              rows="4"
+              maxlength="600"
+              placeholder="例如：刚开播，镜头有点晃，桌上放着一杯冰美式，背景音乐很轻。"
+            ></textarea>
+            <small>填写后，进直播间第一次加载评论的 prompt 会优先带上这段初始画面 / 状态。</small>
+          </label>
+
+          <label class="live-lobby-field">
+            <span>自动生成弹幕间隔</span>
+            <input
+              id="live-lobby-interval-input"
+              type="number"
+              min="10"
+              max="300"
+              step="5"
+              placeholder="30"
+            />
+            <small>默认 30 秒；开播后会自动生成一次观众弹幕，之后按这个间隔继续生成。</small>
+          </label>
+
+          <section class="live-lobby-box">
+            <label class="live-lobby-checkbox">
+              <input id="live-lobby-forum-enabled" type="checkbox" />
+              <span>挂载论坛页签</span>
+            </label>
+            <label class="live-lobby-field">
+              <span>论坛页签</span>
+              <select id="live-lobby-forum-select"></select>
+              <small>本次直播只能挂载一个论坛页签；观众定位会默认沿用这个页签的用户定位。</small>
+            </label>
+          </section>
+
+          <section class="live-lobby-box">
+            <label class="live-lobby-checkbox">
+              <input id="live-lobby-bubble-enabled" type="checkbox" />
+              <span>挂载 Bubble 设置</span>
+            </label>
+            <p class="live-lobby-box__hint">开启后，会记录本次直播需要带入 Bubble 的基础设定。</p>
+          </section>
+
+          <section class="live-lobby-box">
+            <label class="live-lobby-checkbox">
+              <input id="live-lobby-worldbook-enabled" type="checkbox" />
+              <span>挂载世界书基础设置</span>
+            </label>
+            <p class="live-lobby-box__hint">
+              可选勾选本次直播要带入的世界书；不勾选具体条目时，也会保留“已开启世界书”的状态。
+            </p>
+            <div id="live-lobby-worldbook-list" class="live-lobby-worldbook-list"></div>
+          </section>
+
+          <p id="live-lobby-setup-status" class="live-lobby-modal__status" aria-live="polite"></p>
+
+          <div class="live-lobby-modal__actions">
+            <button
+              id="live-lobby-setup-cancel-btn"
+              class="live-lobby-modal__button live-lobby-modal__button--ghost"
+              type="button"
+            >
+              取消
+            </button>
+            <button
+              id="live-lobby-setup-confirm-btn"
+              class="live-lobby-modal__button"
+              type="button"
+            >
+              进入直播
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <script src="./live-lobby.js?v=20260422-193800"></script>
+  </body>
+</html>
