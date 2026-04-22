@@ -228,6 +228,7 @@ const CHAT_UTILITY_ITEMS = [
 
 const messagesNavBtnEl = document.querySelector("#messages-nav-btn");
 const messagesChatSceneBtnEl = document.querySelector("#messages-chat-scene-btn");
+const messagesMessageSelectBtnEl = document.querySelector("#messages-message-select-btn");
 const messagesChatSettingsBtnEl = document.querySelector("#messages-chat-settings-btn");
 const messagesSearchBtnEl = document.querySelector("#messages-search-btn");
 const messagesAddBtnEl = document.querySelector("#messages-add-btn");
@@ -759,6 +760,9 @@ const state = {
   chatCloudHydrating: false,
   composerPanelOpen: false,
   messageActionMessageId: "",
+  messageSelectionMode: false,
+  messageSelectionConversationId: "",
+  selectedMessageIds: [],
   regenerateModalOpen: false,
   regenerateInstruction: "",
   locationModalOpen: false,
@@ -817,6 +821,38 @@ const state = {
 };
 
 let chatSyncQueueState = null;
+const regenerateDebugEvents = [];
+
+function pushRegenerateDebugEvent(stage = "", details = {}, options = {}) {
+  const entry = {
+    at: new Date().toISOString(),
+    stage: String(stage || "").trim() || "unknown",
+    details: details && typeof details === "object" ? { ...details } : {}
+  };
+  regenerateDebugEvents.push(entry);
+  if (regenerateDebugEvents.length > 80) {
+    regenerateDebugEvents.splice(0, regenerateDebugEvents.length - 80);
+  }
+  if (typeof window !== "undefined") {
+    window.__pulseRegenerateDebug = regenerateDebugEvents.map((item) => ({
+      ...item,
+      details: item.details && typeof item.details === "object" ? { ...item.details } : {}
+    }));
+  }
+  const logLevel = String(options.level || "").trim().toLowerCase();
+  if (logLevel === "error") {
+    console.error("[Pulse Messages][Regenerate]", entry);
+  } else if (logLevel === "warn") {
+    console.warn("[Pulse Messages][Regenerate]", entry);
+  } else {
+    console.info("[Pulse Messages][Regenerate]", entry);
+  }
+  const statusMessage = String(options.statusMessage || "").trim();
+  if (statusMessage && !options.suppressUi) {
+    setMessagesStatus(statusMessage, String(options.statusTone || "error").trim() || "error");
+  }
+  return entry;
+}
 
 function isEmbeddedView() {
   try {
@@ -8142,6 +8178,7 @@ function consumePendingMessageShareInbox() {
   let consumedCount = 0;
   const unresolvedEntries = [];
   const insertedEntries = [];
+  const insertedConversationIds = new Set();
 
   inbox.forEach((entry, index) => {
     const conversation = ensureConversationForDiscussionShare(entry);
@@ -8179,8 +8216,10 @@ function consumePendingMessageShareInbox() {
       insertedMessage
     ];
     conversation.updatedAt = insertedMessage.createdAt;
+    markConversationMutated(conversation, insertedMessage.updatedAt || insertedMessage.createdAt);
     bumpConversationReplyContextVersion(conversation);
     insertedEntries.push(entry);
+    insertedConversationIds.add(String(conversation.id || "").trim());
     consumedCount += 1;
   });
 
@@ -8190,6 +8229,13 @@ function consumePendingMessageShareInbox() {
     if (!persisted) {
       nextInbox = [...unresolvedEntries, ...insertedEntries];
       console.warn("[Pulse Messages] Discussion share delivery is kept in inbox for retry.");
+    } else {
+      insertedConversationIds.forEach((conversationId) => {
+        enqueueConversationChatSyncUpsert(conversationId, {
+          reason: "mutation",
+          scheduleFlush: false
+        });
+      });
     }
   }
   if (nextInbox.length !== inbox.length) {
@@ -15517,6 +15563,90 @@ function closeConversationTransientUi() {
   state.messageActionMessageId = "";
 }
 
+function getSelectedConversationMessageIdSet() {
+  return new Set(
+    normalizeObjectArray(state.selectedMessageIds)
+      .map((messageId) => String(messageId || "").trim())
+      .filter(Boolean)
+  );
+}
+
+function isConversationMessageSelectionActive(conversationId = state.activeConversationId) {
+  const resolvedConversationId = String(conversationId || "").trim();
+  return Boolean(
+    state.messageSelectionMode &&
+      resolvedConversationId &&
+      String(state.messageSelectionConversationId || "").trim() === resolvedConversationId
+  );
+}
+
+function clearConversationMessageSelection() {
+  state.messageSelectionMode = false;
+  state.messageSelectionConversationId = "";
+  state.selectedMessageIds = [];
+}
+
+function setConversationMessageSelectionMode(enabled, conversationId = state.activeConversationId) {
+  const resolvedConversationId = String(conversationId || "").trim();
+  if (!enabled || !resolvedConversationId) {
+    clearConversationMessageSelection();
+    return false;
+  }
+  state.messageSelectionMode = true;
+  state.messageSelectionConversationId = resolvedConversationId;
+  state.selectedMessageIds = [];
+  state.messageActionMessageId = "";
+  state.composerPanelOpen = false;
+  state.quotedMessageId = "";
+  state.expandedImageMessageId = "";
+  state.expandedVoiceMessageId = "";
+  return true;
+}
+
+function pruneSelectedConversationMessages(conversation = getConversationById()) {
+  if (!conversation || !isConversationMessageSelectionActive(conversation.id)) {
+    clearConversationMessageSelection();
+    return new Set();
+  }
+  const availableIds = new Set(
+    normalizeObjectArray(conversation.messages)
+      .map((message) => String(message?.id || "").trim())
+      .filter(Boolean)
+  );
+  const selectedIds = normalizeObjectArray(state.selectedMessageIds)
+    .map((messageId) => String(messageId || "").trim())
+    .filter((messageId) => messageId && availableIds.has(messageId));
+  if (selectedIds.length !== state.selectedMessageIds.length) {
+    state.selectedMessageIds = selectedIds;
+  }
+  return new Set(selectedIds);
+}
+
+function toggleConversationMessageSelection(messageId = "") {
+  const conversation = getConversationById();
+  const resolvedMessageId = String(messageId || "").trim();
+  if (!conversation || !resolvedMessageId) {
+    return false;
+  }
+  if (!isConversationMessageSelectionActive(conversation.id)) {
+    setConversationMessageSelectionMode(true, conversation.id);
+  }
+  const messageExists = conversation.messages.some(
+    (message) => String(message?.id || "").trim() === resolvedMessageId
+  );
+  if (!messageExists) {
+    return false;
+  }
+  const selectedIdSet = getSelectedConversationMessageIdSet();
+  if (selectedIdSet.has(resolvedMessageId)) {
+    selectedIdSet.delete(resolvedMessageId);
+  } else {
+    selectedIdSet.add(resolvedMessageId);
+  }
+  state.selectedMessageIds = Array.from(selectedIdSet);
+  return true;
+}
+
 function setLocationStatus(message = "", tone = "") {
   setEditorStatus(messagesLocationStatusEl, message, tone);
 }
@@ -16623,8 +16753,13 @@ function renderTopbar() {
     Boolean(activeConversation) &&
     state.activeTab === "chat" &&
     state.sendingConversationId === activeConversation.id;
+  const isSelectionMode = Boolean(
+    activeConversation && isConversationMessageSelectionActive(activeConversation.id)
+  );
   const title =
-    isTyping
+    isSelectionMode
+      ? `已选 ${pruneSelectedConversationMessages(activeConversation).size} 条`
+      : isTyping
       ? "正在输入……"
       : activeConversation && state.activeTab === "chat"
       ? getConversationMeta(activeConversation).name
@@ -16640,18 +16775,38 @@ function renderTopbar() {
   const inVoiceCall = inConversation && isConversationVoiceCallActive(activeConversation);
   const hasPendingIncomingCall =
     inConversation && Boolean(getLatestPendingAssistantVoiceCallRequest(activeConversation));
+  const isReplyBusy = inConversation && isConversationReplyBusy(activeConversation.id);
+  const canManageSelection =
+    inConversation &&
+    Array.isArray(activeConversation?.messages) &&
+    activeConversation.messages.length > 0 &&
+    !inVoiceCall &&
+    !hasPendingIncomingCall &&
+    !isReplyBusy &&
+    !state.chatReadonlyMode;
 
   if (messagesSearchBtnEl) {
     messagesSearchBtnEl.hidden = !(state.activeTab === "contacts" && !inConversation);
   }
 
+  if (messagesMessageSelectBtnEl) {
+    messagesMessageSelectBtnEl.hidden = !canManageSelection && !isSelectionMode;
+    messagesMessageSelectBtnEl.textContent = isSelectionMode ? "取消" : "多选";
+    messagesMessageSelectBtnEl.setAttribute(
+      "aria-label",
+      isSelectionMode ? "取消多选" : "多选消息"
+    );
+  }
+
   if (messagesChatSettingsBtnEl) {
-    messagesChatSettingsBtnEl.hidden = !inConversation || inVoiceCall || hasPendingIncomingCall;
+    messagesChatSettingsBtnEl.hidden =
+      !inConversation || inVoiceCall || hasPendingIncomingCall || isSelectionMode;
   }
 
   if (messagesChatSceneBtnEl) {
     const sceneMode = activeConversation?.sceneMode === "offline" ? "offline" : "online";
-    messagesChatSceneBtnEl.hidden = !inConversation || inVoiceCall || hasPendingIncomingCall;
+    messagesChatSceneBtnEl.hidden =
+      !inConversation || inVoiceCall || hasPendingIncomingCall || isSelectionMode;
     messagesChatSceneBtnEl.classList.toggle("is-offline", sceneMode === "offline");
     messagesChatSceneBtnEl.setAttribute(
       "aria-label",
@@ -17694,7 +17849,10 @@ function renderConversationDiscussionShareCard(message) {
 function renderConversationMessage(message, conversation, promptSettings = state.chatPromptSettings) {
   const isUser = message.role === "user";
   const avatarMarkup = buildConversationDetailAvatarMarkup(message.role, conversation, promptSettings);
-  const isMenuOpen = state.messageActionMessageId === message.id;
+  const isSelectionMode = isConversationMessageSelectionActive(conversation?.id);
+  const isSelected =
+    isSelectionMode && getSelectedConversationMessageIdSet().has(String(message?.id || "").trim());
+  const isMenuOpen = !isSelectionMode && state.messageActionMessageId === message.id;
   const isDiscussionShareMessage = isDiscussionShareConversationMessage(message);
   const isScheduleInviteMessage = isScheduleInviteConversationMessage(message);
   const isLocationMessage = isLocationConversationMessage(message);
@@ -17730,7 +17888,26 @@ function renderConversationMessage(message, conversation, promptSettings = state
         <p>${escapeHtml(message.text)}</p>
       </article>
     `;
-  const bubbleControlMarkup = isImageMessage
+  const bubbleControlMarkup = isSelectionMode
+    ? `
+      <div
+        class="messages-message-row__selection-bubble${
+          isScheduleInviteMessage
+            ? " messages-message-row__selection-bubble--schedule-invite"
+            : isLocationMessage
+            ? " messages-message-row__selection-bubble--location"
+            : ""
+        }"
+        role="button"
+        tabindex="0"
+        data-action="toggle-selected-conversation-message"
+        data-message-id="${escapeHtml(message.id)}"
+        aria-pressed="${isSelected ? "true" : "false"}"
+      >
+        ${bubbleMarkup}
+      </div>
+    `
+    : isImageMessage
     ? `
       <div class="messages-message-row__stack-shell messages-message-row__stack-shell--image">
         <button
@@ -17844,8 +18021,24 @@ function renderConversationMessage(message, conversation, promptSettings = state
       isVideoCallEventMessage || isVoiceCallEventMessage ? " messages-message-row--call-event" : ""
     }${
       isQuoteMessage ? " messages-message-row--quote" : ""
-    }">
+    }${isSelectionMode ? " is-selection-mode" : ""}${isSelected ? " is-selected" : ""}">
       ${!isUser && avatarMarkup ? avatarMarkup : ""}
+      ${
+        isSelectionMode
+          ? `
+            <button
+              type="button"
+              class="messages-message-row__select-toggle ${isSelected ? "is-selected" : ""}"
+              data-action="toggle-selected-conversation-message"
+              data-message-id="${escapeHtml(message.id)}"
+              aria-label="${isSelected ? "取消选中这条消息" : "选中这条消息"}"
+              aria-pressed="${isSelected ? "true" : "false"}"
+            >
+              <span class="messages-message-row__select-dot"></span>
+            </button>
+          `
+          : ""
+      }
       <div class="messages-message-row__bubble-wrap${
         isDiscussionShareMessage
           ? " messages-message-row__bubble-wrap--discussion-share"
@@ -17857,7 +18050,7 @@ function renderConversationMessage(message, conversation, promptSettings = state
       }">
         <div class="messages-message-row__stack">
           ${bubbleControlMarkup}
-          ${renderConversationMessageMenu(message, isMenuOpen)}
+          ${isSelectionMode ? "" : renderConversationMessageMenu(message, isMenuOpen)}
         </div>
       </div>
       ${isUser && avatarMarkup ? avatarMarkup : ""}
@@ -18049,6 +18242,7 @@ function renderConversationDetail(options = {}) {
 
   const conversation = getConversationById();
   if (!conversation) {
+    clearConversationMessageSelection();
     state.activeConversationId = "";
     renderMessagesPage();
     return;
@@ -18061,6 +18255,15 @@ function renderConversationDetail(options = {}) {
     persist: true,
     skipWhenBusy: true
   });
+  if (!conversation.messages.length && isConversationMessageSelectionActive(conversation.id)) {
+    clearConversationMessageSelection();
+  }
+  if (isReplyBusy && isConversationMessageSelectionActive(conversation.id)) {
+    clearConversationMessageSelection();
+  }
+  const isSelectionMode = isConversationMessageSelectionActive(conversation.id);
+  const selectedMessageIdSet = pruneSelectedConversationMessages(conversation);
+  const selectedMessageCount = selectedMessageIdSet.size;
   const hasPendingUserMessages = conversation.messages.some(
     (message) => message.role === "user" && message.needsReply
   );
@@ -18071,6 +18274,9 @@ function renderConversationDetail(options = {}) {
   const renderOptions = options && typeof options === "object" ? options : {};
   const isVoiceCallActive = isConversationVoiceCallActive(conversation);
   if (isVoiceCallActive) {
+    if (isSelectionMode) {
+      clearConversationMessageSelection();
+    }
     messagesContentEl.innerHTML = renderActiveVoiceCallScreen(conversation, renderOptions);
     syncActiveConversationViewMarker();
     updateVoiceCallDurationDisplay();
@@ -18090,6 +18296,9 @@ function renderConversationDetail(options = {}) {
   }
   const incomingVoiceCallRequest = getLatestPendingAssistantVoiceCallRequest(conversation);
   if (incomingVoiceCallRequest) {
+    if (isSelectionMode) {
+      clearConversationMessageSelection();
+    }
     messagesContentEl.innerHTML = renderIncomingVoiceCallRequestScreen(
       conversation,
       incomingVoiceCallRequest
@@ -18133,63 +18342,93 @@ function renderConversationDetail(options = {}) {
         }
       </div>
       ${renderConversationUtilityPanel()}
-      <form class="messages-conversation__composer" data-action="send-conversation-message">
-        ${renderComposerQuotePreview(quotedMessage)}
-        <input
-          class="messages-conversation__input"
-          name="message"
-          type="text"
-          maxlength="600"
-          value="${escapeHtml(composerDraft)}"
-          placeholder="${isReadonly ? "数据库不可用，仅只读" : "发消息"}"
-          autocomplete="off"
-          ${isReadonly ? "disabled" : ""}
-        />
-        <button class="messages-conversation__send" type="submit" ${isReplyBusy || isReadonly ? "disabled" : ""}>
-          发送
-        </button>
-        <button
-          class="messages-conversation__trigger ${
-            hasPendingUserMessages || canRequestContinuation ? "is-ready" : ""
-          }"
-          type="button"
-          data-action="request-conversation-reply"
-          aria-label="推送到 API 获取回复或续写"
-          ${
-            isReplyBusy || isReadonly || (!hasPendingUserMessages && !canRequestContinuation)
-              ? "disabled"
-              : ""
-          }
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              d="M8 6.5c4.7 0 8.5 3.8 8.5 8.5M8 11c2.2 0 4 1.8 4 4M8 4v5h5"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
-        </button>
-        <button
-          class="messages-conversation__plus ${state.composerPanelOpen ? "is-open" : ""}"
-          type="button"
-          data-action="toggle-composer-panel"
-          aria-label="打开聊天功能栏"
-          aria-expanded="${state.composerPanelOpen ? "true" : "false"}"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              d="M12 5v14M5 12h14"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-            />
-          </svg>
-        </button>
-      </form>
+      ${
+        isSelectionMode
+          ? `
+            <div class="messages-conversation__selection-bar">
+              <div class="messages-conversation__selection-copy">
+                <strong>已选 ${selectedMessageCount} 条</strong>
+                <span>${selectedMessageCount ? "确认后会从当前会话中彻底删除。" : "点击消息左侧圆圈开始选择。"}</span>
+              </div>
+              <div class="messages-conversation__selection-actions">
+                <button
+                  class="messages-conversation__selection-button"
+                  type="button"
+                  data-action="cancel-message-selection"
+                >
+                  取消
+                </button>
+                <button
+                  class="messages-conversation__selection-button messages-conversation__selection-button--danger"
+                  type="button"
+                  data-action="delete-selected-conversation-messages"
+                  ${selectedMessageCount && !isReadonly && !isReplyBusy ? "" : "disabled"}
+                >
+                  删除
+                </button>
+              </div>
+            </div>
+          `
+          : `
+            <form class="messages-conversation__composer" data-action="send-conversation-message">
+              ${renderComposerQuotePreview(quotedMessage)}
+              <input
+                class="messages-conversation__input"
+                name="message"
+                type="text"
+                maxlength="600"
+                value="${escapeHtml(composerDraft)}"
+                placeholder="${isReadonly ? "数据库不可用，仅只读" : "发消息"}"
+                autocomplete="off"
+                ${isReadonly ? "disabled" : ""}
+              />
+              <button class="messages-conversation__send" type="submit" ${isReplyBusy || isReadonly ? "disabled" : ""}>
+                发送
+              </button>
+              <button
+                class="messages-conversation__trigger ${
+                  hasPendingUserMessages || canRequestContinuation ? "is-ready" : ""
+                }"
+                type="button"
+                data-action="request-conversation-reply"
+                aria-label="推送到 API 获取回复或续写"
+                ${
+                  isReplyBusy || isReadonly || (!hasPendingUserMessages && !canRequestContinuation)
+                    ? "disabled"
+                    : ""
+                }
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M8 6.5c4.7 0 8.5 3.8 8.5 8.5M8 11c2.2 0 4 1.8 4 4M8 4v5h5"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
+              <button
+                class="messages-conversation__plus ${state.composerPanelOpen ? "is-open" : ""}"
+                type="button"
+                data-action="toggle-composer-panel"
+                aria-label="打开聊天功能栏"
+                aria-expanded="${state.composerPanelOpen ? "true" : "false"}"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M12 5v14M5 12h14"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                  />
+                </svg>
+              </button>
+            </form>
+          `
+      }
     </section>
   `;
   syncActiveConversationViewMarker();
@@ -18391,6 +18630,20 @@ function renderMessagesPageInner() {
     syncProfileStateFromStorage();
   }
   const inConversation = Boolean(state.activeConversationId && state.activeTab === "chat");
+  const activeConversation = inConversation ? getConversationById(state.activeConversationId) : null;
+  if (
+    activeConversation &&
+    isConversationMessageSelectionActive(activeConversation.id) &&
+    (
+      !Array.isArray(activeConversation.messages) ||
+      !activeConversation.messages.length ||
+      isConversationReplyBusy(activeConversation.id) ||
+      isConversationVoiceCallActive(activeConversation) ||
+      getLatestPendingAssistantVoiceCallRequest(activeConversation)
+    )
+  ) {
+    clearConversationMessageSelection();
+  }
   if (!inConversation && state.discussionShareModalOpen) {
     setDiscussionShareModalOpen(false);
   }
@@ -20925,27 +21178,7 @@ async function deleteConversationMessage(messageId = "") {
     setMessagesStatus(`消息删除失败：${error?.message || "请求失败"}`, "error");
     return;
   }
-  if (String(state.quotedMessageId || "").trim() === targetMessage.id) {
-    state.quotedMessageId = "";
-  }
-  if (String(state.expandedImageMessageId || "").trim() === targetMessage.id) {
-    state.expandedImageMessageId = "";
-  }
-  if (String(state.expandedVoiceMessageId || "").trim() === targetMessage.id) {
-    state.expandedVoiceMessageId = "";
-  }
-  if (
-    state.discussionShareModalOpen &&
-    String(state.discussionShareModalMessageId || "").trim() === targetMessage.id
-  ) {
-    setDiscussionShareModalOpen(false);
-  }
-  if (
-    state.innerThoughtModalOpen &&
-    String(state.innerThoughtTargetMessageId || "").trim() === targetMessage.id
-  ) {
-    setInnerThoughtModalOpen(false);
-  }
+  clearConversationDerivedUiForDeletedMessages([targetMessage.id]);
   cancelConversationReplyWork(conversation.id);
   state.messageActionMessageId = "";
   upsertConversationSnapshotInState(nextConversation, {
@@ -20957,6 +21190,97 @@ async function deleteConversationMessage(messageId = "") {
   });
   renderMessagesPage();
   setMessagesStatus("消息已删除。", "success");
+}
+
+function clearConversationDerivedUiForDeletedMessages(messageIds = []) {
+  const deletedIdSet = new Set(
+    normalizeObjectArray(messageIds)
+      .map((messageId) => String(messageId || "").trim())
+      .filter(Boolean)
+  );
+  if (!deletedIdSet.size) {
+    return;
+  }
+  if (deletedIdSet.has(String(state.quotedMessageId || "").trim())) {
+    state.quotedMessageId = "";
+  }
+  if (deletedIdSet.has(String(state.expandedImageMessageId || "").trim())) {
+    state.expandedImageMessageId = "";
+  }
+  if (deletedIdSet.has(String(state.expandedVoiceMessageId || "").trim())) {
+    state.expandedVoiceMessageId = "";
+  }
+  if (
+    state.discussionShareModalOpen &&
+    deletedIdSet.has(String(state.discussionShareModalMessageId || "").trim())
+  ) {
+    setDiscussionShareModalOpen(false);
+  }
+  if (
+    state.innerThoughtModalOpen &&
+    deletedIdSet.has(String(state.innerThoughtTargetMessageId || "").trim())
+  ) {
+    setInnerThoughtModalOpen(false);
+  }
+}
+
+async function deleteSelectedConversationMessages() {
+  if (!ensureChatMutationAllowed("删除消息")) {
+    return;
+  }
+  const conversation = getConversationById();
+  if (!conversation || !isConversationMessageSelectionActive(conversation.id)) {
+    setMessagesStatus("当前没有可批量删除的消息。", "error");
+    return;
+  }
+  if (isConversationReplyBusy(conversation.id)) {
+    setMessagesStatus("当前正在等待回复，暂时不能批量删除消息。", "error");
+    return;
+  }
+  const selectedIdSet = pruneSelectedConversationMessages(conversation);
+  if (!selectedIdSet.size) {
+    setMessagesStatus("请先选择要删除的消息。", "error");
+    return;
+  }
+  const confirmed = window.confirm(`确定删除选中的 ${selectedIdSet.size} 条消息吗？`);
+  if (!confirmed) {
+    return;
+  }
+  const scrollSnapshot = captureConversationScrollSnapshot();
+  const deletedIds = Array.from(selectedIdSet);
+  const deletedAt = Date.now();
+  const nextConversation = buildMutatedConversationSnapshot(conversation, (draft) => {
+    draft.messages = draft.messages.filter(
+      (message) => !selectedIdSet.has(String(message?.id || "").trim())
+    );
+    recalculateConversationUpdatedAt(draft);
+    markConversationMutated(draft, deletedAt);
+    bumpConversationReplyContextVersion(draft);
+    return draft;
+  });
+  if (!nextConversation) {
+    setMessagesStatus("未能构造删除后的会话快照。", "error");
+    return;
+  }
+  try {
+    await syncConversationSnapshotNow(nextConversation, "mutation");
+  } catch (error) {
+    setMessagesStatus(`批量删除失败：${error?.message || "请求失败"}`, "error");
+    return;
+  }
+  clearConversationDerivedUiForDeletedMessages(deletedIds);
+  cancelConversationReplyWork(conversation.id);
+  state.messageActionMessageId = "";
+  upsertConversationSnapshotInState(nextConversation, {
+    persistMirror: true
+  });
+  clearConversationMessageSelection();
+  queueConversationRenderOptions({
+    scrollBehavior: "preserve",
+    scrollSnapshot
+  });
+  renderMessagesPage();
+  setMessagesStatus(`已删除 ${deletedIds.length} 条消息。`, "success");
 }
 
 async function clearCurrentConversationHistory() {
@@ -22451,6 +22775,28 @@ async function requestConversationReply(options = {}) {
     return;
   }
   const suppressUi = Boolean(requestOptions.suppressUi);
+  let showingDatabaseWriteState = false;
+  const beginDatabaseWriteState = () => {
+    if (suppressUi) {
+      return;
+    }
+    state.sendingConversationId = conversation.id;
+    showingDatabaseWriteState = true;
+    renderMessagesPage();
+    setMessagesStatus("数据库写入中…", "success");
+  };
+  const endDatabaseWriteState = () => {
+    if (!showingDatabaseWriteState) {
+      return;
+    }
+    showingDatabaseWriteState = false;
+    if (
+      state.sendingConversationId === conversation.id &&
+      state.requestingConversationId !== conversation.id
+    ) {
+      state.sendingConversationId = "";
+    }
+  };
   const forceDirect = Boolean(requestOptions.forceDirect);
   requeueStaleProcessingReplyTasks({
     conversationId: conversation.id
@@ -22505,6 +22851,23 @@ async function requestConversationReply(options = {}) {
       ? requestOptions.regenerateInstruction
       : pendingTask?.regenerateInstruction || ""
   ).trim();
+  if (isRegenerate) {
+    pushRegenerateDebugEvent(
+      "request_start",
+      {
+        conversationId: conversation.id,
+        suppressUi,
+        forceDirect,
+        hasPendingTask: Boolean(pendingTask),
+        hasProcessingTask: Boolean(processingTask),
+        currentReplyContextVersion: getConversationReplyContextVersion(conversation),
+        messageCount: Array.isArray(conversation.messages) ? conversation.messages.length : 0
+      },
+      {
+        suppressUi
+      }
+    );
+  }
   const preferDirectVisibleReply =
     !forceDirect &&
     !suppressUi &&
@@ -22527,8 +22890,11 @@ async function requestConversationReply(options = {}) {
       hasConversationPendingReplyMessages(conversation))
   ) {
     try {
+      beginDatabaseWriteState();
       await syncConversationSnapshotNow(conversation, "mutation");
+      endDatabaseWriteState();
     } catch (error) {
+      endDatabaseWriteState();
       setChatReadonlyMode(true, "数据库不可用，仅只读");
       if (!suppressUi) {
         setMessagesStatus(`消息写入数据库失败：${error?.message || "请求失败"}`, "error");
@@ -22546,6 +22912,7 @@ async function requestConversationReply(options = {}) {
       persistMirror: true
     });
   } catch (error) {
+    endDatabaseWriteState();
     setChatReadonlyMode(true, "数据库不可用，仅只读");
     if (!suppressUi) {
       setMessagesStatus(`数据库会话刷新失败：${error?.message || "请求失败"}`, "error");
@@ -22622,12 +22989,32 @@ async function requestConversationReply(options = {}) {
   if (isRegenerate) {
     const latestReplyBatch = getLatestAssistantReplyBatch(conversation);
     if (latestReplyBatch?.blocked) {
+      pushRegenerateDebugEvent(
+        "blocked_by_pending_user_messages",
+        {
+          conversationId: conversation.id
+        },
+        {
+          level: "warn",
+          suppressUi
+        }
+      );
       if (!suppressUi) {
         setMessagesStatus("当前还有待回复的新消息，请先完成这一轮对话。", "error");
       }
       return;
     }
     if (!latestReplyBatch) {
+      pushRegenerateDebugEvent(
+        "latest_reply_batch_missing",
+        {
+          conversationId: conversation.id
+        },
+        {
+          level: "warn",
+          suppressUi
+        }
+      );
       if (!suppressUi) {
         setMessagesStatus("当前没有可重回的上一轮回复。", "error");
       }
@@ -22731,14 +23118,49 @@ async function requestConversationReply(options = {}) {
     clearForegroundReplySync(conversation.id);
     if (isRegenerate) {
       replyContextVersion = bumpConversationReplyContextVersion(conversation);
+      pushRegenerateDebugEvent(
+        "reply_context_bumped",
+        {
+          conversationId: conversation.id,
+          replyContextVersion
+        },
+        {
+          suppressUi
+        }
+      );
       const latestReplyBatch = regenerateReplyBatch || getLatestAssistantReplyBatch(conversation);
       if (!latestReplyBatch || latestReplyBatch.blocked) {
+        pushRegenerateDebugEvent(
+          "reply_batch_missing_after_bump",
+          {
+            conversationId: conversation.id,
+            replyContextVersion,
+            blocked: Boolean(latestReplyBatch?.blocked)
+          },
+          {
+            level: "warn",
+            suppressUi
+          }
+        );
         if (!suppressUi) {
           setMessagesStatus("当前没有可重回的上一轮回复。", "error");
         }
         return;
       }
       regenerateReplyBatch = latestReplyBatch;
+      pushRegenerateDebugEvent(
+        "history_trimmed_for_regenerate",
+        {
+          conversationId: conversation.id,
+          replyContextVersion,
+          startIndex: latestReplyBatch.startIndex,
+          endIndex: latestReplyBatch.endIndex,
+          trimmedHistoryCount: latestReplyBatch.startIndex
+        },
+        {
+          suppressUi
+        }
+      );
       const workingConversation = buildMutatedConversationSnapshot(conversation, (draft) => {
         draft.messages = draft.messages.slice(0, latestReplyBatch.startIndex);
         recalculateConversationUpdatedAt(draft);
@@ -22791,11 +23213,55 @@ async function requestConversationReply(options = {}) {
         conversation
       }
     );
+    if (isRegenerate) {
+      pushRegenerateDebugEvent(
+        "api_reply_received",
+        {
+          conversationId: conversation.id,
+          replyContextVersion,
+          replyLength: String(replyResult?.text || "").length
+        },
+        {
+          suppressUi
+        }
+      );
+    }
     const updatedConversation = getConversationById(conversation.id);
     if (!updatedConversation) {
+      if (isRegenerate) {
+        pushRegenerateDebugEvent(
+          "conversation_missing_after_api",
+          {
+            conversationId: conversation.id,
+            replyContextVersion
+          },
+          {
+            level: "error",
+            suppressUi,
+            statusMessage: "重回失败：请求返回后找不到当前会话，请重试。",
+            statusTone: "error"
+          }
+        );
+      }
       return;
     }
     if (!isConversationReplyContextCurrent(conversation.id, replyContextVersion)) {
+      if (isRegenerate) {
+        pushRegenerateDebugEvent(
+          "reply_context_mismatch_after_api",
+          {
+            conversationId: conversation.id,
+            expectedReplyContextVersion: replyContextVersion,
+            actualReplyContextVersion: getConversationReplyContextVersion(updatedConversation)
+          },
+          {
+            level: "error",
+            suppressUi,
+            statusMessage: "重回已中断：会话在生成期间被刷新或覆盖，请重试。",
+            statusTone: "error"
+          }
+        );
+      }
       return;
     }
     if (!isRegenerate) {
@@ -22836,6 +23302,21 @@ async function requestConversationReply(options = {}) {
       replyResult.privacySession
     );
     if (!createdMessages.length) {
+      if (isRegenerate) {
+        pushRegenerateDebugEvent(
+          "created_messages_empty",
+          {
+            conversationId: conversation.id,
+            replyContextVersion
+          },
+          {
+            level: "error",
+            suppressUi,
+            statusMessage: "重回失败：回复已生成，但没有可展示的新消息。",
+            statusTone: "error"
+          }
+        );
+      }
       return;
     }
     const nextAwarenessCounter =
@@ -22865,9 +23346,38 @@ async function requestConversationReply(options = {}) {
       return draft;
     });
     if (!finalConversation) {
+      if (isRegenerate) {
+        pushRegenerateDebugEvent(
+          "final_conversation_build_failed",
+          {
+            conversationId: conversation.id,
+            replyContextVersion
+          },
+          {
+            level: "error",
+            suppressUi,
+            statusMessage: "重回失败：未能构造替换后的会话快照。",
+            statusTone: "error"
+          }
+        );
+      }
       return;
     }
     await syncConversationSnapshotNow(finalConversation, "mutation");
+    if (isRegenerate) {
+      pushRegenerateDebugEvent(
+        "final_conversation_synced",
+        {
+          conversationId: conversation.id,
+          replyContextVersion,
+          finalMessageCount: Array.isArray(finalConversation.messages) ? finalConversation.messages.length : 0,
+          createdMessageCount: createdMessages.length
+        },
+        {
+          suppressUi
+        }
+      );
+    }
     upsertConversationSnapshotInState(finalConversation, {
       persistMirror: true,
       deferMaintenance: true,
@@ -22875,9 +23385,40 @@ async function requestConversationReply(options = {}) {
     });
     const latestConversation = getConversationById(conversation.id);
     if (!latestConversation) {
+      if (isRegenerate) {
+        pushRegenerateDebugEvent(
+          "latest_conversation_missing_after_sync",
+          {
+            conversationId: conversation.id,
+            replyContextVersion
+          },
+          {
+            level: "error",
+            suppressUi,
+            statusMessage: "重回失败：写入成功后找不到最新会话，请重试。",
+            statusTone: "error"
+          }
+        );
+      }
       return;
     }
     if (!isConversationReplyContextCurrent(conversation.id, replyContextVersion)) {
+      if (isRegenerate) {
+        pushRegenerateDebugEvent(
+          "reply_context_mismatch_after_sync",
+          {
+            conversationId: conversation.id,
+            expectedReplyContextVersion: replyContextVersion,
+            actualReplyContextVersion: getConversationReplyContextVersion(latestConversation)
+          },
+          {
+            level: "error",
+            suppressUi,
+            statusMessage: "重回已中断：写库后会话版本发生变化，请重试。",
+            statusTone: "error"
+          }
+        );
+      }
       return;
     }
     if (
@@ -22910,7 +23451,37 @@ async function requestConversationReply(options = {}) {
       }
     );
     if (!revealedMessages.length) {
+      if (isRegenerate) {
+        pushRegenerateDebugEvent(
+          "append_reply_batch_empty",
+          {
+            conversationId: conversation.id,
+            replyContextVersion,
+            alreadyPersisted: true,
+            createdMessageCount: createdMessages.length
+          },
+          {
+            level: "error",
+            suppressUi,
+            statusMessage: "重回结果已写入数据库，但前端没有成功追加新气泡，请查看控制台日志。",
+            statusTone: "error"
+          }
+        );
+      }
       return;
+    }
+    if (isRegenerate) {
+      pushRegenerateDebugEvent(
+        "append_reply_batch_success",
+        {
+          conversationId: conversation.id,
+          replyContextVersion,
+          revealedMessageCount: revealedMessages.length
+        },
+        {
+          suppressUi
+        }
+      );
     }
     if (replyResult.assistantPresenceUpdate && latestConversation.contactId) {
       setContactPresenceEntry(latestConversation.contactId, replyResult.assistantPresenceUpdate);
@@ -23011,6 +23582,20 @@ async function requestConversationReply(options = {}) {
       );
     }
   } catch (error) {
+    if (isRegenerate) {
+      pushRegenerateDebugEvent(
+        "request_failed",
+        {
+          conversationId: conversation.id,
+          errorMessage: error?.message || "请求失败"
+        },
+        {
+          level: "error",
+          suppressUi
+        }
+      );
+    }
+    endDatabaseWriteState();
     if (!suppressUi) {
       setMessagesStatus(
         `${isProactiveTrigger ? "主动消息生成失败" : "回复失败"}：${error?.message || "请求失败"}`,
@@ -23021,6 +23606,7 @@ async function requestConversationReply(options = {}) {
       throw error;
     }
   } finally {
+    endDatabaseWriteState();
     finishForegroundReplyTask(foregroundReplyTaskId);
     const shouldRestoreConversationScroll =
       !suppressUi &&
@@ -23291,9 +23877,10 @@ function refreshStateFromStorage(options = {}) {
     state.conversations = normalizeCloudConversationList(currentConversations);
   }
   state.contacts = loadContacts(state.conversations);
-  const consumedSharedMessages = shouldLoadLocalConversations ? consumePendingMessageShareInbox() : 0;
+  const consumedSharedMessages = consumePendingMessageShareInbox();
   if (consumedSharedMessages) {
     state.contacts = loadContacts(state.conversations);
+    queueChatSyncFlush("mutation", 0);
   }
   state.worldbooks = loadWorldbooks();
   state.commonPlaces = loadCommonPlaces();
@@ -23455,6 +24042,7 @@ function attachEvents() {
       messagesNavBtnEl.blur();
       if (state.activeConversationId && state.activeTab === "chat") {
         closeConversationTransientUi();
+        clearConversationMessageSelection();
         state.activeConversationId = "";
         setMessagesStatus("");
         renderMessagesPage();
@@ -23483,6 +24071,34 @@ function attachEvents() {
           messagesSearchInputEl?.focus();
         }, 0);
       }
+    });
+  }
+
+  if (messagesMessageSelectBtnEl) {
+    messagesMessageSelectBtnEl.addEventListener("click", () => {
+      const conversation = getConversationById();
+      if (!conversation) {
+        return;
+      }
+      if (!Array.isArray(conversation.messages) || !conversation.messages.length) {
+        setMessagesStatus("当前会话还没有消息可供多选删除。", "error");
+        return;
+      }
+      if (isConversationReplyBusy(conversation.id)) {
+        setMessagesStatus("当前正在等待回复，暂时不能多选删除。", "error");
+        return;
+      }
+      const scrollSnapshot = captureConversationScrollSnapshot();
+      if (isConversationMessageSelectionActive(conversation.id)) {
+        clearConversationMessageSelection();
+      } else {
+        setConversationMessageSelectionMode(true, conversation.id);
+      }
+      queueConversationRenderOptions({
+        scrollBehavior: "preserve",
+        scrollSnapshot
+      });
+      renderMessagesPage();
     });
   }
 
@@ -23542,6 +24158,7 @@ function attachEvents() {
         return;
       }
       closeConversationTransientUi();
+      clearConversationMessageSelection();
       setRegenerateModalOpen(false);
       state.activeTab = String(actionEl.getAttribute("data-tab") || "");
       state.activeConversationId = "";
@@ -23572,6 +24189,21 @@ function attachEvents() {
       ) {
         primeForegroundRefreshSuppression(1600);
       }
+    });
+
+    messagesContentEl.addEventListener("keydown", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      if (
+        !target.classList.contains("messages-message-row__selection-bubble") ||
+        !["Enter", " "].includes(String(event.key || ""))
+      ) {
+        return;
+      }
+      event.preventDefault();
+      target.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
     messagesContentEl.addEventListener("click", (event) => {
@@ -23730,6 +24362,36 @@ function attachEvents() {
       }
 
       if (
+        actionEl.getAttribute("data-action") === "toggle-selected-conversation-message" &&
+        actionEl.getAttribute("data-message-id")
+      ) {
+        const scrollSnapshot = captureConversationScrollSnapshot();
+        toggleConversationMessageSelection(String(actionEl.getAttribute("data-message-id") || ""));
+        queueConversationRenderOptions({
+          scrollBehavior: "preserve",
+          scrollSnapshot
+        });
+        renderMessagesPage();
+        return;
+      }
+
+      if (actionEl.getAttribute("data-action") === "cancel-message-selection") {
+        const scrollSnapshot = captureConversationScrollSnapshot();
+        clearConversationMessageSelection();
+        queueConversationRenderOptions({
+          scrollBehavior: "preserve",
+          scrollSnapshot
+        });
+        renderMessagesPage();
+        return;
+      }
+
+      if (actionEl.getAttribute("data-action") === "delete-selected-conversation-messages") {
+        void deleteSelectedConversationMessages();
+        return;
+      }
+
+      if (
         actionEl.getAttribute("data-action") === "inner-thought-conversation-message" &&
         actionEl.getAttribute("data-message-id")
       ) {
@@ -23824,6 +24486,7 @@ function attachEvents() {
         }
         cancelConversationListLongPress();
         closeConversationTransientUi();
+        clearConversationMessageSelection();
         state.expandedImageMessageId = "";
         state.expandedVoiceMessageId = "";
         state.activeConversationId = nextConversationId;

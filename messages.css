@@ -173,6 +173,14 @@ body.embedded .messages-shell {
   color: #ff9f43;
 }
 
+.messages-topbar__text-button {
+  width: auto;
+  min-width: 44px;
+  padding: 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .messages-status {
   grid-row: 2;
   margin: 0;
@@ -473,6 +481,52 @@ body.embedded .messages-shell {
   gap: 0;
 }
 
+.messages-message-row.is-selection-mode {
+  gap: 10px;
+}
+
+.messages-message-row.is-selected .messages-bubble,
+.messages-message-row.is-selected .messages-discussion-share-card,
+.messages-message-row.is-selected .messages-schedule-invite-card,
+.messages-message-row.is-selected .messages-location-card,
+.messages-message-row.is-selected .messages-image-card,
+.messages-message-row.is-selected .messages-voice-card,
+.messages-message-row.is-selected .messages-call-card {
+  box-shadow:
+    0 0 0 2px rgba(var(--color-brand-rgb), 0.22),
+    0 10px 18px rgba(15, 23, 42, 0.04);
+}
+
+.messages-message-row__select-toggle {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  align-self: center;
+  margin-bottom: 6px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(17, 17, 17, 0.16);
+  background: rgba(255, 255, 255, 0.96);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.messages-message-row__select-toggle.is-selected {
+  border-color: var(--color-brand-500);
+  background: rgba(var(--color-brand-rgb), 0.12);
+}
+
+.messages-message-row__select-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.messages-message-row__select-toggle.is-selected .messages-message-row__select-dot {
+  background: var(--color-brand-500);
+}
+
 .messages-message-row__avatar {
   width: 36px;
   height: 36px;
@@ -699,6 +753,18 @@ body.embedded .messages-shell {
 }
 
 .messages-bubble-toggle--schedule-invite {
+  width: 100%;
+}
+
+.messages-message-row__selection-bubble {
+  width: auto;
+  max-width: 100%;
+  display: block;
+  cursor: pointer;
+}
+
+.messages-message-row__selection-bubble--location,
+.messages-message-row__selection-bubble--schedule-invite {
   width: 100%;
 }
 
@@ -1319,6 +1385,65 @@ body.embedded .messages-shell {
   align-items: center;
   background: #f7f7f7;
   border-top: 1px solid rgba(17, 17, 17, 0.05);
+}
+
+.messages-conversation__selection-bar {
+  position: relative;
+  z-index: 5;
+  flex-shrink: 0;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  background: #f7f7f7;
+  border-top: 1px solid rgba(17, 17, 17, 0.05);
+}
+
+.messages-conversation__selection-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.messages-conversation__selection-copy strong {
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+.messages-conversation__selection-copy span {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted-strong);
+}
+
+.messages-conversation__selection-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.messages-conversation__selection-button {
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #5f5f5f;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px rgba(17, 17, 17, 0.08);
+}
+
+.messages-conversation__selection-button--danger {
+  color: #c54343;
+  background: rgba(197, 67, 67, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(197, 67, 67, 0.12);
+}
+
+.messages-conversation__selection-button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
 }
 
 .messages-call-screen {
