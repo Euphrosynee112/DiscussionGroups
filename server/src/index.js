@@ -968,6 +968,7 @@ async function ensureBusinessSnapshotTables(db) {
       bucket text not null,
       content_text text not null default '',
       entered_bucket_at timestamptz not null default now(),
+      sort_order integer,
       topic_tags_jsonb jsonb not null default '[]'::jsonb,
       summary_text text not null default '',
       summary_updated_at timestamptz,
@@ -993,6 +994,7 @@ async function ensureBusinessSnapshotTables(db) {
   `);
   await db.query(`
     alter table forum_tab_content_items
+      add column if not exists sort_order integer,
       add column if not exists topic_tags_jsonb jsonb not null default '[]'::jsonb,
       add column if not exists summary_text text not null default '',
       add column if not exists summary_updated_at timestamptz,
@@ -1005,6 +1007,10 @@ async function ensureBusinessSnapshotTables(db) {
     update forum_tab_content_items
     set origin_bucket = bucket
     where coalesce(origin_bucket, '') = '';
+  `);
+  await db.query(`
+    create index if not exists forum_tab_content_items_sort_idx
+      on forum_tab_content_items (owner_id, tab_id, bucket, sort_order asc, entered_bucket_at desc);
   `);
   await db.query(`
     create index if not exists forum_tab_content_items_archive_idx
@@ -5714,6 +5720,17 @@ function normalizeForumTabContentBucket(value = "", fallback = "discussion") {
   return FORUM_TAB_CONTENT_BUCKETS.has(normalized) ? normalized : fallback;
 }
 
+function normalizeForumTabContentSortOrder(value = null, fallback = null) {
+  if (value === null || typeof value === "undefined" || value === "") {
+    return fallback;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return clampIntegerValue(Math.round(parsed), -2147483648, 2147483647, fallback ?? 0);
+}
+
 function normalizeForumTopicTag(value = "", fallback = "") {
   const normalized = String(value || "").trim().toLowerCase();
   return FORUM_TOPIC_TAG_IDS.has(normalized) ? normalized : fallback;
@@ -5877,6 +5894,7 @@ function mapForumTabContentItemRow(row = {}) {
     bucket: normalizeForumTabContentBucket(row.bucket, "discussion"),
     contentText: String(row.content_text || "").trim(),
     enteredBucketAt: row.entered_bucket_at || null,
+    sortOrder: Number.isFinite(Number(row.sort_order)) ? Number(row.sort_order) : null,
     topicTags: normalizeForumTopicTags(row.topic_tags_jsonb, []),
     summaryText: String(row.summary_text || "").trim(),
     summaryUpdatedAt: row.summary_updated_at || null,
@@ -6306,6 +6324,7 @@ async function ensureForumTabContentItemsMigrated(
           bucket,
           content_text,
           entered_bucket_at,
+          sort_order,
           topic_tags_jsonb,
           summary_text,
           summary_source_hash,
@@ -6316,7 +6335,7 @@ async function ensureForumTabContentItemsMigrated(
           created_at,
           updated_at
         )
-        values ($1, $2, $3, $4, $5, $6::timestamptz, '[]'::jsonb, '', '', $4, case when $4 = 'hot_topic' then $6::timestamptz else null end, '', $7::jsonb, now(), now())
+        values ($1, $2, $3, $4, $5, $6::timestamptz, $8, '[]'::jsonb, '', '', $4, case when $4 = 'hot_topic' then $6::timestamptz else null end, '', $7::jsonb, now(), now())
       `,
       [
         ownerId,
@@ -6327,7 +6346,8 @@ async function ensureForumTabContentItemsMigrated(
         item.enteredBucketAt,
         stringifyJsonb({
           migratedFromLegacyField: item.bucket === "hot_topic" ? "hotTopic" : "discussionText"
-        })
+        }),
+        (migratedItems.filter((entry) => entry.bucket === item.bucket).findIndex((entry) => entry.id === item.id) + 1) * 1000
       ]
     );
   }
@@ -6341,9 +6361,29 @@ async function applyDailyHotDecay(db, ownerId = DEFAULT_STORAGE_OWNER_ID, tabId 
   }
   const result = await db.query(
     `
+      with candidates as (
+        select
+          id,
+          row_number() over (
+            order by sort_order asc nulls last, entered_bucket_at desc, created_at desc, id desc
+          ) as decay_rank
+        from forum_tab_content_items
+        where owner_id = $1
+          and tab_id = $2
+          and bucket = 'hot_topic'
+          and entered_bucket_at < date_trunc('day', now())
+      ),
+      target_order as (
+        select coalesce(min(sort_order), 0) as min_sort_order
+        from forum_tab_content_items
+        where owner_id = $1
+          and tab_id = $2
+          and bucket = 'discussion'
+      )
       update forum_tab_content_items
       set bucket = 'discussion',
           entered_bucket_at = now(),
+          sort_order = (select min_sort_order from target_order) - candidates.decay_rank::int * 1000,
           origin_bucket = case
             when coalesce(origin_bucket, '') <> '' then origin_bucket
             else 'hot_topic'
@@ -6351,11 +6391,10 @@ async function applyDailyHotDecay(db, ownerId = DEFAULT_STORAGE_OWNER_ID, tabId 
           last_hot_topic_at = coalesce(last_hot_topic_at, entered_bucket_at),
           updated_at = now(),
           metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('lastDecayedAt', now(), 'lastDecayedFromBucket', 'hot_topic')
-      where owner_id = $1
-        and tab_id = $2
-        and bucket = 'hot_topic'
-        and entered_bucket_at < date_trunc('day', now())
-      returning *
+      from candidates
+      where forum_tab_content_items.owner_id = $1
+        and forum_tab_content_items.id = candidates.id
+      returning forum_tab_content_items.*
     `,
     [ownerId, resolvedTabId]
   );
@@ -6373,7 +6412,7 @@ async function markForumDiscussionItemsArchived(db, ownerId = DEFAULT_STORAGE_OW
         select
           id,
           row_number() over (
-            order by entered_bucket_at desc, created_at desc, id desc
+            order by sort_order asc nulls last, entered_bucket_at desc, created_at desc, id desc
           ) as row_num
         from forum_tab_content_items
         where owner_id = $1
@@ -6505,6 +6544,7 @@ async function loadForumTabContentState(
         and tab_id = $2
       order by
         case when bucket = 'hot_topic' then 0 else 1 end,
+        sort_order asc nulls last,
         entered_bucket_at desc,
         created_at desc
     `,
@@ -7770,6 +7810,32 @@ function pickWeightedForumItem(items = [], weightGetter = () => 1) {
   return weightedItems[weightedItems.length - 1]?.item || null;
 }
 
+function pickWeightedForumItemsWithoutReplacement(items = [], count = 1, weightGetter = () => 1) {
+  const pool = normalizeJsonArrayValue(items, [])
+    .map((item) => ({
+      item,
+      weight: Math.max(0, normalizeFiniteNumber(weightGetter(item), 0))
+    }))
+    .filter((entry) => entry.weight > 0);
+  const selected = [];
+  const targetCount = clampIntegerValue(count, 0, pool.length, 0);
+  while (selected.length < targetCount && pool.length) {
+    const totalWeight = pool.reduce((sum, entry) => sum + entry.weight, 0);
+    let cursor = Math.random() * totalWeight;
+    let selectedIndex = pool.length - 1;
+    for (let index = 0; index < pool.length; index += 1) {
+      cursor -= pool[index].weight;
+      if (cursor <= 0) {
+        selectedIndex = index;
+        break;
+      }
+    }
+    selected.push(pool[selectedIndex].item);
+    pool.splice(selectedIndex, 1);
+  }
+  return selected;
+}
+
 function createForumGenerationSourceFromItem(item = {}, sourceKind = "latest_discussion") {
   const mapped = item && typeof item === "object" ? item : {};
   return {
@@ -7781,6 +7847,7 @@ function createForumGenerationSourceFromItem(item = {}, sourceKind = "latest_dis
     topicTags: normalizeForumTopicTags(mapped.topicTags, []),
     originBucket: normalizeForumTabContentBucket(mapped.originBucket || mapped.bucket, "discussion"),
     enteredBucketAt: mapped.enteredBucketAt || null,
+    sortOrder: normalizeForumTabContentSortOrder(mapped.sortOrder, null),
     archivedAt: mapped.archivedAt || null,
     lastHotTopicAt: mapped.lastHotTopicAt || null,
     metadata: normalizeJsonObjectValue(mapped.metadata, {})
@@ -7877,8 +7944,16 @@ function scoreForumPersonaForSource(persona = {}, source = {}, generationType = 
     return Number.NEGATIVE_INFINITY;
   }
   if (generationType === "replies") {
-    const excludedPersonaId = String(options.excludedPersonaId || "").trim();
-    if (excludedPersonaId && excludedPersonaId === persona.id) {
+    const excludedPersonaIds = new Set(
+      normalizeJsonArrayValue(options.excludedPersonaIds, [])
+        .map((id) => String(id || "").trim())
+        .filter(Boolean)
+    );
+    const legacyExcludedPersonaId = String(options.excludedPersonaId || "").trim();
+    if (legacyExcludedPersonaId) {
+      excludedPersonaIds.add(legacyExcludedPersonaId);
+    }
+    if (excludedPersonaIds.has(persona.id)) {
       return Number.NEGATIVE_INFINITY;
     }
   }
@@ -7901,29 +7976,38 @@ function scoreForumPersonaForSource(persona = {}, source = {}, generationType = 
 function chooseForumPersonaPool(personas = [], source = {}, input = {}) {
   const generationType = normalizeForumBackgroundGenerationType(input.generationType, "posts");
   const rootPostMetadata = normalizeJsonObjectValue(input.rootPostMetadata, {});
-  const excludedPersonaId =
-    generationType === "replies" ? String(rootPostMetadata.forumPersonaId || "").trim() : "";
+  const parentReplyMetadata = normalizeJsonObjectValue(input.parentReplyMetadata, {});
+  const excludedPersonaIds = generationType === "replies"
+    ? [rootPostMetadata.forumPersonaId, parentReplyMetadata.forumPersonaId]
+        .map((id) => String(id || "").trim())
+        .filter(Boolean)
+    : [];
+  const requestedCount = clampIntegerValue(Number(input.requestedCount) || 4, 1, 20, 4);
+  const targetPoolSize = Math.max(4, Math.min(12, Math.max(requestedCount, requestedCount + 2)));
   const scored = normalizeJsonArrayValue(personas, [])
     .filter((persona) => persona.isEnabled !== false)
     .map((persona) => ({
       persona,
-      score: scoreForumPersonaForSource(persona, source, generationType, { excludedPersonaId })
+      score: scoreForumPersonaForSource(persona, source, generationType, { excludedPersonaIds })
     }))
     .filter((entry) => Number.isFinite(entry.score))
     .sort((left, right) => right.score - left.score);
-  const primary = pickWeightedForumItem(scored.slice(0, 12), (entry) => Math.max(1, entry.score))?.persona || null;
-  const selected = [];
-  if (primary) {
-    selected.push(primary);
+  const selectedEntries = pickWeightedForumItemsWithoutReplacement(
+    scored.slice(0, Math.max(12, targetPoolSize * 2)),
+    Math.min(targetPoolSize, scored.length),
+    (entry) => Math.max(1, entry.score)
+  );
+  const selected = selectedEntries.map((entry) => entry.persona);
+  if (selected.length < Math.min(targetPoolSize, scored.length)) {
+    scored.forEach((entry) => {
+      if (selected.length >= Math.min(targetPoolSize, scored.length)) {
+        return;
+      }
+      if (!selected.some((persona) => persona.id === entry.persona.id)) {
+        selected.push(entry.persona);
+      }
+    });
   }
-  scored.forEach((entry) => {
-    if (selected.length >= Math.max(4, Math.min(8, Number(input.requestedCount) || 4))) {
-      return;
-    }
-    if (!selected.some((persona) => persona.id === entry.persona.id)) {
-      selected.push(entry.persona);
-    }
-  });
   return selected;
 }
 
@@ -8037,17 +8121,31 @@ function formatForumSpeakingTone(persona = {}) {
   return tone ? `语气:${tone}` : "";
 }
 
-function buildForumPersonaPromptText(personaPool = [], selectedPersona = null, input = {}) {
+function buildForumPersonaPromptText(personaPool = [], selectedPersona = null, input = {}, personaSlots = []) {
   const personas = normalizeJsonArrayValue(personaPool, []);
   if (!personas.length) {
     return "";
   }
+  const slots = normalizeJsonArrayValue(personaSlots, []).filter((persona) => persona?.id);
   const generationType = normalizeForumBackgroundGenerationType(input.generationType, "posts");
+  const slotLines = slots.map((persona, index) =>
+    [
+      `${index + 1}. 第 ${index + 1} 个${generationType === "replies" ? "回复" : "帖子"}固定使用：displayName=${persona.displayName}，handle=${persona.handle || `@${persona.id}`}，language=${formatForumPersonaLanguageLabel(persona.languageCode)}(${persona.languageCode})`,
+      `knowledge_level:${persona.knowledgeLevel}｜进入论坛时间:${persona.enteredForumAt || "未知"}`,
+      persona.interestTags.length ? `主要兴趣:${persona.interestTags.join(", ")}` : "",
+      persona.avoidTags.length ? `较少参与:${persona.avoidTags.join(", ")}` : "",
+      persona.hotStancePrompt ? `热点态度:${persona.hotStancePrompt}` : "",
+      persona.personaPrompt ? `用户定位:${persona.personaPrompt}` : "",
+      formatForumSpeakingTone(persona)
+    ].filter(Boolean).join("\n")
+  );
   return [
     generationType === "replies"
-      ? "本轮回复优先从以下论坛用户画像中选择，尽量避开主帖作者，直接使用给定 displayName / handle："
-      : "本轮发帖优先从以下论坛用户画像中选择，批量生成时尽量不同帖子使用不同用户，直接使用给定 displayName / handle：",
-    "强规则：每一条内容都必须明确绑定到下面某一个 persona；该 persona 的 displayName / handle / 正文语言必须互相一致，避免名称、语感与语言设定彼此脱节，要像同一个论坛用户在说话。",
+      ? "本轮回复已由程序端分配固定论坛用户槽位；请严格按 JSON 数组顺序使用对应槽位，尽量避开主帖/上一层作者："
+      : "本轮发帖已由程序端分配固定论坛用户槽位；请严格按 JSON 数组顺序使用对应槽位：",
+    "强规则：每一条内容都必须使用对应槽位给定的 displayName / handle；正文语言、名称语感和用户设定需要保持一致。",
+    slotLines.length ? "固定输出槽位：\n" + slotLines.join("\n\n") : "",
+    "候选用户池补充信息（仅当固定槽位不足时使用，且同一轮不要重复）：",
     ...personas.map((persona, index) =>
       [
         `${index + 1}. displayName=${persona.displayName}，handle=${persona.handle || `@${persona.id}`}`,
@@ -8142,6 +8240,7 @@ function serializeForumSourceItemForResponse(item = null) {
     topicTags: normalizeForumTopicTags(item.topicTags, []),
     originBucket: item.originBucket || "",
     enteredBucketAt: item.enteredBucketAt || null,
+    sortOrder: normalizeForumTabContentSortOrder(item.sortOrder, null),
     archivedAt: item.archivedAt || null,
     lastHotTopicAt: item.lastHotTopicAt || null,
     cardKind: item.cardKind || "",
@@ -8171,7 +8270,9 @@ function buildForumPersonaGenerationContextPayload(options = {}) {
   if (!selectedItem || !personaPool.length) {
     return null;
   }
-  const selectedPersona = personaPool[0] || null;
+  const requestedCount = clampIntegerValue(Number(requestInput.requestedCount) || 4, 1, 20, 4);
+  const personaSlots = personaPool.slice(0, Math.min(requestedCount, personaPool.length));
+  const selectedPersona = personaSlots[0] || personaPool[0] || null;
   const selectedHistoryDigests = selectedPersona
     ? selectForumHistoryDigestsForPersona(
         selectedPersona,
@@ -8191,7 +8292,7 @@ function buildForumPersonaGenerationContextPayload(options = {}) {
         weightSettings
       )
     : null;
-  const personaText = buildForumPersonaPromptText(personaPool, selectedPersona, requestInput);
+  const personaText = buildForumPersonaPromptText(personaPool, selectedPersona, requestInput, personaSlots);
   const sourceItemText = buildForumSourceItemPromptText(selectedItem, selectedHistoryDigests, replyMode);
   const historyDigestsText = buildForumHistoryDigestsPromptText(selectedHistoryDigests);
   return {
@@ -8204,6 +8305,7 @@ function buildForumPersonaGenerationContextPayload(options = {}) {
       : [],
     fallbackUsed: false,
     selectedPersona: serializeForumPersonaForResponse(selectedPersona),
+    personaSlots: personaSlots.map(serializeForumPersonaForResponse),
     personaPool: personaPool.map(serializeForumPersonaForResponse),
     selectedItem: serializeForumSourceItemForResponse(selectedItem),
     selectedReplyMode: replyMode
@@ -9329,6 +9431,10 @@ app.post("/api/forum/tab-content/items", async (request, response) => {
     return;
   }
   const bucket = normalizeForumTabContentBucket(getInputValue(body, "bucket", "bucket"), "discussion");
+  const requestedSortOrder = normalizeForumTabContentSortOrder(
+    getInputValue(body, "sortOrder", "sort_order"),
+    null
+  );
   const topicTagsValidation = validateRequiredForumTopicTags(
     getInputValue(body, "topicTags", "topic_tags")
   );
@@ -9347,6 +9453,17 @@ app.post("/api/forum/tab-content/items", async (request, response) => {
       return;
     }
     const nextId = randomUUID();
+    const fallbackSortOrderResult = await client.query(
+      `
+        select coalesce(min(sort_order), 0) - 1000 as next_sort_order
+        from forum_tab_content_items
+        where owner_id = $1
+          and tab_id = $2
+          and bucket = $3
+      `,
+      [DEFAULT_STORAGE_OWNER_ID, tabId, bucket]
+    );
+    const nextSortOrder = requestedSortOrder ?? Number(fallbackSortOrderResult.rows[0]?.next_sort_order || -1000);
     const result = await client.query(
       `
         insert into forum_tab_content_items (
@@ -9356,6 +9473,7 @@ app.post("/api/forum/tab-content/items", async (request, response) => {
           bucket,
           content_text,
           entered_bucket_at,
+          sort_order,
           topic_tags_jsonb,
           summary_text,
           summary_source_hash,
@@ -9366,7 +9484,7 @@ app.post("/api/forum/tab-content/items", async (request, response) => {
           created_at,
           updated_at
         )
-        values ($1, $2, $3, $4, $5, now(), $6::jsonb, '', '', $4, case when $4 = 'hot_topic' then now() else null end, '', $7::jsonb, now(), now())
+        values ($1, $2, $3, $4, $5, now(), $8, $6::jsonb, '', '', $4, case when $4 = 'hot_topic' then now() else null end, '', $7::jsonb, now(), now())
         returning *
       `,
       [
@@ -9376,7 +9494,8 @@ app.post("/api/forum/tab-content/items", async (request, response) => {
         bucket,
         contentText,
         stringifyJsonb(topicTagsValidation.topicTags),
-        stringifyJsonb(normalizeJsonObjectValue(body.metadata, {}))
+        stringifyJsonb(normalizeJsonObjectValue(body.metadata, {})),
+        nextSortOrder
       ]
     );
     await markForumBackgroundDirtyRunsIfNeeded(client, DEFAULT_STORAGE_OWNER_ID, tab);
@@ -9461,12 +9580,19 @@ app.patch("/api/forum/tab-content/items/:id", async (request, response) => {
     const nextSummarySourceHash = hasSummaryHashPatch
       ? String(getInputValue(body, "summarySourceHash", "summary_source_hash") || "").trim()
       : existing.summarySourceHash;
+    const hasSortOrderPatch =
+      Object.prototype.hasOwnProperty.call(body, "sortOrder") ||
+      Object.prototype.hasOwnProperty.call(body, "sort_order");
+    const nextSortOrder = hasSortOrderPatch
+      ? normalizeForumTabContentSortOrder(getInputValue(body, "sortOrder", "sort_order"), existing.sortOrder)
+      : existing.sortOrder;
     const result = await client.query(
       `
         update forum_tab_content_items
         set bucket = $3,
             content_text = $4,
             entered_bucket_at = case when bucket <> $3 then now() else entered_bucket_at end,
+            sort_order = $9,
             topic_tags_jsonb = $5::jsonb,
             summary_text = $6,
             summary_source_hash = $7,
@@ -9499,7 +9625,8 @@ app.patch("/api/forum/tab-content/items/:id", async (request, response) => {
         stringifyJsonb({
           ...existing.metadata,
           ...normalizeJsonObjectValue(body.metadata, {})
-        })
+        }),
+        nextSortOrder
       ]
     );
     const settingsState = await loadForumAppSettingsState(client, DEFAULT_STORAGE_OWNER_ID);
@@ -10149,6 +10276,7 @@ app.post("/api/forum/generation-context", async (request, response) => {
       unknownBoundaries: generationContext.unknownBoundaries,
       fallbackUsed: generationContext.fallbackUsed,
       selectedPersona: generationContext.selectedPersona || null,
+      personaSlots: Array.isArray(generationContext.personaSlots) ? generationContext.personaSlots : [],
       personaPool: Array.isArray(generationContext.personaPool) ? generationContext.personaPool : [],
       selectedItem: generationContext.selectedItem || null,
       selectedReplyMode: generationContext.selectedReplyMode || null,

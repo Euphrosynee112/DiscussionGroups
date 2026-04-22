@@ -309,7 +309,7 @@
           createTemplateItem(
             "persona_language_consistency",
             "角色语言一致",
-            "如果上文给了论坛 persona 种子，则每条对象都必须绑定其中一个 persona，并保持 displayName、handle、正文语言与该 persona 的 language 一致。"
+            "如果上文给了固定 persona 槽位，则 JSON 数组必须按顺序使用对应槽位的 displayName、handle 和 language。"
           ),
           createTemplateItem(
             "multiline_style",
@@ -405,7 +405,7 @@
           createTemplateItem(
             "persona_language_consistency",
             "角色语言一致",
-            "如果上文给了论坛 persona 种子，则每条回复都必须绑定其中一个 persona，并保持 displayName、handle、正文语言与该 persona 的 language 一致。"
+            "如果上文给了固定 persona 槽位，则 JSON 数组必须按顺序使用对应槽位的 displayName、handle 和 language。"
           ),
           createTemplateItem("readability", "可读性", "避免整段灌水，优先短句，必要时用换行提升可读性。"),
           createTemplateItem("thread_cohesion", "楼层连贯", "请避免重复句式，并保持楼中讨论的连贯性。")
