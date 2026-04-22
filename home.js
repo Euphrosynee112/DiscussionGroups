@@ -5,8 +5,8 @@ const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GROK_MODEL = "grok-4";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 const DEFAULT_TEMPERATURE = 0.85;
-const APP_BUILD_VERSION = "20260417-175849";
-const APP_BUILD_UPDATED_AT = "2026-04-17 17:58:49";
+const APP_BUILD_VERSION = "20260422-172500";
+const APP_BUILD_UPDATED_AT = "2026-04-22 17:25:00";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -31,7 +31,9 @@ const PRIVACY_ALLOWLIST_TERMS_KEY = "x_style_generator_privacy_allowlist_terms_v
 const PRIVACY_IGNORELIST_TERMS_KEY = "x_style_generator_privacy_ignorelist_terms_v1";
 const PRIVACY_RECENT_HITS_SINCE_KEY = "x_style_generator_privacy_recent_hits_since_v1";
 const PRIVACY_RECENT_HITS_DISMISSED_KEY = "x_style_generator_privacy_recent_hits_dismissed_v1";
+const LIVE_ENTRY_CONFIG_KEY = "x_style_generator_live_entry_config_v1";
 const DEFAULT_AUTO_SCHEDULE_DAYS = 3;
+const DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS = 30;
 const DEFAULT_TRANSFER_MEMORY_IMPORTANCE = 65;
 const API_CONFIG_LIMIT = 12;
 const CONFIG_EXPORT_SCHEMA = "pulse-generator-config";
@@ -105,6 +107,17 @@ const homeRulesNegativeInputEl = document.querySelector("#home-rules-negative-in
 const homeRulesNegativeStatusEl = document.querySelector("#home-rules-negative-status");
 const homeRulesNegativeSaveBtn = document.querySelector("#home-rules-negative-save-btn");
 const homeRulesNegativeCancelBtn = document.querySelector("#home-rules-negative-cancel-btn");
+const homeLiveEntryModalEl = document.querySelector("#home-live-entry-modal");
+const homeLiveEntryCloseBtn = document.querySelector("#home-live-entry-close-btn");
+const homeLiveEntryTopicInputEl = document.querySelector("#home-live-entry-topic-input");
+const homeLiveEntryForumEnabledEl = document.querySelector("#home-live-entry-forum-enabled");
+const homeLiveEntryForumSelectEl = document.querySelector("#home-live-entry-forum-select");
+const homeLiveEntryBubbleEnabledEl = document.querySelector("#home-live-entry-bubble-enabled");
+const homeLiveEntryWorldbookEnabledEl = document.querySelector("#home-live-entry-worldbook-enabled");
+const homeLiveEntryWorldbookListEl = document.querySelector("#home-live-entry-worldbook-list");
+const homeLiveEntryStatusEl = document.querySelector("#home-live-entry-status");
+const homeLiveEntryApplyBtn = document.querySelector("#home-live-entry-apply-btn");
+const homeLiveEntryCancelBtn = document.querySelector("#home-live-entry-cancel-btn");
 const homeActiveConfigSummaryEl = document.querySelector("#home-active-config-summary");
 const homeApiModeSelect = document.querySelector("#home-api-mode");
 const homeApiEndpointInput = document.querySelector("#home-api-endpoint");
@@ -125,6 +138,7 @@ const homeTranslationApiConfigSelectEl = document.querySelector(
 const homeSummaryApiEnabledEl = document.querySelector("#home-summary-api-enabled");
 const homeSummaryApiConfigSelectEl = document.querySelector("#home-summary-api-config-select");
 const homeFloatingApiSwitcherEnabledEl = document.querySelector("#home-floating-api-switcher-enabled");
+const homeLiveAutoReplyIntervalEl = document.querySelector("#home-live-auto-reply-interval");
 const homeNegativePromptInputEl = document.querySelector("#home-negative-prompt-input");
 const homeConfigExportBtn = document.querySelector("#home-config-export-btn");
 const homeConfigImportBtn = document.querySelector("#home-config-import-btn");
@@ -213,6 +227,7 @@ const DEFAULT_SETTINGS = {
   summaryApiEnabled: false,
   summaryApiConfigId: "",
   floatingApiSwitcherEnabled: false,
+  liveAutoReplyIntervalSeconds: DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS,
   privacyCoverEnabled: true,
   negativePromptConstraints: [],
   privacyAllowlist: [],
@@ -234,6 +249,7 @@ const homeState = {
   timeModalOpen: false,
   rulesModalOpen: false,
   rulesNegativeModalOpen: false,
+  liveEntryModalOpen: false,
   browserOpen: false,
   activeAppUrl: "",
   activeAppTab: "home",
@@ -492,6 +508,17 @@ function normalizeAutoScheduleDays(value, fallback = DEFAULT_AUTO_SCHEDULE_DAYS)
     return fallback;
   }
   return Math.min(14, Math.max(1, parsed));
+}
+
+function normalizeLiveAutoReplyIntervalSeconds(
+  value,
+  fallback = DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS
+) {
+  const parsed = Number.parseInt(String(value ?? fallback), 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(300, Math.max(10, parsed));
 }
 
 function normalizeOpenAICompatibleEndpoint(endpoint) {
@@ -918,6 +945,10 @@ function buildNormalizedSettingsSnapshot(source, options = {}) {
   }
   merged.summaryApiEnabled = Boolean(merged.summaryApiEnabled && merged.summaryApiConfigId);
   merged.floatingApiSwitcherEnabled = Boolean(merged.floatingApiSwitcherEnabled);
+  merged.liveAutoReplyIntervalSeconds = normalizeLiveAutoReplyIntervalSeconds(
+    merged.liveAutoReplyIntervalSeconds ?? source?.liveAutoReplyIntervalSeconds,
+    DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS
+  );
   merged.privacyCoverEnabled = merged.privacyCoverEnabled !== false;
   merged.manualTimeSettings =
     typeof window.PulsePromptConfig?.normalizeManualTimeSettings === "function"
@@ -1584,6 +1615,97 @@ function truncateText(value, length = 60) {
 
 function normalizeObjectArray(value) {
   return Array.isArray(value) ? value.filter((item) => item && typeof item === "object") : [];
+}
+
+function normalizeStringArray(value) {
+  const items = Array.isArray(value) ? value : [];
+  const seen = new Set();
+  return items
+    .map((item) => String(item || "").trim())
+    .filter((item) => {
+      if (!item || seen.has(item)) {
+        return false;
+      }
+      seen.add(item);
+      return true;
+    });
+}
+
+function getHomeLiveForumOptions() {
+  const settings = loadSettings({ forceActiveConfig: false });
+  const items = [{ id: "entertainment", name: "默认论坛首页" }];
+  const seen = new Set(items.map((item) => item.id));
+  normalizeObjectArray(settings.customTabs).forEach((tab) => {
+    const tabId = String(tab.id || "").trim();
+    const tabName = String(tab.name || tab.title || tabId).trim();
+    if (!tabId || !tabName || seen.has(tabId)) {
+      return;
+    }
+    seen.add(tabId);
+    items.push({
+      id: tabId,
+      name: tabName
+    });
+  });
+  return items;
+}
+
+function getHomeLiveWorldbookOptions() {
+  const payload = readStoredJson(WORLD_BOOKS_KEY, { categories: [], entries: [] }) || {};
+  const categoryMap = new Map(
+    normalizeObjectArray(payload.categories).map((category, index) => {
+      const categoryId = String(category.id || `category_${index}`).trim();
+      return [categoryId, String(category.name || "").trim()];
+    })
+  );
+  return normalizeObjectArray(payload.entries)
+    .map((entry, index) => {
+      const name = String(entry.name || "").trim();
+      if (!name) {
+        return null;
+      }
+      return {
+        id:
+          String(entry.id || "").trim() ||
+          `worldbook_${String(name).trim().slice(0, 24)}_${index}`,
+        name,
+        categoryName: categoryMap.get(String(entry.categoryId || "").trim()) || ""
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeLiveEntryConfig(source = {}) {
+  const raw = source && typeof source === "object" ? source : {};
+  const forumOptions = getHomeLiveForumOptions();
+  const validForumIds = new Set(forumOptions.map((item) => item.id));
+  const worldbookOptions = getHomeLiveWorldbookOptions();
+  const validWorldbookIds = new Set(worldbookOptions.map((item) => item.id));
+  const fallbackForumId = forumOptions[0]?.id || "entertainment";
+  const resolvedForumId = String(
+    raw.forumTabId ||
+      raw.forumTab ||
+      (Array.isArray(raw.forumTabIds) ? raw.forumTabIds[0] : "") ||
+      (Array.isArray(raw.forumTabs) ? raw.forumTabs[0] : "") ||
+      fallbackForumId
+  ).trim();
+  return {
+    topic: String(raw.topic || "").trim(),
+    forumEnabled: Boolean(raw.forumEnabled),
+    forumTabId: validForumIds.has(resolvedForumId) ? resolvedForumId : fallbackForumId,
+    bubbleEnabled: Boolean(raw.bubbleEnabled),
+    worldbookEnabled: Boolean(raw.worldbookEnabled),
+    worldbookIds: normalizeStringArray(raw.worldbookIds).filter((item) => validWorldbookIds.has(item)),
+    updatedAt: Number.isFinite(Number(raw.updatedAt)) ? Number(raw.updatedAt) : 0
+  };
+}
+
+function loadLiveEntryConfig() {
+  return normalizeLiveEntryConfig(readStoredJson(LIVE_ENTRY_CONFIG_KEY, {}) || {});
+}
+
+function persistLiveEntryConfig(config = {}) {
+  safeSetItem(LIVE_ENTRY_CONFIG_KEY, JSON.stringify(normalizeLiveEntryConfig(config)));
 }
 
 function pickForumProfilePayload(profile = {}) {
@@ -2477,6 +2599,10 @@ function buildTransferPayloadFromCurrentState() {
         summaryApiEnabled: Boolean(settings.summaryApiEnabled),
         summaryApiConfigId: String(settings.summaryApiConfigId || "").trim(),
         floatingApiSwitcherEnabled: Boolean(settings.floatingApiSwitcherEnabled),
+        liveAutoReplyIntervalSeconds: normalizeLiveAutoReplyIntervalSeconds(
+          settings.liveAutoReplyIntervalSeconds,
+          DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS
+        ),
         privacyCoverEnabled: settings.privacyCoverEnabled !== false
       },
       apiConfigs: apiConfigs.map(({ token, ...rest }) => ({ ...rest }))
@@ -6042,6 +6168,17 @@ function applyImportedConfig(payload, selection = homeState.importTransferSelect
     nextSettings.floatingApiSwitcherEnabled = Boolean(
       imported.apiConfig.current?.floatingApiSwitcherEnabled
     );
+    if (
+      Object.prototype.hasOwnProperty.call(
+        imported.apiConfig.current || {},
+        "liveAutoReplyIntervalSeconds"
+      )
+    ) {
+      nextSettings.liveAutoReplyIntervalSeconds = normalizeLiveAutoReplyIntervalSeconds(
+        imported.apiConfig.current?.liveAutoReplyIntervalSeconds,
+        DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS
+      );
+    }
     if (Object.prototype.hasOwnProperty.call(imported.apiConfig.current || {}, "privacyCoverEnabled")) {
       nextSettings.privacyCoverEnabled = imported.apiConfig.current?.privacyCoverEnabled !== false;
     }
@@ -6335,6 +6472,14 @@ function applySettingsToHomeForm(settings) {
   if (homeFloatingApiSwitcherEnabledEl) {
     homeFloatingApiSwitcherEnabledEl.checked = Boolean(settings.floatingApiSwitcherEnabled);
   }
+  if (homeLiveAutoReplyIntervalEl) {
+    homeLiveAutoReplyIntervalEl.value = String(
+      normalizeLiveAutoReplyIntervalSeconds(
+        settings.liveAutoReplyIntervalSeconds,
+        DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS
+      )
+    );
+  }
   if (homeNegativePromptInputEl) {
     homeNegativePromptInputEl.value = normalizeNegativePromptConstraints(
       settings.negativePromptConstraints || []
@@ -6363,6 +6508,10 @@ function readHomeSettingsFromForm() {
     temperature: normalizeTemperature(homeApiTemperatureInput?.value, DEFAULT_TEMPERATURE),
     negativePromptConstraints,
     floatingApiSwitcherEnabled: Boolean(homeFloatingApiSwitcherEnabledEl?.checked),
+    liveAutoReplyIntervalSeconds: normalizeLiveAutoReplyIntervalSeconds(
+      homeLiveAutoReplyIntervalEl?.value,
+      DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS
+    ),
     privacyAllowlist: normalizePrivacyAllowlist(homeState.settings.privacyAllowlist || []),
     apiConfigs: normalizeApiConfigs(homeState.settings.apiConfigs)
   };
@@ -7409,6 +7558,125 @@ function setHomeRulesNegativeModalOpen(isOpen) {
   refreshBodyModalState();
 }
 
+function setHomeLiveEntryStatus(message, tone = "") {
+  if (!homeLiveEntryStatusEl) {
+    return;
+  }
+  homeLiveEntryStatusEl.textContent = message;
+  homeLiveEntryStatusEl.className = "home-settings-status";
+  if (tone) {
+    homeLiveEntryStatusEl.classList.add(tone);
+  }
+}
+
+function getHomeLiveEntryDraft() {
+  const worldbookIds = homeLiveEntryWorldbookListEl
+    ? [...homeLiveEntryWorldbookListEl.querySelectorAll('input[type="checkbox"]:checked')].map(
+        (input) => String(input.value || "").trim()
+      )
+    : [];
+  return normalizeLiveEntryConfig({
+    topic: String(homeLiveEntryTopicInputEl?.value || "").trim(),
+    forumEnabled: Boolean(homeLiveEntryForumEnabledEl?.checked),
+    forumTabId: String(homeLiveEntryForumSelectEl?.value || "").trim(),
+    bubbleEnabled: Boolean(homeLiveEntryBubbleEnabledEl?.checked),
+    worldbookEnabled: Boolean(homeLiveEntryWorldbookEnabledEl?.checked),
+    worldbookIds
+  });
+}
+
+function renderHomeLiveEntryModal(config = loadLiveEntryConfig()) {
+  const resolvedConfig = normalizeLiveEntryConfig(config);
+  const forumOptions = getHomeLiveForumOptions();
+  const worldbookOptions = getHomeLiveWorldbookOptions();
+  if (homeLiveEntryTopicInputEl) {
+    homeLiveEntryTopicInputEl.value = resolvedConfig.topic;
+  }
+  if (homeLiveEntryForumEnabledEl) {
+    homeLiveEntryForumEnabledEl.checked = resolvedConfig.forumEnabled;
+  }
+  if (homeLiveEntryForumSelectEl) {
+    homeLiveEntryForumSelectEl.innerHTML = forumOptions
+      .map(
+        (item) =>
+          `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`
+      )
+      .join("");
+    homeLiveEntryForumSelectEl.value = resolvedConfig.forumTabId;
+    homeLiveEntryForumSelectEl.disabled = !resolvedConfig.forumEnabled;
+  }
+  if (homeLiveEntryBubbleEnabledEl) {
+    homeLiveEntryBubbleEnabledEl.checked = resolvedConfig.bubbleEnabled;
+  }
+  if (homeLiveEntryWorldbookEnabledEl) {
+    homeLiveEntryWorldbookEnabledEl.checked = resolvedConfig.worldbookEnabled;
+  }
+  if (homeLiveEntryWorldbookListEl) {
+    const disabled = !resolvedConfig.worldbookEnabled;
+    homeLiveEntryWorldbookListEl.classList.toggle("is-disabled", disabled);
+    homeLiveEntryWorldbookListEl.classList.toggle("is-empty", !worldbookOptions.length);
+    if (!worldbookOptions.length) {
+      homeLiveEntryWorldbookListEl.innerHTML =
+        '<p class="home-field-hint">当前还没有可选世界书，后续新增后这里会自动出现。</p>';
+    } else {
+      homeLiveEntryWorldbookListEl.innerHTML = worldbookOptions
+        .map(
+          (item) => `
+            <label class="home-live-entry-worldbook-item">
+              <input
+                type="checkbox"
+                value="${escapeHtml(item.id)}"
+                ${resolvedConfig.worldbookIds.includes(item.id) ? "checked" : ""}
+                ${disabled ? "disabled" : ""}
+              />
+              <span class="home-live-entry-worldbook-item__meta">
+                <strong>${escapeHtml(item.name)}</strong>
+                <span>${escapeHtml(item.categoryName || "未分类")}</span>
+              </span>
+            </label>
+          `
+        )
+        .join("");
+    }
+  }
+}
+
+function setHomeLiveEntryModalOpen(isOpen) {
+  homeState.liveEntryModalOpen = Boolean(isOpen);
+  if (!homeLiveEntryModalEl) {
+    return;
+  }
+  if (homeState.liveEntryModalOpen) {
+    if (homeState.modalOpen) {
+      setHomeSettingsModalOpen(false);
+    }
+    if (homeState.timeModalOpen) {
+      setHomeTimeModalOpen(false);
+    }
+    if (homeState.rulesModalOpen) {
+      setHomeRulesModalOpen(false);
+    }
+    setHomeLiveEntryStatus("");
+    renderHomeLiveEntryModal(loadLiveEntryConfig());
+    showHomeLayer(homeLiveEntryModalEl, "grid");
+    refreshBodyModalState();
+    window.setTimeout(() => {
+      homeLiveEntryTopicInputEl?.focus();
+    }, 0);
+    return;
+  }
+  hideHomeLayer(homeLiveEntryModalEl);
+  refreshBodyModalState();
+}
+
+function openConfiguredLiveApp() {
+  setHomeBrowserModalOpen(
+    true,
+    `./live.html?embed=1&v=${APP_BUILD_VERSION}`,
+    getHomeAppMeta("live")
+  );
+}
+
 function getHomeAppMeta(tabName = "home") {
   if (tabName === "privacy") {
     return {
@@ -7429,6 +7697,13 @@ function getHomeAppMeta(tabName = "home") {
       tab: "bubble",
       kicker: "Bubble",
       title: "Bubble"
+    };
+  }
+  if (tabName === "live") {
+    return {
+      tab: "live",
+      kicker: "Live",
+      title: "直播"
     };
   }
   if (tabName === "raising") {
@@ -7480,6 +7755,7 @@ function refreshBodyModalState() {
       homeState.timeModalOpen ||
       homeState.rulesModalOpen ||
       homeState.rulesNegativeModalOpen ||
+      homeState.liveEntryModalOpen ||
       homeState.browserOpen ||
       homeState.privacyAddModalOpen
   );
@@ -7504,6 +7780,9 @@ function setHomeBrowserModalOpen(
     }
     if (homeState.rulesModalOpen) {
       setHomeRulesModalOpen(false);
+    }
+    if (homeState.liveEntryModalOpen) {
+      setHomeLiveEntryModalOpen(false);
     }
     const resolvedAppMeta = appMeta || getHomeAppMeta(homeState.activeAppTab);
     homeState.activeAppUrl = url || homeState.activeAppUrl || "./discussion.html?tab=home";
@@ -7592,6 +7871,11 @@ function openHomeApp(tabName) {
       `./bubble.html?embed=1&v=${APP_BUILD_VERSION}`,
       getHomeAppMeta("bubble")
     );
+    return;
+  }
+
+  if (tabName === "live") {
+    setHomeLiveEntryModalOpen(true);
     return;
   }
 
@@ -7717,6 +8001,70 @@ function attachHomeSettingsEvents() {
     });
   }
 
+  if (homeLiveEntryCloseBtn) {
+    homeLiveEntryCloseBtn.addEventListener("click", () => {
+      setHomeLiveEntryModalOpen(false);
+    });
+  }
+
+  if (homeLiveEntryCancelBtn) {
+    homeLiveEntryCancelBtn.addEventListener("click", () => {
+      setHomeLiveEntryModalOpen(false);
+    });
+  }
+
+  [homeLiveEntryTopicInputEl, homeLiveEntryForumSelectEl].filter(Boolean).forEach((field) => {
+    field.addEventListener("input", () => {
+      setHomeLiveEntryStatus("");
+    });
+    field.addEventListener("change", () => {
+      setHomeLiveEntryStatus("");
+    });
+  });
+
+  if (homeLiveEntryForumEnabledEl) {
+    homeLiveEntryForumEnabledEl.addEventListener("change", () => {
+      renderHomeLiveEntryModal(getHomeLiveEntryDraft());
+      setHomeLiveEntryStatus("");
+    });
+  }
+
+  if (homeLiveEntryBubbleEnabledEl) {
+    homeLiveEntryBubbleEnabledEl.addEventListener("change", () => {
+      setHomeLiveEntryStatus("");
+    });
+  }
+
+  if (homeLiveEntryWorldbookEnabledEl) {
+    homeLiveEntryWorldbookEnabledEl.addEventListener("change", () => {
+      renderHomeLiveEntryModal(getHomeLiveEntryDraft());
+      setHomeLiveEntryStatus("");
+    });
+  }
+
+  if (homeLiveEntryWorldbookListEl) {
+    homeLiveEntryWorldbookListEl.addEventListener("change", () => {
+      setHomeLiveEntryStatus("");
+    });
+  }
+
+  if (homeLiveEntryApplyBtn) {
+    homeLiveEntryApplyBtn.addEventListener("click", () => {
+      const draft = getHomeLiveEntryDraft();
+      if (!draft.topic) {
+        setHomeLiveEntryStatus("请输入直播主题。", "error");
+        homeLiveEntryTopicInputEl?.focus();
+        return;
+      }
+      persistLiveEntryConfig({
+        ...draft,
+        updatedAt: Date.now()
+      });
+      setHomeLiveEntryModalOpen(false);
+      openConfiguredLiveApp();
+    });
+  }
+
   if (homeSettingsModalEl) {
     homeSettingsModalEl.addEventListener("click", (event) => {
       const target = event.target;
@@ -7761,6 +8109,18 @@ function attachHomeSettingsEvents() {
       }
       if (target.hasAttribute("data-close-home-rules-negative")) {
         setHomeRulesNegativeModalOpen(false);
+      }
+    });
+  }
+
+  if (homeLiveEntryModalEl) {
+    homeLiveEntryModalEl.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      if (target.hasAttribute("data-close-home-live-entry")) {
+        setHomeLiveEntryModalOpen(false);
       }
     });
   }
@@ -8318,6 +8678,20 @@ function attachHomeSettingsEvents() {
           : "已关闭悬浮窗快速切换 API。",
         "success"
       );
+    });
+  }
+
+  if (homeLiveAutoReplyIntervalEl) {
+    homeLiveAutoReplyIntervalEl.addEventListener("change", () => {
+      homeState.settings = readHomeSettingsFromForm();
+      persistSettings(homeState.settings);
+      homeLiveAutoReplyIntervalEl.value = String(
+        normalizeLiveAutoReplyIntervalSeconds(
+          homeState.settings.liveAutoReplyIntervalSeconds,
+          DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS
+        )
+      );
+      setHomeApiConfigStatus("直播自动回复间隔已保存。", "success");
     });
   }
 

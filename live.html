@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <title>Pulse Generator · 直播</title>
+    <link rel="stylesheet" href="./theme.css?v=20260422-172500" />
+    <link rel="stylesheet" href="./live.css?v=20260422-172500" />
+  </head>
+  <body>
+    <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
+
+    <main class="live-app" aria-label="直播">
+      <section class="live-screen">
+        <div class="live-stage" aria-hidden="true">
+          <div class="live-stage__glow live-stage__glow--one"></div>
+          <div class="live-stage__glow live-stage__glow--two"></div>
+          <div class="live-stage__spotlight"></div>
+        </div>
+
+        <header class="live-topbar">
+          <button id="live-close-btn" class="live-icon-button" type="button" aria-label="返回首页">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M6.5 6.5l11 11M17.5 6.5l-11 11"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+
+          <section class="live-host-card" aria-label="直播用户">
+            <div id="live-host-avatar" class="live-host-card__avatar"></div>
+            <div class="live-host-card__body">
+              <strong id="live-host-name">Worldview Generator</strong>
+              <span id="live-host-id">@worldview_lab</span>
+            </div>
+          </section>
+
+          <div class="live-stats" aria-label="直播状态">
+            <span class="live-stats__badge">LIVE</span>
+            <span id="live-viewer-count" class="live-stats__count">128 人看过</span>
+          </div>
+        </header>
+
+        <section id="live-bullet-layer" class="live-bullet-layer" aria-live="polite"></section>
+
+        <section class="live-caption">
+          <p id="live-caption-kicker">正在直播</p>
+          <h1 id="live-caption-title">随便聊聊今天的状态</h1>
+          <div id="live-caption-meta" class="live-caption__meta" hidden></div>
+          <span id="live-caption-hint">发送文字会以弹幕形式出现在左下角</span>
+        </section>
+
+        <footer class="live-footer">
+          <form id="live-composer-form" class="live-composer">
+            <input
+              id="live-composer-input"
+              class="live-composer__input"
+              type="text"
+              autocomplete="off"
+              maxlength="120"
+              placeholder="说点什么…"
+            />
+            <button id="live-send-btn" class="live-composer__send" type="submit">发送</button>
+          </form>
+        </footer>
+      </section>
+    </main>
+
+    <script src="./pulse-privacy-cover.js?v=20260413-211026"></script>
+    <script src="./api-log.js?v=20260405-231617"></script>
+    <script src="./live.js?v=20260422-172500"></script>
+  </body>
+</html>

@@ -4,16 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Pulse Generator v2.0</title>
-    <link rel="stylesheet" href="./theme.css?v=20260417-175849" />
-    <link rel="stylesheet" href="./home.css?v=20260417-175849" />
+    <link rel="stylesheet" href="./theme.css?v=20260422-172500" />
+    <link rel="stylesheet" href="./home.css?v=20260422-172500" />
   </head>
   <body>
     <main class="home-scene">
       <section class="phone-home" aria-label="手机首页">
         <header class="status-bar" aria-label="前端版本信息">
           <div class="status-build">
-            <span id="status-version" class="status-build__version">FE v20260416-194800</span>
-            <span id="status-updated" class="status-build__updated">更新于 2026-04-16 19:48:00</span>
+            <span id="status-version" class="status-build__version">FE v20260422-172500</span>
+            <span id="status-updated" class="status-build__updated">更新于 2026-04-22 17:25:00</span>
           </div>
         </header>
 
@@ -73,6 +73,16 @@
           >
             <span class="app-shortcut__icon app-shortcut__icon--x">X</span>
             <span class="app-shortcut__label">X</span>
+          </button>
+
+          <button
+            class="app-shortcut desk-item-live"
+            type="button"
+            data-open-app="live"
+            aria-label="打开直播"
+          >
+            <span class="app-shortcut__icon app-shortcut__icon--live">播</span>
+            <span class="app-shortcut__label">直播</span>
           </button>
 
           <button
@@ -333,6 +343,23 @@
             <p class="home-field-hint">
               开启后，所有顶层页面会显示一个可拖动的 API 悬浮球；点击后可快速切换已保存的 API 配置。
             </p>
+          </div>
+
+          <div class="home-translation-api-settings">
+            <label class="home-field home-field--full">
+              <span>直播自动回复间隔</span>
+              <input
+                id="home-live-auto-reply-interval"
+                type="number"
+                min="10"
+                max="300"
+                step="5"
+                placeholder="30"
+              />
+              <span class="home-field-hint">
+                默认 30 秒；直播打开后会自动获取一次回复，之后按这个间隔补充主播发言。用户发送弹幕后也会立即调用一次 API。
+              </span>
+            </label>
           </div>
 
           <div class="home-config-transfer">
@@ -598,6 +625,93 @@
       </div>
     </section>
 
+    <section
+      id="home-live-entry-modal"
+      class="home-settings-modal"
+      aria-hidden="true"
+      hidden
+      style="display: none"
+    >
+      <div class="home-settings-modal__backdrop" data-close-home-live-entry></div>
+      <div
+        class="home-settings-modal__panel home-live-entry-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="直播基础设置"
+      >
+        <div class="home-settings-modal__head">
+          <div>
+            <p class="home-settings-kicker">Live Setup</p>
+            <h2 class="home-settings-title">直播预设</h2>
+          </div>
+          <button
+            id="home-live-entry-close-btn"
+            class="home-settings-close"
+            type="button"
+            aria-label="关闭直播预设"
+          >
+            ×
+          </button>
+        </div>
+        <div class="home-settings-modal__body">
+          <p class="home-settings-tip">
+            进入直播前先补一下这次的基础信息。这里只记录本次直播的主题和挂载来源，后续进入直播会直接沿用这里的预设。
+          </p>
+
+          <label class="home-field home-field--full">
+            <span>直播主题</span>
+            <input
+              id="home-live-entry-topic-input"
+              type="text"
+              maxlength="40"
+              placeholder="例如：深夜随便聊聊 / 新歌首听 / 今天的碎碎念"
+            />
+            <span class="home-field-hint">建议写一个简短主题，进入直播页后会显示在用户信息下方。</span>
+          </label>
+
+          <section class="home-config-transfer">
+            <label class="home-checkbox-row">
+              <input id="home-live-entry-forum-enabled" type="checkbox" />
+              <span>挂载论坛页签</span>
+            </label>
+            <label class="home-field home-field--full">
+              <span>论坛页签</span>
+              <select id="home-live-entry-forum-select"></select>
+              <span class="home-field-hint">本次直播只能挂载一个论坛页签；观众定位会默认沿用这个页签的用户定位，不改动论坛原本设置。</span>
+            </label>
+          </section>
+
+          <section class="home-config-transfer">
+            <label class="home-checkbox-row">
+              <input id="home-live-entry-bubble-enabled" type="checkbox" />
+              <span>挂载 Bubble 设置</span>
+            </label>
+            <p class="home-field-hint">开启后，会记录本次直播需要带入 Bubble 的基础设定。</p>
+          </section>
+
+          <section class="home-config-transfer">
+            <label class="home-checkbox-row">
+              <input id="home-live-entry-worldbook-enabled" type="checkbox" />
+              <span>挂载世界书基础设置</span>
+            </label>
+            <p class="home-field-hint">
+              可选勾选本次直播要带入的世界书；不勾选具体条目时，也会保留“已开启世界书”的状态。
+            </p>
+            <div id="home-live-entry-worldbook-list" class="home-live-entry-worldbook-list"></div>
+          </section>
+
+          <p id="home-live-entry-status" class="home-settings-status" aria-live="polite"></p>
+
+          <div class="home-config-transfer__actions">
+            <button id="home-live-entry-apply-btn" class="home-primary-button" type="button">
+              进入直播
+            </button>
+            <button id="home-live-entry-cancel-btn" class="home-chip" type="button">取消</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section id="privacy-app-screen" class="privacy-app" hidden>
       <div class="privacy-app__panel">
         <header class="privacy-app__header">
@@ -792,6 +906,6 @@
     <script src="./pulse-message-banner.js?v=20260403-165212"></script>
     <script src="./api-log.js?v=20260405-231617"></script>
     <script src="./pulse-api-switcher.js?v=20260414-141318"></script>
-    <script src="./home.js?v=20260417-175849"></script>
+    <script src="./home.js?v=20260422-172500"></script>
   </body>
 </html>

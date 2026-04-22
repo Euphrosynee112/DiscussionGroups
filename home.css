@@ -280,6 +280,13 @@ button {
   letter-spacing: 0.03em;
 }
 
+.app-shortcut__icon--live {
+  background:
+    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.42), transparent 34%),
+    linear-gradient(180deg, #ff7d8c 0%, #ff586d 56%, #d83a4f 100%);
+  font-size: 18px;
+}
+
 .app-shortcut__icon--schedule {
   background:
     radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.4), transparent 34%),
@@ -319,8 +326,8 @@ button {
 
 .desk-item-chat,
 .desk-item-now,
-.desk-item-memory,
 .desk-item-x,
+.desk-item-live,
 .desk-item-raising,
 .desk-item-plot,
 .desk-item-schedule,
@@ -771,6 +778,62 @@ button {
 .home-transfer-options {
   display: grid;
   gap: 12px;
+}
+
+.home-live-entry-modal__panel {
+  width: min(560px, 100%);
+}
+
+.home-live-entry-worldbook-list {
+  display: grid;
+  gap: 10px;
+  max-height: min(34vh, 260px);
+  padding: 12px;
+  overflow-y: auto;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.52);
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.home-live-entry-worldbook-list.is-disabled {
+  opacity: 0.58;
+}
+
+.home-live-entry-worldbook-list.is-empty {
+  padding: 14px 16px;
+}
+
+.home-live-entry-worldbook-item {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--text);
+}
+
+.home-live-entry-worldbook-item input {
+  margin-top: 2px;
+}
+
+.home-live-entry-worldbook-item__meta {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.home-live-entry-worldbook-item__meta strong,
+.home-live-entry-worldbook-item__meta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-live-entry-worldbook-item__meta strong {
+  font-size: 14px;
+}
+
+.home-live-entry-worldbook-item__meta span {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .home-transfer-group {
