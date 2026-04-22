@@ -1243,10 +1243,10 @@ async function loadCloudConversationById(conversationId = "") {
 async function refreshConversationSnapshotFromCloud(conversationId = "", options = {}) {
   const requestOptions = options && typeof options === "object" ? options : {};
   const conversation = await loadCloudConversationById(conversationId);
-  upsertConversationSnapshotInState(conversation, {
+  const persistedConversation = upsertConversationSnapshotInState(conversation, {
     persistMirror: requestOptions.persistMirror !== false
   });
-  return conversation;
+  return persistedConversation || conversation;
 }
 
 async function syncConversationSnapshotNow(conversation = null, reason = "mutation", options = {}) {
@@ -8161,9 +8161,6 @@ function ensureConversationForDiscussionShare(entry = null) {
   }
   const contact = getContactById(targetContactId);
   if (!contact) {
-    return null;
-  }
-  if (state.chatCloudHydrated && !state.chatReadonlyMode) {
     return null;
   }
   return createConversation(contact);
