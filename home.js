@@ -5,8 +5,8 @@ const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GROK_MODEL = "grok-4";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 const DEFAULT_TEMPERATURE = 0.85;
-const APP_BUILD_VERSION = "20260422-172500";
-const APP_BUILD_UPDATED_AT = "2026-04-22 17:25:00";
+const APP_BUILD_VERSION = "20260422-180300";
+const APP_BUILD_UPDATED_AT = "2026-04-22 18:03:00";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -110,6 +110,8 @@ const homeRulesNegativeCancelBtn = document.querySelector("#home-rules-negative-
 const homeLiveEntryModalEl = document.querySelector("#home-live-entry-modal");
 const homeLiveEntryCloseBtn = document.querySelector("#home-live-entry-close-btn");
 const homeLiveEntryTopicInputEl = document.querySelector("#home-live-entry-topic-input");
+const homeLiveEntryOpeningInputEl = document.querySelector("#home-live-entry-opening-input");
+const homeLiveEntryIntervalInputEl = document.querySelector("#home-live-entry-interval-input");
 const homeLiveEntryForumEnabledEl = document.querySelector("#home-live-entry-forum-enabled");
 const homeLiveEntryForumSelectEl = document.querySelector("#home-live-entry-forum-select");
 const homeLiveEntryBubbleEnabledEl = document.querySelector("#home-live-entry-bubble-enabled");
@@ -138,7 +140,6 @@ const homeTranslationApiConfigSelectEl = document.querySelector(
 const homeSummaryApiEnabledEl = document.querySelector("#home-summary-api-enabled");
 const homeSummaryApiConfigSelectEl = document.querySelector("#home-summary-api-config-select");
 const homeFloatingApiSwitcherEnabledEl = document.querySelector("#home-floating-api-switcher-enabled");
-const homeLiveAutoReplyIntervalEl = document.querySelector("#home-live-auto-reply-interval");
 const homeNegativePromptInputEl = document.querySelector("#home-negative-prompt-input");
 const homeConfigExportBtn = document.querySelector("#home-config-export-btn");
 const homeConfigImportBtn = document.querySelector("#home-config-import-btn");
@@ -1691,6 +1692,16 @@ function normalizeLiveEntryConfig(source = {}) {
   ).trim();
   return {
     topic: String(raw.topic || "").trim(),
+    openingDescription: String(
+      raw.openingDescription || raw.initialDescription || raw.liveOpeningText || ""
+    ).trim(),
+    autoReplyIntervalSeconds: normalizeLiveAutoReplyIntervalSeconds(
+      raw.autoReplyIntervalSeconds ||
+        raw.intervalSeconds ||
+        raw.liveAutoReplyIntervalSeconds ||
+        DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS,
+      DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS
+    ),
     forumEnabled: Boolean(raw.forumEnabled),
     forumTabId: validForumIds.has(resolvedForumId) ? resolvedForumId : fallbackForumId,
     bubbleEnabled: Boolean(raw.bubbleEnabled),
@@ -6472,14 +6483,6 @@ function applySettingsToHomeForm(settings) {
   if (homeFloatingApiSwitcherEnabledEl) {
     homeFloatingApiSwitcherEnabledEl.checked = Boolean(settings.floatingApiSwitcherEnabled);
   }
-  if (homeLiveAutoReplyIntervalEl) {
-    homeLiveAutoReplyIntervalEl.value = String(
-      normalizeLiveAutoReplyIntervalSeconds(
-        settings.liveAutoReplyIntervalSeconds,
-        DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS
-      )
-    );
-  }
   if (homeNegativePromptInputEl) {
     homeNegativePromptInputEl.value = normalizeNegativePromptConstraints(
       settings.negativePromptConstraints || []
@@ -6509,7 +6512,7 @@ function readHomeSettingsFromForm() {
     negativePromptConstraints,
     floatingApiSwitcherEnabled: Boolean(homeFloatingApiSwitcherEnabledEl?.checked),
     liveAutoReplyIntervalSeconds: normalizeLiveAutoReplyIntervalSeconds(
-      homeLiveAutoReplyIntervalEl?.value,
+      homeState.settings.liveAutoReplyIntervalSeconds,
       DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS
     ),
     privacyAllowlist: normalizePrivacyAllowlist(homeState.settings.privacyAllowlist || []),
@@ -7577,6 +7580,11 @@ function getHomeLiveEntryDraft() {
     : [];
   return normalizeLiveEntryConfig({
     topic: String(homeLiveEntryTopicInputEl?.value || "").trim(),
+    openingDescription: String(homeLiveEntryOpeningInputEl?.value || "").trim(),
+    autoReplyIntervalSeconds: normalizeLiveAutoReplyIntervalSeconds(
+      homeLiveEntryIntervalInputEl?.value,
+      DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS
+    ),
     forumEnabled: Boolean(homeLiveEntryForumEnabledEl?.checked),
     forumTabId: String(homeLiveEntryForumSelectEl?.value || "").trim(),
     bubbleEnabled: Boolean(homeLiveEntryBubbleEnabledEl?.checked),
@@ -7591,6 +7599,17 @@ function renderHomeLiveEntryModal(config = loadLiveEntryConfig()) {
   const worldbookOptions = getHomeLiveWorldbookOptions();
   if (homeLiveEntryTopicInputEl) {
     homeLiveEntryTopicInputEl.value = resolvedConfig.topic;
+  }
+  if (homeLiveEntryOpeningInputEl) {
+    homeLiveEntryOpeningInputEl.value = resolvedConfig.openingDescription;
+  }
+  if (homeLiveEntryIntervalInputEl) {
+    homeLiveEntryIntervalInputEl.value = String(
+      normalizeLiveAutoReplyIntervalSeconds(
+        resolvedConfig.autoReplyIntervalSeconds,
+        DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS
+      )
+    );
   }
   if (homeLiveEntryForumEnabledEl) {
     homeLiveEntryForumEnabledEl.checked = resolvedConfig.forumEnabled;
@@ -8013,14 +8032,29 @@ function attachHomeSettingsEvents() {
     });
   }
 
-  [homeLiveEntryTopicInputEl, homeLiveEntryForumSelectEl].filter(Boolean).forEach((field) => {
-    field.addEventListener("input", () => {
-      setHomeLiveEntryStatus("");
+  [
+    homeLiveEntryTopicInputEl,
+    homeLiveEntryOpeningInputEl,
+    homeLiveEntryIntervalInputEl,
+    homeLiveEntryForumSelectEl
+  ]
+    .filter(Boolean)
+    .forEach((field) => {
+      field.addEventListener("input", () => {
+        setHomeLiveEntryStatus("");
+      });
+      field.addEventListener("change", () => {
+        setHomeLiveEntryStatus("");
+        if (field === homeLiveEntryIntervalInputEl) {
+          homeLiveEntryIntervalInputEl.value = String(
+            normalizeLiveAutoReplyIntervalSeconds(
+              homeLiveEntryIntervalInputEl.value,
+              DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS
+            )
+          );
+        }
+      });
     });
-    field.addEventListener("change", () => {
-      setHomeLiveEntryStatus("");
-    });
-  });
 
   if (homeLiveEntryForumEnabledEl) {
     homeLiveEntryForumEnabledEl.addEventListener("change", () => {
@@ -8678,20 +8712,6 @@ function attachHomeSettingsEvents() {
           : "已关闭悬浮窗快速切换 API。",
         "success"
       );
-    });
-  }
-
-  if (homeLiveAutoReplyIntervalEl) {
-    homeLiveAutoReplyIntervalEl.addEventListener("change", () => {
-      homeState.settings = readHomeSettingsFromForm();
-      persistSettings(homeState.settings);
-      homeLiveAutoReplyIntervalEl.value = String(
-        normalizeLiveAutoReplyIntervalSeconds(
-          homeState.settings.liveAutoReplyIntervalSeconds,
-          DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS
-        )
-      );
-      setHomeApiConfigStatus("直播自动回复间隔已保存。", "success");
     });
   }
 
