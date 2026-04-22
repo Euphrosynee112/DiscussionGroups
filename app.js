@@ -3793,6 +3793,7 @@ function attachForumGenerationMetadata(item = {}, generationContext = null, kind
   const persona = findForumPersonaFromGenerationContext(item, generationContext, itemIndex);
   const batchTask = getForumBatchTaskFromGenerationContext(generationContext, itemIndex);
   const selectedItem = batchTask?.mainSource || generationContext?.selectedItem || null;
+  const selectedStanceTask = batchTask?.stanceTask || generationContext?.selectedStanceTask || null;
   const selectedReplyMode = batchTask?.replyMode || generationContext?.selectedReplyMode || null;
   const baseMetadata = item?.metadata && typeof item.metadata === "object" ? { ...item.metadata } : {};
   return {
@@ -3809,6 +3810,9 @@ function attachForumGenerationMetadata(item = {}, generationContext = null, kind
       sourceItemRefKey: String(selectedItem?.refKey || "").trim(),
       sourceItemTags: Array.isArray(selectedItem?.topicTags) ? [...selectedItem.topicTags] : [],
       sourceBucket: String(selectedItem?.bucket || selectedItem?.sourceKind || "").trim(),
+      stanceTaskKey: String(selectedStanceTask?.key || "").trim(),
+      stanceTaskGroupKey: String(selectedStanceTask?.groupKey || "").trim(),
+      stanceTaskLabel: String(selectedStanceTask?.label || "").trim(),
       knowledgeLevel: String(
         persona?.knowledgeLevel || generationContext?.selectedPersona?.knowledgeLevel || ""
       ).trim(),
@@ -4403,6 +4407,7 @@ function buildForumBatchTasksText(batch = {}, generationType = "posts") {
   tasks.forEach((task) => {
     const persona = task?.persona || {};
     const mainSource = task?.mainSource || {};
+    const stanceTask = task?.stanceTask || {};
     const currentRefs = Array.isArray(task?.filteredCurrentDiscussionRefs)
       ? task.filteredCurrentDiscussionRefs
       : [];
@@ -4423,6 +4428,18 @@ function buildForumBatchTasksText(batch = {}, generationType = "posts") {
         persona.hotStancePrompt ? `热点态度：${String(persona.hotStancePrompt || "").trim()}` : "",
         persona.personaPrompt ? `用户设定：${String(persona.personaPrompt || "").trim()}` : "",
         `主来源全文：${buildForumBatchReferenceLine(mainSource, 800)}`,
+        stanceTask?.key
+          ? [
+              "本条立场任务：",
+              `- stance=${String(stanceTask.key || "").trim()}${stanceTask.label ? `（${String(stanceTask.label || "").trim()}）` : ""}`,
+              stanceTask.instruction ? `- 说明：${String(stanceTask.instruction || "").trim()}` : "",
+              stanceTask.boundary ? `- 边界：${String(stanceTask.boundary || "").trim()}` : "",
+              stanceTask.disagreementStyle ? `- 表达方式：${String(stanceTask.disagreementStyle || "").trim()}` : "",
+              "- 允许不完全支持当前热门解读，但不要否认明确给定的事实。"
+            ]
+              .filter(Boolean)
+              .join("\n")
+          : "",
         currentRefs.length
           ? `可参考当前 discussion：\n${currentRefs
               .map((reference) => `- ${buildForumBatchReferenceLine(reference, 180)}`)
@@ -4458,6 +4475,7 @@ function buildForumBatchOutputContractText(batch = {}, generationType = "posts")
     "数组中的每个对象都必须包含 slotIndex，并严格对应同编号 task。",
     `每个对象必须包含字段：${requiredFields}。`,
     "必须使用对应 task 指定的 displayName / handle / language；不要擅自换人。",
+    generationType === "posts" ? "每个 slot 都要体现对应的立场任务，不要把所有帖子写成同一种支持口径。" : "",
     "如果 slotIndex 对应的是中文 persona，就不要输出英文正文；其它语言同理。",
     "</output_contract>"
   ].join("\n");
@@ -4479,6 +4497,7 @@ function buildForumBatchScopedGenerationContext(
     ...(generationContext && typeof generationContext === "object" ? generationContext : {}),
     selectedPersona,
     selectedItem,
+    selectedStanceTask: tasks[0]?.stanceTask || null,
     selectedReplyMode: tasks[0]?.replyMode || null,
     personaSlots: tasks.map((task) => task.persona).filter(Boolean),
     batchTasks: tasks,

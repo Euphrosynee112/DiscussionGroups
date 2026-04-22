@@ -286,6 +286,106 @@ const FORUM_REPLY_MODES = new Set([
   "topic_shift",
   "meme_light"
 ]);
+const FORUM_POST_STANCES = new Set([
+  "agree_amplify",
+  "cautious_accept",
+  "evidence_skeptic",
+  "priority_redirect",
+  "protective_pushback",
+  "contextualize_memory",
+  "fandom_fatigue",
+  "meme_deflect"
+]);
+const DEFAULT_FORUM_POST_STANCE_DEFINITIONS = Object.freeze({
+  agree_amplify: {
+    label: "顺势放大",
+    instruction: "顺着主来源里的热点解读继续聊，可以补充情绪、细节或扩散理由，但不要把推测写成事实。",
+    boundary: "适合上头、共鸣、补糖、补热度；不要替所有粉丝下统一结论。"
+  },
+  cautious_accept: {
+    label: "谨慎接住",
+    instruction: "可以承认这个热点有讨论价值，但需要保留不确定性，表达半信半疑、先看后续或别急着盖章。",
+    boundary: "适合吃瓜但不盖章；不要全盘否认主来源，也不要写成已确认。"
+  },
+  evidence_skeptic: {
+    label: "证据质疑",
+    instruction: "不需要全盘否认热点，但要质疑证据链、图源、时间线、二传逻辑或站姐/营销号解读。",
+    boundary: "可以不支持热门解读方向；不要否认明确给定的公开事实。"
+  },
+  priority_redirect: {
+    label: "重点转移",
+    instruction: "认为当前讨论重点被带偏了，请把话题转回身体状态、工作强度、舞台、作品、成绩或粉圈影响。",
+    boundary: "适合事业粉、健康粉、舞台粉；不要写成管理公告。"
+  },
+  protective_pushback: {
+    label: "护短反推",
+    instruction: "对当前热点扩散有抵触，觉得这类讨论可能伤害J宝、放大隐私、忽略她的状态或让外部观感变差。",
+    boundary: "可以护短和不认同当前解读；不要攻击真人或其他用户。"
+  },
+  contextualize_memory: {
+    label: "旧事补充",
+    instruction: "用这个用户能知道的历史背景、旧舞台、旧行程或旧粉圈经验，让当前热点变得更复杂。",
+    boundary: "适合老粉/深度粉制造信息差；不要凭空编造没有给出的历史。"
+  },
+  fandom_fatigue: {
+    label: "粉圈疲劳",
+    instruction: "重点写对粉圈吵法、站姐动作、控评、营销号或反复二传的疲惫和不耐烦。",
+    boundary: "可以烦当前讨论方式；不要变成纯骂战。"
+  },
+  meme_deflect: {
+    label: "玩梗化解",
+    instruction: "不正面站队，用调侃、梗、轻松吐槽或生活化反应把讨论稍微化开。",
+    boundary: "适合让论坛不全是长评；不要完全脱离主来源。"
+  }
+});
+const DEFAULT_FORUM_POST_STANCE_WEIGHTS = {
+  default: {
+    agree_amplify: 0.25,
+    cautious_accept: 0.2,
+    evidence_skeptic: 0.15,
+    priority_redirect: 0.12,
+    protective_pushback: 0.1,
+    contextualize_memory: 0.08,
+    fandom_fatigue: 0.06,
+    meme_deflect: 0.04
+  },
+  rumor_group: {
+    agree_amplify: 0.18,
+    cautious_accept: 0.2,
+    evidence_skeptic: 0.22,
+    protective_pushback: 0.14,
+    fandom_fatigue: 0.1,
+    contextualize_memory: 0.08,
+    priority_redirect: 0.06,
+    meme_deflect: 0.02
+  },
+  career_group: {
+    agree_amplify: 0.28,
+    contextualize_memory: 0.18,
+    evidence_skeptic: 0.16,
+    priority_redirect: 0.14,
+    cautious_accept: 0.12,
+    fandom_fatigue: 0.06,
+    protective_pushback: 0.04,
+    meme_deflect: 0.02
+  },
+  state_group: {
+    protective_pushback: 0.24,
+    priority_redirect: 0.18,
+    cautious_accept: 0.18,
+    evidence_skeptic: 0.12,
+    contextualize_memory: 0.12,
+    agree_amplify: 0.1,
+    fandom_fatigue: 0.04,
+    meme_deflect: 0.02
+  }
+};
+const FORUM_CRITICAL_POST_STANCES = new Set([
+  "evidence_skeptic",
+  "priority_redirect",
+  "protective_pushback",
+  "fandom_fatigue"
+]);
 const DEFAULT_FORUM_POST_SOURCE_WEIGHTS = {
   hot_topic: 0.55,
   latest_discussion: 0.35,
@@ -1126,6 +1226,7 @@ async function ensureBusinessSnapshotTables(db) {
       hot_stance_prompt text not null default '',
       persona_prompt text not null default '',
       speaking_tone text not null default '',
+      stance_profile_jsonb jsonb not null default '{}'::jsonb,
       language_code text not null default 'zh',
       post_weight double precision not null default 1,
       reply_weight double precision not null default 1,
@@ -1147,6 +1248,10 @@ async function ensureBusinessSnapshotTables(db) {
   await db.query(`
     alter table forum_user_personas
       add column if not exists language_code text not null default 'zh';
+  `);
+  await db.query(`
+    alter table forum_user_personas
+      add column if not exists stance_profile_jsonb jsonb not null default '{}'::jsonb;
   `);
   await db.query(`
     create table if not exists forum_reference_registry (
@@ -5894,6 +5999,148 @@ function normalizeForumReplyMode(value = "", fallback = "agree_extend") {
   return FORUM_REPLY_MODES.has(normalized) ? normalized : fallback;
 }
 
+function normalizeForumPostStanceKey(value = "", fallback = "cautious_accept") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return FORUM_POST_STANCES.has(normalized) ? normalized : fallback;
+}
+
+function normalizeForumPostStanceKeys(value = []) {
+  const rawValues = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? String(value)
+          .split(/[|,]/g)
+          .map((item) => item.trim())
+      : [];
+  return Array.from(
+    new Set(
+      rawValues
+        .map((item) => normalizeForumPostStanceKey(item, ""))
+        .filter(Boolean)
+    )
+  );
+}
+
+function normalizeForumConflictTemperature(value = "", fallback = "low") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["low", "medium", "high"].includes(normalized) ? normalized : fallback;
+}
+
+function inferForumPersonaConflictTemperature(source = {}) {
+  const toneText = [
+    source.speakingTone,
+    source.hotStancePrompt,
+    source.personaPrompt,
+    source.hotStanceKey
+  ].map((item) => String(item || "")).join(" ");
+  if (/尖锐|吵|杠|暴躁|强硬|hard/i.test(toneText)) {
+    return "high";
+  }
+  if (/防爆|不耐烦|上头|情绪|急|疲惫|悲观|拆弹|质检|警惕|boundary|skeptic|guard/i.test(toneText)) {
+    return "medium";
+  }
+  return "low";
+}
+
+function inferForumPersonaStanceProfile(source = {}) {
+  const interestTags = normalizeForumTopicTags(source.interestTags || source.interest_tags_jsonb, []);
+  const avoidTags = normalizeForumTopicTags(source.avoidTags || source.avoid_tags_jsonb, []);
+  const knowledgeLevel = normalizeForumPersonaKnowledgeLevel(source.knowledgeLevel || source.knowledge_level, "surface");
+  const hotStanceKey = String(source.hotStanceKey || source.hot_stance_key || "").trim();
+  const preferred = new Set();
+  const allowed = new Set([...FORUM_POST_STANCES]);
+  const blocked = new Set();
+  const hasCareerTag = interestTags.some((tag) => FORUM_CAREER_GROUP_TAGS.has(tag));
+  const hasStateTag = interestTags.some((tag) => FORUM_STATE_GROUP_TAGS.has(tag));
+  const hasRumorTag = interestTags.some((tag) => FORUM_RUMOR_GROUP_TAGS.has(tag));
+  if (hasCareerTag) {
+    preferred.add("priority_redirect");
+    preferred.add("contextualize_memory");
+    preferred.add("evidence_skeptic");
+  }
+  if (hasStateTag) {
+    preferred.add("protective_pushback");
+    preferred.add("priority_redirect");
+    preferred.add("cautious_accept");
+  }
+  if (hasRumorTag) {
+    preferred.add("cautious_accept");
+    preferred.add("evidence_skeptic");
+    preferred.add("agree_amplify");
+  }
+  if (interestTags.includes("fandom_dynamics") || interestTags.includes("public_buzz")) {
+    preferred.add("fandom_fatigue");
+    preferred.add("evidence_skeptic");
+  }
+  if (interestTags.includes("social_update") || interestTags.includes("visual_style")) {
+    preferred.add("meme_deflect");
+    preferred.add("cautious_accept");
+  }
+  if (["legacy", "deep"].includes(knowledgeLevel)) {
+    preferred.add("contextualize_memory");
+  }
+  if (knowledgeLevel === "surface") {
+    blocked.add("contextualize_memory");
+  }
+  if (/ship|chemistry|fresh_excited|daily|visual|frame/i.test(hotStanceKey)) {
+    preferred.add("agree_amplify");
+    preferred.add("cautious_accept");
+  }
+  if (/source|fact|timeline|boundary|guard|check|evidence|fandom/i.test(hotStanceKey)) {
+    preferred.add("evidence_skeptic");
+    preferred.add("protective_pushback");
+  }
+  if (/career|data|work|live|tour|stream|health|state|rest/i.test(hotStanceKey)) {
+    preferred.add("priority_redirect");
+    preferred.add("protective_pushback");
+  }
+  avoidTags.forEach((tag) => {
+    if (FORUM_RUMOR_GROUP_TAGS.has(tag) && !hasRumorTag) {
+      preferred.add("priority_redirect");
+      preferred.add("protective_pushback");
+    }
+  });
+  return {
+    preferredStances: [...preferred].filter((key) => FORUM_POST_STANCES.has(key) && !blocked.has(key)),
+    allowedStances: [...allowed].filter((key) => !blocked.has(key)),
+    blockedStances: [...blocked],
+    conflictTemperature: inferForumPersonaConflictTemperature(source),
+    frustrationTags: avoidTags,
+    disagreementStyle: ""
+  };
+}
+
+function normalizeForumPersonaStanceProfile(value = {}, fallbackSource = {}) {
+  const source = normalizeJsonObjectValue(value, {});
+  const inferred = inferForumPersonaStanceProfile(fallbackSource);
+  const blockedStances = normalizeForumPostStanceKeys(
+    source.blockedStances || source.blocked_stances || inferred.blockedStances
+  );
+  const blockedSet = new Set(blockedStances);
+  const preferredStances = normalizeForumPostStanceKeys(
+    source.preferredStances || source.preferred_stances || inferred.preferredStances
+  ).filter((key) => !blockedSet.has(key));
+  const allowedStances = normalizeForumPostStanceKeys(
+    source.allowedStances || source.allowed_stances || inferred.allowedStances
+  ).filter((key) => !blockedSet.has(key));
+  return {
+    preferredStances,
+    allowedStances: allowedStances.length
+      ? allowedStances
+      : [...FORUM_POST_STANCES].filter((key) => !blockedSet.has(key)),
+    blockedStances,
+    conflictTemperature: normalizeForumConflictTemperature(
+      source.conflictTemperature || source.conflict_temperature,
+      inferred.conflictTemperature
+    ),
+    frustrationTags: normalizeForumTopicTags(
+      source.frustrationTags || source.frustration_tags,
+      inferred.frustrationTags
+    ),
+    disagreementStyle: String(source.disagreementStyle || source.disagreement_style || inferred.disagreementStyle || "").trim()
+  };
+}
+
 function normalizeForumGenerationScopeType(value = "", fallback = "global") {
   const normalized = String(value || "").trim().toLowerCase();
   return FORUM_GENERATION_SCOPE_TYPES.has(normalized) ? normalized : fallback;
@@ -6130,21 +6377,37 @@ function createForumBackgroundCardSnapshot(row = {}) {
 }
 
 function mapForumUserPersonaRow(row = {}) {
+  const knowledgeLevel = normalizeForumPersonaKnowledgeLevel(row.knowledge_level, "surface");
+  const interestTags = normalizeForumTopicTags(row.interest_tags_jsonb, []);
+  const avoidTags = normalizeForumTopicTags(row.avoid_tags_jsonb, []);
+  const hotStanceKey = String(row.hot_stance_key || "").trim();
+  const hotStancePrompt = String(row.hot_stance_prompt || "").trim();
+  const personaPrompt = String(row.persona_prompt || "").trim();
+  const speakingTone =
+    String(row.speaking_tone || "").trim() ||
+    String(normalizeJsonObjectValue(row.speaking_style_jsonb, {}).tone || "").trim();
   return {
     id: String(row.id || "").trim(),
     tabId: String(row.tab_id || "").trim(),
     displayName: String(row.display_name || "").trim(),
     handle: String(row.handle || "").trim(),
     enteredForumAt: row.entered_forum_at || null,
-    knowledgeLevel: normalizeForumPersonaKnowledgeLevel(row.knowledge_level, "surface"),
-    interestTags: normalizeForumTopicTags(row.interest_tags_jsonb, []),
-    avoidTags: normalizeForumTopicTags(row.avoid_tags_jsonb, []),
-    hotStanceKey: String(row.hot_stance_key || "").trim(),
-    hotStancePrompt: String(row.hot_stance_prompt || "").trim(),
-    personaPrompt: String(row.persona_prompt || "").trim(),
-    speakingTone:
-      String(row.speaking_tone || "").trim() ||
-      String(normalizeJsonObjectValue(row.speaking_style_jsonb, {}).tone || "").trim(),
+    knowledgeLevel,
+    interestTags,
+    avoidTags,
+    hotStanceKey,
+    hotStancePrompt,
+    personaPrompt,
+    speakingTone,
+    stanceProfile: normalizeForumPersonaStanceProfile(row.stance_profile_jsonb, {
+      knowledgeLevel,
+      interestTags,
+      avoidTags,
+      hotStanceKey,
+      hotStancePrompt,
+      personaPrompt,
+      speakingTone
+    }),
     languageCode: normalizeForumPersonaLanguageCode(row.language_code, "zh"),
     postWeight: normalizeFiniteNumber(row.post_weight, 1),
     replyWeight: normalizeFiniteNumber(row.reply_weight, 1),
@@ -8137,6 +8400,28 @@ async function loadForumGenerationWeightSettings(db, ownerId = DEFAULT_STORAGE_O
       DEFAULT_FORUM_POST_SOURCE_WEIGHTS_NO_HOT,
       ["hot_topic", "latest_discussion", "history_digest"]
     ),
+    postStanceWeights: {
+      default: normalizeForumWeightMap(
+        configMap.get("post_stance_weights.default"),
+        DEFAULT_FORUM_POST_STANCE_WEIGHTS.default,
+        [...FORUM_POST_STANCES]
+      ),
+      rumor_group: normalizeForumWeightMap(
+        configMap.get("post_stance_weights.rumor_group"),
+        DEFAULT_FORUM_POST_STANCE_WEIGHTS.rumor_group,
+        [...FORUM_POST_STANCES]
+      ),
+      career_group: normalizeForumWeightMap(
+        configMap.get("post_stance_weights.career_group"),
+        DEFAULT_FORUM_POST_STANCE_WEIGHTS.career_group,
+        [...FORUM_POST_STANCES]
+      ),
+      state_group: normalizeForumWeightMap(
+        configMap.get("post_stance_weights.state_group"),
+        DEFAULT_FORUM_POST_STANCE_WEIGHTS.state_group,
+        [...FORUM_POST_STANCES]
+      )
+    },
     replyModeWeights: {
       default: normalizeForumWeightMap(
         configMap.get("reply_mode_weights.default"),
@@ -8787,6 +9072,148 @@ function resolveForumReplyMode(topicTags = [], settings = {}) {
   };
 }
 
+function resolveForumPostStanceGroupKey(topicTags = []) {
+  const tags = new Set(normalizeForumTopicTags(topicTags, []));
+  if ([...tags].some((tag) => FORUM_RUMOR_GROUP_TAGS.has(tag))) {
+    return "rumor_group";
+  }
+  if ([...tags].some((tag) => FORUM_CAREER_GROUP_TAGS.has(tag))) {
+    return "career_group";
+  }
+  if ([...tags].some((tag) => FORUM_STATE_GROUP_TAGS.has(tag))) {
+    return "state_group";
+  }
+  return "default";
+}
+
+function getForumPostStanceWeightsForGroup(settings = {}, groupKey = "default") {
+  return (
+    settings.postStanceWeights?.[groupKey] ||
+    settings.postStanceWeights?.default ||
+    DEFAULT_FORUM_POST_STANCE_WEIGHTS[groupKey] ||
+    DEFAULT_FORUM_POST_STANCE_WEIGHTS.default
+  );
+}
+
+function scoreForumPostStanceForPersona(
+  stanceKey = "",
+  persona = {},
+  source = {},
+  baseWeight = 0,
+  options = {}
+) {
+  const key = normalizeForumPostStanceKey(stanceKey, "");
+  if (!key) {
+    return 0;
+  }
+  const profile = normalizeForumPersonaStanceProfile(persona.stanceProfile, persona);
+  const allowed = new Set(profile.allowedStances);
+  const blocked = new Set(profile.blockedStances);
+  if (blocked.has(key) || !allowed.has(key)) {
+    return 0;
+  }
+  const sourceTags = normalizeForumTopicTags(source.topicTags, []);
+  const avoidMatches = countForumTopicTagMatches(persona.avoidTags, sourceTags);
+  const frustrationMatches = countForumTopicTagMatches(profile.frustrationTags, sourceTags);
+  const preferred = new Set(profile.preferredStances);
+  const level = normalizeForumPersonaKnowledgeLevel(persona.knowledgeLevel, "surface");
+  const usedCount = normalizeFiniteNumber(options.usedCount, 0);
+  const requestedCount = clampIntegerValue(options.requestedCount, 1, 20, 1);
+  const totalCriticalCount = normalizeFiniteNumber(options.totalCriticalCount, 0);
+  const maxAgreeCount = Math.max(1, Math.ceil(requestedCount * 0.4));
+  const maxCriticalCount = Math.max(1, Math.ceil(requestedCount * 0.55));
+  if (key === "agree_amplify" && usedCount >= maxAgreeCount) {
+    return 0;
+  }
+  if (FORUM_CRITICAL_POST_STANCES.has(key) && totalCriticalCount >= maxCriticalCount) {
+    return 0;
+  }
+  let score = Math.max(0, normalizeFiniteNumber(baseWeight, 0));
+  if (!score) {
+    return 0;
+  }
+  if (preferred.has(key)) {
+    score *= 1.55;
+  }
+  if (avoidMatches > 0) {
+    if (key === "agree_amplify") {
+      score *= 0.35;
+    }
+    if (["cautious_accept", "evidence_skeptic", "priority_redirect", "protective_pushback", "fandom_fatigue"].includes(key)) {
+      score *= 1.25 + avoidMatches * 0.08;
+    }
+  }
+  if (frustrationMatches > 0) {
+    if (["evidence_skeptic", "priority_redirect", "protective_pushback", "fandom_fatigue"].includes(key)) {
+      score *= 1.35 + frustrationMatches * 0.08;
+    }
+    if (key === "agree_amplify") {
+      score *= 0.45;
+    }
+  }
+  if (key === "contextualize_memory") {
+    if (level === "surface") score *= 0.1;
+    if (level === "recent") score *= 0.65;
+    if (level === "deep") score *= 1.2;
+    if (level === "legacy") score *= 1.45;
+  }
+  if (key === "meme_deflect" && level === "surface") {
+    score *= 1.2;
+  }
+  if (profile.conflictTemperature === "high" && FORUM_CRITICAL_POST_STANCES.has(key)) {
+    score *= 1.2;
+  }
+  if (profile.conflictTemperature === "low" && key === "fandom_fatigue") {
+    score *= 0.75;
+  }
+  return score / (1 + usedCount * 1.8);
+}
+
+function resolveForumPostStanceTask(persona = {}, source = {}, settings = {}, options = {}) {
+  const sourceTags = normalizeForumTopicTags(source.topicTags, []);
+  const groupKey = resolveForumPostStanceGroupKey(sourceTags);
+  const weights = getForumPostStanceWeightsForGroup(settings, groupKey);
+  const usedStanceCounts = options.usedStanceCounts instanceof Map ? options.usedStanceCounts : new Map();
+  const profile = normalizeForumPersonaStanceProfile(persona.stanceProfile, persona);
+  const totalCriticalCount = [...FORUM_CRITICAL_POST_STANCES].reduce(
+    (sum, key) => sum + normalizeFiniteNumber(usedStanceCounts.get(key), 0),
+    0
+  );
+  const scored = [...FORUM_POST_STANCES]
+    .map((key) => ({
+      key,
+      score: scoreForumPostStanceForPersona(
+        key,
+        persona,
+        source,
+        weights[key] || 0,
+        {
+          usedCount: usedStanceCounts.get(key) || 0,
+          requestedCount: options.requestedCount,
+          totalCriticalCount
+        }
+      )
+    }))
+    .filter((entry) => entry.score > 0);
+  const selectedKey =
+    pickWeightedForumItem(scored, (entry) => entry.score)?.key ||
+    profile.preferredStances[0] ||
+    profile.allowedStances[0] ||
+    normalizeForumPostStanceKey(Object.keys(weights).find((key) => weights[key] > 0), "cautious_accept");
+  const definition = DEFAULT_FORUM_POST_STANCE_DEFINITIONS[selectedKey] ||
+    DEFAULT_FORUM_POST_STANCE_DEFINITIONS.cautious_accept;
+  return {
+    key: selectedKey,
+    groupKey,
+    label: definition.label,
+    instruction: definition.instruction,
+    boundary: definition.boundary,
+    conflictTemperature: profile.conflictTemperature,
+    disagreementStyle: profile.disagreementStyle,
+    weights
+  };
+}
+
 function buildForumGenerationSourceCatalog(contentState = {}, historyReferences = []) {
   const hotRefs = normalizeJsonArrayValue(contentState?.hotTopicItems, [])
     .map((item) => createForumGenerationSourceFromItem(item, "hot_topic"))
@@ -9098,6 +9525,7 @@ function buildForumGenerationBatches(options = {}) {
   const batchSizes = buildForumGenerationBatchSizes(generationType, requestedCount, requestInput);
   const usedPersonaIds = new Set();
   const usedSourceKeys = new Set();
+  const usedPostStanceCounts = new Map();
   const excludedReplyPersonaIds = generationType === "replies"
     ? [
         normalizeJsonObjectValue(requestInput.rootPostMetadata, {}).forumPersonaId,
@@ -9129,6 +9557,18 @@ function buildForumGenerationBatches(options = {}) {
       }
       usedPersonaIds.add(persona.id);
       usedSourceKeys.add(mainSource.refKey || mainSource.id);
+      const stanceTask = generationType === "posts"
+        ? resolveForumPostStanceTask(persona, mainSource, weightSettings, {
+            usedStanceCounts: usedPostStanceCounts,
+            requestedCount
+          })
+        : null;
+      if (stanceTask?.key) {
+        usedPostStanceCounts.set(
+          stanceTask.key,
+          (usedPostStanceCounts.get(stanceTask.key) || 0) + 1
+        );
+      }
       const replyMode = generationType === "replies"
         ? resolveForumReplyMode(
             normalizeForumTopicTags(
@@ -9163,6 +9603,7 @@ function buildForumGenerationBatches(options = {}) {
           personaLinkMap,
           weightSettings
         ),
+        stanceTask,
         replyMode
       });
       slotIndex += 1;
@@ -9284,6 +9725,7 @@ function serializeForumPersonaForResponse(persona = null) {
     hotStancePrompt: persona.hotStancePrompt,
     personaPrompt: persona.personaPrompt,
     speakingTone: persona.speakingTone,
+    stanceProfile: normalizeForumPersonaStanceProfile(persona.stanceProfile, persona),
     languageCode: persona.languageCode,
     languageLabel: formatForumPersonaLanguageLabel(persona.languageCode),
     postWeight: persona.postWeight,
@@ -9356,6 +9798,7 @@ function buildForumPersonaGenerationContextPayload(options = {}) {
     ).values()
   ).slice(0, 24);
   const replyMode = selectedTask?.replyMode || null;
+  const selectedStanceTask = selectedTask?.stanceTask || null;
   const personaText = buildForumPersonaPromptText(personaPool, selectedPersona, requestInput, personaSlots);
   const sourceItemText = buildForumSourceItemPromptText(selectedItem, selectedPrivateRefs, replyMode);
   const historyDigestsText = buildForumHistoryDigestsPromptText(selectedPrivateRefs);
@@ -9379,6 +9822,17 @@ function buildForumPersonaGenerationContextPayload(options = {}) {
       privateBackgroundRefs: normalizeJsonArrayValue(task.privateBackgroundRefs, [])
         .map(serializeForumReferenceForResponse)
         .filter(Boolean),
+      stanceTask: task.stanceTask
+        ? {
+            key: task.stanceTask.key,
+            groupKey: task.stanceTask.groupKey,
+            label: task.stanceTask.label,
+            instruction: task.stanceTask.instruction,
+            boundary: task.stanceTask.boundary,
+            conflictTemperature: task.stanceTask.conflictTemperature,
+            disagreementStyle: task.stanceTask.disagreementStyle
+          }
+        : null,
       replyMode: task.replyMode
         ? {
             key: task.replyMode.key,
@@ -9401,6 +9855,17 @@ function buildForumPersonaGenerationContextPayload(options = {}) {
     personaSlots: personaSlots.map(serializeForumPersonaForResponse),
     personaPool: personaPool.map(serializeForumPersonaForResponse),
     selectedItem: serializeForumSourceItemForResponse(selectedItem),
+    selectedStanceTask: selectedStanceTask
+      ? {
+          key: selectedStanceTask.key,
+          groupKey: selectedStanceTask.groupKey,
+          label: selectedStanceTask.label,
+          instruction: selectedStanceTask.instruction,
+          boundary: selectedStanceTask.boundary,
+          conflictTemperature: selectedStanceTask.conflictTemperature,
+          disagreementStyle: selectedStanceTask.disagreementStyle
+        }
+      : null,
     selectedReplyMode: replyMode
       ? {
           key: replyMode.key,
