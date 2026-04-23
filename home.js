@@ -5,8 +5,8 @@ const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GROK_MODEL = "grok-4";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 const DEFAULT_TEMPERATURE = 0.85;
-const APP_BUILD_VERSION = "20260423-111157";
-const APP_BUILD_UPDATED_AT = "2026-04-22 19:38:00";
+const APP_BUILD_VERSION = "20260423-191200";
+const APP_BUILD_UPDATED_AT = "2026-04-23 19:12:00";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -32,8 +32,10 @@ const PRIVACY_IGNORELIST_TERMS_KEY = "x_style_generator_privacy_ignorelist_terms
 const PRIVACY_RECENT_HITS_SINCE_KEY = "x_style_generator_privacy_recent_hits_since_v1";
 const PRIVACY_RECENT_HITS_DISMISSED_KEY = "x_style_generator_privacy_recent_hits_dismissed_v1";
 const LIVE_ENTRY_CONFIG_KEY = "x_style_generator_live_entry_config_v1";
+const SIGNING_ENTRY_CONFIG_KEY = "x_style_generator_signing_entry_config_v1";
 const DEFAULT_AUTO_SCHEDULE_DAYS = 3;
 const DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS = 30;
+const DEFAULT_SIGNING_SEGMENT_DURATION_MINUTES = 5;
 const DEFAULT_TRANSFER_MEMORY_IMPORTANCE = 65;
 const API_CONFIG_LIMIT = 12;
 const CONFIG_EXPORT_SCHEMA = "pulse-generator-config";
@@ -125,6 +127,18 @@ const homeLiveEntryWorldbookListEl = document.querySelector("#home-live-entry-wo
 const homeLiveEntryStatusEl = document.querySelector("#home-live-entry-status");
 const homeLiveEntryApplyBtn = document.querySelector("#home-live-entry-apply-btn");
 const homeLiveEntryCancelBtn = document.querySelector("#home-live-entry-cancel-btn");
+const homeSigningEntryModalEl = document.querySelector("#home-signing-entry-modal");
+const homeSigningEntryCloseBtn = document.querySelector("#home-signing-entry-close-btn");
+const homeSigningEntryPresetSelectEl = document.querySelector("#home-signing-entry-preset-select");
+const homeSigningEntryContextInputEl = document.querySelector("#home-signing-entry-context-input");
+const homeSigningEntryDurationInputEl = document.querySelector("#home-signing-entry-duration-input");
+const homeSigningEntryForumEnabledEl = document.querySelector("#home-signing-entry-forum-enabled");
+const homeSigningEntryForumSelectEl = document.querySelector("#home-signing-entry-forum-select");
+const homeSigningEntryWorldbookEnabledEl = document.querySelector("#home-signing-entry-worldbook-enabled");
+const homeSigningEntryWorldbookListEl = document.querySelector("#home-signing-entry-worldbook-list");
+const homeSigningEntryStatusEl = document.querySelector("#home-signing-entry-status");
+const homeSigningEntryApplyBtn = document.querySelector("#home-signing-entry-apply-btn");
+const homeSigningEntryCancelBtn = document.querySelector("#home-signing-entry-cancel-btn");
 const homeActiveConfigSummaryEl = document.querySelector("#home-active-config-summary");
 const homeApiModeSelect = document.querySelector("#home-api-mode");
 const homeApiEndpointInput = document.querySelector("#home-api-endpoint");
@@ -258,6 +272,7 @@ const homeState = {
   liveLobbyModalOpen: false,
   liveEntryModalOpen: false,
   liveEntryReturnToLobby: false,
+  signingEntryModalOpen: false,
   browserOpen: false,
   activeAppUrl: "",
   activeAppTab: "home",
@@ -1724,6 +1739,64 @@ function loadLiveEntryConfig() {
 
 function persistLiveEntryConfig(config = {}) {
   safeSetItem(LIVE_ENTRY_CONFIG_KEY, JSON.stringify(normalizeLiveEntryConfig(config)));
+}
+
+function getSigningContextPresetOptions() {
+  return [
+    { id: "endorsement_signing", label: "代言签售" },
+    { id: "album_signing", label: "专辑签售" },
+    { id: "fanmeeting_signing", label: "见面会签售" }
+  ];
+}
+
+function normalizeSigningSegmentDurationMinutes(
+  value,
+  fallback = DEFAULT_SIGNING_SEGMENT_DURATION_MINUTES
+) {
+  const parsed = Number.parseInt(String(value ?? fallback), 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(30, Math.max(1, parsed));
+}
+
+function normalizeSigningEntryConfig(source = {}) {
+  const raw = source && typeof source === "object" ? source : {};
+  const presetOptions = getSigningContextPresetOptions();
+  const validPresetIds = new Set(presetOptions.map((item) => item.id));
+  const forumOptions = getHomeLiveForumOptions();
+  const validForumIds = new Set(forumOptions.map((item) => item.id));
+  const worldbookOptions = getHomeLiveWorldbookOptions();
+  const validWorldbookIds = new Set(worldbookOptions.map((item) => item.id));
+  const fallbackForumId = forumOptions[0]?.id || "entertainment";
+  const resolvedForumId = String(
+    raw.forumTabId ||
+      raw.forumTab ||
+      (Array.isArray(raw.forumTabIds) ? raw.forumTabIds[0] : "") ||
+      fallbackForumId
+  ).trim();
+  const contextPreset = String(raw.contextPreset || raw.preset || "").trim();
+  return {
+    contextPreset: validPresetIds.has(contextPreset) ? contextPreset : presetOptions[0].id,
+    contextText: String(raw.contextText || raw.description || raw.openingDescription || "").trim(),
+    segmentDurationMinutes: normalizeSigningSegmentDurationMinutes(
+      raw.segmentDurationMinutes || raw.durationMinutes || raw.signingDurationMinutes,
+      DEFAULT_SIGNING_SEGMENT_DURATION_MINUTES
+    ),
+    forumEnabled: Boolean(raw.forumEnabled),
+    forumTabId: validForumIds.has(resolvedForumId) ? resolvedForumId : fallbackForumId,
+    worldbookEnabled: Boolean(raw.worldbookEnabled),
+    worldbookIds: normalizeStringArray(raw.worldbookIds).filter((item) => validWorldbookIds.has(item)),
+    updatedAt: Number.isFinite(Number(raw.updatedAt)) ? Number(raw.updatedAt) : 0
+  };
+}
+
+function loadSigningEntryConfig() {
+  return normalizeSigningEntryConfig(readStoredJson(SIGNING_ENTRY_CONFIG_KEY, {}) || {});
+}
+
+function persistSigningEntryConfig(config = {}) {
+  safeSetItem(SIGNING_ENTRY_CONFIG_KEY, JSON.stringify(normalizeSigningEntryConfig(config)));
 }
 
 function pickForumProfilePayload(profile = {}) {
@@ -3620,8 +3693,8 @@ function collectPrivacyScanTexts() {
 
   contacts.forEach((contact) => {
     const contactName = String(contact.name || "未命名角色").trim() || "未命名角色";
-    pushText("rolePersona", contact.personaPrompt, `角色人设 · ${contactName}`);
-    pushText("specialUserPersona", contact.specialUserPersona, `用户特别人设 · ${contactName}`);
+    pushText("rolePersona", contact.personaPrompt, `角色公共人设 · ${contactName}`);
+    pushText("specialUserPersona", contact.specialUserPersona, `对用户的特殊人设 · ${contactName}`);
   });
 
   normalizeObjectArray(worldbooks.categories).forEach((category) => {
@@ -7692,6 +7765,17 @@ function setHomeLiveEntryStatus(message, tone = "") {
   }
 }
 
+function setHomeSigningEntryStatus(message, tone = "") {
+  if (!homeSigningEntryStatusEl) {
+    return;
+  }
+  homeSigningEntryStatusEl.textContent = message;
+  homeSigningEntryStatusEl.className = "home-settings-status";
+  if (tone) {
+    homeSigningEntryStatusEl.classList.add(tone);
+  }
+}
+
 function getHomeLiveEntryDraft() {
   const worldbookIds = homeLiveEntryWorldbookListEl
     ? [...homeLiveEntryWorldbookListEl.querySelectorAll('input[type="checkbox"]:checked')].map(
@@ -7709,6 +7793,26 @@ function getHomeLiveEntryDraft() {
     forumTabId: String(homeLiveEntryForumSelectEl?.value || "").trim(),
     bubbleEnabled: Boolean(homeLiveEntryBubbleEnabledEl?.checked),
     worldbookEnabled: Boolean(homeLiveEntryWorldbookEnabledEl?.checked),
+    worldbookIds
+  });
+}
+
+function getHomeSigningEntryDraft() {
+  const worldbookIds = homeSigningEntryWorldbookListEl
+    ? [...homeSigningEntryWorldbookListEl.querySelectorAll('input[type="checkbox"]:checked')].map(
+        (input) => String(input.value || "").trim()
+      )
+    : [];
+  return normalizeSigningEntryConfig({
+    contextPreset: String(homeSigningEntryPresetSelectEl?.value || "").trim(),
+    contextText: String(homeSigningEntryContextInputEl?.value || "").trim(),
+    segmentDurationMinutes: normalizeSigningSegmentDurationMinutes(
+      homeSigningEntryDurationInputEl?.value,
+      DEFAULT_SIGNING_SEGMENT_DURATION_MINUTES
+    ),
+    forumEnabled: Boolean(homeSigningEntryForumEnabledEl?.checked),
+    forumTabId: String(homeSigningEntryForumSelectEl?.value || "").trim(),
+    worldbookEnabled: Boolean(homeSigningEntryWorldbookEnabledEl?.checked),
     worldbookIds
   });
 }
@@ -7780,6 +7884,71 @@ function renderHomeLiveEntryModal(config = loadLiveEntryConfig()) {
   }
 }
 
+function renderHomeSigningEntryModal(config = loadSigningEntryConfig()) {
+  const resolvedConfig = normalizeSigningEntryConfig(config);
+  const presetOptions = getSigningContextPresetOptions();
+  const forumOptions = getHomeLiveForumOptions();
+  const worldbookOptions = getHomeLiveWorldbookOptions();
+  if (homeSigningEntryPresetSelectEl) {
+    homeSigningEntryPresetSelectEl.innerHTML = presetOptions
+      .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label)}</option>`)
+      .join("");
+    homeSigningEntryPresetSelectEl.value = resolvedConfig.contextPreset;
+  }
+  if (homeSigningEntryContextInputEl) {
+    homeSigningEntryContextInputEl.value = resolvedConfig.contextText;
+  }
+  if (homeSigningEntryDurationInputEl) {
+    homeSigningEntryDurationInputEl.value = String(
+      normalizeSigningSegmentDurationMinutes(
+        resolvedConfig.segmentDurationMinutes,
+        DEFAULT_SIGNING_SEGMENT_DURATION_MINUTES
+      )
+    );
+  }
+  if (homeSigningEntryForumEnabledEl) {
+    homeSigningEntryForumEnabledEl.checked = resolvedConfig.forumEnabled;
+  }
+  if (homeSigningEntryForumSelectEl) {
+    homeSigningEntryForumSelectEl.innerHTML = forumOptions
+      .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`)
+      .join("");
+    homeSigningEntryForumSelectEl.value = resolvedConfig.forumTabId;
+    homeSigningEntryForumSelectEl.disabled = !resolvedConfig.forumEnabled;
+  }
+  if (homeSigningEntryWorldbookEnabledEl) {
+    homeSigningEntryWorldbookEnabledEl.checked = resolvedConfig.worldbookEnabled;
+  }
+  if (homeSigningEntryWorldbookListEl) {
+    const disabled = !resolvedConfig.worldbookEnabled;
+    homeSigningEntryWorldbookListEl.classList.toggle("is-disabled", disabled);
+    homeSigningEntryWorldbookListEl.classList.toggle("is-empty", !worldbookOptions.length);
+    if (!worldbookOptions.length) {
+      homeSigningEntryWorldbookListEl.innerHTML =
+        '<p class="home-field-hint">当前还没有可选世界书，后续新增后这里会自动出现。</p>';
+    } else {
+      homeSigningEntryWorldbookListEl.innerHTML = worldbookOptions
+        .map(
+          (item) => `
+            <label class="home-live-entry-worldbook-item">
+              <input
+                type="checkbox"
+                value="${escapeHtml(item.id)}"
+                ${resolvedConfig.worldbookIds.includes(item.id) ? "checked" : ""}
+                ${disabled ? "disabled" : ""}
+              />
+              <span class="home-live-entry-worldbook-item__meta">
+                <strong>${escapeHtml(item.name)}</strong>
+                <span>${escapeHtml(item.categoryName || "未分类")}</span>
+              </span>
+            </label>
+          `
+        )
+        .join("");
+    }
+  }
+}
+
 function setHomeLiveEntryModalOpen(isOpen, options = {}) {
   homeState.liveEntryModalOpen = Boolean(isOpen);
   if (!homeLiveEntryModalEl) {
@@ -7817,6 +7986,48 @@ function setHomeLiveEntryModalOpen(isOpen, options = {}) {
   }
 }
 
+function openConfiguredSigningApp() {
+  setHomeBrowserModalOpen(
+    true,
+    `./signing.html?embed=1&v=${APP_BUILD_VERSION}`,
+    getHomeAppMeta("signing")
+  );
+}
+
+function setHomeSigningEntryModalOpen(isOpen) {
+  homeState.signingEntryModalOpen = Boolean(isOpen);
+  if (!homeSigningEntryModalEl) {
+    return;
+  }
+  if (homeState.signingEntryModalOpen) {
+    if (homeState.modalOpen) {
+      setHomeSettingsModalOpen(false);
+    }
+    if (homeState.timeModalOpen) {
+      setHomeTimeModalOpen(false);
+    }
+    if (homeState.rulesModalOpen) {
+      setHomeRulesModalOpen(false);
+    }
+    if (homeState.liveLobbyModalOpen) {
+      setHomeLiveLobbyModalOpen(false);
+    }
+    if (homeState.liveEntryModalOpen) {
+      setHomeLiveEntryModalOpen(false, { returnToLobby: false });
+    }
+    setHomeSigningEntryStatus("");
+    renderHomeSigningEntryModal(loadSigningEntryConfig());
+    showHomeLayer(homeSigningEntryModalEl, "grid");
+    refreshBodyModalState();
+    window.setTimeout(() => {
+      homeSigningEntryPresetSelectEl?.focus();
+    }, 0);
+    return;
+  }
+  hideHomeLayer(homeSigningEntryModalEl);
+  refreshBodyModalState();
+}
+
 function openConfiguredLiveApp() {
   setHomeBrowserModalOpen(
     true,
@@ -7852,6 +8063,13 @@ function getHomeAppMeta(tabName = "home") {
       tab: "live",
       kicker: "Live",
       title: "直播"
+    };
+  }
+  if (tabName === "signing") {
+    return {
+      tab: "signing",
+      kicker: "Signing",
+      title: "签售"
     };
   }
   if (tabName === "raising") {
@@ -7905,6 +8123,7 @@ function refreshBodyModalState() {
       homeState.rulesNegativeModalOpen ||
       homeState.liveLobbyModalOpen ||
       homeState.liveEntryModalOpen ||
+      homeState.signingEntryModalOpen ||
       homeState.browserOpen ||
       homeState.privacyAddModalOpen
   );
@@ -7935,6 +8154,9 @@ function setHomeBrowserModalOpen(
     }
     if (homeState.liveEntryModalOpen) {
       setHomeLiveEntryModalOpen(false, { returnToLobby: false });
+    }
+    if (homeState.signingEntryModalOpen) {
+      setHomeSigningEntryModalOpen(false);
     }
     const resolvedAppMeta = appMeta || getHomeAppMeta(homeState.activeAppTab);
     homeState.activeAppUrl = url || homeState.activeAppUrl || "./discussion.html?tab=home";
@@ -8032,6 +8254,11 @@ function openHomeApp(tabName) {
       `./live-lobby.html?embed=1&v=${APP_BUILD_VERSION}`,
       getHomeAppMeta("live")
     );
+    return;
+  }
+
+  if (tabName === "signing") {
+    setHomeSigningEntryModalOpen(true);
     return;
   }
 
@@ -8269,6 +8496,74 @@ function attachHomeSettingsEvents() {
     });
   }
 
+  if (homeSigningEntryCloseBtn) {
+    homeSigningEntryCloseBtn.addEventListener("click", () => {
+      setHomeSigningEntryModalOpen(false);
+    });
+  }
+
+  if (homeSigningEntryCancelBtn) {
+    homeSigningEntryCancelBtn.addEventListener("click", () => {
+      setHomeSigningEntryModalOpen(false);
+    });
+  }
+
+  [
+    homeSigningEntryPresetSelectEl,
+    homeSigningEntryContextInputEl,
+    homeSigningEntryDurationInputEl,
+    homeSigningEntryForumSelectEl
+  ]
+    .filter(Boolean)
+    .forEach((field) => {
+      field.addEventListener("input", () => {
+        setHomeSigningEntryStatus("");
+      });
+      field.addEventListener("change", () => {
+        setHomeSigningEntryStatus("");
+        if (field === homeSigningEntryDurationInputEl) {
+          homeSigningEntryDurationInputEl.value = String(
+            normalizeSigningSegmentDurationMinutes(
+              homeSigningEntryDurationInputEl.value,
+              DEFAULT_SIGNING_SEGMENT_DURATION_MINUTES
+            )
+          );
+        }
+      });
+    });
+
+  if (homeSigningEntryForumEnabledEl) {
+    homeSigningEntryForumEnabledEl.addEventListener("change", () => {
+      renderHomeSigningEntryModal(getHomeSigningEntryDraft());
+      setHomeSigningEntryStatus("");
+    });
+  }
+
+  if (homeSigningEntryWorldbookEnabledEl) {
+    homeSigningEntryWorldbookEnabledEl.addEventListener("change", () => {
+      renderHomeSigningEntryModal(getHomeSigningEntryDraft());
+      setHomeSigningEntryStatus("");
+    });
+  }
+
+  if (homeSigningEntryWorldbookListEl) {
+    homeSigningEntryWorldbookListEl.addEventListener("change", () => {
+      setHomeSigningEntryStatus("");
+    });
+  }
+
+  if (homeSigningEntryApplyBtn) {
+    homeSigningEntryApplyBtn.addEventListener("click", () => {
+      const draft = getHomeSigningEntryDraft();
+      persistSigningEntryConfig({
+        ...draft,
+        updatedAt: Date.now()
+      });
+      setHomeSigningEntryModalOpen(false);
+      openConfiguredSigningApp();
+    });
+  }
+
   if (homeSettingsModalEl) {
     homeSettingsModalEl.addEventListener("click", (event) => {
       const target = event.target;
@@ -8325,6 +8620,18 @@ function attachHomeSettingsEvents() {
       }
       if (target.hasAttribute("data-close-home-live-entry")) {
         setHomeLiveEntryModalOpen(false);
+      }
+    });
+  }
+
+  if (homeSigningEntryModalEl) {
+    homeSigningEntryModalEl.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      if (target.hasAttribute("data-close-home-signing-entry")) {
+        setHomeSigningEntryModalOpen(false);
       }
     });
   }
@@ -9016,6 +9323,10 @@ function attachHomeSettingsEvents() {
       setHomeLiveEntryModalOpen(false);
       return;
     }
+    if (event.key === "Escape" && homeState.signingEntryModalOpen) {
+      setHomeSigningEntryModalOpen(false);
+      return;
+    }
     if (event.key === "Escape" && homeState.liveLobbyModalOpen) {
       setHomeLiveLobbyModalOpen(false);
       return;
@@ -9045,6 +9356,7 @@ function initHome() {
   hideHomeLayer(homeRulesNegativeModalEl);
   hideHomeLayer(homeLiveLobbyModalEl);
   hideHomeLayer(homeLiveEntryModalEl);
+  hideHomeLayer(homeSigningEntryModalEl);
   hideHomeLayer(homeBrowserModalEl);
   hideHomeLayer(privacyAppAddModalEl);
   resetPrivacyAddForm();

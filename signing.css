@@ -1,0 +1,589 @@
+:root {
+  --signing-bg: #080d16;
+  --signing-surface: rgba(255, 255, 255, 0.12);
+  --signing-surface-strong: rgba(255, 255, 255, 0.18);
+  --signing-text: rgba(255, 255, 255, 0.96);
+  --signing-muted: rgba(255, 255, 255, 0.68);
+  --signing-line: rgba(255, 255, 255, 0.12);
+  --signing-safe-bottom: env(safe-area-inset-bottom);
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  width: 100%;
+  min-height: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--signing-bg);
+  color: var(--signing-text);
+  font-family: "Avenir Next", "SF Pro Display", "PingFang SC", "Noto Sans SC", sans-serif;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  border: 0;
+}
+
+.desktop-entry {
+  position: fixed;
+  left: 18px;
+  top: 18px;
+  z-index: 30;
+  color: rgba(255, 255, 255, 0.84);
+  text-decoration: none;
+}
+
+body.embedded .desktop-entry {
+  display: none;
+}
+
+.signing-app,
+.signing-screen {
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+}
+
+.signing-screen {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  overflow: hidden;
+  background: var(--signing-bg);
+}
+
+.signing-video-stage {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 22% 18%, rgba(255, 190, 122, 0.28), transparent 28%),
+    radial-gradient(circle at 82% 14%, rgba(255, 132, 158, 0.2), transparent 22%),
+    linear-gradient(180deg, #1f2434 0%, #0d121c 54%, #070b12 100%);
+}
+
+.signing-video-stage__remote {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.signing-video-stage__remote img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: saturate(0.86) brightness(0.82);
+}
+
+.signing-video-stage__remote-fallback {
+  width: min(52vw, 240px);
+  height: min(52vw, 240px);
+  border-radius: 40px;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 34% 24%, rgba(255, 255, 255, 0.34), transparent 34%),
+    linear-gradient(135deg, rgba(255, 195, 125, 0.98), rgba(255, 136, 76, 0.86));
+  color: #fff;
+  font-size: clamp(42px, 14vw, 88px);
+  font-weight: 900;
+  box-shadow: 0 30px 70px rgba(0, 0, 0, 0.28);
+}
+
+.signing-video-stage__shade {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(5, 9, 16, 0.54) 0%, rgba(5, 9, 16, 0.12) 28%, rgba(5, 9, 16, 0.24) 62%, rgba(5, 9, 16, 0.9) 100%),
+    radial-gradient(circle at center, transparent 0%, rgba(0, 0, 0, 0.28) 84%);
+}
+
+.signing-video-stage__topbar {
+  position: relative;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: max(14px, env(safe-area-inset-top)) 14px 6px;
+}
+
+.signing-icon-button {
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--signing-text);
+  backdrop-filter: blur(16px);
+}
+
+.signing-icon-button svg {
+  width: 20px;
+  height: 20px;
+}
+
+.signing-video-info {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding-top: 2px;
+}
+
+.signing-video-info p,
+.signing-video-info strong,
+.signing-video-info__handle {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signing-video-info p {
+  color: var(--signing-muted);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.signing-video-info strong {
+  font-size: 19px;
+  line-height: 1.18;
+}
+
+.signing-video-info__handle {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.76);
+}
+
+.signing-video-stage__local {
+  width: 74px;
+  height: 104px;
+  border-radius: 22px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 30% 18%, rgba(255, 255, 255, 0.28), transparent 32%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08));
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 18px 32px rgba(0, 0, 0, 0.22);
+  color: #fff;
+  font-weight: 900;
+}
+
+.signing-video-stage__local img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.signing-stage-meta {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 14px;
+}
+
+.signing-stage-meta__badges {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.signing-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 11px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.94);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  backdrop-filter: blur(18px);
+}
+
+.signing-pill--soft {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.signing-stage-meta__timer {
+  flex: 0 0 auto;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.signing-config-tags {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 14px 0;
+}
+
+.signing-config-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  max-width: 100%;
+  padding: 0 11px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.24);
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  backdrop-filter: blur(14px);
+}
+
+.signing-history {
+  position: absolute;
+  z-index: 3;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  max-height: min(46vh, 390px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+  padding: 8px 0 2px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.signing-history-empty {
+  align-self: center;
+  max-width: 300px;
+  padding: 11px 14px;
+  border-radius: 18px;
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--signing-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+  backdrop-filter: blur(14px);
+}
+
+.signing-message {
+  max-width: min(80%, 430px);
+  padding: 11px 13px;
+  border-radius: 18px;
+  color: #16202d;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.14);
+}
+
+.signing-message--user {
+  align-self: flex-end;
+  border-bottom-right-radius: 7px;
+  background: var(--page-chat-user-bubble);
+}
+
+.signing-message--fan {
+  align-self: flex-start;
+  border-bottom-left-radius: 7px;
+  background: rgba(255, 255, 255, 0.95);
+}
+
+.signing-message--system {
+  align-self: center;
+  max-width: min(88%, 500px);
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.28);
+  color: rgba(255, 255, 255, 0.88);
+  box-shadow: none;
+}
+
+.signing-footer {
+  position: relative;
+  z-index: 5;
+  padding: 10px 12px calc(12px + var(--signing-safe-bottom));
+  background: #070b12;
+  border-top: 1px solid var(--signing-line);
+}
+
+.signing-status-hint {
+  margin: 0 0 10px;
+  min-height: 18px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.signing-composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.signing-composer__input {
+  min-height: 42px;
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 0 15px;
+  outline: none;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.signing-composer__input::placeholder {
+  color: rgba(255, 255, 255, 0.48);
+}
+
+.signing-composer__input:focus {
+  border-color: rgba(var(--color-brand-rgb), 0.72);
+  box-shadow: 0 0 0 3px rgba(var(--color-brand-rgb), 0.18);
+}
+
+.signing-composer__send,
+.signing-composer__trigger {
+  min-height: 42px;
+  padding: 0 13px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.signing-composer__send {
+  background: var(--color-brand-500);
+  color: #fff;
+}
+
+.signing-composer__trigger {
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.signing-composer__send:disabled,
+.signing-composer__trigger:disabled,
+.signing-composer__input:disabled {
+  opacity: 0.52;
+}
+
+.signing-modal,
+.signing-cooldown {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+}
+
+.signing-modal {
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+
+.signing-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(5, 9, 16, 0.54);
+  backdrop-filter: blur(8px);
+}
+
+.signing-modal__panel {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 420px);
+  border-radius: 26px;
+  padding: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 248, 252, 0.98));
+  color: #132030;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.24);
+}
+
+.signing-modal__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.signing-modal__eyebrow,
+.signing-modal__title,
+.signing-modal__desc {
+  margin: 0;
+}
+
+.signing-modal__eyebrow {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(15, 23, 42, 0.42);
+}
+
+.signing-modal__title {
+  margin-top: 4px;
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+.signing-modal__close {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: rgba(15, 23, 42, 0.08);
+  color: rgba(15, 23, 42, 0.72);
+  font-size: 24px;
+}
+
+.signing-modal__body {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.signing-modal__desc {
+  font-size: 13px;
+  line-height: 1.6;
+  color: rgba(15, 23, 42, 0.66);
+}
+
+.signing-modal__status {
+  min-height: 18px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(15, 23, 42, 0.6);
+}
+
+.signing-modal__status.is-error {
+  color: #c2410c;
+}
+
+.signing-modal__status.is-success {
+  color: #15803d;
+}
+
+.signing-modal__actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.signing-modal__button,
+.signing-cooldown__button {
+  min-height: 46px;
+  border-radius: 999px;
+  padding: 0 16px;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.signing-modal__button {
+  background: var(--color-brand-500);
+  color: #fff;
+}
+
+.signing-modal__button--ghost {
+  background: rgba(15, 23, 42, 0.08);
+  color: rgba(15, 23, 42, 0.86);
+}
+
+.signing-cooldown {
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background: rgba(5, 9, 16, 0.74);
+  backdrop-filter: blur(14px);
+}
+
+.signing-cooldown__panel {
+  width: min(100%, 380px);
+  border-radius: 30px;
+  padding: 24px 22px 22px;
+  background:
+    radial-gradient(circle at top, rgba(255, 193, 121, 0.2), transparent 40%),
+    linear-gradient(180deg, rgba(24, 30, 42, 0.98), rgba(10, 14, 22, 0.98));
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.34);
+  text-align: center;
+}
+
+.signing-cooldown__eyebrow,
+.signing-cooldown__title,
+.signing-cooldown__desc,
+.signing-cooldown__timer {
+  margin: 0;
+}
+
+.signing-cooldown__eyebrow {
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.signing-cooldown__title {
+  margin-top: 8px;
+  font-size: 26px;
+  line-height: 1.2;
+}
+
+.signing-cooldown__desc {
+  margin-top: 10px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.signing-cooldown__timer {
+  display: block;
+  margin-top: 22px;
+  font-size: 42px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.signing-cooldown__button {
+  width: 100%;
+  margin-top: 20px;
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.92);
+}
+
+@media (pointer: coarse) {
+  .signing-composer__input,
+  .signing-modal textarea,
+  .signing-modal input,
+  .signing-modal select {
+    font-size: 16px;
+  }
+}

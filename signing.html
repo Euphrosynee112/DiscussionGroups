@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <title>Pulse Generator · 签售</title>
+    <link rel="stylesheet" href="./theme.css?v=20260423-191200" />
+    <link rel="stylesheet" href="./signing.css?v=20260423-191200" />
+  </head>
+  <body>
+    <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
+
+    <main class="signing-app" aria-label="签售">
+      <section class="signing-screen">
+        <div class="signing-video-stage">
+          <div id="signing-remote-visual" class="signing-video-stage__remote"></div>
+          <div class="signing-video-stage__shade"></div>
+
+          <header class="signing-video-stage__topbar">
+            <button id="signing-close-btn" class="signing-icon-button" type="button" aria-label="返回首页">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M6.5 6.5l11 11M17.5 6.5l-11 11"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+
+            <section class="signing-video-info" aria-label="当前签售对象">
+              <p id="signing-session-kicker">正在连接下一位粉丝</p>
+              <strong id="signing-remote-name">签售对象</strong>
+              <span id="signing-remote-handle" class="signing-video-info__handle">@fan</span>
+            </section>
+
+            <div id="signing-local-preview" class="signing-video-stage__local" aria-label="用户画面"></div>
+          </header>
+
+          <section class="signing-stage-meta" aria-label="签售状态">
+            <div class="signing-stage-meta__badges">
+              <span id="signing-kind-badge" class="signing-pill">随机粉丝</span>
+              <span id="signing-context-badge" class="signing-pill signing-pill--soft">代言签售</span>
+            </div>
+            <time id="signing-call-timer" class="signing-stage-meta__timer">05:00</time>
+          </section>
+
+          <section id="signing-config-tags" class="signing-config-tags" hidden></section>
+
+          <section id="signing-history" class="signing-history" aria-live="polite"></section>
+        </div>
+
+        <footer class="signing-footer">
+          <p id="signing-status-hint" class="signing-status-hint" aria-live="polite">
+            接通后会由粉丝先开口，之后你可以发送消息，再点击“回应”获取下一轮。
+          </p>
+          <form id="signing-composer-form" class="signing-composer">
+            <input
+              id="signing-composer-input"
+              class="signing-composer__input"
+              type="text"
+              autocomplete="off"
+              maxlength="200"
+              placeholder="输入想说的话…"
+            />
+            <button id="signing-send-btn" class="signing-composer__send" type="submit">发送</button>
+            <button id="signing-reply-btn" class="signing-composer__trigger" type="button">回应</button>
+          </form>
+        </footer>
+      </section>
+    </main>
+
+    <section id="signing-summary-modal" class="signing-modal" hidden aria-hidden="true">
+      <div class="signing-modal__backdrop" data-close-signing-summary></div>
+      <div class="signing-modal__panel" role="dialog" aria-modal="true" aria-label="生成签售感想">
+        <div class="signing-modal__head">
+          <div>
+            <p class="signing-modal__eyebrow">Seed Review</p>
+            <h2 class="signing-modal__title">这位粉丝要生成签后感想吗？</h2>
+          </div>
+          <button id="signing-summary-close-btn" class="signing-modal__close" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="signing-modal__body">
+          <p id="signing-summary-description" class="signing-modal__desc">
+            这条感想会以正文形式写入挂载页签的 discussion，不显示粉丝身份。
+          </p>
+          <p id="signing-summary-status" class="signing-modal__status" aria-live="polite"></p>
+          <div class="signing-modal__actions">
+            <button id="signing-summary-skip-btn" class="signing-modal__button signing-modal__button--ghost" type="button">
+              否
+            </button>
+            <button id="signing-summary-generate-btn" class="signing-modal__button" type="button">
+              是，生成感想
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="signing-cooldown-overlay" class="signing-cooldown" hidden aria-hidden="true">
+      <div class="signing-cooldown__panel" role="dialog" aria-modal="true" aria-label="切场倒计时">
+        <p class="signing-cooldown__eyebrow">Next Fan</p>
+        <h2 class="signing-cooldown__title">本轮签售已结束</h2>
+        <p class="signing-cooldown__desc">如果你不退出，系统会在倒计时结束后自动接入下一位粉丝。</p>
+        <time id="signing-cooldown-timer" class="signing-cooldown__timer">00:15</time>
+        <button id="signing-cooldown-exit-btn" class="signing-cooldown__button" type="button">
+          退出整场签售
+        </button>
+      </div>
+    </section>
+
+    <script src="./pulse-privacy-cover.js?v=20260417-115721"></script>
+    <script src="./pulse-structured-output.js?v=20260423-191200"></script>
+    <script src="./api-log.js?v=20260405-231617"></script>
+    <script src="./signing.js?v=20260423-191200"></script>
+  </body>
+</html>

@@ -4,16 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Pulse Generator v2.0</title>
-    <link rel="stylesheet" href="./theme.css?v=20260423-131310" />
-    <link rel="stylesheet" href="./home.css?v=20260423-131310" />
+    <link rel="stylesheet" href="./theme.css?v=20260423-191200" />
+    <link rel="stylesheet" href="./home.css?v=20260423-191200" />
   </head>
   <body>
     <main class="home-scene">
       <section class="phone-home" aria-label="手机首页">
         <header class="status-bar" aria-label="前端版本信息">
           <div class="status-build">
-            <span id="status-version" class="status-build__version">FE v20260423-131310</span>
-            <span id="status-updated" class="status-build__updated">更新于 2026-04-23 13:13:10</span>
+            <span id="status-version" class="status-build__version">FE v20260423-191200</span>
+            <span id="status-updated" class="status-build__updated">更新于 2026-04-23 19:12:00</span>
           </div>
         </header>
 
@@ -83,6 +83,16 @@
           >
             <span class="app-shortcut__icon app-shortcut__icon--live">播</span>
             <span class="app-shortcut__label">直播</span>
+          </button>
+
+          <button
+            class="app-shortcut desk-item-signing"
+            type="button"
+            data-open-app="signing"
+            aria-label="打开签售"
+          >
+            <span class="app-shortcut__icon app-shortcut__icon--signing">签</span>
+            <span class="app-shortcut__label">签售</span>
           </button>
 
           <button
@@ -721,6 +731,108 @@
       </div>
     </section>
 
+    <section
+      id="home-signing-entry-modal"
+      class="home-settings-modal"
+      aria-hidden="true"
+      hidden
+      style="display: none"
+    >
+      <div class="home-settings-modal__backdrop" data-close-home-signing-entry></div>
+      <div
+        class="home-settings-modal__panel home-live-entry-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="签售基础设置"
+      >
+        <div class="home-settings-modal__head">
+          <div>
+            <p class="home-settings-kicker">Signing Setup</p>
+            <h2 class="home-settings-title">签售预设</h2>
+          </div>
+          <button
+            id="home-signing-entry-close-btn"
+            class="home-settings-close"
+            type="button"
+            aria-label="关闭签售预设"
+          >
+            ×
+          </button>
+        </div>
+        <div class="home-settings-modal__body">
+          <p class="home-settings-tip">
+            进入签售前先补一下这次的基础信息。签售会按单粉丝轮转进行，每位粉丝都会单独计时。
+          </p>
+
+          <label class="home-field home-field--full">
+            <span>签售背景预设</span>
+            <select id="home-signing-entry-preset-select">
+              <option value="endorsement_signing">代言签售</option>
+              <option value="album_signing">专辑签售</option>
+              <option value="fanmeeting_signing">见面会签售</option>
+            </select>
+            <span class="home-field-hint">会作为本场签售的基础场景说明，影响粉丝的开场方式和互动重点。</span>
+          </label>
+
+          <label class="home-field home-field--full">
+            <span>签售背景补充描述（可选）</span>
+            <textarea
+              id="home-signing-entry-context-input"
+              rows="4"
+              maxlength="600"
+              placeholder="例如：今天是新代言官宣后的首场签售，现场排队很长，主持人一直在控时间。"
+            ></textarea>
+            <span class="home-field-hint">只对这一整场签售生效，用来补充场地氛围、流程压力和这场活动的特殊设定。</span>
+          </label>
+
+          <label class="home-field home-field--full">
+            <span>单个粉丝签售时长（分钟）</span>
+            <input
+              id="home-signing-entry-duration-input"
+              type="number"
+              min="1"
+              max="30"
+              step="1"
+              placeholder="5"
+            />
+            <span class="home-field-hint">默认 5 分钟；每位粉丝结束后会进入 15 秒切场倒计时，不退出则自动开始下一位。</span>
+          </label>
+
+          <section class="home-config-transfer">
+            <label class="home-checkbox-row">
+              <input id="home-signing-entry-forum-enabled" type="checkbox" />
+              <span>挂载论坛页签</span>
+            </label>
+            <label class="home-field home-field--full">
+              <span>论坛页签</span>
+              <select id="home-signing-entry-forum-select"></select>
+              <span class="home-field-hint">seed 粉丝优先从这个页签的 persona 中抽取；签后感想也会写回这个页签的 discussion。</span>
+            </label>
+          </section>
+
+          <section class="home-config-transfer">
+            <label class="home-checkbox-row">
+              <input id="home-signing-entry-worldbook-enabled" type="checkbox" />
+              <span>挂载世界书基础设置</span>
+            </label>
+            <p class="home-field-hint">
+              可选勾选本次签售要带入的世界书；不勾选具体条目时，也会保留“已开启世界书”的状态。
+            </p>
+            <div id="home-signing-entry-worldbook-list" class="home-live-entry-worldbook-list"></div>
+          </section>
+
+          <p id="home-signing-entry-status" class="home-settings-status" aria-live="polite"></p>
+
+          <div class="home-config-transfer__actions">
+            <button id="home-signing-entry-apply-btn" class="home-primary-button" type="button">
+              进入签售
+            </button>
+            <button id="home-signing-entry-cancel-btn" class="home-chip" type="button">取消</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section id="privacy-app-screen" class="privacy-app" hidden>
       <div class="privacy-app__panel">
         <header class="privacy-app__header">
@@ -915,6 +1027,6 @@
     <script src="./pulse-message-banner.js?v=20260403-165212"></script>
     <script src="./api-log.js?v=20260405-231617"></script>
     <script src="./pulse-api-switcher.js?v=20260414-141318"></script>
-    <script src="./home.js?v=20260423-131310"></script>
+    <script src="./home.js?v=20260423-191200"></script>
   </body>
 </html>
