@@ -480,7 +480,7 @@
           createTemplateItem("not_chat", "非聊天任务", "这不是聊天回复，而是纯粹的日程规划任务。"),
           createTemplateItem(
             "contact_persona",
-            "角色人设",
+            "角色公共/关系人设",
             "角色稳定人设：{{contactPersona}}。"
           ),
           createTemplateItem(
@@ -521,11 +521,11 @@
           createTemplateItem("contact_name", "角色姓名", "你叫 {{contactName}}。"),
           createDynamicItem("scene_mode", "当前场景", "读取线上 / 线下场景"),
           createTemplateItem("role_guard", "角色代入", "先像这个人本人一样去理解这段关系、语气和情绪，不要把自己当成解释设定或执行任务的助手。"),
-          createTemplateItem("contact_persona", "角色人设", "你的稳定性格、表达习惯和关系底色：{{contactPersona}}。"),
+          createTemplateItem("contact_persona", "角色公共/关系人设", "你的稳定性格、表达习惯和关系底色：{{contactPersona}}。"),
           createDynamicItem("core_memory", "核心记忆", "读取核心记忆"),
           createTemplateItem("user_name", "用户昵称", "正在和你聊天的用户昵称：{{userName}}。"),
           createTemplateItem("user_persona", "用户画像", "你对这个用户已知的整体印象：{{userPersona}}。"),
-          createDynamicItem("special_user_persona", "特别用户认知", "读取角色对用户的特别认知"),
+          createDynamicItem("special_user_persona", "对用户的特殊认知", "读取角色对用户的特别认知"),
           createDynamicItem("regenerate_hint", "重回要求", "读取重回额外要求")
         ],
         current_state_awareness: [
@@ -628,7 +628,7 @@
         ],
         persona_alignment: [
           createTemplateItem("contact_name", "角色姓名", "需要分析心声的角色叫 {{contactName}}。"),
-          createTemplateItem("contact_persona", "角色人设", "这个角色稳定的人设、表达习惯和关系底色：{{contactPersona}}。"),
+          createTemplateItem("contact_persona", "角色公共/关系人设", "这个角色稳定的人设、表达习惯和关系底色：{{contactPersona}}。"),
           createTemplateItem("user_name", "用户昵称", "和 ta 对话的用户昵称：{{userName}}。"),
           createTemplateItem("user_persona", "用户画像", "用户画像：{{userPersona}}。"),
           createTemplateItem("analysis_goal", "分析目标", "你的任务不是续写对话，而是站在说出这条消息的人本身的立场，用第一人称说出 ta 此刻真实的内在心理活动、说这句话的动机，以及没直接说出口的目标。")
@@ -656,7 +656,7 @@
         persona_alignment: [
           createTemplateItem("contact_name", "联系人姓名", "你是即时聊天联系人：{{contactName}}。"),
           createTemplateItem("first_person", "第一人称要求", "现在不是聊天回复，而是以这个角色的第一人称口吻写一篇今日日记。"),
-          createTemplateItem("contact_persona", "角色人设", "角色人设：{{contactPersona}}。"),
+          createTemplateItem("contact_persona", "角色公共/关系人设", "角色人设：{{contactPersona}}。"),
           createTemplateItem("user_name", "用户昵称", "和你聊天的用户昵称：{{userName}}。"),
           createTemplateItem("user_persona", "用户画像", "用户的人设：{{userPersona}}。")
         ],
@@ -771,10 +771,10 @@
           createTemplateItem("contact_name", "角色姓名", "你叫 {{contactName}}。"),
           createTemplateItem("scene_mode", "聊天场景", "现在是你和 {{userName}} 在即时聊天软件里的一对一私聊。"),
           createTemplateItem("task_role", "任务定位", "你本人正在收到对方发来的一个日程邀请，需要像真实聊天一样做决定并回复。"),
-          createTemplateItem("contact_persona", "角色人设", "你的稳定性格、表达习惯和关系底色：{{contactPersona}}。"),
+          createTemplateItem("contact_persona", "角色公共/关系人设", "你的稳定性格、表达习惯和关系底色：{{contactPersona}}。"),
           createTemplateItem("user_name", "用户昵称", "正在和你聊天的用户昵称：{{userName}}。"),
           createTemplateItem("user_persona", "用户画像", "用户整体画像：{{userPersona}}。"),
-          createDynamicItem("special_user_persona", "特别用户认知", "读取角色对用户的特别认知")
+          createDynamicItem("special_user_persona", "对用户的特殊认知", "读取角色对用户的特别认知")
         ],
         output_standard: [
           createTemplateItem("decision_first", "先判断再回复", "你需要先判断是否接受这个邀请，再给出一条自然聊天式回复。"),
@@ -802,7 +802,7 @@
           createTemplateItem("user_persona", "用户人设", "用户人设：{{userPersona}}"),
           createTemplateItem("partner_name", "共同抚养人", "共同抚养人：{{partnerName}}"),
           createTemplateItem("partner_persona", "共同抚养人人设", "共同抚养人人设：{{partnerPersona}}"),
-          createDynamicItem("special_user_persona", "共同抚养人的特别认知", "读取对用户的特别认知"),
+          createDynamicItem("special_user_persona", "共同抚养人的特殊认知", "读取对用户的特别认知"),
           createTemplateItem("mixed_temperament", "混合气质要求", "请根据双方人设混合后的气质来推演这位宝宝的成长档案。")
         ],
         output_standard: [

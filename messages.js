@@ -30,6 +30,8 @@ const MESSAGE_PROACTIVE_TRIGGER_RUNS_KEY = "x_style_generator_message_proactive_
 const MESSAGE_PROACTIVE_TRIGGER_LOCKS_KEY = "x_style_generator_message_proactive_trigger_locks_v1";
 const PLOT_THREADS_KEY = "x_style_generator_plot_threads_v1";
 const RAISING_RECORDS_KEY = "x_style_generator_raising_records_v1";
+const FORUM_CUSTOM_TAB_LIMIT = 4;
+const FORUM_TAB_DOMAIN_TYPES = new Set(["general", "user_fandom", "contact_fandom"]);
 const DEFAULT_TEMPERATURE = 0.85;
 const DEFAULT_MESSAGE_HISTORY_ROUNDS = 20;
 const MAX_MESSAGE_HISTORY_ROUNDS = 50;
@@ -262,6 +264,18 @@ const messagesContactAvatarFileInputEl = document.querySelector("#messages-conta
 const messagesContactAvatarResetBtnEl = document.querySelector("#messages-contact-avatar-reset-btn");
 const messagesContactNameInputEl = document.querySelector("#messages-contact-name-input");
 const messagesContactPersonaInputEl = document.querySelector("#messages-contact-persona-input");
+const messagesContactForumFandomEnabledInputEl = document.querySelector(
+  "#messages-contact-forum-fandom-enabled-input"
+);
+const messagesContactForumFandomFieldsEl = document.querySelector(
+  "#messages-contact-forum-fandom-fields"
+);
+const messagesContactForumFandomTabNameInputEl = document.querySelector(
+  "#messages-contact-forum-fandom-tab-name-input"
+);
+const messagesContactForumFandomAudienceInputEl = document.querySelector(
+  "#messages-contact-forum-fandom-audience-input"
+);
 const messagesContactSpecialPersonaInputEl = document.querySelector(
   "#messages-contact-special-persona-input"
 );
@@ -6619,6 +6633,10 @@ function normalizeContact(contact, index = 0) {
     avatarText: String(source.avatarText || "").trim() || getContactAvatarFallback({ name }),
     personaPrompt: String(source.personaPrompt || "").trim(),
     specialUserPersona: String(source.specialUserPersona || "").trim(),
+    forumFandomEnabled: Boolean(source.forumFandomEnabled),
+    forumFandomTabId: String(source.forumFandomTabId || "").trim(),
+    forumFandomTabName: String(source.forumFandomTabName || "").trim(),
+    forumFandomAudience: String(source.forumFandomAudience || "").trim(),
     awarenessTitle: resolveAwarenessTitle(source.awarenessTitle, source.awarenessText),
     awarenessText: String(source.awarenessText || "").trim(),
     awarenessEmotionShift: String(source.awarenessEmotionShift || "").trim(),
@@ -6664,6 +6682,10 @@ function buildSnapshotContactFromConversation(conversation = {}, index = 0) {
         getContactAvatarFallback({ name: contactName }),
       personaPrompt: "",
       specialUserPersona: "",
+      forumFandomEnabled: false,
+      forumFandomTabId: "",
+      forumFandomTabName: "",
+      forumFandomAudience: "",
       createdAt: Number(conversation?.updatedAt) || Date.now(),
       updatedAt: Number(conversation?.updatedAt) || Date.now()
     },
@@ -6735,6 +6757,327 @@ function persistContacts() {
     return true;
   }
   return safeSetItem(MESSAGE_CONTACTS_KEY, nextPayload);
+}
+
+function normalizeForumTabDomainType(value = "", fallback = "general") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return FORUM_TAB_DOMAIN_TYPES.has(normalized) ? normalized : fallback;
+}
+
+function createMessagesCustomTabId(seed = "custom") {
+  return `custom_${Date.now()}_${hashText(seed)}`;
+}
+
+function normalizeForumCustomTabs(tabs = []) {
+  if (!Array.isArray(tabs)) {
+    return [];
+  }
+
+  return tabs
+    .map((tab, index) => {
+      if (typeof tab === "string") {
+        const name = String(tab).trim().slice(0, 20) || "自定义页签";
+        return {
+          id: `custom_${index}_${hashText(name)}`,
+          name,
+          pinned: false,
+          audience: "",
+          discussionText: "",
+          hotTopic: "",
+          text: "",
+          timeAwareness: false,
+          worldbookIds: [],
+          bubbleFocusEnabled: false,
+          bubbleFocusMinutes: DEFAULT_CONTEXT_FOCUS_MINUTES,
+          insFocusEnabled: false,
+          insFocusMinutes: DEFAULT_CONTEXT_FOCUS_MINUTES,
+          forumDomainType: "general",
+          fandomTargetId: "",
+          fandomDisplayName: ""
+        };
+      }
+      if (!tab || typeof tab !== "object") {
+        return null;
+      }
+      const rawName = tab.name || tab.label || tab.title || tab.tabName || tab.tabLabel || "";
+      const rawAudience =
+        tab.audience ||
+        tab.userPosition ||
+        tab.userProfile ||
+        tab.positioning ||
+        tab.targetAudience ||
+        tab.memberProfile ||
+        "";
+      const rawDiscussionText =
+        tab.discussionText ||
+        tab.text ||
+        tab.prompt ||
+        tab.content ||
+        tab.description ||
+        "";
+      const rawHotTopic =
+        tab.hotTopic ||
+        tab.hotspot ||
+        tab.hotText ||
+        tab.topicText ||
+        tab.topic ||
+        "";
+      const rawWorldbookIds =
+        tab.worldbookIds ||
+        tab.mountedWorldbookIds ||
+        tab.worldbooks ||
+        tab.worldbookEntries ||
+        [];
+      return {
+        id:
+          tab.id ||
+          tab.feedId ||
+          tab.key ||
+          `custom_${index}_${hashText(`${rawName || ""}-${rawDiscussionText || ""}-${rawHotTopic || ""}`)}`,
+        name: String(rawName || "自定义页签").trim().slice(0, 20) || "自定义页签",
+        pinned: Boolean(tab.pinned || tab.isPinned || tab.defaultFeed),
+        audience: String(rawAudience || "").trim(),
+        discussionText: String(rawDiscussionText || "").trim(),
+        hotTopic: String(rawHotTopic || "").trim(),
+        text: String(rawDiscussionText || "").trim(),
+        timeAwareness:
+          typeof tab.timeAwareness === "boolean"
+            ? tab.timeAwareness
+            : Boolean(tab.enableTimeAwareness || tab.dateAwareness || tab.timeAware),
+        worldbookIds: normalizeMountedIds(rawWorldbookIds),
+        bubbleFocusEnabled: Boolean(
+          tab.bubbleFocusEnabled || tab.mountBubble || tab.bubbleMounted || tab.bubbleEnabled
+        ),
+        bubbleFocusMinutes: normalizeContextFocusMinutes(
+          tab.bubbleFocusMinutes || tab.bubbleMinutes || tab.bubbleFocusWindow
+        ),
+        insFocusEnabled: Boolean(
+          tab.insFocusEnabled ||
+            tab.mountIns ||
+            tab.profilePostFocusEnabled ||
+            tab.profileMounted ||
+            tab.insMounted
+        ),
+        insFocusMinutes: normalizeContextFocusMinutes(
+          tab.insFocusMinutes ||
+            tab.insMinutes ||
+            tab.profilePostFocusMinutes ||
+            tab.profileFocusWindow
+        ),
+        forumDomainType: normalizeForumTabDomainType(
+          tab.forumDomainType || tab.domainType || tab.tabDomainType,
+          "general"
+        ),
+        fandomTargetId: String(tab.fandomTargetId || tab.contactId || "").trim(),
+        fandomDisplayName: String(tab.fandomDisplayName || tab.fandomTargetName || "").trim()
+      };
+    })
+    .filter(Boolean)
+    .map((tab) => ({
+      id: tab.id || createMessagesCustomTabId(tab.name || "custom"),
+      name: String(tab.name || "自定义页签").trim().slice(0, 20) || "自定义页签",
+      pinned: Boolean(tab.pinned),
+      audience: String(tab.audience || "").trim(),
+      discussionText: String(tab.discussionText || tab.text || "").trim(),
+      hotTopic: String(tab.hotTopic || "").trim(),
+      text: String(tab.discussionText || tab.text || "").trim(),
+      timeAwareness: Boolean(tab.timeAwareness),
+      worldbookIds: normalizeMountedIds(tab.worldbookIds || []),
+      bubbleFocusEnabled: Boolean(tab.bubbleFocusEnabled),
+      bubbleFocusMinutes: normalizeContextFocusMinutes(tab.bubbleFocusMinutes),
+      insFocusEnabled: Boolean(tab.insFocusEnabled),
+      insFocusMinutes: normalizeContextFocusMinutes(tab.insFocusMinutes),
+      forumDomainType: normalizeForumTabDomainType(tab.forumDomainType, "general"),
+      fandomTargetId: String(tab.fandomTargetId || "").trim(),
+      fandomDisplayName: String(tab.fandomDisplayName || "").trim()
+    }));
+}
+
+function buildContactCombinedPersonaText(contact = null, options = {}) {
+  const resolvedContact = contact && typeof contact === "object" ? contact : {};
+  const joiner = typeof options.joiner === "string" ? options.joiner : "\n";
+  return [
+    String(resolvedContact.personaPrompt || "").trim(),
+    String(resolvedContact.specialUserPersona || "").trim()
+  ]
+    .filter(Boolean)
+    .join(joiner)
+    .trim();
+}
+
+function buildDefaultContactFandomTabName(contact = null) {
+  const contactName = String(contact?.name || "").trim() || "角色";
+  return `${contactName}粉丝页`.slice(0, 10);
+}
+
+function buildDefaultContactFandomAudience(contact = null) {
+  const contactName = String(contact?.name || "").trim() || "这个角色";
+  return `${contactName}相关话题的活跃讨论用户，默认熟悉TA的公开人设、作品、舞台、行程和热点，会带有一定粉丝滤镜，但也会围绕同一事件产生不同立场。`;
+}
+
+function findContactFandomTab(tabs = [], contactId = "", tabId = "") {
+  const resolvedContactId = String(contactId || "").trim();
+  const resolvedTabId = String(tabId || "").trim();
+  return normalizeForumCustomTabs(tabs).find((tab) => {
+    if (resolvedTabId && tab.id === resolvedTabId) {
+      return true;
+    }
+    return (
+      tab.forumDomainType === "contact_fandom" &&
+      resolvedContactId &&
+      String(tab.fandomTargetId || "").trim() === resolvedContactId
+    );
+  }) || null;
+}
+
+function updateContactForumFandomFieldsVisibility() {
+  const enabled = Boolean(messagesContactForumFandomEnabledInputEl?.checked);
+  if (messagesContactForumFandomFieldsEl) {
+    messagesContactForumFandomFieldsEl.hidden = !enabled;
+  }
+}
+
+async function syncForumTabsFromMessages(nextTabs = []) {
+  const settings = loadSettings();
+  const previousTabs = normalizeForumCustomTabs(settings.customTabs || []);
+  const normalizedTabs = normalizeForumCustomTabs(nextTabs);
+  persistSettings({
+    ...settings,
+    customTabs: normalizedTabs
+  });
+  try {
+    await requestMessagesStorageApi("/api/forum/custom-tabs", {
+      method: "PUT",
+      body: JSON.stringify({
+        tabs: normalizedTabs
+      })
+    });
+  } catch (error) {
+    persistSettings({
+      ...settings,
+      customTabs: previousTabs
+    });
+    throw error;
+  }
+  const syncedTabs = normalizeForumCustomTabs(normalizedTabs);
+  persistSettings({
+    ...settings,
+    customTabs: syncedTabs
+  });
+  return syncedTabs;
+}
+
+async function syncContactForumFandomTab(draft = {}, existingContact = null) {
+  const resolvedDraft = draft && typeof draft === "object" ? { ...draft } : {};
+  const settings = loadSettings();
+  const currentTabs = normalizeForumCustomTabs(settings.customTabs || []);
+  const existingTab = findContactFandomTab(
+    currentTabs,
+    resolvedDraft.id,
+    resolvedDraft.forumFandomTabId || existingContact?.forumFandomTabId
+  );
+
+  if (!resolvedDraft.forumFandomEnabled) {
+    if (!existingTab) {
+      return resolvedDraft;
+    }
+    const nextTabs = currentTabs.map((tab) =>
+      tab.id === existingTab.id
+        ? {
+            ...tab,
+            fandomTargetId: "",
+            fandomDisplayName: ""
+          }
+        : tab
+    );
+    await syncForumTabsFromMessages(nextTabs);
+    return {
+      ...resolvedDraft,
+      forumFandomTabId: String(existingTab.id || "").trim() || resolvedDraft.forumFandomTabId
+    };
+  }
+
+  if (!existingTab && currentTabs.length >= FORUM_CUSTOM_TAB_LIMIT) {
+    throw new Error(`已达到 ${FORUM_CUSTOM_TAB_LIMIT} 个论坛自定义页签上限，无法为这个联系人新增粉丝页。`);
+  }
+
+  const resolvedTabName =
+    String(resolvedDraft.forumFandomTabName || "").trim() ||
+    String(existingTab?.name || "").trim() ||
+    buildDefaultContactFandomTabName(resolvedDraft);
+  const resolvedAudience =
+    String(resolvedDraft.forumFandomAudience || "").trim() ||
+    String(existingTab?.audience || "").trim() ||
+    buildDefaultContactFandomAudience(resolvedDraft);
+  const targetTabId =
+    String(existingTab?.id || resolvedDraft.forumFandomTabId || "").trim() ||
+    createMessagesCustomTabId(`${resolvedDraft.id || resolvedDraft.name || "contact"}_fandom`);
+  const nextTab = {
+    ...(existingTab || {}),
+    id: targetTabId,
+    name: resolvedTabName,
+    audience: resolvedAudience,
+    discussionText: String(existingTab?.discussionText || "").trim(),
+    hotTopic: String(existingTab?.hotTopic || "").trim(),
+    text: String(existingTab?.discussionText || existingTab?.text || "").trim(),
+    timeAwareness:
+      typeof existingTab?.timeAwareness === "boolean" ? existingTab.timeAwareness : false,
+    worldbookIds: normalizeMountedIds(existingTab?.worldbookIds || []),
+    bubbleFocusEnabled: Boolean(existingTab?.bubbleFocusEnabled),
+    bubbleFocusMinutes: normalizeContextFocusMinutes(existingTab?.bubbleFocusMinutes),
+    insFocusEnabled: Boolean(existingTab?.insFocusEnabled),
+    insFocusMinutes: normalizeContextFocusMinutes(existingTab?.insFocusMinutes),
+    forumDomainType: "contact_fandom",
+    fandomTargetId: String(resolvedDraft.id || "").trim(),
+    fandomDisplayName: String(resolvedDraft.name || "").trim()
+  };
+  const nextTabs = existingTab
+    ? currentTabs.map((tab) => (tab.id === existingTab.id ? nextTab : tab))
+    : [...currentTabs, nextTab];
+  const syncedTabs = await syncForumTabsFromMessages(nextTabs);
+  const syncedTab =
+    findContactFandomTab(syncedTabs, resolvedDraft.id, targetTabId) ||
+    syncedTabs.find((tab) => tab.id === targetTabId) ||
+    nextTab;
+  return {
+    ...resolvedDraft,
+    forumFandomEnabled: true,
+    forumFandomTabId: String(syncedTab.id || targetTabId).trim(),
+    forumFandomTabName: resolvedTabName,
+    forumFandomAudience: resolvedAudience
+  };
+}
+
+async function detachDeletedContactForumFandomTab(contact = null) {
+  const resolvedContact = contact && typeof contact === "object" ? contact : null;
+  const contactId = String(resolvedContact?.id || "").trim();
+  if (!contactId) {
+    return;
+  }
+  const settings = loadSettings();
+  const currentTabs = normalizeForumCustomTabs(settings.customTabs || []);
+  const existingTab = findContactFandomTab(
+    currentTabs,
+    contactId,
+    resolvedContact?.forumFandomTabId
+  );
+  if (!existingTab) {
+    return;
+  }
+  const nextTabs = currentTabs.map((tab) =>
+    tab.id === existingTab.id
+      ? {
+          ...tab,
+          fandomTargetId: "",
+          fandomDisplayName: ""
+        }
+      : tab
+  );
+  try {
+    await syncForumTabsFromMessages(nextTabs);
+  } catch (error) {
+    console.warn("[Messages] Failed to detach contact fandom tab after contact deletion:", error);
+  }
 }
 
 function normalizeWorldbookCategory(category, index = 0) {
@@ -8522,7 +8865,11 @@ function getResolvedConversationContact(conversation = getConversationById()) {
     avatarText:
       String(resolvedConversation?.contactAvatarTextSnapshot || "").trim() || snapshotName.slice(0, 1),
     personaPrompt: "",
-    specialUserPersona: ""
+    specialUserPersona: "",
+    forumFandomEnabled: false,
+    forumFandomTabId: "",
+    forumFandomTabName: "",
+    forumFandomAudience: ""
   };
 }
 
@@ -10450,7 +10797,8 @@ function buildAutoScheduleGenerationSystemPrompt(
       settings: currentSettings,
       variables: {
         contactName: resolvedContact.name || "这个角色",
-        contactPersona: resolvedContact.personaPrompt || "作息自然、贴近真实生活。",
+        contactPersona:
+          buildContactCombinedPersonaText(resolvedContact) || "作息自然、贴近真实生活。",
         dayCount: resolvedDayCount
       }
     }
@@ -11868,9 +12216,7 @@ function buildConversationSystemPrompt(
             ? `现在是你和 ${profile.username || DEFAULT_PROFILE.username} 正在现实里见面相处，不是在即时聊天软件里远程对话。`
             : `现在是你和 ${profile.username || DEFAULT_PROFILE.username} 在即时聊天软件里的一对一私聊。`,
         core_memory: memoryContexts.core,
-        special_user_persona: String(contact.specialUserPersona || "").trim()
-          ? `你对这个用户的特别认知：${String(contact.specialUserPersona || "").trim()}。这部分是你基于相处形成的更私人、更具体的认识，重要程度略高于用户的通用画像。`
-          : "",
+        special_user_persona: "",
         regenerate_hint: requestOptions.regenerate
           ? [
               "这是一条针对上一版回复的重回请求，需要重新生成这一轮回复。",
@@ -11971,7 +12317,7 @@ function buildConversationSystemPrompt(
       variables: {
         contactName: contact.name,
         contactPersona:
-          contact.personaPrompt || "自然、友好、会根据关系和语境稳定回应。",
+          buildContactCombinedPersonaText(contact) || "自然、友好、会根据关系和语境稳定回应。",
         userName: profile.username || DEFAULT_PROFILE.username,
         userPersona: profile.personaPrompt || DEFAULT_PROFILE.personaPrompt,
         replySentenceLimit: normalizeMessagePromptSettings(promptSettings).replySentenceLimit
@@ -12012,7 +12358,7 @@ function buildJournalSystemPrompt(
       variables: {
         dateLabel: formatJournalFullDateLabel(dateText),
         contactName: contact.name,
-        contactPersona: contact.personaPrompt || "自然、细腻、会根据设定稳定表达。",
+        contactPersona: buildContactCombinedPersonaText(contact) || "自然、细腻、会根据设定稳定表达。",
         userName: profile.username || DEFAULT_PROFILE.username,
         userPersona: profile.personaPrompt || DEFAULT_PROFILE.personaPrompt,
         journalLength: normalizeMessagePromptSettings(promptSettings).journalLength
@@ -12401,7 +12747,7 @@ function buildMemorySummarySystemPrompt(profile, contact) {
       settings: loadSettings(),
       variables: {
         contactName: contact.name,
-        contactPersona: contact.personaPrompt || "自然、友好、会根据关系稳定回应。",
+        contactPersona: buildContactCombinedPersonaText(contact) || "自然、友好、会根据关系稳定回应。",
         userName: profile.username || DEFAULT_PROFILE.username,
         userPersona: profile.personaPrompt || DEFAULT_PROFILE.personaPrompt
       }
@@ -15361,7 +15707,7 @@ function buildInnerThoughtSystemPrompt(
       settings,
       variables: {
         contactName: contact.name || "这个角色",
-        contactPersona: contact.personaPrompt || "自然、友好、会根据关系稳定回应。",
+        contactPersona: buildContactCombinedPersonaText(contact) || "自然、友好、会根据关系稳定回应。",
         userName: profile.username || DEFAULT_PROFILE.username,
         userPersona: profile.personaPrompt || DEFAULT_PROFILE.personaPrompt
       }
@@ -19626,7 +19972,11 @@ function applyContactToForm(contact = null) {
     name: "",
     avatarImage: "",
     personaPrompt: "",
-    specialUserPersona: ""
+    specialUserPersona: "",
+    forumFandomEnabled: false,
+    forumFandomTabId: "",
+    forumFandomTabName: "",
+    forumFandomAudience: ""
   };
   state.contactEditorAvatarImage = String(resolvedContact.avatarImage || "").trim();
   if (messagesContactNameInputEl) {
@@ -19638,6 +19988,15 @@ function applyContactToForm(contact = null) {
   if (messagesContactSpecialPersonaInputEl) {
     messagesContactSpecialPersonaInputEl.value = resolvedContact.specialUserPersona || "";
   }
+  if (messagesContactForumFandomEnabledInputEl) {
+    messagesContactForumFandomEnabledInputEl.checked = Boolean(resolvedContact.forumFandomEnabled);
+  }
+  if (messagesContactForumFandomTabNameInputEl) {
+    messagesContactForumFandomTabNameInputEl.value = resolvedContact.forumFandomTabName || "";
+  }
+  if (messagesContactForumFandomAudienceInputEl) {
+    messagesContactForumFandomAudienceInputEl.value = resolvedContact.forumFandomAudience || "";
+  }
   if (messagesContactModalTitleEl) {
     messagesContactModalTitleEl.textContent = resolvedContact.id ? "编辑联系人" : "新建联系人";
   }
@@ -19645,6 +20004,7 @@ function applyContactToForm(contact = null) {
     messagesContactDeleteSectionEl.hidden = !resolvedContact.id;
   }
   renderContactEditorAvatarPreview();
+  updateContactForumFandomFieldsVisibility();
   setEditorStatus(messagesContactEditorStatusEl);
 }
 
@@ -19658,6 +20018,10 @@ function getCurrentContactDraft() {
     avatarText: getContactAvatarFallback({ name }),
     personaPrompt: String(messagesContactPersonaInputEl?.value || "").trim(),
     specialUserPersona: String(messagesContactSpecialPersonaInputEl?.value || "").trim(),
+    forumFandomEnabled: Boolean(messagesContactForumFandomEnabledInputEl?.checked),
+    forumFandomTabId: String(existingContact?.forumFandomTabId || "").trim(),
+    forumFandomTabName: String(messagesContactForumFandomTabNameInputEl?.value || "").trim(),
+    forumFandomAudience: String(messagesContactForumFandomAudienceInputEl?.value || "").trim(),
     awarenessTitle: resolveAwarenessTitle(
       existingContact?.awarenessTitle,
       existingContact?.awarenessText
@@ -21778,6 +22142,8 @@ async function handleDeleteContactFromEditor() {
     setEditorStatus(messagesContactEditorStatusEl, "删除联系人失败。", "error");
     return;
   }
+
+  await detachDeletedContactForumFandomTab(contact);
 
   setContactEditorOpen(false);
   renderMessagesPage();
@@ -24724,10 +25090,27 @@ function attachEvents() {
     });
   }
 
+  if (messagesContactForumFandomEnabledInputEl) {
+    messagesContactForumFandomEnabledInputEl.addEventListener("change", () => {
+      updateContactForumFandomFieldsVisibility();
+    });
+  }
+
   if (messagesContactFormEl) {
     messagesContactFormEl.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const draft = getCurrentContactDraft();
+      const existingContact = getContactById(state.contactEditorId);
+      let draft = getCurrentContactDraft();
+      try {
+        draft = await syncContactForumFandomTab(draft, existingContact || null);
+      } catch (error) {
+        setEditorStatus(
+          messagesContactEditorStatusEl,
+          `角色粉丝页同步失败：${error?.message || "请求失败"}`,
+          "error"
+        );
+        return;
+      }
       const existingIndex = state.contacts.findIndex((item) => item.id === draft.id);
       if (existingIndex >= 0) {
         state.contacts[existingIndex] = draft;

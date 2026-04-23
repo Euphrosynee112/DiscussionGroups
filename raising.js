@@ -1488,13 +1488,18 @@ function parseJsonObjectWithRepair(jsonText, errorMessage) {
 }
 
 function buildKidArchivePrompt(profile, partner, record) {
+  const combinedPartnerPersona = [
+    String(partner.personaPrompt || "").trim(),
+    String(partner.specialUserPersona || "").trim()
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
   return buildStructuredPromptSections(
     "raising_kid_archive",
     {
       persona_alignment: {
-        special_user_persona: partner.specialUserPersona
-          ? `这个共同抚养人对用户的特别认知：${partner.specialUserPersona}。这部分比用户通用人设更私人、更贴近两人的相处感受，请适度提高参考权重。`
-          : ""
+        special_user_persona: ""
       }
     },
     {
@@ -1505,7 +1510,7 @@ function buildKidArchivePrompt(profile, partner, record) {
         userName: profile.username,
         userPersona: profile.personaPrompt || "温柔、细腻、会认真照顾孩子。",
         partnerName: partner.name,
-        partnerPersona: partner.personaPrompt || "有鲜明性格，会把自己的气质投射到孩子身上。"
+        partnerPersona: combinedPartnerPersona || "有鲜明性格，会把自己的气质投射到孩子身上。"
       }
     }
   );

@@ -40,6 +40,7 @@ const THREAD_SHARE_STORAGE_RESERVE_CHARS = 48000;
 const CUSTOM_TAB_DISCUSSION_VISIBLE_LIMIT = 10;
 const CUSTOM_TAB_TOPIC_TAG_MIN_COUNT = 1;
 const CUSTOM_TAB_TOPIC_TAG_MAX_COUNT = 3;
+const FORUM_TAB_DOMAIN_TYPES = new Set(["general", "user_fandom", "contact_fandom"]);
 const FORUM_TOPIC_TAG_CATALOG = [
   { id: "chart_sales", label: "榜单/销量", description: "榜单、销量、一位、商业成绩" },
   { id: "stage_live", label: "舞台/现场", description: "舞台表现、开麦、唱跳、巡演现场" },
@@ -258,6 +259,7 @@ const customTabEditorDescriptionEl = document.querySelector("#custom-tab-editor-
 const customTabEditorResetBtn = document.querySelector("#custom-tab-editor-reset-btn");
 const customTabNameInput = document.querySelector("#custom-tab-name-input");
 const customTabAudienceInput = document.querySelector("#custom-tab-audience-input");
+const customTabBindingMetaEl = document.querySelector("#custom-tab-binding-meta");
 const customTabDiscussionItemsEditorEl = document.querySelector("#custom-tab-discussion-items-editor");
 const customTabHotTopicItemsEditorEl = document.querySelector("#custom-tab-hot-topic-items-editor");
 const customTabTimeAwarenessInput = document.querySelector("#custom-tab-time-awareness-input");
@@ -901,7 +903,10 @@ function normalizeCustomTabs(tabs = []) {
           bubbleFocusEnabled: false,
           bubbleFocusMinutes: DEFAULT_CONTEXT_FOCUS_MINUTES,
           insFocusEnabled: false,
-          insFocusMinutes: DEFAULT_CONTEXT_FOCUS_MINUTES
+          insFocusMinutes: DEFAULT_CONTEXT_FOCUS_MINUTES,
+          forumDomainType: "general",
+          fandomTargetId: "",
+          fandomDisplayName: ""
         };
       }
       if (!tab || typeof tab !== "object") {
@@ -971,7 +976,13 @@ function normalizeCustomTabs(tabs = []) {
             tab.insMinutes ||
             tab.profilePostFocusMinutes ||
             tab.profileFocusWindow
-        )
+        ),
+        forumDomainType: normalizeForumTabDomainType(
+          tab.forumDomainType || tab.domainType || tab.tabDomainType,
+          "general"
+        ),
+        fandomTargetId: String(tab.fandomTargetId || tab.contactId || "").trim(),
+        fandomDisplayName: String(tab.fandomDisplayName || tab.fandomTargetName || "").trim()
       };
     })
     .filter(Boolean)
@@ -989,7 +1000,10 @@ function normalizeCustomTabs(tabs = []) {
       bubbleFocusEnabled: Boolean(tab.bubbleFocusEnabled),
       bubbleFocusMinutes: normalizeContextFocusMinutes(tab.bubbleFocusMinutes),
       insFocusEnabled: Boolean(tab.insFocusEnabled),
-      insFocusMinutes: normalizeContextFocusMinutes(tab.insFocusMinutes)
+      insFocusMinutes: normalizeContextFocusMinutes(tab.insFocusMinutes),
+      forumDomainType: normalizeForumTabDomainType(tab.forumDomainType, "general"),
+      fandomTargetId: String(tab.fandomTargetId || "").trim(),
+      fandomDisplayName: String(tab.fandomDisplayName || "").trim()
     }));
   const pinnedTab = normalizedTabs.find((tab) => tab.pinned) || null;
   if (!pinnedTab) {
@@ -1007,6 +1021,69 @@ function normalizeCustomTabs(tabs = []) {
         pinned: false
       }))
   ];
+}
+
+function normalizeForumTabDomainType(value = "", fallback = "general") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return FORUM_TAB_DOMAIN_TYPES.has(normalized) ? normalized : fallback;
+}
+
+function loadStoredMessageContacts() {
+  const raw = safeGetItem(MESSAGE_CONTACTS_KEY);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    const contacts = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.contacts)
+        ? parsed.contacts
+        : [];
+    return contacts
+      .filter((item) => item && typeof item === "object")
+      .map((item) => ({
+        id: String(item.id || "").trim(),
+        name: String(item.name || "").trim(),
+        personaPrompt: String(item.personaPrompt || "").trim()
+      }))
+      .filter((item) => item.id);
+  } catch (_error) {
+    return [];
+  }
+}
+
+function getForumFandomContactForTab(tab = null) {
+  const resolvedTab = tab && typeof tab === "object" ? tab : null;
+  if (!resolvedTab || normalizeForumTabDomainType(resolvedTab.forumDomainType, "general") !== "contact_fandom") {
+    return null;
+  }
+  const targetId = String(resolvedTab.fandomTargetId || "").trim();
+  if (!targetId) {
+    return null;
+  }
+  return loadStoredMessageContacts().find((contact) => contact.id === targetId) || null;
+}
+
+function enrichCustomTabWithFandomContext(tab = null) {
+  const resolvedTab = tab && typeof tab === "object" ? tab : null;
+  if (!resolvedTab) {
+    return null;
+  }
+  const fandomContact = getForumFandomContactForTab(resolvedTab);
+  return {
+    ...resolvedTab,
+    fandomDisplayName: String(fandomContact?.name || resolvedTab.fandomDisplayName || "").trim(),
+    fandomPublicPersona: String(fandomContact?.personaPrompt || "").trim(),
+    fandomBindingLabel:
+      normalizeForumTabDomainType(resolvedTab.forumDomainType, "general") === "contact_fandom"
+        ? fandomContact?.name
+          ? `角色粉丝页 · 来自 ${fandomContact.name}`
+          : String(resolvedTab.fandomTargetId || "").trim()
+            ? "角色粉丝页 · 绑定联系人缺失"
+            : "角色粉丝页 · 已解绑"
+        : ""
+  };
 }
 
 function normalizeWorldbookCategory(category, index = 0) {
@@ -1356,9 +1433,16 @@ function buildCustomTabSourceText(tab, options = {}) {
   const audience = String(tab.audience || "").trim();
   const discussionText = String(tab.discussionText || tab.text || "").trim();
   const hotTopic = String(tab.hotTopic || "").trim();
+  const fandomPublicPersona = String(tab.fandomPublicPersona || "").trim();
+  const fandomDisplayName = String(tab.fandomDisplayName || "").trim();
 
   if (includeAudience && audience) {
     sections.push(`论坛活跃用户定位：${audience}`);
+  }
+  if (fandomPublicPersona) {
+    sections.push(
+      `该页签对应角色的公共人设${fandomDisplayName ? `（${fandomDisplayName}）` : ""}：${fandomPublicPersona}`
+    );
   }
   if (includeDiscussionText && discussionText) {
     sections.push(`论坛长期讨论背景：${discussionText}`);
@@ -1383,6 +1467,25 @@ function buildCustomTabTopicSeedText(settings, feedType = state.activeFeed) {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function buildCustomTabBindingMetaText(tab = null) {
+  const resolvedTab = enrichCustomTabWithFandomContext(tab);
+  if (!resolvedTab) {
+    return "";
+  }
+  const domainType = normalizeForumTabDomainType(resolvedTab.forumDomainType, "general");
+  if (domainType !== "contact_fandom") {
+    return "";
+  }
+  const displayName = String(resolvedTab.fandomDisplayName || "").trim();
+  if (displayName) {
+    return `绑定联系人：${displayName}`;
+  }
+  if (String(resolvedTab.fandomTargetId || "").trim()) {
+    return "绑定联系人：已失效，请回到通讯录重新绑定或关闭角色粉丝页。";
+  }
+  return "绑定联系人：当前已解绑，页签内容仍会保留。";
 }
 
 function normalizeApiMode(mode) {
@@ -1505,11 +1608,15 @@ function findCustomTabInSettings(settings, tabId) {
   if (!Array.isArray(settings?.customTabs)) {
     return null;
   }
-  return settings.customTabs.find((tab) => tab.id === tabId) || null;
+  return enrichCustomTabWithFandomContext(
+    settings.customTabs.find((tab) => tab.id === tabId) || null
+  );
 }
 
 function getCustomTab(tabId) {
-  return state.customTabs.find((tab) => tab.id === tabId) || null;
+  return enrichCustomTabWithFandomContext(
+    state.customTabs.find((tab) => tab.id === tabId) || null
+  );
 }
 
 function isBuiltinFeed(feedType) {
@@ -4398,6 +4505,9 @@ function buildForumBatchPublicContextText(
     "<public_context>",
     `当前论坛：${String(customTab?.name || getFeedLabel(resolvedFeedType) || "论坛").trim()}`,
     customTab?.audience ? `页签用户定位：${String(customTab.audience || "").trim()}` : "",
+    customTab?.fandomPublicPersona
+      ? `对应角色公共人设：${String(customTab.fandomPublicPersona || "").trim()}`
+      : "",
     `当前日期：${currentDateTime}`,
     hotRefs.length
       ? [
@@ -4692,17 +4802,23 @@ function buildCustomTabsSummary(settings) {
 }
 
 function resolvePromptRuntimeCustomTab(customTab = null, generationContext = null) {
-  const baseTab = customTab && typeof customTab === "object" ? customTab : null;
+  const baseTab = enrichCustomTabWithFandomContext(
+    customTab && typeof customTab === "object" ? customTab : null
+  );
   const runtimeTab =
     generationContext?.tab && typeof generationContext.tab === "object" ? generationContext.tab : null;
   if (!baseTab) {
-    return runtimeTab;
+    return enrichCustomTabWithFandomContext(runtimeTab) || runtimeTab;
   }
   if (!runtimeTab) {
     return baseTab;
   }
   return {
     ...baseTab,
+    forumDomainType: runtimeTab.forumDomainType || baseTab.forumDomainType,
+    fandomTargetId: runtimeTab.fandomTargetId || baseTab.fandomTargetId,
+    fandomDisplayName: runtimeTab.fandomDisplayName || baseTab.fandomDisplayName,
+    fandomPublicPersona: runtimeTab.fandomPublicPersona || baseTab.fandomPublicPersona || "",
     discussionText: String(runtimeTab.discussionText || baseTab.discussionText || "").trim(),
     hotTopic: String(runtimeTab.hotTopic || baseTab.hotTopic || "").trim()
   };
@@ -7727,6 +7843,7 @@ async function syncCustomTabContentDraftWithServer(tabId = "") {
 }
 
 function getCurrentCustomTabFormDraft() {
+  const existingTab = state.customTabEditingId ? getCustomTab(state.customTabEditingId) : null;
   const worldbookIds = customTabWorldbookListEl
     ? [...customTabWorldbookListEl.querySelectorAll("input[type='checkbox']:checked")]
         .map((input) => (input instanceof HTMLInputElement ? String(input.value || "").trim() : ""))
@@ -7749,7 +7866,10 @@ function getCurrentCustomTabFormDraft() {
     bubbleFocusEnabled: Boolean(customTabBubbleFocusEnabledInput?.checked),
     bubbleFocusMinutes: normalizeContextFocusMinutes(customTabBubbleFocusMinutesInput?.value),
     insFocusEnabled: Boolean(customTabInsFocusEnabledInput?.checked),
-    insFocusMinutes: normalizeContextFocusMinutes(customTabInsFocusMinutesInput?.value)
+    insFocusMinutes: normalizeContextFocusMinutes(customTabInsFocusMinutesInput?.value),
+    forumDomainType: String(existingTab?.forumDomainType || "").trim(),
+    fandomTargetId: String(existingTab?.fandomTargetId || "").trim(),
+    fandomDisplayName: String(existingTab?.fandomDisplayName || "").trim()
   };
 }
 
@@ -8006,30 +8126,33 @@ function renderCustomTabsManager() {
   } else {
     customTabsListEl.innerHTML = state.customTabs
       .map((tab) => {
+        const resolvedTab = enrichCustomTabWithFandomContext(tab) || tab;
         const snippet = truncate(
-          tab.hotTopic || tab.discussionText || tab.text || tab.audience || "尚未设置内容",
+          resolvedTab.hotTopic || resolvedTab.discussionText || resolvedTab.text || resolvedTab.audience || "尚未设置内容",
           88
         );
+        const bindingLabel = String(resolvedTab.fandomBindingLabel || "").trim();
         return `
-          <article class="custom-tab-item${editingTab?.id === tab.id ? " is-active" : ""}" data-tab-id="${escapeHtml(
-            tab.id
+          <article class="custom-tab-item${editingTab?.id === resolvedTab.id ? " is-active" : ""}" data-tab-id="${escapeHtml(
+            resolvedTab.id
           )}" draggable="true">
             <div>
-              <strong>${escapeHtml(tab.name || "未命名页签")}${tab.pinned ? " · 置顶" : ""}</strong>
+              <strong>${escapeHtml(resolvedTab.name || "未命名页签")}${resolvedTab.pinned ? " · 置顶" : ""}</strong>
+              ${bindingLabel ? `<p class="tag-stat-meta">${escapeHtml(bindingLabel)}</p>` : ""}
               <p class="tag-stat-meta">${escapeHtml(snippet)}</p>
             </div>
             <div class="custom-tab-item__actions">
               <button class="ghost-chip" type="button" data-action="edit-custom-tab" data-tab-id="${escapeHtml(
-                tab.id
+                resolvedTab.id
               )}">编辑</button>
               <button class="ghost-chip" type="button" data-action="pin-custom-tab" data-tab-id="${escapeHtml(
-                tab.id
-              )}">${tab.pinned ? "已置顶" : "置顶"}</button>
+                resolvedTab.id
+              )}">${resolvedTab.pinned ? "已置顶" : "置顶"}</button>
               <button class="ghost-chip" type="button" data-action="clear-custom-tab-cache" data-tab-id="${escapeHtml(
-                tab.id
+                resolvedTab.id
               )}">清缓存</button>
               <button class="ghost-chip ghost-chip--danger" type="button" data-action="delete-custom-tab" data-tab-id="${escapeHtml(
-                tab.id
+                resolvedTab.id
               )}">删除</button>
             </div>
           </article>
@@ -8049,6 +8172,11 @@ function renderCustomTabsManager() {
   const isEditing = Boolean(state.customTabEditingId);
   const reachedLimit = state.customTabs.length >= CUSTOM_TAB_LIMIT;
   const disableCreation = !isEditing && reachedLimit;
+  const bindingMetaText = buildCustomTabBindingMetaText(currentDraft || null);
+  if (customTabBindingMetaEl) {
+    customTabBindingMetaEl.textContent = bindingMetaText;
+    customTabBindingMetaEl.classList.toggle("hidden", !bindingMetaText);
+  }
   const saveButton = customTabForm.querySelector("#custom-tab-save-btn");
   [
     customTabNameInput,
