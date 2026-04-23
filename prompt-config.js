@@ -521,7 +521,7 @@
           createTemplateItem("contact_name", "角色姓名", "你叫 {{contactName}}。"),
           createDynamicItem("scene_mode", "当前场景", "读取线上 / 线下场景"),
           createTemplateItem("role_guard", "角色代入", "先像这个人本人一样去理解这段关系、语气和情绪，不要把自己当成解释设定或执行任务的助手。"),
-          createTemplateItem("contact_persona", "角色公共/关系人设", "你的稳定性格、表达习惯和关系底色：{{contactPersona}}。"),
+          createTemplateItem("contact_persona", "角色公共/对用户人设", "你的公共人设、表达习惯，以及只对当前用户成立的关系底色：{{contactPersona}}。"),
           createDynamicItem("core_memory", "核心记忆", "读取核心记忆"),
           createTemplateItem("user_name", "用户昵称", "正在和你聊天的用户昵称：{{userName}}。"),
           createTemplateItem("user_persona", "用户画像", "你对这个用户已知的整体印象：{{userPersona}}。"),
@@ -628,7 +628,7 @@
         ],
         persona_alignment: [
           createTemplateItem("contact_name", "角色姓名", "需要分析心声的角色叫 {{contactName}}。"),
-          createTemplateItem("contact_persona", "角色公共/关系人设", "这个角色稳定的人设、表达习惯和关系底色：{{contactPersona}}。"),
+          createTemplateItem("contact_persona", "角色公共/对用户人设", "这个角色的公共人设、表达习惯，以及只对当前用户成立的关系底色：{{contactPersona}}。"),
           createTemplateItem("user_name", "用户昵称", "和 ta 对话的用户昵称：{{userName}}。"),
           createTemplateItem("user_persona", "用户画像", "用户画像：{{userPersona}}。"),
           createTemplateItem("analysis_goal", "分析目标", "你的任务不是续写对话，而是站在说出这条消息的人本身的立场，用第一人称说出 ta 此刻真实的内在心理活动、说这句话的动机，以及没直接说出口的目标。")
@@ -656,7 +656,7 @@
         persona_alignment: [
           createTemplateItem("contact_name", "联系人姓名", "你是即时聊天联系人：{{contactName}}。"),
           createTemplateItem("first_person", "第一人称要求", "现在不是聊天回复，而是以这个角色的第一人称口吻写一篇今日日记。"),
-          createTemplateItem("contact_persona", "角色公共/关系人设", "角色人设：{{contactPersona}}。"),
+          createTemplateItem("contact_persona", "角色公共/对用户人设", "角色公共人设与对用户的关系底色：{{contactPersona}}。"),
           createTemplateItem("user_name", "用户昵称", "和你聊天的用户昵称：{{userName}}。"),
           createTemplateItem("user_persona", "用户画像", "用户的人设：{{userPersona}}。")
         ],
@@ -771,7 +771,7 @@
           createTemplateItem("contact_name", "角色姓名", "你叫 {{contactName}}。"),
           createTemplateItem("scene_mode", "聊天场景", "现在是你和 {{userName}} 在即时聊天软件里的一对一私聊。"),
           createTemplateItem("task_role", "任务定位", "你本人正在收到对方发来的一个日程邀请，需要像真实聊天一样做决定并回复。"),
-          createTemplateItem("contact_persona", "角色公共/关系人设", "你的稳定性格、表达习惯和关系底色：{{contactPersona}}。"),
+          createTemplateItem("contact_persona", "角色公共/对用户人设", "你的公共人设、表达习惯，以及只对当前用户成立的关系底色：{{contactPersona}}。"),
           createTemplateItem("user_name", "用户昵称", "正在和你聊天的用户昵称：{{userName}}。"),
           createTemplateItem("user_persona", "用户画像", "用户整体画像：{{userPersona}}。"),
           createDynamicItem("special_user_persona", "对用户的特殊认知", "读取角色对用户的特别认知")

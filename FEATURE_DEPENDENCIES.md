@@ -82,7 +82,8 @@
 
 - 用户资料：`profile.username`、`profile.personaPrompt`
 - 角色资料：`contact.name`、`contact.personaPrompt`
-- 角色对用户的特别认知：`contact.specialUserPersona`
+- 用户对角色的特别认知：`contact.userSpecialPersona`（兼容旧字段 `contact.specialUserPersona`）
+- 角色对用户的特别认知：`contact.roleSpecialPersona`
 - 角色察觉配置：`contact.awareness*`
 
 主要入口：

@@ -1691,7 +1691,7 @@ async function replaceChatContactsSnapshot(db, valueJson, ownerId, tableWrites) 
         toStorageText(contact.avatarImage),
         toStorageText(contact.avatarText),
         toStorageText(contact.personaPrompt),
-        toStorageText(contact.specialUserPersona),
+        toStorageText(contact.userSpecialPersona || contact.specialUserPersona),
         stringifyJsonb(awarenessState),
         stringifyJsonb(contact),
         toClientTimestamp(contact.updatedAt || contact.createdAt)

@@ -509,7 +509,8 @@ function loadProfile() {
       : String(profile?.chatAvatarImage || profile?.avatarImage || "").trim(),
     avatarText: String(profile?.avatar || "你").trim().slice(0, 2) || "你",
     personaPrompt: String(profile?.chatPersonaPrompt || profile?.personaPrompt || "").trim(),
-    specialUserPersona: ""
+    userSpecialPersona: "",
+    roleSpecialPersona: ""
   };
 }
 
@@ -527,7 +528,8 @@ function normalizeContact(contact, index = 0) {
     avatarImage: String(source.avatarImage || "").trim(),
     avatarText: String(source.avatarText || "").trim() || getContactAvatarFallback({ name }),
     personaPrompt: String(source.personaPrompt || "").trim(),
-    specialUserPersona: String(source.specialUserPersona || "").trim(),
+    userSpecialPersona: String(source.userSpecialPersona || source.specialUserPersona || "").trim(),
+    roleSpecialPersona: String(source.roleSpecialPersona || "").trim(),
     updatedAt: Number(source.updatedAt) || Date.now()
   };
 }
@@ -554,7 +556,8 @@ function normalizeThreadParticipant(source = {}, index = 0) {
       String(source.avatarText || "").trim() ||
       (type === "user" ? "你" : getContactAvatarFallback({ name })),
     personaPrompt: String(source.personaPrompt || "").trim(),
-    specialUserPersona: String(source.specialUserPersona || "").trim()
+    userSpecialPersona: String(source.userSpecialPersona || source.specialUserPersona || "").trim(),
+    roleSpecialPersona: String(source.roleSpecialPersona || "").trim()
   };
 }
 
@@ -1377,7 +1380,8 @@ function getCombinedParticipantList() {
       avatarImage: state.profile.avatarImage,
       avatarText: state.profile.avatarText,
       personaPrompt: state.profile.personaPrompt,
-      specialUserPersona: ""
+      userSpecialPersona: "",
+      roleSpecialPersona: ""
     },
     ...state.contacts
   ];
@@ -1643,7 +1647,8 @@ function getSelectedParticipantSnapshots() {
       avatarImage: item.avatarImage,
       avatarText: item.avatarText,
       personaPrompt: item.personaPrompt,
-      specialUserPersona: item.specialUserPersona
+      userSpecialPersona: item.userSpecialPersona,
+      roleSpecialPersona: item.roleSpecialPersona
     }));
 }
 
@@ -1963,8 +1968,8 @@ function buildStorySystemPrompt(thread, history = []) {
             const lines = [
               `- ${item.type === "user" ? "用户" : "角色"}「${item.name}」`,
               item.personaPrompt ? `  人设：${item.personaPrompt}` : "",
-              item.specialUserPersona && item.type === "contact" && userPresent
-                ? `  对用户的特别认知：${item.specialUserPersona}`
+              item.roleSpecialPersona && item.type === "contact" && userPresent
+                ? `  对用户的特别认知：${item.roleSpecialPersona}`
                 : ""
             ]
               .filter(Boolean)

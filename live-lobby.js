@@ -211,7 +211,7 @@ function loadContacts() {
       avatarImage: safeTrim(contact.avatarImage || ""),
       avatarText: safeTrim(contact.avatarText || "") || buildContactAvatarTextFallback(contact),
       description: truncateText(
-        safeTrim(contact.personaPrompt || contact.specialUserPersona || "角色直播入口已预留。"),
+        safeTrim(contact.personaPrompt || contact.roleSpecialPersona || "角色直播入口已预留。"),
         78
       )
     }))

@@ -276,7 +276,10 @@ const messagesContactForumFandomTabNameInputEl = document.querySelector(
 const messagesContactForumFandomAudienceInputEl = document.querySelector(
   "#messages-contact-forum-fandom-audience-input"
 );
-const messagesContactSpecialPersonaInputEl = document.querySelector(
+const messagesContactRoleSpecialPersonaInputEl = document.querySelector(
+  "#messages-contact-role-special-persona-input"
+);
+const messagesContactUserSpecialPersonaInputEl = document.querySelector(
   "#messages-contact-special-persona-input"
 );
 const messagesContactEditorStatusEl = document.querySelector("#messages-contact-editor-status");
@@ -6632,7 +6635,8 @@ function normalizeContact(contact, index = 0) {
     avatarImage: String(source.avatarImage || "").trim(),
     avatarText: String(source.avatarText || "").trim() || getContactAvatarFallback({ name }),
     personaPrompt: String(source.personaPrompt || "").trim(),
-    specialUserPersona: String(source.specialUserPersona || "").trim(),
+    userSpecialPersona: String(source.userSpecialPersona || source.specialUserPersona || "").trim(),
+    roleSpecialPersona: String(source.roleSpecialPersona || "").trim(),
     forumFandomEnabled: Boolean(source.forumFandomEnabled),
     forumFandomTabId: String(source.forumFandomTabId || "").trim(),
     forumFandomTabName: String(source.forumFandomTabName || "").trim(),
@@ -6681,7 +6685,8 @@ function buildSnapshotContactFromConversation(conversation = {}, index = 0) {
         String(conversation?.contactAvatarTextSnapshot || "").trim() ||
         getContactAvatarFallback({ name: contactName }),
       personaPrompt: "",
-      specialUserPersona: "",
+      userSpecialPersona: "",
+      roleSpecialPersona: "",
       forumFandomEnabled: false,
       forumFandomTabId: "",
       forumFandomTabName: "",
@@ -6898,7 +6903,20 @@ function buildContactCombinedPersonaText(contact = null, options = {}) {
   const joiner = typeof options.joiner === "string" ? options.joiner : "\n";
   return [
     String(resolvedContact.personaPrompt || "").trim(),
-    String(resolvedContact.specialUserPersona || "").trim()
+    String(resolvedContact.roleSpecialPersona || "").trim()
+  ]
+    .filter(Boolean)
+    .join(joiner)
+    .trim();
+}
+
+function buildUserCombinedPersonaText(profile = null, contact = null, options = {}) {
+  const resolvedProfile = profile && typeof profile === "object" ? profile : {};
+  const resolvedContact = contact && typeof contact === "object" ? contact : {};
+  const joiner = typeof options.joiner === "string" ? options.joiner : "\n";
+  return [
+    String(resolvedProfile.personaPrompt || DEFAULT_PROFILE.personaPrompt || "").trim(),
+    String(resolvedContact.userSpecialPersona || "").trim()
   ]
     .filter(Boolean)
     .join(joiner)
@@ -8865,7 +8883,8 @@ function getResolvedConversationContact(conversation = getConversationById()) {
     avatarText:
       String(resolvedConversation?.contactAvatarTextSnapshot || "").trim() || snapshotName.slice(0, 1),
     personaPrompt: "",
-    specialUserPersona: "",
+    userSpecialPersona: "",
+    roleSpecialPersona: "",
     forumFandomEnabled: false,
     forumFandomTabId: "",
     forumFandomTabName: "",
@@ -12319,7 +12338,8 @@ function buildConversationSystemPrompt(
         contactPersona:
           buildContactCombinedPersonaText(contact) || "自然、友好、会根据关系和语境稳定回应。",
         userName: profile.username || DEFAULT_PROFILE.username,
-        userPersona: profile.personaPrompt || DEFAULT_PROFILE.personaPrompt,
+        userPersona:
+          buildUserCombinedPersonaText(profile, contact) || DEFAULT_PROFILE.personaPrompt,
         replySentenceLimit: normalizeMessagePromptSettings(promptSettings).replySentenceLimit
       }
     }
@@ -12360,7 +12380,8 @@ function buildJournalSystemPrompt(
         contactName: contact.name,
         contactPersona: buildContactCombinedPersonaText(contact) || "自然、细腻、会根据设定稳定表达。",
         userName: profile.username || DEFAULT_PROFILE.username,
-        userPersona: profile.personaPrompt || DEFAULT_PROFILE.personaPrompt,
+        userPersona:
+          buildUserCombinedPersonaText(profile, contact) || DEFAULT_PROFILE.personaPrompt,
         journalLength: normalizeMessagePromptSettings(promptSettings).journalLength
       }
     }
@@ -12749,7 +12770,8 @@ function buildMemorySummarySystemPrompt(profile, contact) {
         contactName: contact.name,
         contactPersona: buildContactCombinedPersonaText(contact) || "自然、友好、会根据关系稳定回应。",
         userName: profile.username || DEFAULT_PROFILE.username,
-        userPersona: profile.personaPrompt || DEFAULT_PROFILE.personaPrompt
+        userPersona:
+          buildUserCombinedPersonaText(profile, contact) || DEFAULT_PROFILE.personaPrompt
       }
     }
   );
@@ -15709,7 +15731,8 @@ function buildInnerThoughtSystemPrompt(
         contactName: contact.name || "这个角色",
         contactPersona: buildContactCombinedPersonaText(contact) || "自然、友好、会根据关系稳定回应。",
         userName: profile.username || DEFAULT_PROFILE.username,
-        userPersona: profile.personaPrompt || DEFAULT_PROFILE.personaPrompt
+        userPersona:
+          buildUserCombinedPersonaText(profile, contact) || DEFAULT_PROFILE.personaPrompt
       }
     }
   );
@@ -19972,7 +19995,8 @@ function applyContactToForm(contact = null) {
     name: "",
     avatarImage: "",
     personaPrompt: "",
-    specialUserPersona: "",
+    userSpecialPersona: "",
+    roleSpecialPersona: "",
     forumFandomEnabled: false,
     forumFandomTabId: "",
     forumFandomTabName: "",
@@ -19985,8 +20009,11 @@ function applyContactToForm(contact = null) {
   if (messagesContactPersonaInputEl) {
     messagesContactPersonaInputEl.value = resolvedContact.personaPrompt || "";
   }
-  if (messagesContactSpecialPersonaInputEl) {
-    messagesContactSpecialPersonaInputEl.value = resolvedContact.specialUserPersona || "";
+  if (messagesContactRoleSpecialPersonaInputEl) {
+    messagesContactRoleSpecialPersonaInputEl.value = resolvedContact.roleSpecialPersona || "";
+  }
+  if (messagesContactUserSpecialPersonaInputEl) {
+    messagesContactUserSpecialPersonaInputEl.value = resolvedContact.userSpecialPersona || "";
   }
   if (messagesContactForumFandomEnabledInputEl) {
     messagesContactForumFandomEnabledInputEl.checked = Boolean(resolvedContact.forumFandomEnabled);
@@ -20017,7 +20044,8 @@ function getCurrentContactDraft() {
     avatarImage: state.contactEditorAvatarImage || "",
     avatarText: getContactAvatarFallback({ name }),
     personaPrompt: String(messagesContactPersonaInputEl?.value || "").trim(),
-    specialUserPersona: String(messagesContactSpecialPersonaInputEl?.value || "").trim(),
+    userSpecialPersona: String(messagesContactUserSpecialPersonaInputEl?.value || "").trim(),
+    roleSpecialPersona: String(messagesContactRoleSpecialPersonaInputEl?.value || "").trim(),
     forumFandomEnabled: Boolean(messagesContactForumFandomEnabledInputEl?.checked),
     forumFandomTabId: String(existingContact?.forumFandomTabId || "").trim(),
     forumFandomTabName: String(messagesContactForumFandomTabNameInputEl?.value || "").trim(),

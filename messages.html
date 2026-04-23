@@ -367,11 +367,20 @@
           </section>
 
           <label class="messages-form-field messages-form-field--textarea">
-            <span>对用户的特殊人设</span>
+            <span>角色对用户的特殊人设</span>
+            <textarea
+              id="messages-contact-role-special-persona-input"
+              rows="5"
+              placeholder="可选。记录这个角色只对用户成立的特别认知，例如相处印象、偏爱点、介意点或私人滤镜。"
+            ></textarea>
+          </label>
+
+          <label class="messages-form-field messages-form-field--textarea">
+            <span>用户对角色的特殊人设</span>
             <textarea
               id="messages-contact-special-persona-input"
               rows="5"
-              placeholder="可选。记录这个角色只对用户成立的特别认知，例如相处印象、偏爱点、介意点或私人滤镜。"
+              placeholder="可选。记录用户只会在这个角色身上触发的特别滤镜、期待、偏好或互动倾向。"
             ></textarea>
           </label>
 
@@ -2595,7 +2604,7 @@
 
     <input id="messages-image-file-input" type="file" accept="image/*" hidden />
 
-    <script src="./prompt-config.js?v=20260414-130224"></script>
+    <script src="./prompt-config.js?v=20260423-150419"></script>
     <script src="./privacy-allowlist.js?v=20260415-173916"></script>
     <script src="./pulse-privacy-cover.js?v=20260417-115721"></script>
     <script src="./pulse-structured-output.js?v=20260414-130224"></script>
@@ -2605,6 +2614,6 @@
     <script src="./messages-awareness-config.js?v=20260403-165212"></script>
     <script src="./messages-memory-decay-config.js?v=20260416-231000"></script>
     <script src="./messages-proactive-trigger-config.js?v=20260415-145640"></script>
-    <script src="./messages.js?v=20260422-154500"></script>
+    <script src="./messages.js?v=20260423-150419"></script>
   </body>
 </html>

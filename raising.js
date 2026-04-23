@@ -524,9 +524,27 @@ function normalizeContact(contact, index = 0) {
     avatarImage: String(source.avatarImage || "").trim(),
     avatarText: String(source.avatarText || "").trim() || getContactAvatarFallback({ name }),
     personaPrompt: String(source.personaPrompt || "").trim(),
-    specialUserPersona: String(source.specialUserPersona || "").trim(),
+    userSpecialPersona: String(source.userSpecialPersona || source.specialUserPersona || "").trim(),
+    roleSpecialPersona: String(source.roleSpecialPersona || "").trim(),
     updatedAt: Number(source.updatedAt) || Date.now()
   };
+}
+
+function buildContactCombinedPersonaText(contact = null) {
+  const resolvedContact = contact && typeof contact === "object" ? contact : {};
+  return [String(resolvedContact.personaPrompt || "").trim(), String(resolvedContact.roleSpecialPersona || "").trim()]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function buildUserCombinedPersonaText(profile = null, contact = null) {
+  const resolvedProfile = profile && typeof profile === "object" ? profile : {};
+  const resolvedContact = contact && typeof contact === "object" ? contact : {};
+  return [String(resolvedProfile.personaPrompt || "").trim(), String(resolvedContact.userSpecialPersona || "").trim()]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
 }
 
 function loadContacts() {
@@ -1488,13 +1506,6 @@ function parseJsonObjectWithRepair(jsonText, errorMessage) {
 }
 
 function buildKidArchivePrompt(profile, partner, record) {
-  const combinedPartnerPersona = [
-    String(partner.personaPrompt || "").trim(),
-    String(partner.specialUserPersona || "").trim()
-  ]
-    .filter(Boolean)
-    .join("\n")
-    .trim();
   return buildStructuredPromptSections(
     "raising_kid_archive",
     {
@@ -1508,9 +1519,9 @@ function buildKidArchivePrompt(profile, partner, record) {
         childName: record.childName,
         childGender: getGenderLabel(record.childGender),
         userName: profile.username,
-        userPersona: profile.personaPrompt || "温柔、细腻、会认真照顾孩子。",
+        userPersona: buildUserCombinedPersonaText(profile, partner) || "温柔、细腻、会认真照顾孩子。",
         partnerName: partner.name,
-        partnerPersona: combinedPartnerPersona || "有鲜明性格，会把自己的气质投射到孩子身上。"
+        partnerPersona: buildContactCombinedPersonaText(partner) || "有鲜明性格，会把自己的气质投射到孩子身上。"
       }
     }
   );

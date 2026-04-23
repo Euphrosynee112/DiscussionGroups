@@ -457,7 +457,8 @@ function loadContacts() {
         avatarImage: safeTrim(contact.avatarImage || ""),
         avatarText: safeTrim(contact.avatarText || "") || getAvatarFallback(name || "联"),
         personaPrompt: safeTrim(contact.personaPrompt || ""),
-        specialUserPersona: safeTrim(contact.specialUserPersona || "")
+        userSpecialPersona: safeTrim(contact.userSpecialPersona || contact.specialUserPersona || ""),
+        roleSpecialPersona: safeTrim(contact.roleSpecialPersona || "")
       };
     })
     .filter((contact) => contact.id && contact.name);

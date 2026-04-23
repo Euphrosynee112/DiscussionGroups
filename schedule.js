@@ -928,8 +928,29 @@ function normalizeContact(contact, index = 0) {
     avatarImage: String(source.avatarImage || "").trim(),
     avatarText: String(source.avatarText || "").trim() || name.slice(0, 2) || "角色",
     personaPrompt: String(source.personaPrompt || "").trim(),
-    specialUserPersona: String(source.specialUserPersona || "").trim()
+    userSpecialPersona: String(source.userSpecialPersona || source.specialUserPersona || "").trim(),
+    roleSpecialPersona: String(source.roleSpecialPersona || "").trim()
   };
+}
+
+function buildContactCombinedPersonaText(contact = null) {
+  const resolvedContact = contact && typeof contact === "object" ? contact : {};
+  return [String(resolvedContact.personaPrompt || "").trim(), String(resolvedContact.roleSpecialPersona || "").trim()]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function buildUserCombinedPersonaText(profile = null, contact = null) {
+  const resolvedProfile = profile && typeof profile === "object" ? profile : {};
+  const resolvedContact = contact && typeof contact === "object" ? contact : {};
+  return [
+    String(resolvedProfile.personaPrompt || DEFAULT_PROFILE.personaPrompt || "").trim(),
+    String(resolvedContact.userSpecialPersona || "").trim()
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
 }
 
 function loadContacts() {
@@ -1445,10 +1466,6 @@ function buildInviteConflictContext(contact, inviteEntry) {
 
 function buildScheduleInviteSystemPrompt(profile, contact, inviteEntry, options = {}) {
   const companionNames = Array.isArray(options.companionNames) ? options.companionNames : [];
-  const combinedPersona = [String(contact.personaPrompt || "").trim(), String(contact.specialUserPersona || "").trim()]
-    .filter(Boolean)
-    .join("\n")
-    .trim();
   return buildStructuredPromptSections(
     "schedule_invite",
     {
@@ -1466,10 +1483,12 @@ function buildScheduleInviteSystemPrompt(profile, contact, inviteEntry, options 
       settings: loadSettings(),
       variables: {
         contactName: contact.name,
-        contactPersona: combinedPersona || "自然、友好，会根据关系和现实安排做决定。",
+        contactPersona: buildContactCombinedPersonaText(contact) || "自然、友好，会根据关系和现实安排做决定。",
         userName: profile.username || DEFAULT_PROFILE.username,
         userPersona:
-          profile.personaPrompt || DEFAULT_PROFILE.personaPrompt || "用户有自己稳定的人设和表达方式。"
+          buildUserCombinedPersonaText(profile, contact) ||
+          DEFAULT_PROFILE.personaPrompt ||
+          "用户有自己稳定的人设和表达方式。"
       }
     }
   );
