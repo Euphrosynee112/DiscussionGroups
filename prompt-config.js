@@ -734,9 +734,11 @@
         context_library: [
           createDynamicItem("worldbook_context", "世界书背景", "读取挂载世界书"),
           createDynamicItem("hot_topics_context", "共同关注话题", "读取热点挂载"),
+          createDynamicItem("recent_user_history", "最近用户发言背景", "读取最近 Bubble 用户发言"),
           createDynamicItem("message_intro", "Bubble 消息前缀", "按消息条数生成"),
           createDynamicItem("message_list", "Bubble 消息列表", "读取本轮 Bubble 消息"),
-          createDynamicItem("message_merge_rule", "整轮消息理解规则", "读取整轮综合回应说明")
+          createDynamicItem("message_merge_rule", "整轮消息理解规则", "读取整轮综合回应说明"),
+          createDynamicItem("seed_reply_tasks", "匿名 Seed 回复任务", "读取论坛 seed 匿名任务")
         ],
         persona_alignment: [
           createTemplateItem("task_role", "任务定位", "你正在模拟 Bubble 中创作者的粉丝回复列表。"),
@@ -749,6 +751,7 @@
           createTemplateItem("language_choices", "语言范围", "language 只能是 zh、ja、en、ko 四选一。"),
           createTemplateItem("language_balance", "语言覆盖", "四种语言都必须出现，尽量平均分配。"),
           createTemplateItem("fan_reaction", "粉丝视角", "text 是粉丝视角对创作者刚发消息的即时反应。"),
+          createDynamicItem("seed_anonymous_rule", "Seed 匿名规则", "匿名 seed 回复时读取"),
           createTemplateItem("max_length", "长度限制", "每条 text 不得超过 50 个字符。"),
           createTemplateItem("tone", "语气", "语气要像真实粉丝：可以可爱、惊讶、夸赞、调侃、尖叫，但都要围绕原消息做反应。"),
           createTemplateItem("plain_output", "纯输出", "不要加编号、不要加标签、不要解释、不要输出用户名字段。")

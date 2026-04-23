@@ -482,7 +482,8 @@ body.embedded .bubble-embedded-close {
   line-height: 1.55;
 }
 
-.bubble-sheet-field select {
+.bubble-sheet-field select,
+.bubble-sheet-field input[type="number"] {
   width: 100%;
   min-height: 44px;
   padding: 0 14px;
