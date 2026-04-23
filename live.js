@@ -11,8 +11,12 @@ const DEPLOYED_STORAGE_API_BASE_URL = "https://spring-field-3219.fly.dev";
 const PROFILE_KEY = "x_style_generator_profile_v1";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const MESSAGE_CONTACTS_KEY = "x_style_generator_message_contacts_v1";
+const MESSAGE_THREADS_KEY = "x_style_generator_message_threads_v1";
+const MESSAGE_MEMORIES_KEY = "x_style_generator_message_memories_v1";
 const WORLD_BOOKS_KEY = "x_style_generator_message_worldbooks_v1";
 const LIVE_ENTRY_CONFIG_KEY = "x_style_generator_live_entry_config_v1";
+const DEFAULT_CORE_MEMORY_THRESHOLD = 80;
+const DEFAULT_SCENE_MEMORY_THRESHOLD = 65;
 const memoryStorage = {};
 
 const DEFAULT_PROFILE = {
@@ -145,6 +149,22 @@ function readStoredJson(key, fallback = null) {
 
 function safeTrim(value = "") {
   return String(value || "").trim();
+}
+
+function normalizePositiveInteger(value, fallback = 0) {
+  const parsed = Number.parseInt(String(value ?? fallback), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function clampNumber(value, min, max) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, numeric));
 }
 
 function hashText(value) {
@@ -518,6 +538,186 @@ function getLiveWorldbookOptions() {
       };
     })
     .filter(Boolean);
+}
+
+function normalizeWorldbookIds(value = []) {
+  const validWorldbookIds = new Set(getLiveWorldbookOptions().map((item) => item.id));
+  const source = Array.isArray(value) ? value : [];
+  const uniqueIds = [];
+  const seenIds = new Set();
+  source.forEach((item) => {
+    const entryId = safeTrim(item);
+    if (!entryId || seenIds.has(entryId) || !validWorldbookIds.has(entryId)) {
+      return;
+    }
+    seenIds.add(entryId);
+    uniqueIds.push(entryId);
+  });
+  return uniqueIds;
+}
+
+function buildWorldbookContextFromIds(entryIds = [], options = {}) {
+  const resolvedIds = normalizeWorldbookIds(entryIds);
+  const entries = getLiveWorldbookOptions().filter((entry) => resolvedIds.includes(entry.id));
+  if (!entries.length) {
+    return safeTrim(options.emptyText || "");
+  }
+  const title = safeTrim(options.title || "挂载世界书：") || "挂载世界书：";
+  return [
+    title,
+    ...entries.slice(0, 8).map((entry) =>
+      [
+        `- ${entry.name}${entry.categoryName ? `（${entry.categoryName}）` : ""}`,
+        entry.text ? `  ${truncateText(entry.text, 520)}` : ""
+      ]
+        .filter(Boolean)
+        .join("\n")
+    )
+  ].join("\n");
+}
+
+function getLiveConversationPromptSettings() {
+  const contactId = safeTrim(state.liveEntryConfig?.contactId || state.hostContact?.id || "");
+  const globalPromptSettings =
+    state.settings?.messagePromptSettings && typeof state.settings.messagePromptSettings === "object"
+      ? state.settings.messagePromptSettings
+      : {};
+  const conversations = normalizeObjectArray(readStoredJson(MESSAGE_THREADS_KEY, []));
+  const conversation =
+    conversations.find((item) => safeTrim(item?.contactId || "") === contactId) || null;
+  const promptSettings =
+    conversation?.promptSettings && typeof conversation.promptSettings === "object"
+      ? conversation.promptSettings
+      : {};
+  return {
+    worldbookEnabled: Boolean(promptSettings.worldbookEnabled),
+    worldbookIds: normalizeWorldbookIds(promptSettings.worldbookIds),
+    coreMemoryThreshold: clampNumber(
+      normalizePositiveInteger(
+        promptSettings.coreMemoryThreshold,
+        normalizePositiveInteger(
+          globalPromptSettings.coreMemoryThreshold,
+          DEFAULT_CORE_MEMORY_THRESHOLD
+        )
+      ),
+      1,
+      100
+    ),
+    sceneMemoryThreshold: clampNumber(
+      normalizePositiveInteger(
+        promptSettings.sceneMemoryThreshold,
+        normalizePositiveInteger(
+          globalPromptSettings.sceneMemoryThreshold,
+          DEFAULT_SCENE_MEMORY_THRESHOLD
+        )
+      ),
+      1,
+      100
+    )
+  };
+}
+
+function buildRoleMergedWorldbookContextText() {
+  const liveWorldbookIds = state.liveEntryConfig?.worldbookEnabled
+    ? normalizeWorldbookIds(state.liveEntryConfig.worldbookIds)
+    : [];
+  const conversationPromptSettings = getLiveConversationPromptSettings();
+  const privateWorldbookIds = conversationPromptSettings.worldbookEnabled
+    ? normalizeWorldbookIds(conversationPromptSettings.worldbookIds)
+    : [];
+  const mergedWorldbookIds = [...new Set([...liveWorldbookIds, ...privateWorldbookIds])];
+  const hasSharedSelection = Boolean(liveWorldbookIds.length);
+  const hasPrivateSelection = Boolean(privateWorldbookIds.length);
+  const title = hasSharedSelection && hasPrivateSelection
+    ? "挂载世界书（直播共享 + 角色私有去重合并）："
+    : hasPrivateSelection
+      ? "角色 1v1 私有世界书（仅角色侧可见）："
+      : "挂载世界书：";
+  if (!mergedWorldbookIds.length) {
+    return state.liveEntryConfig?.worldbookEnabled
+      ? "已勾选挂载世界书基础设置，但未选择具体世界书条目。"
+      : "";
+  }
+  return buildWorldbookContextFromIds(mergedWorldbookIds, { title });
+}
+
+function normalizeLiveMemoryEntry(memory = {}, index = 0) {
+  const source = memory && typeof memory === "object" ? memory : {};
+  const content = safeTrim(source.content || source.text || "");
+  return {
+    id: String(source.id || `live_memory_${Date.now()}_${index}`),
+    contactId: safeTrim(source.contactId || source.contact_id || ""),
+    type: safeTrim(source.type || "").toLowerCase() === "core" ? "core" : "scene",
+    content,
+    importance: clampNumber(
+      normalizePositiveInteger(source.importance, DEFAULT_SCENE_MEMORY_THRESHOLD),
+      1,
+      100
+    ),
+    updatedAt: Number(source.updatedAt) || Number(source.createdAt) || 0
+  };
+}
+
+function getLiveMemoriesForContact(contactId = "") {
+  const resolvedContactId = safeTrim(contactId);
+  if (!resolvedContactId) {
+    return [];
+  }
+  return normalizeObjectArray(readStoredJson(MESSAGE_MEMORIES_KEY, []))
+    .map((item, index) => normalizeLiveMemoryEntry(item, index))
+    .filter((item) => item.contactId === resolvedContactId && item.content)
+    .sort(
+      (left, right) =>
+        (right.importance || 0) - (left.importance || 0) ||
+        (right.updatedAt || 0) - (left.updatedAt || 0)
+    );
+}
+
+function buildLiveMemorySection(title = "", entries = []) {
+  if (!entries.length) {
+    return "";
+  }
+  return [
+    safeTrim(title),
+    "清楚记得的部分：",
+    ...entries.map((entry) => `- ${entry.content}`)
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildRolePrivateMemoryContextText() {
+  const contactId = safeTrim(state.liveEntryConfig?.contactId || state.hostContact?.id || "");
+  if (!contactId) {
+    return "";
+  }
+  const promptSettings = getLiveConversationPromptSettings();
+  const memories = getLiveMemoriesForContact(contactId);
+  if (!memories.length) {
+    return "";
+  }
+  const coreEntries = memories
+    .filter(
+      (item) => item.type === "core" && item.importance >= promptSettings.coreMemoryThreshold
+    )
+    .slice(0, 8);
+  const sceneEntries = memories
+    .filter(
+      (item) => item.type === "scene" && item.importance >= promptSettings.sceneMemoryThreshold
+    )
+    .slice(0, 10);
+  return [
+    buildLiveMemorySection(
+      "这些核心记忆会持续影响你当下的情绪走向、判断和对用户的态度，请像真的记得它们一样自然体现：",
+      coreEntries
+    ),
+    buildLiveMemorySection(
+      "这些情景记忆只在直播内容自然相关时再想起来，不必刻意提前提起：",
+      sceneEntries
+    )
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function normalizeLiveEntryConfig(source = {}) {
@@ -1079,22 +1279,9 @@ function buildWorldbookContextText() {
   if (!state.liveEntryConfig?.worldbookEnabled) {
     return "";
   }
-  const selectedIds = new Set(state.liveEntryConfig.worldbookIds || []);
-  const entries = getLiveWorldbookOptions().filter((entry) => selectedIds.has(entry.id));
-  if (!entries.length) {
-    return "已勾选挂载世界书基础设置，但未选择具体世界书条目。";
-  }
-  return [
-    "挂载世界书：",
-    ...entries.slice(0, 8).map((entry) =>
-      [
-        `- ${entry.name}${entry.categoryName ? `（${entry.categoryName}）` : ""}`,
-        entry.text ? `  ${truncateText(entry.text, 520)}` : ""
-      ]
-        .filter(Boolean)
-        .join("\n")
-    )
-  ].join("\n");
+  return buildWorldbookContextFromIds(state.liveEntryConfig.worldbookIds, {
+    emptyText: "已勾选挂载世界书基础设置，但未选择具体世界书条目。"
+  });
 }
 
 function buildRecentLiveHistoryText() {
@@ -1163,7 +1350,8 @@ function buildRoleLiveSystemPrompt(trigger = "auto", latestUserText = "") {
     openingDescription ? `初始直播描写：${openingDescription}` : "",
     buildForumContextText(),
     buildBubbleContextText(),
-    buildWorldbookContextText()
+    buildRoleMergedWorldbookContextText(),
+    buildRolePrivateMemoryContextText()
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -1171,6 +1359,7 @@ function buildRoleLiveSystemPrompt(trigger = "auto", latestUserText = "") {
     `当前直播主播是角色：${hostProfile.username}。`,
     hostProfile.personaPrompt ? `角色人设：${hostProfile.personaPrompt}` : "",
     "你只能让当前被选中的这个角色作为主播行动，不要调动未被选择的其他角色。",
+    "角色自己的 1v1 私有世界书与记忆只用于你理解主播状态，不代表直播间观众公开知道；不要把这些内容硬讲成所有人都知道的公开事实。",
     `直播间中真实存在的用户账号是：${userProfile.username}（${userProfile.userId}）。只有当历史里出现实名用户评论时，才可以把她当作被识别出的本人；匿名评论一律视为普通观众。`
   ]
     .filter(Boolean)
@@ -1233,7 +1422,9 @@ function buildFanLiveSystemPrompt(trigger = "auto", latestUserText = "") {
       ? `当前直播主播是角色：${hostProfile.username}。`
       : `直播发起人 / 主播是用户：${hostProfile.username}（${hostProfile.userId}）。`,
     !isContactLiveMode() && hostProfile.signature ? `主播账号简介：${hostProfile.signature}` : "",
-    hostProfile.personaPrompt ? `主播人设与表达参考：${hostProfile.personaPrompt}` : "",
+    !isContactLiveMode() && hostProfile.personaPrompt
+      ? `主播人设与表达参考：${hostProfile.personaPrompt}`
+      : "",
     isContactLiveMode()
       ? "你不是主播本人；你要模拟直播间里不同观众对角色主播动态的即时弹幕反应。"
       : "你不是主播本人，也不要替主播发言；你要模拟直播间里不同观众的即时弹幕反应。"
