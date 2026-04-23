@@ -527,16 +527,14 @@ function getSigningPresetLabel(presetId = "") {
 
 function getSigningForumOptions() {
   const settings = state.settings || loadSettings();
-  const items = [{ id: "entertainment", name: "默认论坛首页" }];
-  const seen = new Set(items.map((item) => item.id));
-  normalizeCustomTabs(settings.customTabs).forEach((tab) => {
-    if (!tab.id || !tab.name || seen.has(tab.id)) {
-      return;
-    }
-    seen.add(tab.id);
-    items.push({ id: tab.id, name: tab.name });
-  });
-  return items;
+  return normalizeCustomTabs(settings.customTabs)
+    .map((tab) => {
+      if (!tab.id || !tab.name) {
+        return null;
+      }
+      return { id: tab.id, name: tab.name };
+    })
+    .filter(Boolean);
 }
 
 function getWorldbookPayload() {
@@ -614,7 +612,7 @@ function normalizeSigningEntryConfig(source = {}) {
   const validPresetIds = new Set(presetOptions.map((item) => item.id));
   const forumOptions = getSigningForumOptions();
   const validForumIds = new Set(forumOptions.map((item) => item.id));
-  const fallbackForumId = forumOptions[0]?.id || "entertainment";
+  const fallbackForumId = forumOptions[0]?.id || "";
   const resolvedForumId = safeTrim(
     raw.forumTabId ||
       raw.forumTab ||
@@ -629,7 +627,7 @@ function normalizeSigningEntryConfig(source = {}) {
       raw.segmentDurationMinutes || raw.durationMinutes || raw.signingDurationMinutes,
       DEFAULT_SIGNING_SEGMENT_DURATION_MINUTES
     ),
-    forumEnabled: Boolean(raw.forumEnabled),
+    forumEnabled: Boolean(raw.forumEnabled && (validForumIds.has(resolvedForumId) || fallbackForumId)),
     forumTabId: validForumIds.has(resolvedForumId) ? resolvedForumId : fallbackForumId,
     worldbookEnabled: Boolean(raw.worldbookEnabled),
     worldbookIds: normalizeWorldbookIds(raw.worldbookIds),
@@ -1188,10 +1186,10 @@ function syncComposerAvailability() {
 function lookupForumTabName(tabId = "") {
   const resolvedTabId = safeTrim(tabId);
   if (!resolvedTabId) {
-    return "默认论坛首页";
+    return "未挂载论坛";
   }
   return (
-    getSigningForumOptions().find((item) => item.id === resolvedTabId)?.name || "默认论坛首页"
+    getSigningForumOptions().find((item) => item.id === resolvedTabId)?.name || "未挂载论坛"
   );
 }
 
@@ -1200,11 +1198,7 @@ function renderRemoteVisual() {
   signingRemoteNameEl.textContent = fan?.displayName || "下一位粉丝";
   signingRemoteHandleEl.textContent = fan?.handle || "@fan";
   if (signingRemoteVisualEl) {
-    signingRemoteVisualEl.innerHTML = fan?.avatarImage
-      ? `<img src="${escapeHtml(fan.avatarImage)}" alt="${escapeHtml(fan.displayName || "粉丝")} 的画面" />`
-      : `<div class="signing-video-stage__remote-fallback">${escapeHtml(
-          fan?.avatarText || "签"
-        )}</div>`;
+    signingRemoteVisualEl.innerHTML = "";
   }
   const presetLabel = getSigningPresetLabel(state.signingEntryConfig?.contextPreset);
   if (signingContextBadgeEl) {
@@ -1960,8 +1954,13 @@ async function handleGenerateSummaryAndContinue() {
     return;
   }
   state.summaryPending = true;
+  state.summaryModalOpen = false;
   setSummaryButtonsDisabled(true);
-  setSummaryStatus("正在生成签后感想…");
+  setSummaryStatus("");
+  setSigningHint("正在后台生成签后感想…");
+  persistSigningSessionState();
+  renderSummaryModal();
+  syncComposerAvailability();
   try {
     const result = await requestSigningStructuredOutput({
       action: "signing_seed_review",
@@ -1975,17 +1974,25 @@ async function handleGenerateSummaryAndContinue() {
       result.discussionText,
       state.pendingSummaryFan
     );
-    setSummaryStatus("签后感想已写入 discussion，准备接入下一位粉丝。", "success");
+    setSigningHint("签后感想已写入 discussion，准备接入下一位粉丝。");
     window.setTimeout(() => {
       startCooldown();
     }, 280);
   } catch (error) {
-    setSummaryStatus(error?.message || "签后感想生成失败。", "error");
+    appendSegmentMessage(
+      "system",
+      `系统：签后感想未写入论坛（${error?.message || "签后感想生成失败"}）`,
+      { trigger: "summary_error" }
+    );
+    setSigningHint(`签后感想未写入论坛：${error?.message || "请稍后重试"}`);
+    window.setTimeout(() => {
+      startCooldown();
+    }, 900);
   } finally {
     state.summaryPending = false;
     setSummaryButtonsDisabled(false);
     persistSigningSessionState();
-    renderSummaryModal();
+    renderAll();
     syncComposerAvailability();
   }
 }

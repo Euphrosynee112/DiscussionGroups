@@ -5,8 +5,8 @@ const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const DEFAULT_GROK_MODEL = "grok-4";
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 const DEFAULT_TEMPERATURE = 0.85;
-const APP_BUILD_VERSION = "20260423-191200";
-const APP_BUILD_UPDATED_AT = "2026-04-23 19:12:00";
+const APP_BUILD_VERSION = "20260423-201800";
+const APP_BUILD_UPDATED_AT = "2026-04-23 20:18:00";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const POSTS_KEY = "x_style_generator_posts_v2";
 const REFRESH_KEY = "x_style_generator_refresh_v2";
@@ -1749,6 +1749,25 @@ function getSigningContextPresetOptions() {
   ];
 }
 
+function getHomeSigningForumOptions() {
+  const settings = loadSettings({ forceActiveConfig: false });
+  return normalizeObjectArray(settings.customTabs)
+    .map((tab, index) => {
+      const id = String(tab.id || tab.feedId || tab.key || "").trim();
+      const name = String(
+        tab.name || tab.label || tab.title || tab.tabName || tab.tabLabel || ""
+      ).trim();
+      if (!id || !name) {
+        return null;
+      }
+      return {
+        id: id || `signing_tab_${index}`,
+        name
+      };
+    })
+    .filter(Boolean);
+}
+
 function normalizeSigningSegmentDurationMinutes(
   value,
   fallback = DEFAULT_SIGNING_SEGMENT_DURATION_MINUTES
@@ -1764,11 +1783,11 @@ function normalizeSigningEntryConfig(source = {}) {
   const raw = source && typeof source === "object" ? source : {};
   const presetOptions = getSigningContextPresetOptions();
   const validPresetIds = new Set(presetOptions.map((item) => item.id));
-  const forumOptions = getHomeLiveForumOptions();
+  const forumOptions = getHomeSigningForumOptions();
   const validForumIds = new Set(forumOptions.map((item) => item.id));
   const worldbookOptions = getHomeLiveWorldbookOptions();
   const validWorldbookIds = new Set(worldbookOptions.map((item) => item.id));
-  const fallbackForumId = forumOptions[0]?.id || "entertainment";
+  const fallbackForumId = forumOptions[0]?.id || "";
   const resolvedForumId = String(
     raw.forumTabId ||
       raw.forumTab ||
@@ -1783,7 +1802,7 @@ function normalizeSigningEntryConfig(source = {}) {
       raw.segmentDurationMinutes || raw.durationMinutes || raw.signingDurationMinutes,
       DEFAULT_SIGNING_SEGMENT_DURATION_MINUTES
     ),
-    forumEnabled: Boolean(raw.forumEnabled),
+    forumEnabled: Boolean(raw.forumEnabled && (validForumIds.has(resolvedForumId) || fallbackForumId)),
     forumTabId: validForumIds.has(resolvedForumId) ? resolvedForumId : fallbackForumId,
     worldbookEnabled: Boolean(raw.worldbookEnabled),
     worldbookIds: normalizeStringArray(raw.worldbookIds).filter((item) => validWorldbookIds.has(item)),
@@ -2536,7 +2555,8 @@ function sanitizePlotThreadTransferValue(thread = {}) {
       avatarImage: String(item.avatarImage || "").trim(),
       avatarText: String(item.avatarText || "").trim(),
       personaPrompt: String(item.personaPrompt || "").trim(),
-      specialUserPersona: String(item.specialUserPersona || "").trim()
+      userSpecialPersona: String(item.userSpecialPersona || item.specialUserPersona || "").trim(),
+      roleSpecialPersona: String(item.roleSpecialPersona || "").trim()
     }))
     .filter((item) => item.name);
   const customCharacters = normalizeObjectArray(thread.customCharacters)
@@ -3669,7 +3689,8 @@ function collectPrivacyScanTexts() {
   const counts = {
     rolePersona: 0,
     userPersona: 0,
-    specialUserPersona: 0,
+    userSpecialPersona: 0,
+    roleSpecialPersona: 0,
     worldbook: 0,
     forum: 0,
     commonPlace: 0
@@ -3694,7 +3715,8 @@ function collectPrivacyScanTexts() {
   contacts.forEach((contact) => {
     const contactName = String(contact.name || "未命名角色").trim() || "未命名角色";
     pushText("rolePersona", contact.personaPrompt, `角色公共人设 · ${contactName}`);
-    pushText("specialUserPersona", contact.specialUserPersona, `对用户的特殊人设 · ${contactName}`);
+    pushText("roleSpecialPersona", contact.roleSpecialPersona, `角色对用户的特殊人设 · ${contactName}`);
+    pushText("userSpecialPersona", contact.userSpecialPersona || contact.specialUserPersona, `用户对角色的特殊人设 · ${contactName}`);
   });
 
   normalizeObjectArray(worldbooks.categories).forEach((category) => {
@@ -4709,7 +4731,8 @@ function scanCurrentPrivacyAllowlistCandidates() {
   const sourceCount =
     counts.rolePersona +
     counts.userPersona +
-    counts.specialUserPersona +
+    counts.userSpecialPersona +
+    counts.roleSpecialPersona +
     counts.worldbook +
     counts.forum +
     counts.commonPlace;
@@ -5532,7 +5555,8 @@ function buildTransferSections(payload, options = {}) {
           description: truncateText(
             [
               String(contact.personaPrompt || "").trim(),
-              String(contact.specialUserPersona || "").trim(),
+              String(contact.roleSpecialPersona || "").trim(),
+              String(contact.userSpecialPersona || contact.specialUserPersona || "").trim(),
               String(contact.awarenessText || "").trim()
             ]
               .filter(Boolean)
@@ -7660,7 +7684,7 @@ function getHomeLiveLobbyContacts() {
       avatarImage: String(contact.avatarImage || "").trim(),
       avatarText: String(contact.avatarText || "").trim() || buildContactAvatarTextFallback(contact),
       description: truncateText(
-        String(contact.personaPrompt || contact.specialUserPersona || "角色直播入口已预留。").trim(),
+        String(contact.personaPrompt || contact.roleSpecialPersona || "角色直播入口已预留。").trim(),
         56
       )
     }))
@@ -7887,7 +7911,7 @@ function renderHomeLiveEntryModal(config = loadLiveEntryConfig()) {
 function renderHomeSigningEntryModal(config = loadSigningEntryConfig()) {
   const resolvedConfig = normalizeSigningEntryConfig(config);
   const presetOptions = getSigningContextPresetOptions();
-  const forumOptions = getHomeLiveForumOptions();
+  const forumOptions = getHomeSigningForumOptions();
   const worldbookOptions = getHomeLiveWorldbookOptions();
   if (homeSigningEntryPresetSelectEl) {
     homeSigningEntryPresetSelectEl.innerHTML = presetOptions
@@ -7910,11 +7934,13 @@ function renderHomeSigningEntryModal(config = loadSigningEntryConfig()) {
     homeSigningEntryForumEnabledEl.checked = resolvedConfig.forumEnabled;
   }
   if (homeSigningEntryForumSelectEl) {
-    homeSigningEntryForumSelectEl.innerHTML = forumOptions
-      .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`)
-      .join("");
+    homeSigningEntryForumSelectEl.innerHTML = forumOptions.length
+      ? forumOptions
+          .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`)
+          .join("")
+      : '<option value="">暂无可用自定义页签</option>';
     homeSigningEntryForumSelectEl.value = resolvedConfig.forumTabId;
-    homeSigningEntryForumSelectEl.disabled = !resolvedConfig.forumEnabled;
+    homeSigningEntryForumSelectEl.disabled = !resolvedConfig.forumEnabled || !forumOptions.length;
   }
   if (homeSigningEntryWorldbookEnabledEl) {
     homeSigningEntryWorldbookEnabledEl.checked = resolvedConfig.worldbookEnabled;
@@ -8555,6 +8581,11 @@ function attachHomeSettingsEvents() {
   if (homeSigningEntryApplyBtn) {
     homeSigningEntryApplyBtn.addEventListener("click", () => {
       const draft = getHomeSigningEntryDraft();
+      if (draft.forumEnabled && !draft.forumTabId) {
+        setHomeSigningEntryStatus("签售挂载论坛时，请先创建并选择一个自定义页签。", "error");
+        homeSigningEntryForumSelectEl?.focus();
+        return;
+      }
       persistSigningEntryConfig({
         ...draft,
         updatedAt: Date.now()

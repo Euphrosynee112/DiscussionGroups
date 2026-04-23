@@ -73,17 +73,13 @@ body.embedded .desktop-entry {
   position: relative;
   min-height: 0;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 22% 18%, rgba(255, 190, 122, 0.28), transparent 28%),
-    radial-gradient(circle at 82% 14%, rgba(255, 132, 158, 0.2), transparent 22%),
-    linear-gradient(180deg, #1f2434 0%, #0d121c 54%, #070b12 100%);
+  background: #06080d;
 }
 
 .signing-video-stage__remote {
   position: absolute;
   inset: 0;
-  display: grid;
-  place-items: center;
+  display: none;
   overflow: hidden;
 }
 
@@ -113,8 +109,7 @@ body.embedded .desktop-entry {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(180deg, rgba(5, 9, 16, 0.54) 0%, rgba(5, 9, 16, 0.12) 28%, rgba(5, 9, 16, 0.24) 62%, rgba(5, 9, 16, 0.9) 100%),
-    radial-gradient(circle at center, transparent 0%, rgba(0, 0, 0, 0.28) 84%);
+    linear-gradient(180deg, rgba(5, 9, 16, 0.16) 0%, rgba(5, 9, 16, 0.08) 26%, rgba(5, 9, 16, 0.12) 58%, rgba(5, 9, 16, 0.4) 100%);
 }
 
 .signing-video-stage__topbar {
