@@ -8,7 +8,7 @@
     />
     <title>Pulse Generator · 直播</title>
     <link rel="stylesheet" href="./theme.css?v=20260422-182000" />
-    <link rel="stylesheet" href="./live.css?v=20260422-182000" />
+    <link rel="stylesheet" href="./live.css?v=20260423-111157" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -50,6 +50,11 @@
 
         <section id="live-bullet-layer" class="live-bullet-layer" aria-live="polite"></section>
 
+        <section id="live-host-update-card" class="live-host-update-card" hidden aria-live="polite">
+          <p class="live-host-update-card__label">最新主播动态</p>
+          <div id="live-host-update-text" class="live-host-update-card__text"></div>
+        </section>
+
         <section class="live-caption">
           <p id="live-caption-kicker">正在直播</p>
           <h1 id="live-caption-title">随便聊聊今天的状态</h1>
@@ -58,6 +63,14 @@
         </section>
 
         <footer class="live-footer">
+          <div id="live-role-tools" class="live-role-tools" hidden>
+            <button id="live-anonymous-toggle" class="live-role-tool-button" type="button">
+              匿名评论
+            </button>
+            <button id="live-guide-btn" class="live-role-tool-button live-role-tool-button--accent" type="button">
+              引导
+            </button>
+          </div>
           <form id="live-composer-form" class="live-composer">
             <input
               id="live-composer-input"
@@ -73,8 +86,77 @@
       </section>
     </main>
 
+    <section id="live-summary-modal" class="live-modal" hidden aria-hidden="true">
+      <div class="live-modal__backdrop" data-close-live-summary></div>
+      <div class="live-modal__panel" role="dialog" aria-modal="true" aria-label="直播结束总结">
+        <div class="live-modal__head">
+          <div>
+            <p class="live-modal__eyebrow">Live Summary</p>
+            <h2 class="live-modal__title">结束直播</h2>
+          </div>
+          <button id="live-summary-close-btn" class="live-modal__close" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="live-modal__body">
+          <label class="live-modal-field">
+            <span>挂载到论坛页签热门</span>
+            <select id="live-summary-tab-select"></select>
+            <small>总结会写入所选页签的热门条目，并同步刷新本地热点文本。</small>
+          </label>
+          <label class="live-modal-checkbox">
+            <input id="live-summary-controversy" type="checkbox" />
+            <span>允许生成争议性话题</span>
+          </label>
+          <p id="live-summary-status" class="live-modal__status" aria-live="polite"></p>
+          <div class="live-modal__actions">
+            <button id="live-summary-direct-end-btn" class="live-modal__button live-modal__button--ghost" type="button">
+              直接结束
+            </button>
+            <button id="live-summary-generate-btn" class="live-modal__button" type="button">
+              生成总结并结束
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="live-guide-modal" class="live-modal" hidden aria-hidden="true">
+      <div class="live-modal__backdrop" data-close-live-guide></div>
+      <div class="live-modal__panel" role="dialog" aria-modal="true" aria-label="直播引导">
+        <div class="live-modal__head">
+          <div>
+            <p class="live-modal__eyebrow">Live Guide</p>
+            <h2 class="live-modal__title">下一轮引导</h2>
+          </div>
+          <button id="live-guide-close-btn" class="live-modal__close" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="live-modal__body">
+          <label class="live-modal-field">
+            <span>引导文本</span>
+            <textarea id="live-guide-text" rows="4" maxlength="500" placeholder="写下希望下一轮往哪个方向走。"></textarea>
+          </label>
+          <label class="live-modal-field">
+            <span>情感倾向（可选）</span>
+            <input id="live-guide-emotion" type="text" maxlength="80" placeholder="例如：兴奋 / 尴尬 / 心疼 / 起哄" />
+          </label>
+          <p id="live-guide-status" class="live-modal__status" aria-live="polite"></p>
+          <div class="live-modal__actions live-modal__actions--three">
+            <button id="live-guide-cancel-btn" class="live-modal__button live-modal__button--ghost" type="button">
+              取消
+            </button>
+            <button id="live-guide-fans-btn" class="live-modal__button live-modal__button--soft" type="button">
+              引导粉丝
+            </button>
+            <button id="live-guide-role-btn" class="live-modal__button" type="button">
+              引导角色
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <script src="./pulse-privacy-cover.js?v=20260413-211026"></script>
+    <script src="./pulse-structured-output.js?v=20260423-111157"></script>
     <script src="./api-log.js?v=20260405-231617"></script>
-    <script src="./live.js?v=20260422-182000"></script>
+    <script src="./live.js?v=20260423-111157"></script>
   </body>
 </html>

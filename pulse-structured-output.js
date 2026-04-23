@@ -824,6 +824,78 @@
           presence_update: normalizedPresence
         };
       }
+    },
+    live_hot_topic_summary_v1: {
+      name: "live_hot_topic_summary_v1",
+      deepseekMaxTokens: 360,
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          summaryText: {
+            type: "string",
+            description: "A single 60-90 Chinese character hot topic summary from the livestream."
+          }
+        },
+        required: ["summaryText"]
+      },
+      promptHint: [
+        "请只返回 json，不要解释，不要 markdown。",
+        'json 示例：{"summaryText":"直播里围绕新歌和近况聊了不少，观众明显偏向被轻松氛围安抚，整体风向更像一次温柔回暖。"}'
+      ].join("\n"),
+      repairExample: {
+        summaryText:
+          "直播里围绕新歌和近况聊了不少，观众明显偏向被轻松氛围安抚，整体风向更像一次温柔回暖。"
+      },
+      normalize(value) {
+        const source = normalizeObjectValue(value);
+        if (!source) {
+          return null;
+        }
+        const summaryText = String(
+          source.summaryText || source.summary_text || source.text || source.summary || ""
+        ).trim();
+        return summaryText ? { summaryText } : null;
+      }
+    },
+    live_controversial_hot_topic_v1: {
+      name: "live_controversial_hot_topic_v1",
+      deepseekMaxTokens: 360,
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          controversialTopicText: {
+            type: "string",
+            description:
+              "A single 60-90 Chinese character controversial hot topic derived from 2-3 livestream fragments."
+          }
+        },
+        required: ["controversialTopicText"]
+      },
+      promptHint: [
+        "请只返回 json，不要解释，不要 markdown。",
+        'json 示例：{"controversialTopicText":"有人截出“累了”“先不说”“随便吧”三句放大解读，质疑这场直播情绪不稳，讨论迅速转向是否在暗示不满。"}'
+      ].join("\n"),
+      repairExample: {
+        controversialTopicText:
+          "有人截出“累了”“先不说”“随便吧”三句放大解读，质疑这场直播情绪不稳，讨论迅速转向是否在暗示不满。"
+      },
+      normalize(value) {
+        const source = normalizeObjectValue(value);
+        if (!source) {
+          return null;
+        }
+        const controversialTopicText = String(
+          source.controversialTopicText ||
+            source.controversial_topic_text ||
+            source.topicText ||
+            source.text ||
+            source.summary ||
+            ""
+        ).trim();
+        return controversialTopicText ? { controversialTopicText } : null;
+      }
     }
   };
 

@@ -1,9 +1,10 @@
-const APP_BUILD_VERSION = "20260422-193800";
+const APP_BUILD_VERSION = "20260423-111157";
 const PROFILE_KEY = "x_style_generator_profile_v1";
 const SETTINGS_KEY = "x_style_generator_settings_v2";
 const MESSAGE_CONTACTS_KEY = "x_style_generator_message_contacts_v1";
 const WORLD_BOOKS_KEY = "x_style_generator_message_worldbooks_v1";
 const LIVE_ENTRY_CONFIG_KEY = "x_style_generator_live_entry_config_v1";
+const LIVE_CONTACT_ENTRY_CONFIGS_KEY = "x_style_generator_live_contact_entry_configs_v1";
 const DEFAULT_LIVE_AUTO_REPLY_INTERVAL_SECONDS = 30;
 const memoryStorage = {};
 
@@ -14,6 +15,8 @@ const liveLobbyUserCreateBtnEl = document.querySelector("#live-lobby-user-create
 const liveLobbySetupModalEl = document.querySelector("#live-lobby-setup-modal");
 const liveLobbySetupCloseBtnEl = document.querySelector("#live-lobby-setup-close-btn");
 const liveLobbySetupCancelBtnEl = document.querySelector("#live-lobby-setup-cancel-btn");
+const liveLobbySetupTitleEl = document.querySelector(".live-lobby-modal__title");
+const liveLobbySetupEyebrowEl = document.querySelector(".live-lobby-modal__eyebrow");
 const liveLobbyTopicInputEl = document.querySelector("#live-lobby-topic-input");
 const liveLobbyOpeningInputEl = document.querySelector("#live-lobby-opening-input");
 const liveLobbyIntervalInputEl = document.querySelector("#live-lobby-interval-input");
@@ -36,7 +39,9 @@ const state = {
   profile: loadProfile(),
   settings: loadSettings(),
   contacts: loadContacts(),
-  setupModalOpen: false
+  setupModalOpen: false,
+  setupMode: "user",
+  setupContactId: ""
 };
 
 function isEmbeddedView() {
@@ -270,6 +275,8 @@ function normalizeLiveEntryConfig(source = {}) {
   );
 
   return {
+    mode: raw.mode === "contact" ? "contact" : "user",
+    contactId: safeTrim(raw.contactId || raw.contact_id || ""),
     topic: safeTrim(raw.topic || ""),
     openingDescription: safeTrim(
       raw.openingDescription || raw.initialDescription || raw.liveOpeningText || ""
@@ -296,6 +303,67 @@ function loadLiveEntryConfig() {
 
 function persistLiveEntryConfig(config = {}) {
   safeSetItem(LIVE_ENTRY_CONFIG_KEY, JSON.stringify(normalizeLiveEntryConfig(config)));
+}
+
+function loadContactLiveEntryConfigs() {
+  const source = readStoredJson(LIVE_CONTACT_ENTRY_CONFIGS_KEY, {}) || {};
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(source)
+      .map(([contactId, config]) => {
+        const resolvedContactId = safeTrim(contactId);
+        if (!resolvedContactId) {
+          return null;
+        }
+        return [
+          resolvedContactId,
+          normalizeLiveEntryConfig({
+            ...(config && typeof config === "object" ? config : {}),
+            mode: "contact",
+            contactId: resolvedContactId
+          })
+        ];
+      })
+      .filter(Boolean)
+  );
+}
+
+function persistContactLiveEntryConfig(contactId = "", config = {}) {
+  const resolvedContactId = safeTrim(contactId);
+  if (!resolvedContactId) {
+    return;
+  }
+  const allConfigs = loadContactLiveEntryConfigs();
+  allConfigs[resolvedContactId] = normalizeLiveEntryConfig({
+    ...config,
+    mode: "contact",
+    contactId: resolvedContactId
+  });
+  safeSetItem(LIVE_CONTACT_ENTRY_CONFIGS_KEY, JSON.stringify(allConfigs));
+}
+
+function getCurrentSetupContact() {
+  const contactId = safeTrim(state.setupContactId || "");
+  return state.contacts.find((item) => item.id === contactId) || null;
+}
+
+function loadSetupEntryConfig(mode = state.setupMode, contactId = state.setupContactId) {
+  if (mode === "contact") {
+    const resolvedContactId = safeTrim(contactId);
+    const contactConfigs = loadContactLiveEntryConfigs();
+    return normalizeLiveEntryConfig({
+      ...(contactConfigs[resolvedContactId] || {}),
+      mode: "contact",
+      contactId: resolvedContactId
+    });
+  }
+  return normalizeLiveEntryConfig({
+    ...loadLiveEntryConfig(),
+    mode: "user",
+    contactId: ""
+  });
 }
 
 function setStatus(message, tone = "") {
@@ -357,7 +425,7 @@ function renderContactCards() {
               </span>
               <span class="live-lobby-card__meta-text">
                 <strong>${escapeHtml(contact.name)}</strong>
-                <span>入口已预留</span>
+                <span>点击进入开播设置</span>
               </span>
             </span>
           </span>
@@ -375,6 +443,8 @@ function getDraftConfig() {
     : [];
 
   return normalizeLiveEntryConfig({
+    mode: state.setupMode,
+    contactId: state.setupContactId,
     topic: safeTrim(liveLobbyTopicInputEl?.value || ""),
     openingDescription: safeTrim(liveLobbyOpeningInputEl?.value || ""),
     autoReplyIntervalSeconds: normalizeLiveAutoReplyIntervalSeconds(
@@ -389,10 +459,22 @@ function getDraftConfig() {
   });
 }
 
-function renderSetupModal(config = loadLiveEntryConfig()) {
+function renderSetupModal(config = loadSetupEntryConfig()) {
   const resolvedConfig = normalizeLiveEntryConfig(config);
   const forumOptions = getLiveForumOptions();
   const worldbookOptions = getLiveWorldbookOptions();
+  const setupContact = getCurrentSetupContact();
+
+  if (liveLobbySetupEyebrowEl) {
+    liveLobbySetupEyebrowEl.textContent =
+      state.setupMode === "contact" ? "Role Live Setup" : "Live Setup";
+  }
+  if (liveLobbySetupTitleEl) {
+    liveLobbySetupTitleEl.textContent =
+      state.setupMode === "contact" && setupContact
+        ? `${setupContact.name} 的直播预设`
+        : "直播预设";
+  }
 
   if (liveLobbyTopicInputEl) {
     liveLobbyTopicInputEl.value = resolvedConfig.topic;
@@ -457,14 +539,16 @@ function renderSetupModal(config = loadLiveEntryConfig()) {
   }
 }
 
-function setSetupModalOpen(isOpen) {
+function setSetupModalOpen(isOpen, options = {}) {
   state.setupModalOpen = Boolean(isOpen);
   if (!liveLobbySetupModalEl) {
     return;
   }
 
   if (state.setupModalOpen) {
-    renderSetupModal(loadLiveEntryConfig());
+    state.setupMode = options.mode === "contact" ? "contact" : "user";
+    state.setupContactId = state.setupMode === "contact" ? safeTrim(options.contactId || "") : "";
+    renderSetupModal(loadSetupEntryConfig(state.setupMode, state.setupContactId));
     setSetupStatus("");
     liveLobbySetupModalEl.hidden = false;
     liveLobbySetupModalEl.setAttribute("aria-hidden", "false");
@@ -476,6 +560,8 @@ function setSetupModalOpen(isOpen) {
 
   liveLobbySetupModalEl.hidden = true;
   liveLobbySetupModalEl.setAttribute("aria-hidden", "true");
+  state.setupMode = "user";
+  state.setupContactId = "";
   setSetupStatus("");
 }
 
@@ -488,9 +574,11 @@ function handleRoleCardClick(contactId = "") {
   if (!contact) {
     return;
   }
-  setStatus(
-    `「${contact.name}」的角色直播入口已预留。当前先使用底部 + 号发起用户直播，后续会在这里直接进入角色直播。`
-  );
+  setStatus("");
+  setSetupModalOpen(true, {
+    mode: "contact",
+    contactId: contact.id
+  });
 }
 
 function attachEvents() {
@@ -500,7 +588,7 @@ function attachEvents() {
 
   liveLobbyUserCreateBtnEl?.addEventListener("click", () => {
     setStatus("");
-    setSetupModalOpen(true);
+    setSetupModalOpen(true, { mode: "user" });
   });
 
   liveLobbyCardListEl?.addEventListener("click", (event) => {
@@ -580,8 +668,16 @@ function attachEvents() {
 
     persistLiveEntryConfig({
       ...draft,
+      mode: state.setupMode,
+      contactId: state.setupMode === "contact" ? state.setupContactId : "",
       updatedAt: Date.now()
     });
+    if (state.setupMode === "contact") {
+      persistContactLiveEntryConfig(state.setupContactId, {
+        ...draft,
+        updatedAt: Date.now()
+      });
+    }
     setSetupModalOpen(false);
     openConfiguredLivePage();
   });
