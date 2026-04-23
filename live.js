@@ -1285,7 +1285,17 @@ function buildWorldbookContextText() {
   });
 }
 
-function buildRecentLiveHistoryText() {
+function stripLiveSpeakerPrefix(text = "") {
+  const raw = safeTrim(text);
+  if (!raw) {
+    return "";
+  }
+  const stripped = raw.replace(/^[^：:\n]{1,48}\s*[：:]\s*/, "");
+  return safeTrim(stripped) || raw;
+}
+
+function buildRecentLiveHistoryText(options = {}) {
+  const resolvedOptions = options && typeof options === "object" ? options : {};
   const items = state.liveMessages.slice(-12);
   if (!items.length) {
     return "当前直播刚开始，还没有真实主播发言或观众弹幕。";
@@ -1293,7 +1303,11 @@ function buildRecentLiveHistoryText() {
   return items
     .map((item) => {
       const roleLabel = mapLiveMessageRoleLabel(item.role, item.meta || {});
-      return `${roleLabel}：${item.text}`;
+      const text =
+        resolvedOptions.redactNamedViewerIdentity && item.role === "viewer_named"
+          ? stripLiveSpeakerPrefix(item.text)
+          : item.text;
+      return `${roleLabel}：${text}`;
     })
     .join("\n");
 }
@@ -1340,12 +1354,12 @@ function consumePendingGuide(type = "role") {
 
 function buildRoleLiveSystemPrompt(trigger = "auto", latestUserText = "") {
   const hostProfile = getLiveHostProfile();
-  const userProfile = state.profile || DEFAULT_PROFILE;
   const config = state.liveEntryConfig || {};
   const topic = safeTrim(config.topic || "随便聊聊今天的状态");
   const openingDescription = safeTrim(config.openingDescription || "");
   const negativeBlock = buildNegativePromptConstraintBlock(state.settings);
   const guide = consumePendingGuide("role");
+  const hasNamedUserTrigger = trigger === "named_comment";
   const contextLibrary = [
     `直播主题：${topic}`,
     openingDescription ? `初始直播描写：${openingDescription}` : "",
@@ -1361,14 +1375,20 @@ function buildRoleLiveSystemPrompt(trigger = "auto", latestUserText = "") {
     hostProfile.personaPrompt ? `角色人设：${hostProfile.personaPrompt}` : "",
     "你只能让当前被选中的这个角色作为主播行动，不要调动未被选择的其他角色。",
     "角色自己的 1v1 私有世界书与记忆只用于你理解主播状态，不代表直播间观众公开知道；不要把这些内容硬讲成所有人都知道的公开事实。",
-    `直播间中真实存在的用户账号是：${userProfile.username}（${userProfile.userId}）。只有当历史里出现实名用户评论时，才可以把她当作被识别出的本人；匿名评论一律视为普通观众。`
+    hasNamedUserTrigger
+      ? "这一轮刚收到一条实名用户评论；你可以把当前触发内容视为用户本人对你说的话，但只围绕这次实名触发来回应。"
+      : "这一轮没有新的实名用户评论；不要主动点名用户账号，不要直接使用私下称呼、专属昵称或爱称，也不要因为你私下知道她是谁就把匿名/普通观众当成用户本人。"
   ]
     .filter(Boolean)
     .join("\n");
   const currentStateAwareness = [
     `当前直播主题：${topic}`,
     openingDescription ? `开场画面：${openingDescription}` : "",
-    latestUserText ? `最新触发内容：${latestUserText}` : "",
+    latestUserText
+      ? hasNamedUserTrigger
+        ? `本轮实名用户评论内容：${latestUserText}`
+        : `最新触发内容：${latestUserText}`
+      : "",
     guide
       ? `本轮角色引导：${guide.text}${guide.emotion ? `；情感倾向：${guide.emotion}` : ""}`
       : "",
@@ -1379,7 +1399,7 @@ function buildRoleLiveSystemPrompt(trigger = "auto", latestUserText = "") {
     }`,
     state.currentHostCard ? `上一条主播动态：${state.currentHostCard}` : "",
     "最近真实互动：",
-    buildRecentLiveHistoryText()
+    buildRecentLiveHistoryText({ redactNamedViewerIdentity: true })
   ]
     .filter(Boolean)
     .join("\n");
@@ -1387,7 +1407,10 @@ function buildRoleLiveSystemPrompt(trigger = "auto", latestUserText = "") {
     "只输出 1 段角色主播动态，不要输出 JSON、Markdown、列表或说明。",
     "这一段可以把发言、动作、神态、镜头反应自然写在一起，但要保持像直播里刚刚发生的一瞬间。",
     "不要复述背景事实，不要写成长篇叙述，直接进入情绪和现场感。",
-    "不要让未被选择的其他角色突然出现或接管剧情。"
+    "不要让未被选择的其他角色突然出现或接管剧情。",
+    hasNamedUserTrigger
+      ? "可以接住这次实名用户评论，但不要因此无限延展成长期公开互动。"
+      : "没有当前实名触发时，不要主动叫用户名字，也不要主动使用只在私下关系里才会出现的特别称呼。"
   ].join("\n");
   return [
     negativeBlock,
@@ -1422,6 +1445,9 @@ function buildFanLiveSystemPrompt(trigger = "auto", latestUserText = "") {
     isContactLiveMode()
       ? `当前直播主播是角色：${hostProfile.username}。`
       : `直播发起人 / 主播是用户：${hostProfile.username}（${hostProfile.userId}）。`,
+    isContactLiveMode() && hostProfile.personaPrompt
+      ? `角色公共人设 / 对外形象参考：${hostProfile.personaPrompt}`
+      : "",
     !isContactLiveMode() && hostProfile.signature ? `主播账号简介：${hostProfile.signature}` : "",
     !isContactLiveMode() && hostProfile.personaPrompt
       ? `主播人设与表达参考：${hostProfile.personaPrompt}`
