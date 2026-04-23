@@ -12,8 +12,11 @@ const DIRECT_MESSAGES_KEY = "x_style_generator_direct_messages_v1";
 const BUBBLE_ROOMS_KEY = "x_style_generator_bubble_rooms_v1";
 const BUBBLE_THREADS_KEY = "x_style_generator_bubble_threads_v1";
 const BUBBLE_FAN_DETAILS_KEY = "x_style_generator_bubble_fan_details_v1";
+const LOCAL_STORAGE_API_BASE_URL = "http://localhost:3000";
+const DEPLOYED_STORAGE_API_BASE_URL = "https://spring-field-3219.fly.dev";
 const DEFAULT_TEMPERATURE = 0.85;
 const FAN_DETAIL_REPLY_COUNT = 15;
+const DEFAULT_BUBBLE_HISTORY_ROUNDS = 15;
 
 const DEFAULT_SETTINGS = {
   mode: "openai",
@@ -33,6 +36,7 @@ const DEFAULT_SETTINGS = {
     hotTopicsTabId: "",
     hotTopicsIncludeDiscussionText: true,
     hotTopicsIncludeHotTopic: false,
+    historyRounds: DEFAULT_BUBBLE_HISTORY_ROUNDS,
     worldbookEnabled: false,
     worldbookIds: []
   }
@@ -138,6 +142,48 @@ function buildStructuredPromptSections(promptTypeOrSections = {}, maybeSections 
   );
 }
 
+function resolveDiscussionStorageApiBaseUrl() {
+  const origin = String(window.location?.origin || "").replace(/\/+$/, "");
+  const hostname = String(window.location?.hostname || "").toLowerCase();
+  if (!origin || origin === "null") {
+    return DEPLOYED_STORAGE_API_BASE_URL;
+  }
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return LOCAL_STORAGE_API_BASE_URL;
+  }
+  if (hostname.endsWith(".fly.dev")) {
+    return origin;
+  }
+  return DEPLOYED_STORAGE_API_BASE_URL;
+}
+
+function buildDiscussionStorageApiUrl(pathname = "/api/health") {
+  const baseUrl = resolveDiscussionStorageApiBaseUrl();
+  return new URL(String(pathname || "").replace(/^\/+/, ""), `${baseUrl}/`).toString();
+}
+
+async function requestDiscussionStorageApi(pathname, options = {}) {
+  const response = await fetch(buildDiscussionStorageApiUrl(pathname), {
+    ...options,
+    headers: {
+      Accept: "application/json",
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.headers || {})
+    }
+  });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch (_error) {
+  }
+  if (!response.ok || payload?.ok === false) {
+    throw new Error(
+      String(payload?.error || payload?.details || `请求失败（HTTP ${response.status || 500}）。`).trim()
+    );
+  }
+  return payload;
+}
+
 const FAN_EMOJI_POOL = [
   "🥺",
   "🥹",
@@ -187,6 +233,7 @@ const bubbleChatHotTopicsTabSelectEl = document.querySelector("#bubble-chat-hot-
 const bubbleChatHotTopicsTextInputEl = document.querySelector("#bubble-chat-hot-topics-text-input");
 const bubbleChatHotTopicsTopicInputEl = document.querySelector("#bubble-chat-hot-topics-topic-input");
 const bubbleChatHotTopicsWarningEl = document.querySelector("#bubble-chat-hot-topics-warning");
+const bubbleChatHistoryRoundsInputEl = document.querySelector("#bubble-chat-history-rounds-input");
 const bubbleChatWorldbookInputEl = document.querySelector("#bubble-chat-worldbook-enabled-input");
 const bubbleChatWorldbookListEl = document.querySelector("#bubble-chat-worldbook-list");
 const bubbleChatSettingsStatusEl = document.querySelector("#bubble-chat-settings-status");
@@ -212,7 +259,8 @@ const state = {
   activeRoomId: "",
   activeFanDetailId: "",
   loadingFanDetailId: "",
-  translatingFanReplyIds: {}
+  translatingFanReplyIds: {},
+  forumPersonaCache: {}
 };
 
 function isEmbeddedView() {
@@ -315,6 +363,14 @@ function truncateFanReply(text, length = 50) {
     return normalized;
   }
   return normalized.slice(0, length);
+}
+
+function clampInteger(value, min = 0, max = 100, fallback = min) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isInteger(parsed)) {
+    return fallback;
+  }
+  return Math.min(Math.max(parsed, min), max);
 }
 
 function formatLocalTime(now = new Date()) {
@@ -611,6 +667,12 @@ function normalizeBubblePromptSettings(source = {}) {
         ? resolved.hotTopicsIncludeDiscussionText
         : true,
     hotTopicsIncludeHotTopic: Boolean(resolved.hotTopicsIncludeHotTopic),
+    historyRounds: clampInteger(
+      resolved.historyRounds,
+      0,
+      50,
+      DEFAULT_BUBBLE_HISTORY_ROUNDS
+    ),
     worldbookEnabled: Boolean(resolved.worldbookEnabled),
     worldbookIds: normalizeMountedIds(resolved.worldbookIds || [])
   };
@@ -1685,6 +1747,9 @@ function pickRandomFanAvatar(seed = "") {
 }
 
 function normalizeFanReply(reply, index = 0) {
+  const replyKind = String(reply?.replyKind || reply?.reply_kind || "").trim() === "seed"
+    ? "seed"
+    : "random";
   return {
     id: String(reply?.id || `fan_reply_${Date.now()}_${index}`),
     fanId: String(reply?.fanId || createRandomFanId(`${index}`)).trim(),
@@ -1694,7 +1759,13 @@ function normalizeFanReply(reply, index = 0) {
     time: resolveBubbleTimeLabel(reply?.time, reply?.createdAt),
     translationZh: String(reply?.translationZh || "").trim(),
     translationVisible: Boolean(reply?.translationVisible),
-    createdAt: Number(reply?.createdAt) || Date.now()
+    createdAt: Number(reply?.createdAt) || Date.now(),
+    replyKind,
+    forumPersonaId: String(reply?.forumPersonaId || reply?.forum_persona_id || "").trim(),
+    sourceUserMessageIds: Array.isArray(reply?.sourceUserMessageIds)
+      ? reply.sourceUserMessageIds.map((item) => String(item || "").trim()).filter(Boolean)
+      : [],
+    metadata: reply?.metadata && typeof reply.metadata === "object" ? reply.metadata : {}
   };
 }
 
@@ -1906,6 +1977,131 @@ function getUserBubbleBatchAroundMessage(thread, messageId = "") {
     cursor -= 1;
   }
   return batch;
+}
+
+function normalizeBubbleUserHistoryMessage(message, index = 0) {
+  return {
+    id: String(message?.id || message?.messageId || `bubble_history_${index}`).trim(),
+    text: String(message?.text || "").trim(),
+    time: resolveBubbleTimeLabel(message?.time, message?.createdAt),
+    createdAt: Number(message?.createdAt) || Date.now() + index
+  };
+}
+
+function getMountedForumTabIdFromSettings(settings = getCurrentSettings()) {
+  const promptSettings = normalizeBubblePromptSettings(settings.bubblePromptSettings);
+  return promptSettings.hotTopicsEnabled ? String(promptSettings.hotTopicsTabId || "").trim() : "";
+}
+
+function getRecentLocalBubbleUserHistory(thread, sourceMessages = [], limit = DEFAULT_BUBBLE_HISTORY_ROUNDS) {
+  const resolvedLimit = clampInteger(limit, 0, 50, DEFAULT_BUBBLE_HISTORY_ROUNDS);
+  if (!resolvedLimit) {
+    return [];
+  }
+  const sourceIds = new Set(
+    (Array.isArray(sourceMessages) ? sourceMessages : [])
+      .map((item) => String(item?.id || "").trim())
+      .filter(Boolean)
+  );
+  return (Array.isArray(thread?.messages) ? thread.messages : [])
+    .filter((item) => item?.role === "user" && String(item.text || "").trim())
+    .filter((item) => !sourceIds.has(String(item.id || "").trim()))
+    .slice(-resolvedLimit)
+    .map((item, index) => normalizeBubbleUserHistoryMessage(item, index));
+}
+
+function mergeBubbleUserHistoryMessages(primary = [], secondary = [], limit = DEFAULT_BUBBLE_HISTORY_ROUNDS) {
+  const resolvedLimit = clampInteger(limit, 0, 50, DEFAULT_BUBBLE_HISTORY_ROUNDS);
+  if (!resolvedLimit) {
+    return [];
+  }
+  const byId = new Map();
+  [...(Array.isArray(secondary) ? secondary : []), ...(Array.isArray(primary) ? primary : [])]
+    .map((item, index) => normalizeBubbleUserHistoryMessage(item, index))
+    .filter((item) => item.id && item.text)
+    .forEach((item) => {
+      byId.set(item.id, item);
+    });
+  return [...byId.values()]
+    .sort((left, right) => (Number(left.createdAt) || 0) - (Number(right.createdAt) || 0))
+    .slice(-resolvedLimit);
+}
+
+function buildBubbleUserHistoryPromptText(historyMessages = []) {
+  const items = (Array.isArray(historyMessages) ? historyMessages : [])
+    .map((item, index) => normalizeBubbleUserHistoryMessage(item, index))
+    .filter((item) => item.text);
+  if (!items.length) {
+    return "";
+  }
+  return [
+    "最近 Bubble 用户发言背景（弱参考，帮助理解用户长期关注点；不能盖过本轮消息）：",
+    ...items.map((item, index) => `${index + 1}. ${item.text}`)
+  ].join("\n");
+}
+
+async function loadRemoteBubbleUserHistory(roomId = "", sourceMessages = [], limit = DEFAULT_BUBBLE_HISTORY_ROUNDS) {
+  const resolvedRoomId = String(roomId || "").trim();
+  const resolvedLimit = clampInteger(limit, 0, 50, DEFAULT_BUBBLE_HISTORY_ROUNDS);
+  if (!resolvedRoomId || !resolvedLimit) {
+    return [];
+  }
+  const sourceIds = new Set(
+    (Array.isArray(sourceMessages) ? sourceMessages : [])
+      .map((item) => String(item?.id || "").trim())
+      .filter(Boolean)
+  );
+  try {
+    const query = new URLSearchParams({
+      roomId: resolvedRoomId,
+      limit: String(resolvedLimit + sourceIds.size + 5)
+    });
+    const payload = await requestDiscussionStorageApi(`/api/bubble/user-messages?${query.toString()}`);
+    return (Array.isArray(payload?.messages) ? payload.messages : [])
+      .map((item, index) => normalizeBubbleUserHistoryMessage({
+        id: item.messageId,
+        text: item.text,
+        createdAt: item.createdAt
+      }, index))
+      .filter((item) => item.text && !sourceIds.has(item.id))
+      .slice(-resolvedLimit);
+  } catch (error) {
+    console.warn("[bubble] failed to load remote user history", error);
+    return [];
+  }
+}
+
+async function buildBubbleUserHistoryForPrompt(roomId = "", thread = null, sourceMessages = [], limit = DEFAULT_BUBBLE_HISTORY_ROUNDS) {
+  const localHistory = getRecentLocalBubbleUserHistory(thread, sourceMessages, limit);
+  if (localHistory.length >= clampInteger(limit, 0, 50, DEFAULT_BUBBLE_HISTORY_ROUNDS)) {
+    return localHistory;
+  }
+  const remoteHistory = await loadRemoteBubbleUserHistory(roomId, sourceMessages, limit);
+  return mergeBubbleUserHistoryMessages(localHistory, remoteHistory, limit);
+}
+
+async function syncBubbleUserMessageToBackend(roomId = "", message = {}, settings = getCurrentSettings()) {
+  const content = String(message?.text || "").trim();
+  const messageId = String(message?.id || "").trim();
+  const resolvedRoomId = String(roomId || "").trim();
+  if (!resolvedRoomId || !messageId || !content) {
+    return null;
+  }
+  try {
+    return await requestDiscussionStorageApi("/api/bubble/user-messages", {
+      method: "POST",
+      body: JSON.stringify({
+        roomId: resolvedRoomId,
+        messageId,
+        text: content,
+        createdAt: Number(message.createdAt) || Date.now(),
+        mountedForumTabId: getMountedForumTabIdFromSettings(settings)
+      })
+    });
+  } catch (error) {
+    console.warn("[bubble] failed to sync user message", error);
+    return null;
+  }
 }
 
 function buildRoomPreviewFromMessage(message, fallbackText = "还没有 Bubble 消息。") {
@@ -2134,6 +2330,9 @@ function applyBubblePromptSettingsToForm(promptSettings) {
   if (bubbleChatHotTopicsTopicInputEl) {
     bubbleChatHotTopicsTopicInputEl.checked = resolved.hotTopicsIncludeHotTopic;
   }
+  if (bubbleChatHistoryRoundsInputEl) {
+    bubbleChatHistoryRoundsInputEl.value = String(resolved.historyRounds);
+  }
   if (bubbleChatWorldbookInputEl) {
     bubbleChatWorldbookInputEl.checked = resolved.worldbookEnabled;
   }
@@ -2157,6 +2356,12 @@ function getCurrentBubblePromptSettingsDraft() {
     hotTopicsTabId: tabs.some((tab) => tab.id === selectedTabId) ? selectedTabId : "",
     hotTopicsIncludeDiscussionText: Boolean(bubbleChatHotTopicsTextInputEl?.checked),
     hotTopicsIncludeHotTopic: Boolean(bubbleChatHotTopicsTopicInputEl?.checked),
+    historyRounds: clampInteger(
+      bubbleChatHistoryRoundsInputEl?.value,
+      0,
+      50,
+      DEFAULT_BUBBLE_HISTORY_ROUNDS
+    ),
     worldbookEnabled: Boolean(bubbleChatWorldbookInputEl?.checked),
     worldbookIds: selectedWorldbookIds
   });
@@ -2431,22 +2636,22 @@ function sendBubbleMessage(text) {
   }
 
   const thread = ensureThread(state.activeRoomId);
-  thread.messages = [
-    ...thread.messages,
-    {
-      id: `bubble_msg_${Date.now()}`,
-      role: "user",
-      text: content,
-      time: formatBubbleTimestamp(Date.now()),
-      createdAt: Date.now()
-    }
-  ];
+  const now = Date.now();
+  const userMessage = {
+    id: `bubble_msg_${now}`,
+    role: "user",
+    text: content,
+    time: formatBubbleTimestamp(now),
+    createdAt: now
+  };
+  thread.messages = [...thread.messages, userMessage];
   thread.pendingFanReply = true;
   syncRoomPreview(state.activeRoomId);
   persistBubbleThreads();
   persistBubbleRooms();
   renderActiveChat();
   renderBubbleRooms();
+  syncBubbleUserMessageToBackend(state.activeRoomId, userMessage, getCurrentSettings());
   setBubbleStatus("消息已发送，现在可以点击“接收粉丝回复”。", "success");
 }
 
@@ -2582,10 +2787,26 @@ function buildBubbleWorldbookContext(promptSettings) {
   return entries.join("\n\n");
 }
 
-function buildFanReplyPrompt(profile, sourceMessages = [], emojiSet = [], settings = getCurrentSettings()) {
+function buildFanReplyPrompt(
+  profile,
+  sourceMessages = [],
+  emojiSet = [],
+  settings = getCurrentSettings(),
+  options = {}
+) {
   const creatorName = String(profile.username || DEFAULT_PROFILE.username).trim();
   const creatorPersona = String(profile.personaPrompt || DEFAULT_PROFILE.personaPrompt).trim();
   const promptSettings = normalizeBubblePromptSettings(settings.bubblePromptSettings);
+  const resolvedOptions = options && typeof options === "object" ? options : {};
+  const requestedCount = clampInteger(
+    resolvedOptions.count,
+    1,
+    FAN_DETAIL_REPLY_COUNT,
+    FAN_DETAIL_REPLY_COUNT
+  );
+  const recentUserHistory = Array.isArray(resolvedOptions.recentUserHistory)
+    ? resolvedOptions.recentUserHistory
+    : [];
   const normalizedMessages = Array.isArray(sourceMessages)
     ? sourceMessages
         .map((item, index) => normalizeFanDetailSourceMessage(item, index))
@@ -2603,6 +2824,7 @@ function buildFanReplyPrompt(profile, sourceMessages = [], emojiSet = [], settin
         hot_topics_context: hotTopicsContext
           ? `粉丝团体近期共同关注的话题：\n${hotTopicsContext}`
           : "",
+        recent_user_history: buildBubbleUserHistoryPromptText(recentUserHistory),
         message_intro: normalizedMessages.length
           ? `创作者这一轮连续发送了 ${normalizedMessages.length} 条 Bubble 消息；以下所有消息在理解上同等重要，请综合这一整轮内容生成粉丝回复：`
           : "",
@@ -2621,10 +2843,210 @@ function buildFanReplyPrompt(profile, sourceMessages = [], emojiSet = [], settin
       variables: {
         creatorName,
         creatorPersona,
-        count: FAN_DETAIL_REPLY_COUNT
+        count: requestedCount
       }
     }
   );
+}
+
+function normalizeForumPersonaForBubble(persona = {}) {
+  const source = persona && typeof persona === "object" ? persona : {};
+  const languageCode = String(source.languageCode || source.language_code || "zh").trim().toLowerCase();
+  return {
+    id: String(source.id || "").trim(),
+    languageCode: ["zh", "ja", "en", "ko"].includes(languageCode) ? languageCode : "zh",
+    interestTags: Array.isArray(source.interestTags) ? source.interestTags.map((item) => String(item || "").trim()).filter(Boolean) : [],
+    avoidTags: Array.isArray(source.avoidTags) ? source.avoidTags.map((item) => String(item || "").trim()).filter(Boolean) : [],
+    hotStancePrompt: String(source.hotStancePrompt || "").trim(),
+    personaPrompt: String(source.personaPrompt || "").trim(),
+    speakingTone: String(source.speakingTone || "").trim(),
+    replyWeight: Math.max(0.1, Number(source.replyWeight) || 1)
+  };
+}
+
+async function loadBubbleForumPersonas(promptSettings = normalizeBubblePromptSettings()) {
+  const tabId = String(promptSettings.hotTopicsEnabled ? promptSettings.hotTopicsTabId : "").trim();
+  if (!tabId) {
+    return [];
+  }
+  const cached = state.forumPersonaCache[tabId];
+  if (Array.isArray(cached)) {
+    return cached;
+  }
+  try {
+    const payload = await requestDiscussionStorageApi(
+      `/api/forum/personas?tabId=${encodeURIComponent(tabId)}`
+    );
+    const personas = (Array.isArray(payload?.personas) ? payload.personas : [])
+      .map(normalizeForumPersonaForBubble)
+      .filter((item) => item.id);
+    state.forumPersonaCache[tabId] = personas;
+    return personas;
+  } catch (error) {
+    console.warn("[bubble] failed to load forum personas", error);
+    state.forumPersonaCache[tabId] = [];
+    return [];
+  }
+}
+
+function pickWeightedBubblePersonas(personas = [], count = 1, seed = "") {
+  const pool = (Array.isArray(personas) ? personas : [])
+    .map((persona, index) => ({
+      persona,
+      weight: Math.max(0.1, Number(persona.replyWeight) || 1),
+      tieBreaker: Number.parseInt(hashText(`${seed}-${persona.id}-${index}`).slice(0, 8), 36) || 0
+    }))
+    .filter((entry) => entry.persona?.id);
+  const selected = [];
+  const targetCount = Math.min(Math.max(0, count), pool.length);
+  while (selected.length < targetCount && pool.length) {
+    const totalWeight = pool.reduce((sum, entry) => sum + entry.weight, 0);
+    let cursor = Math.random() * totalWeight;
+    let selectedIndex = pool.length - 1;
+    for (let index = 0; index < pool.length; index += 1) {
+      cursor -= pool[index].weight;
+      if (cursor <= 0) {
+        selectedIndex = index;
+        break;
+      }
+    }
+    selected.push(pool[selectedIndex].persona);
+    pool.splice(selectedIndex, 1);
+    pool.sort((left, right) => left.tieBreaker - right.tieBreaker);
+  }
+  return selected;
+}
+
+function getBubbleSeedReplyTargetCount(totalCount = FAN_DETAIL_REPLY_COUNT) {
+  const resolvedCount = clampInteger(totalCount, 1, FAN_DETAIL_REPLY_COUNT, FAN_DETAIL_REPLY_COUNT);
+  return resolvedCount >= 10 ? 2 : 1;
+}
+
+function buildBubbleSeedReplyPrompt(
+  profile,
+  sourceMessages = [],
+  recentUserHistory = [],
+  seedPersonas = [],
+  settings = getCurrentSettings()
+) {
+  const creatorName = String(profile.username || DEFAULT_PROFILE.username).trim();
+  const creatorPersona = String(profile.personaPrompt || DEFAULT_PROFILE.personaPrompt).trim();
+  const promptSettings = normalizeBubblePromptSettings(settings.bubblePromptSettings);
+  const normalizedMessages = (Array.isArray(sourceMessages) ? sourceMessages : [])
+    .map((item, index) => normalizeFanDetailSourceMessage(item, index))
+    .filter((item) => item.text);
+  const normalizedPersonas = (Array.isArray(seedPersonas) ? seedPersonas : [])
+    .map(normalizeForumPersonaForBubble)
+    .filter((item) => item.id);
+  const worldbookContext = buildBubbleWorldbookContext(promptSettings);
+  const hotTopicsContext = buildBubbleHotTopicsContext(settings, promptSettings);
+  const taskText = normalizedPersonas.length
+    ? [
+        "匿名 seed 回复任务：以下每个 seed 只用于决定语言、关注点和语气；输出中绝对不要写出论坛 ID、handle 或 seed 身份。",
+        ...normalizedPersonas.map((persona, index) =>
+          [
+            `${index + 1}. language=${persona.languageCode}`,
+            persona.speakingTone ? `语气=${persona.speakingTone}` : "",
+            persona.interestTags.length ? `兴趣=${persona.interestTags.join(", ")}` : "",
+            persona.avoidTags.length ? `回避=${persona.avoidTags.join(", ")}` : "",
+            persona.hotStancePrompt ? `热点态度=${persona.hotStancePrompt}` : "",
+            persona.personaPrompt ? `用户画像=${persona.personaPrompt}` : ""
+          ].filter(Boolean).join("｜")
+        )
+      ].join("\n")
+    : "";
+  return buildStructuredPromptSections(
+    {
+      contextLibrary: [
+        worldbookContext
+          ? `补充背景设定（弱参考）：\n${worldbookContext}`
+          : "",
+        hotTopicsContext
+          ? `粉丝团体近期共同关注的话题：\n${hotTopicsContext}`
+          : "",
+        buildBubbleUserHistoryPromptText(recentUserHistory),
+        normalizedMessages.length
+          ? `创作者这一轮连续发送了 ${normalizedMessages.length} 条 Bubble 消息；以下消息是本轮回复主语境：\n${normalizedMessages
+              .map((item, index) => `${index + 1}. ${item.time ? `${item.time} · ` : ""}${item.text}`)
+              .join("\n")}`
+          : "",
+        "请把最近用户发言当作弱背景，只用来理解用户长期关注点；当前回复必须围绕本轮 Bubble 消息。"
+      ],
+      personaAlignment: [
+        "你正在模拟 Bubble 中创作者的匿名粉丝回复。",
+        `创作者昵称：${creatorName}`,
+        `创作者人设：${creatorPersona}`,
+        taskText
+      ],
+      outputStandard: [
+        `请严格输出 JSON 数组，长度必须等于 ${normalizedPersonas.length}。`,
+        "第 N 个对象必须对应第 N 个 seed 任务。",
+        "每个对象只包含字段：language, text。",
+        "language 必须使用对应 seed 的 language。",
+        "text 是匿名粉丝视角对创作者刚发消息的即时反应，不得超过 50 个字符。",
+        "不要输出用户名、论坛身份、seed 字样、编号或解释。"
+      ]
+    },
+    null,
+    {
+      settings
+    }
+  );
+}
+
+async function generateBubbleSeedRepliesForDetail(
+  sourceMessages = [],
+  recentUserHistory = [],
+  settings = getCurrentSettings(),
+  targetCount = 0
+) {
+  const promptSettings = normalizeBubblePromptSettings(settings.bubblePromptSettings);
+  const allPersonas = await loadBubbleForumPersonas(promptSettings);
+  const seedCount = Math.min(
+    clampInteger(targetCount, 0, FAN_DETAIL_REPLY_COUNT, 0),
+    allPersonas.length
+  );
+  if (!seedCount) {
+    return [];
+  }
+  const selectedPersonas = pickWeightedBubblePersonas(
+    allPersonas,
+    seedCount,
+    sourceMessages.map((item) => item.text || item.id || "").join("|")
+  );
+  if (!selectedPersonas.length) {
+    return [];
+  }
+  try {
+    const replyResult = await requestJsonArrayText(
+      settings,
+      buildBubbleSeedReplyPrompt(
+        state.profile,
+        sourceMessages,
+        recentUserHistory,
+        selectedPersonas,
+        settings
+      ),
+      selectedPersonas.length
+    );
+    const decodedReplies = decodeValueWithPrivacy(
+      parseFanReplies(replyResult.rawText, selectedPersonas.length),
+      replyResult.privacySession
+    );
+    return decodedReplies
+      .slice(0, selectedPersonas.length)
+      .map((reply, index) => ({
+        ...reply,
+        language: selectedPersonas[index]?.languageCode || reply.language,
+        replyKind: "seed",
+        forumPersonaId: selectedPersonas[index]?.id || "",
+        sourceUserMessageIds: sourceMessages.map((item) => String(item?.id || "").trim()).filter(Boolean)
+      }))
+      .filter((item) => item.text);
+  } catch (error) {
+    console.warn("[bubble] failed to generate seed fan replies", error);
+    return [];
+  }
 }
 
 function parseFanReplies(rawText, count = FAN_DETAIL_REPLY_COUNT) {
@@ -2760,18 +3182,43 @@ async function generateFanRepliesForDetail(detailId, options = {}) {
   }
 
   try {
+    const currentSettings = getCurrentSettings();
+    const promptSettings = normalizeBubblePromptSettings(currentSettings.bubblePromptSettings);
+    const recentUserHistory = await buildBubbleUserHistoryForPrompt(
+      roomId,
+      thread,
+      detail.sourceMessages,
+      promptSettings.historyRounds
+    );
+    const seedReplies = await generateBubbleSeedRepliesForDetail(
+      detail.sourceMessages,
+      recentUserHistory,
+      currentSettings,
+      getBubbleSeedReplyTargetCount(FAN_DETAIL_REPLY_COUNT)
+    );
+    const remainingCount = Math.max(1, FAN_DETAIL_REPLY_COUNT - seedReplies.length);
     const replyResult = await requestJsonArrayText(
-      getCurrentSettings(),
-      buildFanReplyPrompt(state.profile, detail.sourceMessages, detail.emojiSet, getCurrentSettings()),
-      FAN_DETAIL_REPLY_COUNT
+      currentSettings,
+      buildFanReplyPrompt(
+        state.profile,
+        detail.sourceMessages,
+        detail.emojiSet,
+        currentSettings,
+        {
+          count: remainingCount,
+          recentUserHistory
+        }
+      ),
+      remainingCount
+    );
+    const standardReplies = decodeValueWithPrivacy(
+      parseFanReplies(replyResult.rawText, remainingCount),
+      replyResult.privacySession
     );
     const mixedReplies = mixFanRepliesByLanguage(
-      decodeValueWithPrivacy(
-        parseFanReplies(replyResult.rawText, FAN_DETAIL_REPLY_COUNT),
-        replyResult.privacySession
-      ),
+      [...standardReplies, ...seedReplies],
       `${detailId}-${detail.sourceText || parentMessage.text || ""}`
-    );
+    ).slice(0, FAN_DETAIL_REPLY_COUNT);
     const replies = mixedReplies.map((item, index) =>
       normalizeFanReply(
         {
@@ -2783,7 +3230,10 @@ async function generateFanRepliesForDetail(detailId, options = {}) {
           time: formatBubbleTimestamp(Date.now() + index),
           translationZh: "",
           translationVisible: false,
-          createdAt: Date.now() + index
+          createdAt: Date.now() + index,
+          replyKind: item.replyKind,
+          forumPersonaId: item.forumPersonaId,
+          sourceUserMessageIds: item.sourceUserMessageIds
         },
         index
       )
@@ -2960,6 +3410,7 @@ function attachEvents() {
 
       state.settings = loadSettings();
       state.settings.bubblePromptSettings = draft;
+      state.forumPersonaCache = {};
       safeSetItem(SETTINGS_KEY, JSON.stringify(state.settings));
       updateBubbleHotTopicsWarning(draft);
       setBubbleChatSettingsStatus("Bubble 回复设置已保存。", "success");
@@ -2993,6 +3444,12 @@ function attachEvents() {
         setBubbleChatSettingsStatus("");
       });
     });
+
+  if (bubbleChatHistoryRoundsInputEl) {
+    bubbleChatHistoryRoundsInputEl.addEventListener("input", () => {
+      setBubbleChatSettingsStatus("");
+    });
+  }
 
   if (bubbleChatWorldbookListEl) {
     bubbleChatWorldbookListEl.addEventListener("change", () => {

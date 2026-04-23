@@ -4360,6 +4360,24 @@ function buildForumBatchReferenceLine(reference = {}, maxChars = 160) {
   return `${refKey || "REF"}${tagText} ${bodyText}`.trim();
 }
 
+function isBubbleUserForumReference(reference = {}) {
+  return (
+    String(reference?.refType || "").trim() === "bubble_user_message" ||
+    String(reference?.sourceKind || "").trim() === "bubble_user_message"
+  );
+}
+
+function buildForumBubbleBackgroundLine(reference = {}, maxChars = 180) {
+  const previewText =
+    String(reference?.previewText || "").trim() ||
+    String(reference?.summaryText || "").trim() ||
+    String(reference?.detailText || "").trim() ||
+    String(reference?.contentText || "").trim();
+  let bodyText = truncate(previewText.replace(/\s+/g, " ").trim(), maxChars);
+  bodyText = bodyText.replace(/^用户曾在\s*Bubble\s*里提到[:：]\s*/i, "").trim();
+  return bodyText || "用户之前在 Bubble 里提到过相关内容。";
+}
+
 function buildForumBatchPublicContextText(
   settings = {},
   feedType = state.activeFeed,
@@ -4414,6 +4432,8 @@ function buildForumBatchTasksText(batch = {}, generationType = "posts") {
     const privateRefs = Array.isArray(task?.privateBackgroundRefs)
       ? task.privateBackgroundRefs
       : [];
+    const bubblePrivateRefs = privateRefs.filter((reference) => isBubbleUserForumReference(reference));
+    const otherPrivateRefs = privateRefs.filter((reference) => !isBubbleUserForumReference(reference));
     lines.push(
       [
         `<task slotIndex="${Number(task?.slotIndex) || 0}">`,
@@ -4445,8 +4465,13 @@ function buildForumBatchTasksText(batch = {}, generationType = "posts") {
               .map((reference) => `- ${buildForumBatchReferenceLine(reference, 180)}`)
               .join("\n")}`
           : "可参考当前 discussion：无",
-        privateRefs.length
-          ? `私有历史背景：\n${privateRefs
+        bubblePrivateRefs.length
+          ? `这个用户曾在 Bubble 里看到过以下用户发言背景：\n${bubblePrivateRefs
+              .map((reference, index) => `${index + 1}. ${buildForumBubbleBackgroundLine(reference, 180)}`)
+              .join("\n")}`
+          : "这个用户曾在 Bubble 里看到过以下用户发言背景：无",
+        otherPrivateRefs.length
+          ? `私有历史背景：\n${otherPrivateRefs
               .map((reference) => `- ${buildForumBatchReferenceLine(reference, 180)}`)
               .join("\n")}`
           : "私有历史背景：无",

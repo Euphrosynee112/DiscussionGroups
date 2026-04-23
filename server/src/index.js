@@ -170,13 +170,15 @@ const FORUM_REFERENCE_TYPES = new Set([
   "forum_item",
   "worldbook_entry",
   "history_digest",
-  "background_card"
+  "background_card",
+  "bubble_user_message"
 ]);
 const FORUM_REFERENCE_PREFIX_RULES = Object.freeze({
   forum_item: { prefix: "F", start: 10001 },
   worldbook_entry: { prefix: "W", start: 20001 },
   history_digest: { prefix: "B", start: 30001 },
-  background_card: { prefix: "B", start: 30001 }
+  background_card: { prefix: "B", start: 30001 },
+  bubble_user_message: { prefix: "BU", start: 40001 }
 });
 const FORUM_TOPIC_TAG_MIN_COUNT = 1;
 const FORUM_TOPIC_TAG_MAX_COUNT = 3;
@@ -6699,6 +6701,9 @@ function buildForumReferenceSourceId(refType = "forum_item", sourceId = "", opti
   const resolvedType = normalizeForumReferenceType(refType, "forum_item");
   const resolvedSourceId = String(sourceId || "").trim();
   const normalizedOptions = normalizeJsonObjectValue(options, {});
+  if (resolvedType === "bubble_user_message") {
+    return resolvedSourceId;
+  }
   if (resolvedType === "history_digest") {
     const digestId = String(normalizedOptions.digestId || resolvedSourceId || "").trim();
     return digestId ? `history_digest:${digestId}` : "";
@@ -6722,6 +6727,9 @@ function buildForumReferenceTitle(refType = "forum_item", source = {}) {
   if (resolvedType === "background_card") {
     return String(source.sourceTitle || source.title || "").trim() || "论坛背景卡";
   }
+  if (resolvedType === "bubble_user_message") {
+    return "Bubble 用户发言";
+  }
   return String(source.sourceTitle || source.title || source.name || "").trim() || "世界书来源";
 }
 
@@ -6731,14 +6739,15 @@ async function allocateNextForumReferenceKey(
   refType = "forum_item"
 ) {
   const rule = getForumReferenceRule(refType);
+  const escapedPrefix = String(rule.prefix || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const result = await db.query(
     `
-      select coalesce(max(substring(ref_key from 2)::bigint), 0) as max_suffix
+      select coalesce(max(substring(ref_key from $3)::bigint), 0) as max_suffix
       from forum_reference_registry
       where owner_id = $1
-        and ref_key like $2
+        and ref_key ~ $2
     `,
-    [ownerId, `${rule.prefix}%`]
+    [ownerId, `^${escapedPrefix}[0-9]+$`, String(rule.prefix || "").length + 1]
   );
   const currentMax = Number(result.rows[0]?.max_suffix || 0);
   const nextValue = Math.max(rule.start - 1, currentMax) + 1;
@@ -6812,6 +6821,260 @@ async function upsertForumReferenceRegistryEntry(
     }
   }
   throw new Error(`Failed to allocate forum reference key for ${refType}:${sourceId}`);
+}
+
+function getBubbleUserMessageDocKey(roomId = "", messageId = "") {
+  const resolvedRoomId = String(roomId || "").trim();
+  const resolvedMessageId = String(messageId || "").trim();
+  return resolvedRoomId && resolvedMessageId ? `${resolvedRoomId}:${resolvedMessageId}` : "";
+}
+
+function normalizeBubbleUserMessageInput(source = {}) {
+  const input = normalizeJsonObjectValue(source, {});
+  const roomId = String(input.roomId || input.room_id || "").trim();
+  const messageId = String(input.messageId || input.message_id || "").trim();
+  const text = String(input.text || input.contentText || input.content_text || "").trim();
+  const createdAtMs = normalizeFiniteNumber(input.createdAt || input.created_at, Date.now());
+  const mountedForumTabId = String(
+    input.mountedForumTabId ||
+      input.mounted_forum_tab_id ||
+      input.forumTabId ||
+      input.tabId ||
+      ""
+  ).trim();
+  return {
+    roomId,
+    messageId,
+    docKey: getBubbleUserMessageDocKey(roomId, messageId),
+    text,
+    createdAt: Number.isFinite(createdAtMs) ? Math.round(createdAtMs) : Date.now(),
+    mountedForumTabId,
+    sourceDetailId: String(input.sourceDetailId || input.source_detail_id || "").trim(),
+    topicTags: normalizeForumTopicTags(input.topicTags || input.topic_tags || [], []),
+    metadata: normalizeJsonObjectValue(input.metadata, {})
+  };
+}
+
+function mapBubbleUserMessageDocumentRow(row = {}) {
+  const content = normalizeJsonObjectValue(row.content_jsonb, {});
+  const message = normalizeBubbleUserMessageInput({
+    ...content,
+    roomId: content.roomId || content.room_id,
+    messageId: content.messageId || content.message_id,
+    text: content.text
+  });
+  return {
+    ...message,
+    docKey: String(row.doc_key || message.docKey || "").trim(),
+    title: String(row.title || "").trim(),
+    clientUpdatedAt: row.client_updated_at || null,
+    createdAtDb: row.created_at || null,
+    updatedAt: row.updated_at || null
+  };
+}
+
+function serializeBubbleUserMessageForResponse(message = {}) {
+  return {
+    roomId: String(message.roomId || "").trim(),
+    messageId: String(message.messageId || "").trim(),
+    text: String(message.text || "").trim(),
+    createdAt: Number(message.createdAt) || 0,
+    mountedForumTabId: String(message.mountedForumTabId || "").trim(),
+    sourceDetailId: String(message.sourceDetailId || "").trim()
+  };
+}
+
+async function upsertBubbleUserMessageDocument(
+  db,
+  ownerId = DEFAULT_STORAGE_OWNER_ID,
+  source = {}
+) {
+  const message = normalizeBubbleUserMessageInput(source);
+  if (!message.roomId || !message.messageId || !message.docKey || !message.text) {
+    throw new Error("roomId, messageId and text are required.");
+  }
+  const existingResult = await db.query(
+    `
+      select *
+      from app_documents
+      where owner_id = $1
+        and doc_type = 'bubble_user_message'
+        and doc_key = $2
+      limit 1
+    `,
+    [ownerId, message.docKey]
+  );
+  const existing = existingResult.rows[0]
+    ? mapBubbleUserMessageDocumentRow(existingResult.rows[0])
+    : null;
+  const content = {
+    roomId: message.roomId,
+    messageId: message.messageId,
+    text: message.text,
+    createdAt: message.createdAt,
+    mountedForumTabId: message.mountedForumTabId,
+    sourceDetailId: message.sourceDetailId,
+    topicTags: message.topicTags,
+    metadata: message.metadata
+  };
+  const title = truncateForumBackgroundText(message.text, 80);
+  const result = await db.query(
+    `
+      insert into app_documents (
+        owner_id,
+        doc_type,
+        doc_key,
+        title,
+        content_jsonb,
+        client_updated_at,
+        created_at,
+        updated_at
+      )
+      values ($1, 'bubble_user_message', $2, $3, $4::jsonb, to_timestamp($5 / 1000.0), now(), now())
+      on conflict (owner_id, doc_type, doc_key) do update
+        set title = excluded.title,
+            content_jsonb = excluded.content_jsonb,
+            client_updated_at = excluded.client_updated_at,
+            updated_at = now()
+      returning *
+    `,
+    [ownerId, message.docKey, title, stringifyJsonb(content), message.createdAt]
+  );
+  if (
+    existing?.mountedForumTabId &&
+    existing.mountedForumTabId !== message.mountedForumTabId
+  ) {
+    await db.query(
+      `
+        delete from forum_reference_registry
+        where owner_id = $1
+          and ref_type = 'bubble_user_message'
+          and source_id = $2
+          and tab_id = $3
+      `,
+      [ownerId, message.docKey, existing.mountedForumTabId]
+    );
+  }
+  let reference = null;
+  if (message.mountedForumTabId) {
+    reference = await upsertForumReferenceRegistryEntry(db, ownerId, {
+      refType: "bubble_user_message",
+      sourceId: message.docKey,
+      tabId: message.mountedForumTabId,
+      title: "Bubble 用户发言",
+      topicTags: message.topicTags,
+      refDate: normalizeForumDiscussionDate(new Date(message.createdAt).toISOString(), ""),
+      metadata: {
+        roomId: message.roomId,
+        messageId: message.messageId,
+        sourceKind: "bubble_user_message",
+        textPreview: truncateForumBackgroundText(message.text, 120)
+      }
+    });
+  }
+  return {
+    message: mapBubbleUserMessageDocumentRow(result.rows[0] || {}),
+    reference
+  };
+}
+
+async function loadBubbleUserMessageDocuments(
+  db,
+  ownerId = DEFAULT_STORAGE_OWNER_ID,
+  options = {}
+) {
+  const roomId = String(options.roomId || "").trim();
+  const limit = clampIntegerValue(options.limit, 1, 100, 15);
+  const params = [ownerId, limit];
+  let roomFilter = "";
+  if (roomId) {
+    params.push(roomId);
+    roomFilter = `and content_jsonb->>'roomId' = $${params.length}`;
+  }
+  const result = await db.query(
+    `
+      select *
+      from app_documents
+      where owner_id = $1
+        and doc_type = 'bubble_user_message'
+        ${roomFilter}
+      order by coalesce(nullif(content_jsonb->>'createdAt', '')::double precision, 0) desc,
+               updated_at desc
+      limit $2
+    `,
+    params
+  );
+  return result.rows.map(mapBubbleUserMessageDocumentRow).filter((item) => item.messageId && item.text);
+}
+
+async function loadBubbleUserMessageReferencesForForum(
+  db,
+  ownerId = DEFAULT_STORAGE_OWNER_ID,
+  tabId = "",
+  limit = 80
+) {
+  const resolvedTabId = String(tabId || "").trim();
+  if (!resolvedTabId) {
+    return [];
+  }
+  const result = await db.query(
+    `
+      select
+        documents.*,
+        refs.ref_key,
+        refs.ref_type,
+        refs.title as ref_title,
+        refs.topic_tags_jsonb,
+        refs.ref_date,
+        refs.metadata as ref_metadata
+      from app_documents documents
+      join forum_reference_registry refs
+        on refs.owner_id = documents.owner_id
+       and refs.ref_type = 'bubble_user_message'
+       and refs.source_id = documents.doc_key
+       and refs.tab_id = $2
+      where documents.owner_id = $1
+        and documents.doc_type = 'bubble_user_message'
+      order by refs.ref_date desc nulls last, documents.updated_at desc
+      limit $3
+    `,
+    [ownerId, resolvedTabId, clampIntegerValue(limit, 1, 200, 80)]
+  );
+  return result.rows
+    .map((row) => {
+      const message = mapBubbleUserMessageDocumentRow(row);
+      const refDate = normalizeForumDiscussionDate(
+        row.ref_date || new Date(message.createdAt).toISOString(),
+        ""
+      );
+      const contentText = message.text
+        ? `用户曾在 Bubble 里提到：${message.text}`
+        : "";
+      return {
+        id: message.docKey,
+        refKey: String(row.ref_key || "").trim(),
+        refType: "bubble_user_message",
+        sourceKind: "bubble_user_message",
+        bucket: "bubble_history",
+        title: String(row.ref_title || "Bubble 用户发言").trim(),
+        contentText,
+        summaryText: contentText,
+        detailText: "",
+        topicTags: normalizeForumTopicTags(row.topic_tags_jsonb || message.topicTags, []),
+        discussionDate: refDate,
+        refDate,
+        archivedAt: row.updated_at || null,
+        cardKind: "bubble_user_message",
+        sourceItemIds: [],
+        metadata: {
+          ...normalizeJsonObjectValue(row.ref_metadata, {}),
+          roomId: message.roomId,
+          messageId: message.messageId,
+          mountedForumTabId: resolvedTabId
+        }
+      };
+    })
+    .filter((item) => item.refKey && item.contentText);
 }
 
 async function ensureForumTabContentItemRowsHydrated(
@@ -8780,6 +9043,46 @@ function countForumTopicTagMatches(left = [], right = []) {
   return normalizeForumTopicTags(left, []).filter((tag) => rightSet.has(tag)).length;
 }
 
+function extractForumComparableKeywords(value = "") {
+  const text = String(value || "").trim();
+  if (!text) {
+    return [];
+  }
+  const asciiTokens = text.match(/[a-z0-9]{2,}/gi) || [];
+  const cjkTokens = text.match(/[\u4e00-\u9fff]{2,6}/g) || [];
+  return Array.from(
+    new Set(
+      [...asciiTokens, ...cjkTokens]
+        .map((item) => canonicalizeMemoryCompareText(item))
+        .filter((item) => item.length >= 2)
+    )
+  );
+}
+
+function computeForumTextOverlapBonus(left = "", right = "") {
+  const leftText = String(left || "").trim();
+  const rightText = String(right || "").trim();
+  if (!leftText || !rightText) {
+    return 0;
+  }
+  if (memoryTextsLookSimilar(leftText, rightText)) {
+    return 24;
+  }
+  const rightKeywordSet = new Set(extractForumComparableKeywords(rightText));
+  const sharedKeywordCount = extractForumComparableKeywords(leftText)
+    .filter((keyword) => rightKeywordSet.has(keyword))
+    .length;
+  return sharedKeywordCount * 10;
+}
+
+function isForumBubbleUserReference(reference = {}) {
+  return (
+    normalizeForumReferenceType(reference?.refType, "") === "bubble_user_message" ||
+    String(reference?.sourceKind || "").trim() === "bubble_user_message" ||
+    String(reference?.cardKind || "").trim() === "bubble_user_message"
+  );
+}
+
 function compareForumDateStrings(left = "", right = "") {
   const normalizedLeft = normalizeForumDiscussionDate(left, "");
   const normalizedRight = normalizeForumDiscussionDate(right, "");
@@ -8797,6 +9100,12 @@ function computeForumReferencePersonaMatch(persona = {}, reference = {}) {
   const weakMatches = countForumWeakTopicTagMatches(reference.topicTags, persona.interestTags);
   const avoidMatches = countForumTopicTagMatches(reference.topicTags, persona.avoidTags);
   const matchType = interestMatches > 0 ? "strong" : weakMatches > 0 ? "weak" : "";
+  if (!matchType && isForumBubbleUserReference(reference)) {
+    return {
+      matchType: "weak",
+      matchScore: 10 - avoidMatches * 12
+    };
+  }
   return {
     matchType,
     matchScore:
@@ -9224,15 +9533,24 @@ function buildForumGenerationSourceCatalog(contentState = {}, historyReferences 
   const historyRefs = normalizeJsonArrayValue(historyReferences, [])
     .map((reference) => ({
       ...reference,
-      sourceKind: "history_digest",
-      bucket: "history_digest"
+      sourceKind: isForumBubbleUserReference(reference)
+        ? "bubble_user_message"
+        : String(reference?.sourceKind || "").trim() || "history_digest",
+      bucket: isForumBubbleUserReference(reference)
+        ? "bubble_history"
+        : String(reference?.bucket || "").trim() || "history_digest"
     }))
-    .filter((item) => item.refKey && (item.summaryText || item.detailText || item.contentText) && item.topicTags.length);
+    .filter((item) =>
+      item.refKey &&
+      (item.summaryText || item.detailText || item.contentText) &&
+      (item.topicTags.length || isForumBubbleUserReference(item))
+    );
+  const publicHistoryRefs = historyRefs.filter((item) => !isForumBubbleUserReference(item));
   return {
     hotRefs,
     currentDiscussionRefs,
     historyRefs,
-    allRefs: [...hotRefs, ...currentDiscussionRefs, ...historyRefs]
+    allRefs: [...hotRefs, ...currentDiscussionRefs, ...publicHistoryRefs]
   };
 }
 
@@ -9249,7 +9567,8 @@ function scoreForumSourceRecency(source = {}) {
 function selectForumMainSourceForPost(catalog = {}, weights = {}, usedSourceKeys = new Set()) {
   const hotRefs = normalizeJsonArrayValue(catalog.hotRefs, []);
   const currentRefs = normalizeJsonArrayValue(catalog.currentDiscussionRefs, []);
-  const historyRefs = normalizeJsonArrayValue(catalog.historyRefs, []);
+  const historyRefs = normalizeJsonArrayValue(catalog.historyRefs, [])
+    .filter((reference) => !isForumBubbleUserReference(reference));
   const sourceWeights = hotRefs.length
     ? weights.postSourceWeightsHotPresent
     : weights.postSourceWeightsNoHot;
@@ -9441,12 +9760,29 @@ function selectForumPrivateBackgroundRefsForPersona(
       .filter(([refKey]) => refKey)
   );
   const sourceTags = normalizeForumTopicTags(mainSource?.topicTags, []);
+  const mainSourceText = [
+    mainSource?.summaryText,
+    mainSource?.detailText,
+    mainSource?.contentText,
+    mainSource?.previewText
+  ].map((item) => String(item || "").trim()).filter(Boolean).join(" ");
   const scored = normalizeJsonArrayValue(historyRefs, [])
     .map((reference) => {
       const link = linkMap.get(String(reference.refKey || "").trim());
       if (!link) {
         return null;
       }
+      const referenceText = [
+        reference?.summaryText,
+        reference?.detailText,
+        reference?.contentText,
+        reference?.previewText
+      ].map((item) => String(item || "").trim()).filter(Boolean).join(" ");
+      const bubbleRelevanceBonus =
+        isForumBubbleUserReference(reference)
+          ? computeForumTextOverlapBonus(referenceText, mainSourceText) +
+            scoreForumSourceRecency(reference) * 10
+          : 0;
       return {
         reference: {
           ...reference,
@@ -9457,7 +9793,8 @@ function selectForumPrivateBackgroundRefsForPersona(
           normalizeFiniteNumber(link.matchScore, 0) +
           countForumTopicTagMatches(reference.topicTags, sourceTags) * 22 +
           countForumWeakTopicTagMatches(reference.topicTags, sourceTags) * 9 +
-          (reference.cardKind === "interpretation_frame" ? 8 : 0)
+          (reference.cardKind === "interpretation_frame" ? 8 : 0) +
+          bubbleRelevanceBonus
       };
     })
     .filter(Boolean)
@@ -10135,6 +10472,53 @@ app.use("/api", (request, response, next) => {
   response
     .status(500)
     .json(createJsonError("DATABASE_URL is missing. API routes are unavailable."));
+});
+
+app.get("/api/bubble/user-messages", async (request, response) => {
+  const roomId = String(request.query.roomId || request.query.room_id || "").trim();
+  const limit = clampIntegerValue(request.query.limit, 1, 100, 15);
+  try {
+    const messages = await loadBubbleUserMessageDocuments(
+      pool,
+      DEFAULT_STORAGE_OWNER_ID,
+      { roomId, limit }
+    );
+    response.json({
+      ok: true,
+      messages: messages.map(serializeBubbleUserMessageForResponse)
+    });
+  } catch (error) {
+    response
+      .status(500)
+      .json(createJsonError("Failed to load Bubble user messages.", error?.message));
+  }
+});
+
+app.post("/api/bubble/user-messages", async (request, response) => {
+  try {
+    const result = await upsertBubbleUserMessageDocument(
+      pool,
+      DEFAULT_STORAGE_OWNER_ID,
+      request.body
+    );
+    response.json({
+      ok: true,
+      message: serializeBubbleUserMessageForResponse(result.message),
+      reference: result.reference
+        ? {
+            refKey: result.reference.refKey,
+            refType: result.reference.refType,
+            tabId: result.reference.tabId
+          }
+        : null
+    });
+  } catch (error) {
+    const message = String(error?.message || "").trim();
+    const status = /required/i.test(message) ? 400 : 500;
+    response
+      .status(status)
+      .json(createJsonError("Failed to save Bubble user message.", message));
+  }
 });
 
 app.get("/api/memory/diagnostics", async (request, response) => {
@@ -11860,11 +12244,16 @@ app.post("/api/forum/generation-context", async (request, response) => {
       sourceBundle.tab.id,
       historyDigests
     );
+    const bubbleUserMessageReferences = await loadBubbleUserMessageReferencesForForum(
+      pool,
+      DEFAULT_STORAGE_OWNER_ID,
+      sourceBundle.tab.id
+    );
     const historyReferences = buildForumHistoryReferenceCandidates(
       contentState,
       historyDigests,
       historyDigestRefMap
-    );
+    ).concat(bubbleUserMessageReferences);
     const personaLinkMap = await refreshForumPersonaReferenceLinks(
       pool,
       DEFAULT_STORAGE_OWNER_ID,
