@@ -896,6 +896,40 @@
         ).trim();
         return controversialTopicText ? { controversialTopicText } : null;
       }
+    },
+    signing_seed_review_v1: {
+      name: "signing_seed_review_v1",
+      deepseekMaxTokens: 420,
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          discussionText: {
+            type: "string",
+            description:
+              "A single discussion body paragraph describing a fan's signing review without any signature."
+          }
+        },
+        required: ["discussionText"]
+      },
+      promptHint: [
+        "请只返回 json，不要解释，不要 markdown。",
+        'json 示例：{"discussionText":"今天这场签售比想象里还近，前面聊到活动时她接得特别认真，后面被提醒时间快到了以后语气突然更温柔，整个人会让人有点舍不得走。"}'
+      ].join("\n"),
+      repairExample: {
+        discussionText:
+          "今天这场签售比想象里还近，前面聊到活动时她接得特别认真，后面被提醒时间快到了以后语气突然更温柔，整个人会让人有点舍不得走。"
+      },
+      normalize(value) {
+        const source = normalizeObjectValue(value);
+        if (!source) {
+          return null;
+        }
+        const discussionText = String(
+          source.discussionText || source.discussion_text || source.text || source.content || ""
+        ).trim();
+        return discussionText ? { discussionText } : null;
+      }
     }
   };
 

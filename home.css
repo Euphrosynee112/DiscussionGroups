@@ -287,6 +287,13 @@ button {
   font-size: 18px;
 }
 
+.app-shortcut__icon--signing {
+  background:
+    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.42), transparent 34%),
+    linear-gradient(180deg, #f5b777 0%, #f29d55 56%, #dd7d2c 100%);
+  font-size: 18px;
+}
+
 .app-shortcut__icon--schedule {
   background:
     radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.4), transparent 34%),
@@ -328,6 +335,7 @@ button {
 .desk-item-now,
 .desk-item-x,
 .desk-item-live,
+.desk-item-signing,
 .desk-item-raising,
 .desk-item-plot,
 .desk-item-schedule,
