@@ -166,6 +166,7 @@ const FORUM_TAB_HISTORY_BATCH_MAX_ITEMS = 6;
 const FORUM_TAB_HISTORY_BATCH_MAX_CHARS = 1600;
 const FORUM_BACKGROUND_GENERATION_TYPES = new Set(["posts", "replies"]);
 const FORUM_BACKGROUND_DETAIL_LEVELS = new Set(["brief", "standard", "full"]);
+const FORUM_TAB_DOMAIN_TYPES = new Set(["general", "user_fandom", "contact_fandom"]);
 const FORUM_REFERENCE_TYPES = new Set([
   "forum_item",
   "worldbook_entry",
@@ -6158,6 +6159,11 @@ function normalizeForumBackgroundTextArray(value = [], fallback = []) {
   );
 }
 
+function normalizeForumTabDomainType(value = "", fallback = "general") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return FORUM_TAB_DOMAIN_TYPES.has(normalized) ? normalized : fallback;
+}
+
 function normalizeForumTabRecord(tab = {}, index = 0) {
   const source = normalizeJsonObjectValue(tab, {});
   const rawName = source.name || source.label || source.title || "";
@@ -6184,6 +6190,12 @@ function normalizeForumTabRecord(tab = {}, index = 0) {
     audience: String(rawAudience || "").trim(),
     discussionText: String(rawDiscussionText || "").trim(),
     hotTopic: String(rawHotTopic || "").trim(),
+    forumDomainType: normalizeForumTabDomainType(
+      source.forumDomainType || source.domainType || source.tabDomainType,
+      "general"
+    ),
+    fandomTargetId: String(source.fandomTargetId || source.contactId || "").trim(),
+    fandomDisplayName: String(source.fandomDisplayName || source.fandomTargetName || "").trim(),
     worldbookIds: normalizeForumBackgroundTextArray(
       source.worldbookIds ||
         source.mountedWorldbookIds ||
@@ -7830,6 +7842,9 @@ async function buildForumBackgroundSourceBundle(
       id: tab.id,
       name: tab.name,
       audience: tab.audience,
+      forumDomainType: tab.forumDomainType,
+      fandomTargetId: tab.fandomTargetId,
+      fandomDisplayName: tab.fandomDisplayName,
       discussionText: contentState?.promptTexts?.discussion || "",
       hotTopic: contentState?.promptTexts?.hotTopic || ""
     },
@@ -7854,6 +7869,9 @@ async function buildForumBackgroundSourceBundle(
       id: tab.id,
       name: tab.name,
       audience: tab.audience,
+      forumDomainType: tab.forumDomainType,
+      fandomTargetId: tab.fandomTargetId,
+      fandomDisplayName: tab.fandomDisplayName,
       discussionText: contentState?.promptTexts?.discussion || "",
       hotTopic: contentState?.promptTexts?.hotTopic || "",
       counts: contentState?.counts || {

@@ -8,7 +8,7 @@
     />
     <title>Pulse Generator · Chat</title>
     <link rel="stylesheet" href="./theme.css?v=20260417-175849" />
-    <link rel="stylesheet" href="./messages.css?v=20260421-223000" />
+    <link rel="stylesheet" href="./messages.css?v=20260422-154500" />
   </head>
   <body>
     <a class="desktop-entry" href="./index.html" aria-label="返回手机首页">← 首页</a>
@@ -319,20 +319,59 @@
           </label>
 
           <label class="messages-form-field messages-form-field--textarea">
-            <span>人物人设</span>
+            <span>公共人设</span>
             <textarea
               id="messages-contact-persona-input"
               rows="6"
-              placeholder="记录这个联系人在对话中的身份、性格、说话方式和背景。"
+              placeholder="记录这个联系人在大众认知里的身份、性格、说话方式和公开背景。"
             ></textarea>
           </label>
 
+          <section class="messages-form-field">
+            <div class="messages-form-field__head">
+              <span>角色粉丝页</span>
+            </div>
+            <label class="messages-toggle-field">
+              <div class="messages-toggle-field__body">
+                <strong>为这个角色启用专属粉丝页</strong>
+                <p>只会为当前联系人显式创建/绑定，不会批量给所有联系人自动生成。</p>
+              </div>
+              <span class="messages-switch">
+                <input id="messages-contact-forum-fandom-enabled-input" type="checkbox" />
+                <span class="messages-switch__slider"></span>
+              </span>
+            </label>
+            <div id="messages-contact-forum-fandom-fields" hidden>
+              <label class="messages-form-field">
+                <span>页签名称</span>
+                <input
+                  id="messages-contact-forum-fandom-tab-name-input"
+                  type="text"
+                  maxlength="10"
+                  placeholder="可选，默认按联系人名称生成"
+                  autocomplete="off"
+                />
+              </label>
+              <label class="messages-form-field messages-form-field--textarea">
+                <span>粉丝页用户定位</span>
+                <textarea
+                  id="messages-contact-forum-fandom-audience-input"
+                  rows="4"
+                  placeholder="可选，留空时会按角色粉丝讨论区的默认模板生成。"
+                ></textarea>
+              </label>
+              <small class="messages-form-field__hint">
+                该页签会复用论坛条目、seed 和热点逻辑，不影响私聊 prompt。
+              </small>
+            </div>
+          </section>
+
           <label class="messages-form-field messages-form-field--textarea">
-            <span>用户特别人设</span>
+            <span>对用户的特殊人设</span>
             <textarea
               id="messages-contact-special-persona-input"
               rows="5"
-              placeholder="可选。记录这个角色对用户的特别认知，例如相处印象、偏爱点、介意点或私人滤镜。"
+              placeholder="可选。记录这个角色只对用户成立的特别认知，例如相处印象、偏爱点、介意点或私人滤镜。"
             ></textarea>
           </label>
 
@@ -2566,6 +2605,6 @@
     <script src="./messages-awareness-config.js?v=20260403-165212"></script>
     <script src="./messages-memory-decay-config.js?v=20260416-231000"></script>
     <script src="./messages-proactive-trigger-config.js?v=20260415-145640"></script>
-    <script src="./messages.js?v=20260421-223000"></script>
+    <script src="./messages.js?v=20260422-154500"></script>
   </body>
 </html>

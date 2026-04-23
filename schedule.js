@@ -1445,6 +1445,10 @@ function buildInviteConflictContext(contact, inviteEntry) {
 
 function buildScheduleInviteSystemPrompt(profile, contact, inviteEntry, options = {}) {
   const companionNames = Array.isArray(options.companionNames) ? options.companionNames : [];
+  const combinedPersona = [String(contact.personaPrompt || "").trim(), String(contact.specialUserPersona || "").trim()]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
   return buildStructuredPromptSections(
     "schedule_invite",
     {
@@ -1455,16 +1459,14 @@ function buildScheduleInviteSystemPrompt(profile, contact, inviteEntry, options 
           : "这次邀请没有其他角色同行人。"
       },
       persona_alignment: {
-        special_user_persona: contact.specialUserPersona
-          ? `你对这个用户的特别认知：${contact.specialUserPersona}。`
-          : ""
+        special_user_persona: ""
       }
     },
     {
       settings: loadSettings(),
       variables: {
         contactName: contact.name,
-        contactPersona: contact.personaPrompt || "自然、友好，会根据关系和现实安排做决定。",
+        contactPersona: combinedPersona || "自然、友好，会根据关系和现实安排做决定。",
         userName: profile.username || DEFAULT_PROFILE.username,
         userPersona:
           profile.personaPrompt || DEFAULT_PROFILE.personaPrompt || "用户有自己稳定的人设和表达方式。"
