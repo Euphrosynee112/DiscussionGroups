@@ -9,7 +9,7 @@
   --shadow-lg: var(--shadow-lg);
   --shadow-md: var(--shadow-md);
   --shadow-sm: var(--shadow-sm);
-  --icon-shadow: 0 9px 16px rgba(96, 107, 122, 0.12);
+  --icon-shadow: 0 12px 22px rgba(78, 93, 122, 0.15);
   --border: rgba(255, 255, 255, 0.72);
 }
 
@@ -184,16 +184,24 @@ button {
 }
 
 .app-shortcut__icon {
+  --home-icon-top-rgb: 144, 168, 205;
+  --home-icon-bottom-rgb: 99, 121, 160;
   position: relative;
   width: 52px;
   height: 52px;
   display: grid;
   place-items: center;
   border-radius: 17px;
-  border: 1px solid rgba(255, 255, 255, 0.42);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.08));
+  border: 1px solid rgba(255, 255, 255, 0.46);
+  background:
+    radial-gradient(circle at 26% 22%, rgba(255, 255, 255, 0.42), transparent 34%),
+    linear-gradient(
+      180deg,
+      rgba(var(--home-icon-top-rgb), 0.74),
+      rgba(var(--home-icon-bottom-rgb), 0.6)
+    );
   box-shadow:
-    inset 0 1px 1px rgba(255, 255, 255, 0.24),
+    inset 0 1px 1px rgba(255, 255, 255, 0.32),
     inset 0 -1px 0 rgba(15, 23, 42, 0.04),
     var(--icon-shadow);
   color: #ffffff;
@@ -207,7 +215,17 @@ button {
   position: absolute;
   inset: 1px 1px 52% 1px;
   border-radius: 16px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.04));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.38), rgba(255, 255, 255, 0.04));
+  pointer-events: none;
+}
+
+.app-shortcut__icon::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 74% 82%, rgba(255, 255, 255, 0.12), transparent 42%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(15, 23, 42, 0.05));
   pointer-events: none;
 }
 
@@ -219,96 +237,61 @@ button {
 }
 
 .app-shortcut__icon--x {
-  background:
-    radial-gradient(circle at 28% 26%, rgba(255, 255, 255, 0.28), transparent 34%),
-    linear-gradient(180deg, #676a70 0%, #292c30 100%);
+  --home-icon-top-rgb: 129, 144, 173;
+  --home-icon-bottom-rgb: 90, 105, 138;
   font-size: 24px;
   letter-spacing: -0.03em;
 }
 
 .app-shortcut__icon--chat {
-  background:
-    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.38), transparent 32%),
-    linear-gradient(
-      180deg,
-      rgba(var(--page-chat-accent-rgb), 0.92) 0%,
-      rgba(var(--page-chat-accent-rgb), 0.74) 52%,
-      var(--page-chat-accent-strong) 100%
-    );
+  --home-icon-top-rgb: 132, 178, 210;
+  --home-icon-bottom-rgb: 91, 132, 175;
 }
 
 .app-shortcut__icon--bubble {
-  background:
-    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.38), transparent 34%),
-    linear-gradient(
-      180deg,
-      rgba(var(--page-bubble-accent-rgb), 0.84) 0%,
-      rgba(var(--page-bubble-accent-rgb), 0.68) 54%,
-      var(--page-bubble-accent-strong) 100%
-    );
+  --home-icon-top-rgb: 139, 176, 205;
+  --home-icon-bottom-rgb: 97, 129, 168;
 }
 
 .app-shortcut__icon--memory {
-  background:
-    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.42), transparent 34%),
-    linear-gradient(180deg, #d8ddf6 0%, #b8c6ed 52%, #8ea3d8 100%);
+  --home-icon-top-rgb: 151, 160, 206;
+  --home-icon-bottom-rgb: 109, 120, 179;
 }
 
 .app-shortcut__icon--raising {
-  background:
-    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.42), transparent 34%),
-    linear-gradient(
-      180deg,
-      rgba(var(--page-raising-accent-rgb), 0.62) 0%,
-      rgba(var(--page-raising-accent-rgb), 0.5) 56%,
-      var(--page-raising-accent-strong) 100%
-    );
+  --home-icon-top-rgb: 158, 152, 184;
+  --home-icon-bottom-rgb: 120, 116, 156;
   font-size: 19px;
   letter-spacing: 0.02em;
 }
 
 .app-shortcut__icon--plot {
-  background:
-    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.42), transparent 34%),
-    linear-gradient(
-      180deg,
-      rgba(var(--page-plot-accent-rgb), 0.5) 0%,
-      rgba(var(--page-plot-accent-rgb), 0.42) 56%,
-      var(--page-plot-accent-strong) 100%
-    );
+  --home-icon-top-rgb: 154, 148, 178;
+  --home-icon-bottom-rgb: 116, 111, 153;
   font-size: 18px;
   letter-spacing: 0.03em;
 }
 
 .app-shortcut__icon--live {
-  background:
-    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.42), transparent 34%),
-    linear-gradient(180deg, #ff7d8c 0%, #ff586d 56%, #d83a4f 100%);
+  --home-icon-top-rgb: 151, 151, 208;
+  --home-icon-bottom-rgb: 110, 114, 176;
   font-size: 18px;
 }
 
 .app-shortcut__icon--signing {
-  background:
-    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.42), transparent 34%),
-    linear-gradient(180deg, #f5b777 0%, #f29d55 56%, #dd7d2c 100%);
+  --home-icon-top-rgb: 155, 152, 200;
+  --home-icon-bottom-rgb: 116, 117, 171;
   font-size: 18px;
 }
 
 .app-shortcut__icon--schedule {
-  background:
-    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.4), transparent 34%),
-    linear-gradient(
-      180deg,
-      rgba(var(--page-schedule-accent-rgb), 0.56) 0%,
-      rgba(var(--page-schedule-accent-rgb), 0.44) 56%,
-      var(--page-schedule-accent-strong) 100%
-    );
+  --home-icon-top-rgb: 140, 167, 209;
+  --home-icon-bottom-rgb: 98, 123, 171;
 }
 
 .app-shortcut__icon--time {
-  background:
-    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.42), transparent 34%),
-    linear-gradient(180deg, #d4cff6 0%, #a9a0eb 56%, #8479dc 100%);
+  --home-icon-top-rgb: 148, 159, 212;
+  --home-icon-bottom-rgb: 106, 119, 181;
 }
 
 .app-shortcut__icon--heart {
@@ -380,18 +363,27 @@ button {
 }
 
 .dock-app__icon {
+  --dock-icon-top-rgb: 145, 168, 205;
+  --dock-icon-bottom-rgb: 101, 122, 160;
   position: relative;
   width: 48px;
   height: 48px;
   display: grid;
   place-items: center;
   border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.34);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.36));
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  background:
+    radial-gradient(circle at 26% 22%, rgba(255, 255, 255, 0.42), transparent 34%),
+    linear-gradient(
+      180deg,
+      rgba(var(--dock-icon-top-rgb), 0.74),
+      rgba(var(--dock-icon-bottom-rgb), 0.58)
+    );
   box-shadow:
     inset 0 1px 1px rgba(255, 255, 255, 0.42),
     inset 0 -1px 0 rgba(15, 23, 42, 0.05),
     var(--icon-shadow);
+  color: rgba(255, 255, 255, 0.94);
   font-size: 20px;
   overflow: hidden;
 }
@@ -412,31 +404,23 @@ button {
 }
 
 .dock-app--mail .dock-app__icon {
-  background:
-    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.5), transparent 34%),
-    linear-gradient(180deg, #bfdaf2 0%, #93b6dd 55%, #7d9bc7 100%);
-  color: #ffffff;
+  --dock-icon-top-rgb: 133, 166, 202;
+  --dock-icon-bottom-rgb: 94, 124, 167;
 }
 
 .dock-app--settings .dock-app__icon {
-  background:
-    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.5), transparent 34%),
-    linear-gradient(180deg, #d9dee4 0%, #b8c1cd 55%, #9ca5b2 100%);
-  color: #ffffff;
+  --dock-icon-top-rgb: 149, 156, 202;
+  --dock-icon-bottom-rgb: 109, 116, 174;
 }
 
 .dock-app--memory .dock-app__icon {
-  background:
-    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.5), transparent 34%),
-    linear-gradient(180deg, #e9d8bb 0%, #d6be97 55%, #c2a679 100%);
-  color: #ffffff;
+  --dock-icon-top-rgb: 157, 151, 184;
+  --dock-icon-bottom-rgb: 119, 115, 156;
 }
 
 .dock-app--rules .dock-app__icon {
-  background:
-    radial-gradient(circle at 24% 22%, rgba(255, 255, 255, 0.5), transparent 34%),
-    linear-gradient(180deg, #cfe9d0 0%, #9dd2a2 55%, #77bb82 100%);
-  color: #ffffff;
+  --dock-icon-top-rgb: 139, 170, 208;
+  --dock-icon-bottom-rgb: 99, 126, 171;
 }
 
 .home-settings-modal,
