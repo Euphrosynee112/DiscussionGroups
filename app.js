@@ -690,6 +690,82 @@ async function requestDiscussionStorageApi(pathname, options = {}) {
   return payload;
 }
 
+const SHARED_MOUNTABLE_STORAGE_KEYS = [PROFILE_KEY, MESSAGE_CONTACTS_KEY];
+const SHARED_MOUNTABLE_SYNC_COOLDOWN_MS = 3_000;
+let sharedMountableStorageSyncPromise = null;
+let lastSharedMountableStorageSyncAt = 0;
+
+function getDiscussionStorageRecordValue(record = null) {
+  const source = record && typeof record === "object" ? record : {};
+  if (Object.prototype.hasOwnProperty.call(source, "value_json")) {
+    return source.value_json;
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "valueJson")) {
+    return source.valueJson;
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "value")) {
+    return source.value;
+  }
+  return undefined;
+}
+
+function persistSyncedDiscussionStorageRecord(key, value) {
+  const storageKey = String(key || "").trim();
+  if (!storageKey) {
+    return false;
+  }
+  const nextValue =
+    typeof value === "string" ? value : JSON.stringify(value === undefined ? null : value);
+  if (safeGetItem(storageKey) === nextValue) {
+    return false;
+  }
+  return safeSetItem(storageKey, nextValue);
+}
+
+async function syncSharedMountableStorageFromBackend(options = {}) {
+  const resolvedOptions = options && typeof options === "object" ? options : {};
+  const force = Boolean(resolvedOptions.force);
+  if (!force && sharedMountableStorageSyncPromise) {
+    return sharedMountableStorageSyncPromise;
+  }
+  if (!force && Date.now() - lastSharedMountableStorageSyncAt < SHARED_MOUNTABLE_SYNC_COOLDOWN_MS) {
+    return false;
+  }
+  sharedMountableStorageSyncPromise = (async () => {
+    try {
+      const payload = await requestDiscussionStorageApi("/api/storage/bootstrap");
+      const records = Array.isArray(payload?.records) ? payload.records : [];
+      let changed = false;
+      SHARED_MOUNTABLE_STORAGE_KEYS.forEach((key) => {
+        const record = records.find((item) => String(item?.key || "").trim() === key);
+        if (!record) {
+          return;
+        }
+        const value = getDiscussionStorageRecordValue(record);
+        if (value === undefined) {
+          return;
+        }
+        changed = persistSyncedDiscussionStorageRecord(key, value) || changed;
+      });
+      lastSharedMountableStorageSyncAt = Date.now();
+      return changed;
+    } catch (_error) {
+      return false;
+    } finally {
+      sharedMountableStorageSyncPromise = null;
+    }
+  })();
+  return sharedMountableStorageSyncPromise;
+}
+
+function refreshMountedEntityDependentUi() {
+  if (state.customTabEditorOpen) {
+    renderCustomTabsManager();
+  }
+  updatePromptPreview();
+  updateReplyPromptPreview();
+}
+
 function buildSingleInstructionRequestBody(
   settings,
   systemPrompt,
@@ -1123,10 +1199,17 @@ function loadStoredMessageContacts() {
 }
 
 function getStoredForumUserPublicEntity() {
-  const profile = loadProfile();
+  const storedProfile = readStoredJson(PROFILE_KEY, {});
+  const profile = storedProfile && typeof storedProfile === "object" ? storedProfile : {};
   const displayName =
-    String(profile.username || profile.userId || "用户本人").trim() || "用户本人";
-  const publicPersona = String(profile.personaPrompt || "").trim();
+    String(
+      profile.chatUsername ||
+        profile.username ||
+        profile.chatUserId ||
+        profile.userId ||
+        "用户本人"
+    ).trim() || "用户本人";
+  const publicPersona = String(profile.chatPersonaPrompt || profile.personaPrompt || "").trim();
   return publicPersona
     ? {
         ref: "user:self",
@@ -8293,6 +8376,12 @@ function setCustomTabsPanelOpen(isOpen) {
   if (state.customTabEditorOpen) {
     document.body.style.overflow = "hidden";
     renderCustomTabsManager();
+    void syncSharedMountableStorageFromBackend({ force: true }).then((didChange) => {
+      if (!didChange || !state.customTabEditorOpen) {
+        return;
+      }
+      refreshMountedEntityDependentUi();
+    });
     focusCustomTabNameField();
     return;
   }
@@ -11354,19 +11443,27 @@ function attachEvents() {
     renderProfilePage();
     renderThreadModal();
     updateReplyPromptPreview();
+    void syncSharedMountableStorageFromBackend().then((didChange) => {
+      if (didChange) {
+        refreshMountedEntityDependentUi();
+      }
+    });
   });
 
   window.addEventListener("storage", (event) => {
-    if (event.key && event.key !== PROFILE_KEY) {
+    const key = String(event?.key || "").trim();
+    if (key && ![PROFILE_KEY, MESSAGE_CONTACTS_KEY].includes(key)) {
       return;
     }
-    if (!refreshSharedProfileState()) {
-      return;
+    if (key !== MESSAGE_CONTACTS_KEY) {
+      if (!refreshSharedProfileState()) {
+        return;
+      }
+      renderActiveFeed();
+      renderProfilePage();
+      renderThreadModal();
     }
-    renderActiveFeed();
-    renderProfilePage();
-    renderThreadModal();
-    updateReplyPromptPreview();
+    refreshMountedEntityDependentUi();
   });
 
   window.addEventListener("storage", (event) => {
@@ -11451,6 +11548,11 @@ function init() {
   safeRun("switch initial tab", () => switchTab(getInitialTabFromLocation()));
   safeRun("attach events", () => attachEvents());
   safeRun("sync home refresh anchor", () => syncHomeRefreshAnchor());
+  void syncSharedMountableStorageFromBackend().then((didChange) => {
+    if (didChange) {
+      refreshMountedEntityDependentUi();
+    }
+  });
   window.__appBootstrap.ready = true;
 }
 

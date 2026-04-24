@@ -187,6 +187,80 @@ async function requestDiscussionStorageApi(pathname, options = {}) {
   return payload;
 }
 
+const SHARED_MOUNTABLE_STORAGE_KEYS = [PROFILE_KEY, MESSAGE_CONTACTS_KEY];
+const SHARED_MOUNTABLE_SYNC_COOLDOWN_MS = 3_000;
+let sharedMountableStorageSyncPromise = null;
+let lastSharedMountableStorageSyncAt = 0;
+
+function getDiscussionStorageRecordValue(record = null) {
+  const source = record && typeof record === "object" ? record : {};
+  if (Object.prototype.hasOwnProperty.call(source, "value_json")) {
+    return source.value_json;
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "valueJson")) {
+    return source.valueJson;
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "value")) {
+    return source.value;
+  }
+  return undefined;
+}
+
+function persistSyncedDiscussionStorageRecord(key, value) {
+  const storageKey = String(key || "").trim();
+  if (!storageKey) {
+    return false;
+  }
+  const nextValue =
+    typeof value === "string" ? value : JSON.stringify(value === undefined ? null : value);
+  if (safeGetItem(storageKey) === nextValue) {
+    return false;
+  }
+  return safeSetItem(storageKey, nextValue);
+}
+
+async function syncSharedMountableStorageFromBackend(options = {}) {
+  const resolvedOptions = options && typeof options === "object" ? options : {};
+  const force = Boolean(resolvedOptions.force);
+  if (!force && sharedMountableStorageSyncPromise) {
+    return sharedMountableStorageSyncPromise;
+  }
+  if (!force && Date.now() - lastSharedMountableStorageSyncAt < SHARED_MOUNTABLE_SYNC_COOLDOWN_MS) {
+    return false;
+  }
+  sharedMountableStorageSyncPromise = (async () => {
+    try {
+      const payload = await requestDiscussionStorageApi("/api/storage/bootstrap");
+      const records = Array.isArray(payload?.records) ? payload.records : [];
+      let changed = false;
+      SHARED_MOUNTABLE_STORAGE_KEYS.forEach((key) => {
+        const record = records.find((item) => String(item?.key || "").trim() === key);
+        if (!record) {
+          return;
+        }
+        const value = getDiscussionStorageRecordValue(record);
+        if (value === undefined) {
+          return;
+        }
+        changed = persistSyncedDiscussionStorageRecord(key, value) || changed;
+      });
+      lastSharedMountableStorageSyncAt = Date.now();
+      return changed;
+    } catch (_error) {
+      return false;
+    } finally {
+      sharedMountableStorageSyncPromise = null;
+    }
+  })();
+  return sharedMountableStorageSyncPromise;
+}
+
+function refreshMountedEntityDependentUi() {
+  if (state.chatSettingsOpen) {
+    applyBubblePromptSettingsToForm(state.settings.bubblePromptSettings);
+  }
+}
+
 const FAN_EMOJI_POOL = [
   "🥺",
   "🥹",
@@ -1533,8 +1607,16 @@ function loadPublicProfileEntity() {
   try {
     const storedProfile = JSON.parse(raw);
     const displayName =
-      String(storedProfile?.username || storedProfile?.userId || "用户本人").trim() || "用户本人";
-    const publicPersona = String(storedProfile?.personaPrompt || "").trim();
+      String(
+        storedProfile?.chatUsername ||
+          storedProfile?.username ||
+          storedProfile?.chatUserId ||
+          storedProfile?.userId ||
+          "用户本人"
+      ).trim() || "用户本人";
+    const publicPersona = String(
+      storedProfile?.chatPersonaPrompt || storedProfile?.personaPrompt || ""
+    ).trim();
     return publicPersona
       ? {
           ref: "user:self",
@@ -2698,6 +2780,12 @@ function setBubbleChatSettingsOpen(isOpen) {
     bubbleChatSettingsModalEl.hidden = false;
     bubbleChatSettingsModalEl.setAttribute("aria-hidden", "false");
     applyBubblePromptSettingsToForm(state.settings.bubblePromptSettings);
+    void syncSharedMountableStorageFromBackend({ force: true }).then((didChange) => {
+      if (!didChange || !state.chatSettingsOpen) {
+        return;
+      }
+      refreshMountedEntityDependentUi();
+    });
     document.body.classList.add("bubble-settings-open");
     return;
   }
@@ -3941,6 +4029,11 @@ function attachEvents() {
     const shouldReopenDetail = Boolean(activeFanDetailId);
     refreshBubbleData();
     renderBubbleRooms();
+    void syncSharedMountableStorageFromBackend().then((didChange) => {
+      if (didChange) {
+        refreshMountedEntityDependentUi();
+      }
+    });
     if (!shouldReopenChat && !shouldReopenDetail) {
       return;
     }
@@ -3958,11 +4051,13 @@ function attachEvents() {
       refreshBubbleRuntimeSettingsFromStorage();
       return;
     }
-    if (event.key && event.key !== PROFILE_KEY) {
+    const key = String(event?.key || "").trim();
+    if (key && ![PROFILE_KEY, MESSAGE_CONTACTS_KEY].includes(key)) {
       return;
     }
     refreshBubbleData();
     renderBubbleRooms();
+    refreshMountedEntityDependentUi();
     if (state.chatOpen && state.activeRoomId) {
       setChatModalOpen(true, state.activeRoomId);
     }
@@ -4007,6 +4102,11 @@ function init() {
   renderBubbleRooms();
   setBubbleStatus("Bubble 会优先读取 Chat 资料；首次未单独设置时会沿用论坛资料。");
   attachEvents();
+  void syncSharedMountableStorageFromBackend().then((didChange) => {
+    if (didChange) {
+      refreshMountedEntityDependentUi();
+    }
+  });
 }
 
 init();
