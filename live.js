@@ -1247,13 +1247,16 @@ function getSelectedForumTab() {
 function buildForumContextText() {
   const tab = getSelectedForumTab();
   if (!tab) {
-    return state.liveEntryConfig?.forumEnabled ? "已挂载默认论坛首页。" : "";
+    return state.liveEntryConfig?.forumEnabled
+      ? "当前没有可用的论坛页签定位，本场直播默认按开放式直播间处理。"
+      : "未挂载论坛页签，本场直播默认按开放式直播间处理。";
   }
   const audience = safeTrim(tab.audience || "");
   return [
     `挂载论坛页签：${tab.name}`,
     "本次直播只能挂载一个论坛页签；如果挂载了论坛页签，直播间观众定位默认沿用该页签的用户定位，不要混用其他页签定位。",
     audience ? `直播间观众定位（来自唯一挂载页签「${tab.name}」）：${audience}` : "",
+    audience ? "" : `当前页签「${tab.name}」未设置用户定位，本场直播默认按开放式直播间处理。`,
     tab.discussionText ? `页签文本：${truncateText(tab.discussionText, 520)}` : "",
     tab.hotTopic ? `页签热点：${truncateText(tab.hotTopic, 360)}` : ""
   ]
@@ -1428,6 +1431,7 @@ function buildFanLiveSystemPrompt(trigger = "auto", latestUserText = "") {
   const config = state.liveEntryConfig || {};
   const selectedForumTab = getSelectedForumTab();
   const forumAudience = safeTrim(selectedForumTab?.audience || "");
+  const openLiveMode = !forumAudience;
   const topic = safeTrim(config.topic || "随便聊聊今天的状态");
   const openingDescription = safeTrim(config.openingDescription || "");
   const negativeBlock = buildNegativePromptConstraintBlock(state.settings);
@@ -1452,6 +1456,9 @@ function buildFanLiveSystemPrompt(trigger = "auto", latestUserText = "") {
     !isContactLiveMode() && hostProfile.personaPrompt
       ? `主播人设与表达参考：${hostProfile.personaPrompt}`
       : "",
+    openLiveMode
+      ? "当前没有可用的页签用户定位，把这场直播视为开放式直播间：观众来源更杂，可以同时出现粉丝、路人、黑粉、乐子人、围观群众和半懂不懂的吃瓜观众。"
+      : "",
     isContactLiveMode()
       ? "你不是主播本人；你要模拟直播间里不同观众对角色主播动态的即时弹幕反应。"
       : "你不是主播本人，也不要替主播发言；你要模拟直播间里不同观众的即时弹幕反应。"
@@ -1463,7 +1470,7 @@ function buildFanLiveSystemPrompt(trigger = "auto", latestUserText = "") {
     openingDescription ? `开场画面 / 初始状态：${openingDescription}` : "",
     forumAudience
       ? `当前直播观众定位：${forumAudience}（来自唯一挂载论坛页签「${selectedForumTab.name}」，不要串用其他页签用户定位。）`
-      : "",
+      : "当前直播观众定位：未挂载可用页签定位，默认按开放式直播间处理。",
     latestUserText
       ? `${isContactLiveMode() ? "最新角色主播动态" : "最新主播发言"}：${latestUserText}`
       : isContactLiveMode()
@@ -1490,9 +1497,16 @@ function buildFanLiveSystemPrompt(trigger = "auto", latestUserText = "") {
     "只输出观众弹幕，不要输出主播发言，不要输出 JSON、Markdown、列表、编号、角色标签或解释。",
     "一次必须生成 15 条互不相同的观众弹幕；每一行就是一条弹幕。",
     "每条弹幕必须自带随机观众 ID，格式固定为：@u1234：弹幕内容。",
-    "弹幕要像不同观众同时在直播间刷屏，可以有短句、追问、玩笑、惊讶、接梗、情绪反应和轻微跑题。",
+    openLiveMode
+      ? "弹幕要像开放式直播间同时刷屏：可以更杂、更散、更有冲突感，允许出现夸赞、质疑、误解、抬杠、拱火、反驳、阴阳怪气和互相接话，但仍然要像直播弹幕，不要写成长评论。"
+      : "弹幕要像不同观众同时在直播间刷屏，可以有短句、追问、玩笑、惊讶、接梗、情绪反应、轻微跑题和少量立场冲突。",
     `当前直播主题、初始直播描写和${isContactLiveMode() ? "角色主播的最新动态" : "主播的实际发言"}优先级最高；如果有最新触发内容，先围绕这句话生成观众反应。`,
-    "不要复述设定，不要总结背景，不要长篇说明，不要让 15 条弹幕语气完全一样。"
+    openLiveMode
+      ? "15 条弹幕不要一边倒；至少要有明显的态度差异和立场分歧，不要让所有人都在同一个频道里夸或骂。"
+      : "不要复述设定，不要总结背景，不要长篇说明，不要让 15 条弹幕语气完全一样。",
+    openLiveMode
+      ? "不要复述设定，不要总结背景，不要长篇说明。"
+      : ""
   ].join("\n");
   return [
     negativeBlock,
