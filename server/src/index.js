@@ -6754,12 +6754,17 @@ async function allocateNextForumReferenceKey(
   const escapedPrefix = String(rule.prefix || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const result = await db.query(
     `
-      select coalesce(max(substring(ref_key from $3)::bigint), 0) as max_suffix
+      select coalesce(
+        max(
+          nullif(substring(ref_key from '[0-9]+$'), '')::bigint
+        ),
+        0
+      ) as max_suffix
       from forum_reference_registry
       where owner_id = $1
         and ref_key ~ $2
     `,
-    [ownerId, `^${escapedPrefix}[0-9]+$`, String(rule.prefix || "").length + 1]
+    [ownerId, `^${escapedPrefix}[0-9]+$`]
   );
   const currentMax = Number(result.rows[0]?.max_suffix || 0);
   const nextValue = Math.max(rule.start - 1, currentMax) + 1;
