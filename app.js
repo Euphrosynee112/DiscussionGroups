@@ -5371,13 +5371,13 @@ function setPullIndicator(distance = 0, mode = "idle") {
 
   const progress = Math.max(0, Math.min(distance, 130));
   const isLoading = mode === "loading";
-  const isVisible = progress > 0 || isLoading;
-  const feedOffset = isLoading ? 42 : Math.min(36, progress * 0.32);
-  const scale = 1 + progress / 420;
+  const isVisible = !isLoading && progress > 0;
+  const feedOffset = isLoading ? 0 : Math.min(36, progress * 0.32);
+  const scale = isVisible ? 1 + progress / 420 : 1;
   pullIndicatorEl.style.transform = `scale(${scale})`;
   pullIndicatorEl.classList.toggle("visible", isVisible);
   pullIndicatorEl.classList.toggle("ready", mode === "ready");
-  pullIndicatorEl.classList.toggle("loading", mode === "loading");
+  pullIndicatorEl.classList.toggle("loading", false);
   setFeedPullOffset(feedOffset);
 
   const homeCount = getCurrentSettings().homeCount || DEFAULT_POST_COUNT;
