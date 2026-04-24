@@ -4496,6 +4496,7 @@ function buildForumBatchPublicContextText(
     findCustomTabInSettings(settings, resolvedFeedType),
     generationContext
   );
+  const forumPromptContext = buildForumPromptContext(settings, resolvedFeedType);
   const currentDateTime = typeof formatAwarenessDateTime === "function"
     ? formatAwarenessDateTime(getPromptNow(settings))
     : formatDateTime(getPromptNow(settings));
@@ -4510,11 +4511,20 @@ function buildForumBatchPublicContextText(
       : "",
     `当前日期：${currentDateTime}`,
     hotRefs.length
+      ? "优先级规则：当前热点与同层级即时语境（如 Bubble / INS）是本轮讨论的最高优先主线，默认应成为大多数帖子和回复的核心参考。"
+      : "",
+    hotRefs.length
       ? [
           "当前热点摘要：",
           ...hotRefs.map((reference) => buildForumBatchReferenceLine(reference, 120))
         ].join("\n")
       : "当前热点摘要：无",
+    forumPromptContext.supplementalTopicTexts.length
+      ? [
+          "主导即时讨论语境（与页签热点同级，可共同成为主线）：",
+          ...forumPromptContext.supplementalTopicTexts
+        ].join("\n")
+      : "",
     worldbookRefs.length
       ? [
           "必要世界书参考：",

@@ -394,6 +394,7 @@ const DEFAULT_FORUM_POST_SOURCE_WEIGHTS = {
   latest_discussion: 0.35,
   history_digest: 0.1
 };
+const FORUM_HOT_SOURCE_MIN_RATIO = 0.6;
 const DEFAULT_FORUM_POST_SOURCE_WEIGHTS_NO_HOT = {
   hot_topic: 0,
   latest_discussion: 0.8,
@@ -9587,22 +9588,31 @@ function scoreForumSourceRecency(source = {}) {
   return Math.max(0, 1 - (Date.now() - timeMs) / (14 * 24 * 60 * 60 * 1000));
 }
 
-function selectForumMainSourceForPost(catalog = {}, weights = {}, usedSourceKeys = new Set()) {
+function selectForumMainSourceForPost(
+  catalog = {},
+  weights = {},
+  usedSourceKeys = new Set(),
+  options = {}
+) {
   const hotRefs = normalizeJsonArrayValue(catalog.hotRefs, []);
   const currentRefs = normalizeJsonArrayValue(catalog.currentDiscussionRefs, []);
   const historyRefs = normalizeJsonArrayValue(catalog.historyRefs, [])
     .filter((reference) => !isForumBubbleUserReference(reference));
+  const forceBucket = String(options.forceBucket || "").trim();
   const sourceWeights = hotRefs.length
     ? weights.postSourceWeightsHotPresent
     : weights.postSourceWeightsNoHot;
-  const bucket = pickWeightedForumItem(
-    [
-      { key: "hot_topic", items: hotRefs },
-      { key: "latest_discussion", items: currentRefs },
-      { key: "history_digest", items: historyRefs }
-    ].filter((entry) => entry.items.length),
-    (entry) => sourceWeights?.[entry.key] || 0
-  );
+  const availableBuckets = [
+    { key: "hot_topic", items: hotRefs },
+    { key: "latest_discussion", items: currentRefs },
+    { key: "history_digest", items: historyRefs }
+  ].filter((entry) => entry.items.length);
+  const bucket = forceBucket
+    ? availableBuckets.find((entry) => entry.key === forceBucket) || null
+    : pickWeightedForumItem(
+        availableBuckets,
+        (entry) => sourceWeights?.[entry.key] || 0
+      );
   if (!bucket) {
     return null;
   }
@@ -9678,22 +9688,49 @@ function selectForumPersonaForSource(
 ) {
   const usedPersonaIds = new Set(normalizeJsonArrayValue(options.usedPersonaIds, []));
   const excludedPersonaIds = new Set(normalizeJsonArrayValue(options.excludedPersonaIds, []));
-  const scoreWithFilters = (ignoreUsed = false) =>
+  const excludedLanguageCodes = new Set(
+    normalizeJsonArrayValue(options.excludedLanguageCodes, [])
+      .map((code) => normalizeForumPersonaLanguageCode(code, ""))
+      .filter(Boolean)
+  );
+  const languageUsageCounts = options.languageUsageCounts instanceof Map
+    ? options.languageUsageCounts
+    : new Map();
+  const scoreWithFilters = (ignoreUsed = false, avoidExcludedLanguages = false) =>
     normalizeJsonArrayValue(personas, [])
       .filter((persona) => persona?.isEnabled !== false)
       .filter((persona) => !excludedPersonaIds.has(String(persona.id || "").trim()))
       .filter((persona) => ignoreUsed || !usedPersonaIds.has(String(persona.id || "").trim()))
+      .filter((persona) =>
+        !avoidExcludedLanguages ||
+        !excludedLanguageCodes.has(
+          normalizeForumPersonaLanguageCode(persona.languageCode, "zh")
+        )
+      )
       .map((persona) => ({
         persona,
-        score: scoreForumPersonaForSource(persona, source, generationType, {
-          excludedPersonaIds: [...excludedPersonaIds]
-        })
+        score:
+          scoreForumPersonaForSource(persona, source, generationType, {
+            excludedPersonaIds: [...excludedPersonaIds]
+          }) /
+          (1 + normalizeFiniteNumber(
+            languageUsageCounts.get(
+              normalizeForumPersonaLanguageCode(persona.languageCode, "zh")
+            ),
+            0
+          ) * 0.45)
       }))
       .filter((entry) => Number.isFinite(entry.score))
       .sort((left, right) => right.score - left.score);
-  let scored = scoreWithFilters(false);
+  let scored = scoreWithFilters(false, true);
   if (!scored.length) {
-    scored = scoreWithFilters(true);
+    scored = scoreWithFilters(false, false);
+  }
+  if (!scored.length) {
+    scored = scoreWithFilters(true, true);
+  }
+  if (!scored.length) {
+    scored = scoreWithFilters(true, false);
   }
   if (!scored.length) {
     return null;
@@ -9886,6 +9923,7 @@ function buildForumGenerationBatches(options = {}) {
   const usedPersonaIds = new Set();
   const usedSourceKeys = new Set();
   const usedPostStanceCounts = new Map();
+  const usedLanguageCounts = new Map();
   const excludedReplyPersonaIds = generationType === "replies"
     ? [
         normalizeJsonObjectValue(requestInput.rootPostMetadata, {}).forumPersonaId,
@@ -9897,26 +9935,60 @@ function buildForumGenerationBatches(options = {}) {
   const replyMainSource = generationType === "replies"
     ? selectForumMainSourceForReply(catalog, requestInput)
     : null;
+  const targetHotSourceCount =
+    generationType === "posts" && catalog.hotRefs.length
+      ? clampIntegerValue(
+          Math.ceil(requestedCount * FORUM_HOT_SOURCE_MIN_RATIO),
+          1,
+          requestedCount,
+          1
+        )
+      : 0;
+  let usedHotSourceCount = 0;
   const batches = [];
   let slotIndex = 1;
+  let previousTaskLanguageCode = "";
   batchSizes.forEach((batchSize, batchIndex) => {
     const tasks = [];
+    const batchUsedLanguageCodes = new Set();
     for (let index = 0; index < batchSize; index += 1) {
+      const shouldForceHotSource =
+        generationType === "posts" &&
+        targetHotSourceCount > 0 &&
+        usedHotSourceCount < targetHotSourceCount;
       const mainSource = generationType === "replies"
         ? replyMainSource
-        : selectForumMainSourceForPost(catalog, weightSettings, usedSourceKeys);
+        : selectForumMainSourceForPost(catalog, weightSettings, usedSourceKeys, {
+            forceBucket: shouldForceHotSource ? "hot_topic" : ""
+          });
       if (!mainSource) {
         continue;
       }
+      const excludedLanguageCodes = new Set(batchUsedLanguageCodes);
+      if (previousTaskLanguageCode) {
+        excludedLanguageCodes.add(previousTaskLanguageCode);
+      }
       const persona = selectForumPersonaForSource(personas, mainSource, generationType, {
         usedPersonaIds: [...usedPersonaIds],
-        excludedPersonaIds: excludedReplyPersonaIds
+        excludedPersonaIds: excludedReplyPersonaIds,
+        excludedLanguageCodes: [...excludedLanguageCodes],
+        languageUsageCounts: usedLanguageCounts
       });
       if (!persona) {
         continue;
       }
       usedPersonaIds.add(persona.id);
       usedSourceKeys.add(mainSource.refKey || mainSource.id);
+      if (mainSource.sourceKind === "hot_topic") {
+        usedHotSourceCount += 1;
+      }
+      const personaLanguageCode = normalizeForumPersonaLanguageCode(persona.languageCode, "zh");
+      batchUsedLanguageCodes.add(personaLanguageCode);
+      usedLanguageCounts.set(
+        personaLanguageCode,
+        (usedLanguageCounts.get(personaLanguageCode) || 0) + 1
+      );
+      previousTaskLanguageCode = personaLanguageCode;
       const stanceTask = generationType === "posts"
         ? resolveForumPostStanceTask(persona, mainSource, weightSettings, {
             usedStanceCounts: usedPostStanceCounts,
