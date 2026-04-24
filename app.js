@@ -8960,6 +8960,16 @@ function getGeminiFinishReason(payload) {
   return String(payload?.candidates?.[0]?.finishReason || payload?.candidates?.[0]?.finish_reason || "").trim();
 }
 
+function getGeminiPromptBlockReason(payload) {
+  return String(
+    payload?.promptFeedback?.blockReason ||
+      payload?.promptFeedback?.block_reason ||
+      payload?.prompt_feedback?.blockReason ||
+      payload?.prompt_feedback?.block_reason ||
+      ""
+  ).trim();
+}
+
 function getGeminiSafetyRatings(payload) {
   const promptFeedback = payload?.promptFeedback || payload?.prompt_feedback || null;
   const candidate = payload?.candidates?.[0] || null;
@@ -8982,13 +8992,28 @@ function buildGeminiLogFields(settings, payload) {
     return {};
   }
   const finishReason = getGeminiFinishReason(payload);
+  const blockReason = getGeminiPromptBlockReason(payload);
   const geminiSafetyRatings = getGeminiSafetyRatings(payload);
   return {
     geminiFinishReason: finishReason,
     gemini_finish_reason: finishReason,
+    geminiPromptBlockReason: blockReason,
+    gemini_prompt_block_reason: blockReason,
     geminiSafetyRatings,
     gemini_safety_ratings: geminiSafetyRatings
   };
+}
+
+function buildGeminiBlockedContextMessage(payload, fallbackMessage = "接口请求成功，但响应中没有可解析的文本。") {
+  const blockReason = getGeminiPromptBlockReason(payload);
+  if (blockReason) {
+    return `Gemini 拒绝了当前上下文：${blockReason}`;
+  }
+  const finishReason = getGeminiFinishReason(payload);
+  if (finishReason && finishReason.toUpperCase() !== "STOP") {
+    return `Gemini 未返回可解析内容：${finishReason}`;
+  }
+  return fallbackMessage;
 }
 
 function buildRequestBody(settings, prompt, count = DEFAULT_POST_COUNT, options = {}) {
@@ -9429,6 +9454,7 @@ async function executeDiscussionGenerationBatchRequest(options = {}) {
 
     const message = resolveMessage(payload);
     if (!message) {
+      const blockedMessage = buildGeminiBlockedContextMessage(payload, emptyMessage);
       appendApiLog({
         ...logBase,
         ...buildGeminiLogFields(settings, payload),
@@ -9436,10 +9462,10 @@ async function executeDiscussionGenerationBatchRequest(options = {}) {
         statusCode: response.status,
         responseText: rawResponse,
         responseBody: payload,
-        errorMessage: emptyMessage
+        errorMessage: blockedMessage
       });
       logged = true;
-      throw new Error(emptyMessage);
+      throw new Error(blockedMessage);
     }
 
     const parsedItems = parseItems(message);
@@ -9469,10 +9495,14 @@ async function executeDiscussionGenerationBatchRequest(options = {}) {
 async function requestGeneratedPosts(
   settings,
   feedType = state.activeFeed,
-  count = settings.homeCount || DEFAULT_POST_COUNT
+  count = settings.homeCount || DEFAULT_POST_COUNT,
+  options = {}
 ) {
   const resolvedFeedType = getCurrentContentFeed(feedType);
   const requestEndpoint = resolveApiRequestEndpoint(settings);
+  const resolvedOptions = options && typeof options === "object" ? options : {};
+  const onBatchSuccess =
+    typeof resolvedOptions.onBatchSuccess === "function" ? resolvedOptions.onBatchSuccess : null;
   settings.endpoint = requestEndpoint;
 
   if (!requestEndpoint) {
@@ -9547,6 +9577,19 @@ async function requestGeneratedPosts(
         httpErrorPrefix: "接口请求失败"
       });
       mergedPosts.push(...batchItems);
+      if (onBatchSuccess) {
+        try {
+          await onBatchSuccess({
+            batch,
+            batchItems: [...batchItems],
+            mergedItems: mergedPosts.slice(0, count),
+            mergedCount: Math.min(mergedPosts.length, count),
+            requestedCount: count
+          });
+        } catch (error) {
+          console.warn("[forum] progressive batch render failed", error);
+        }
+      }
     }
     return mergedPosts.slice(0, count);
   }
@@ -10366,25 +10409,17 @@ async function refreshHomeFeed(trigger = "manual") {
   const settings = { ...state.settings };
   const profile = { ...getCurrentProfile() };
   const homeCount = settings.homeCount || DEFAULT_POST_COUNT;
+  const existingFeedSnapshot = [...(state.feeds[targetFeed] || [])];
+  let renderedPartialCount = 0;
+  let hasPartialSuccess = false;
 
-  try {
-    let posts;
-    const sourceLabel = "API";
+  syncAuthoredPostIdentity(profile);
+  refreshAuthoredPostsEngagement(profile);
 
-    try {
-      posts = await requestGeneratedPosts(settings, targetFeed, homeCount);
-    } catch (error) {
-      const errorMessage = error.message || "请求失败";
-      setSettingsStatus(errorMessage, "error");
-      setHomeStatus(`刷新失败：${errorMessage}`, "error");
-      return;
-    }
-
-    syncAuthoredPostIdentity(profile);
-    refreshAuthoredPostsEngagement(profile);
+  const applyProgressiveFeedSnapshot = (rawPosts = []) => {
     const mountedRepostSource = getMountedInsRepostSource(settings, targetFeed);
     const normalizedIncomingPosts = ensureDistinctGeneratedPosts(
-      posts.map((item, index) =>
+      (Array.isArray(rawPosts) ? rawPosts : []).map((item, index) =>
         normalizePost(
           mountedRepostSource
             ? {
@@ -10396,19 +10431,66 @@ async function refreshHomeFeed(trigger = "manual") {
           targetFeed
         )
       ),
-      state.feeds[targetFeed] || [],
+      existingFeedSnapshot,
       settings,
       targetFeed,
       homeCount
     );
+    renderedPartialCount = normalizedIncomingPosts.length;
+    if (!renderedPartialCount) {
+      return [];
+    }
+    hasPartialSuccess = true;
     state.feeds[targetFeed] = mergeFeedHistory(
-      state.feeds[targetFeed] || [],
+      existingFeedSnapshot,
       normalizedIncomingPosts,
       MAX_FEED_ITEMS
     );
     state.discussions[targetFeed] = {};
     persistFeeds(state.feeds);
     persistDiscussions();
+    renderActiveFeed();
+    updateInsightPanel();
+    setHomeStatus(
+      `正在生成“${getFeedLabel(targetFeed)}”讨论流… 已完成 ${renderedPartialCount}/${homeCount} 条`,
+      ""
+    );
+    return normalizedIncomingPosts;
+  };
+
+  try {
+    let posts;
+    const sourceLabel = "API";
+
+    try {
+      posts = await requestGeneratedPosts(settings, targetFeed, homeCount, {
+        onBatchSuccess: ({ mergedItems }) => {
+          applyProgressiveFeedSnapshot(mergedItems);
+        }
+      });
+    } catch (error) {
+      const errorMessage = error.message || "请求失败";
+      if (hasPartialSuccess && renderedPartialCount > 0) {
+        state.lastRefreshAt = `${formatDateTime()} · ${sourceLabel}（部分成功）`;
+        safeSetItem(REFRESH_KEY, state.lastRefreshAt);
+        renderProfilePage();
+        setSettingsStatus(
+          `已先显示 ${renderedPartialCount}/${homeCount} 条讨论；后续批次失败，可直接继续浏览。`,
+          ""
+        );
+        setHomeStatus(
+          `已先显示 ${renderedPartialCount}/${homeCount} 条讨论，后续批次失败：${errorMessage}`,
+          "error"
+        );
+        switchTab("home");
+      } else {
+        setSettingsStatus(errorMessage, "error");
+        setHomeStatus(`刷新失败：${errorMessage}`, "error");
+      }
+      return;
+    }
+
+    applyProgressiveFeedSnapshot(posts);
     state.lastRefreshAt = `${formatDateTime()} · ${sourceLabel}`;
     safeSetItem(REFRESH_KEY, state.lastRefreshAt);
     renderActiveFeed();

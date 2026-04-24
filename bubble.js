@@ -1167,6 +1167,16 @@ function getGeminiFinishReason(payload) {
   return String(payload?.candidates?.[0]?.finishReason || payload?.candidates?.[0]?.finish_reason || "").trim();
 }
 
+function getGeminiPromptBlockReason(payload) {
+  return String(
+    payload?.promptFeedback?.blockReason ||
+      payload?.promptFeedback?.block_reason ||
+      payload?.prompt_feedback?.blockReason ||
+      payload?.prompt_feedback?.block_reason ||
+      ""
+  ).trim();
+}
+
 function getGeminiSafetyRatings(payload) {
   const promptFeedback = payload?.promptFeedback || payload?.prompt_feedback || null;
   const candidate = payload?.candidates?.[0] || null;
@@ -1189,13 +1199,28 @@ function buildGeminiLogFields(settings, payload) {
     return {};
   }
   const finishReason = getGeminiFinishReason(payload);
+  const blockReason = getGeminiPromptBlockReason(payload);
   const geminiSafetyRatings = getGeminiSafetyRatings(payload);
   return {
     geminiFinishReason: finishReason,
     gemini_finish_reason: finishReason,
+    geminiPromptBlockReason: blockReason,
+    gemini_prompt_block_reason: blockReason,
     geminiSafetyRatings,
     gemini_safety_ratings: geminiSafetyRatings
   };
+}
+
+function buildGeminiBlockedContextMessage(payload, fallbackMessage = "接口请求成功，但响应中没有可解析的文本。") {
+  const blockReason = getGeminiPromptBlockReason(payload);
+  if (blockReason) {
+    return `Gemini 拒绝了当前上下文：${blockReason}`;
+  }
+  const finishReason = getGeminiFinishReason(payload);
+  if (finishReason && finishReason.toUpperCase() !== "STOP") {
+    return `Gemini 未返回可解析内容：${finishReason}`;
+  }
+  return fallbackMessage;
 }
 
 function resolveMessage(payload) {
@@ -1426,6 +1451,10 @@ async function requestJsonArrayText(settings, prompt, count = FAN_DETAIL_REPLY_C
 
     const message = resolveMessage(payload);
     if (!message) {
+      const blockedMessage = buildGeminiBlockedContextMessage(
+        payload,
+        "接口请求成功，但响应中没有可解析的文本。"
+      );
       appendApiLog({
         ...logBase,
         ...buildGeminiLogFields(settings, payload),
@@ -1433,10 +1462,10 @@ async function requestJsonArrayText(settings, prompt, count = FAN_DETAIL_REPLY_C
         statusCode: response.status,
         responseText: rawResponse,
         responseBody: payload,
-        errorMessage: "接口请求成功，但响应中没有可解析的文本。"
+        errorMessage: blockedMessage
       });
       logged = true;
-      throw new Error("接口请求成功，但响应中没有可解析的文本。");
+      throw new Error(blockedMessage);
     }
 
     appendApiLog({
