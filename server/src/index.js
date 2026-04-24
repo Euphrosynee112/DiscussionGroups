@@ -6160,6 +6160,45 @@ function normalizeForumBackgroundTextArray(value = [], fallback = []) {
   );
 }
 
+function normalizeForumMountedEntityRefs(value = []) {
+  const rawItems = normalizeJsonArrayValue(value, []);
+  return Array.from(
+    new Set(
+      rawItems
+        .map((item) => {
+          if (typeof item === "string") {
+            const text = String(item || "").trim();
+            if (text === "user" || text === "user:self") {
+              return "user:self";
+            }
+            if (text.startsWith("contact:")) {
+              const contactId = text.slice("contact:".length).trim();
+              return contactId ? `contact:${contactId}` : "";
+            }
+            return "";
+          }
+          const source = normalizeJsonObjectValue(item, {});
+          const entityType = String(
+            source.entityType || source.type || source.refType || source.kind || ""
+          )
+            .trim()
+            .toLowerCase();
+          const entityId = String(
+            source.entityId || source.id || source.refId || source.contactId || ""
+          ).trim();
+          if (entityType === "user") {
+            return "user:self";
+          }
+          if (entityType === "contact" && entityId) {
+            return `contact:${entityId}`;
+          }
+          return "";
+        })
+        .filter(Boolean)
+    )
+  );
+}
+
 function normalizeForumTabDomainType(value = "", fallback = "general") {
   const normalized = String(value || "").trim().toLowerCase();
   return FORUM_TAB_DOMAIN_TYPES.has(normalized) ? normalized : fallback;
@@ -6197,6 +6236,19 @@ function normalizeForumTabRecord(tab = {}, index = 0) {
     ),
     fandomTargetId: String(source.fandomTargetId || source.contactId || "").trim(),
     fandomDisplayName: String(source.fandomDisplayName || source.fandomTargetName || "").trim(),
+    mountedEntityRefs: normalizeForumMountedEntityRefs(
+      source.mountedEntityRefs ||
+        source.mountedEntities ||
+        source.publicEntityRefs ||
+        source.entityRefs ||
+        []
+    ),
+    autoDetectMentionedContacts:
+      typeof source.autoDetectMentionedContacts === "boolean"
+        ? source.autoDetectMentionedContacts
+        : typeof source.mentionedContactsEnabled === "boolean"
+          ? source.mentionedContactsEnabled
+          : true,
     worldbookIds: normalizeForumBackgroundTextArray(
       source.worldbookIds ||
         source.mountedWorldbookIds ||
@@ -7851,6 +7903,8 @@ async function buildForumBackgroundSourceBundle(
       forumDomainType: tab.forumDomainType,
       fandomTargetId: tab.fandomTargetId,
       fandomDisplayName: tab.fandomDisplayName,
+      mountedEntityRefs: tab.mountedEntityRefs,
+      autoDetectMentionedContacts: tab.autoDetectMentionedContacts,
       discussionText: contentState?.promptTexts?.discussion || "",
       hotTopic: contentState?.promptTexts?.hotTopic || ""
     },
@@ -7878,6 +7932,8 @@ async function buildForumBackgroundSourceBundle(
       forumDomainType: tab.forumDomainType,
       fandomTargetId: tab.fandomTargetId,
       fandomDisplayName: tab.fandomDisplayName,
+      mountedEntityRefs: tab.mountedEntityRefs,
+      autoDetectMentionedContacts: tab.autoDetectMentionedContacts,
       discussionText: contentState?.promptTexts?.discussion || "",
       hotTopic: contentState?.promptTexts?.hotTopic || "",
       counts: contentState?.counts || {

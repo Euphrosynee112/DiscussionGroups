@@ -255,6 +255,25 @@
                 <small>默认 15 条，只记录并参考用户自己发出的 Bubble 消息；历史仅作弱背景。</small>
               </label>
 
+              <section class="bubble-sheet-field">
+                <div class="bubble-sheet-field__head">
+                  <span>挂载公共人物</span>
+                  <small>Bubble 比论坛更偏粉丝私域；这里挂载的人物会被默认当作这群粉丝长期熟悉的对象。</small>
+                </div>
+                <div id="bubble-chat-mounted-entity-list" class="bubble-sheet-worldbook-list"></div>
+              </section>
+
+              <label class="bubble-sheet-toggle">
+                <div class="bubble-sheet-toggle__body">
+                  <strong>自动识别提到的联系人</strong>
+                  <p>只按联系人名称匹配；识别到的人物只作弱参考，允许有人只听过名字、有人会顺手解释。</p>
+                </div>
+                <span class="bubble-sheet-switch">
+                  <input id="bubble-chat-auto-detect-contacts-input" type="checkbox" />
+                  <span class="bubble-sheet-switch__slider"></span>
+                </span>
+              </label>
+
               <label class="bubble-sheet-toggle">
                 <div class="bubble-sheet-toggle__body">
                   <strong>世界书挂载</strong>

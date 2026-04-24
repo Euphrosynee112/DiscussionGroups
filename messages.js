@@ -6798,7 +6798,9 @@ function normalizeForumCustomTabs(tabs = []) {
           insFocusMinutes: DEFAULT_CONTEXT_FOCUS_MINUTES,
           forumDomainType: "general",
           fandomTargetId: "",
-          fandomDisplayName: ""
+          fandomDisplayName: "",
+          mountedEntityRefs: [],
+          autoDetectMentionedContacts: true
         };
       }
       if (!tab || typeof tab !== "object") {
@@ -6874,7 +6876,19 @@ function normalizeForumCustomTabs(tabs = []) {
           "general"
         ),
         fandomTargetId: String(tab.fandomTargetId || tab.contactId || "").trim(),
-        fandomDisplayName: String(tab.fandomDisplayName || tab.fandomTargetName || "").trim()
+        fandomDisplayName: String(tab.fandomDisplayName || tab.fandomTargetName || "").trim(),
+        mountedEntityRefs: normalizeMountedIds(
+          tab.mountedEntityRefs ||
+            tab.mountedEntities ||
+            tab.publicEntityRefs ||
+            []
+        ),
+        autoDetectMentionedContacts:
+          typeof tab.autoDetectMentionedContacts === "boolean"
+            ? tab.autoDetectMentionedContacts
+            : typeof tab.mentionedContactsEnabled === "boolean"
+              ? tab.mentionedContactsEnabled
+              : true
       };
     })
     .filter(Boolean)
@@ -6894,7 +6908,12 @@ function normalizeForumCustomTabs(tabs = []) {
       insFocusMinutes: normalizeContextFocusMinutes(tab.insFocusMinutes),
       forumDomainType: normalizeForumTabDomainType(tab.forumDomainType, "general"),
       fandomTargetId: String(tab.fandomTargetId || "").trim(),
-      fandomDisplayName: String(tab.fandomDisplayName || "").trim()
+      fandomDisplayName: String(tab.fandomDisplayName || "").trim(),
+      mountedEntityRefs: normalizeMountedIds(tab.mountedEntityRefs || []),
+      autoDetectMentionedContacts:
+        typeof tab.autoDetectMentionedContacts === "boolean"
+          ? tab.autoDetectMentionedContacts
+          : true
     }));
 }
 
@@ -9211,7 +9230,12 @@ function normalizeCustomTabs(tabs = []) {
           bubbleFocusEnabled: false,
           bubbleFocusMinutes: DEFAULT_CONTEXT_FOCUS_MINUTES,
           insFocusEnabled: false,
-          insFocusMinutes: DEFAULT_CONTEXT_FOCUS_MINUTES
+          insFocusMinutes: DEFAULT_CONTEXT_FOCUS_MINUTES,
+          mountedEntityRefs: [],
+          autoDetectMentionedContacts: true,
+          forumDomainType: "general",
+          fandomTargetId: "",
+          fandomDisplayName: ""
         };
       }
       if (!tab || typeof tab !== "object") {
@@ -9280,15 +9304,38 @@ function normalizeCustomTabs(tabs = []) {
             tab.insMinutes ||
             tab.profilePostFocusMinutes ||
             tab.profileFocusWindow
-        )
+        ),
+        mountedEntityRefs: normalizeMountedIds(
+          tab.mountedEntityRefs ||
+            tab.mountedEntities ||
+            tab.publicEntityRefs ||
+            []
+        ),
+        autoDetectMentionedContacts:
+          typeof tab.autoDetectMentionedContacts === "boolean"
+            ? tab.autoDetectMentionedContacts
+            : typeof tab.mentionedContactsEnabled === "boolean"
+              ? tab.mentionedContactsEnabled
+              : true,
+        forumDomainType: normalizeForumTabDomainType(
+          tab.forumDomainType || tab.domainType || tab.tabDomainType,
+          "general"
+        ),
+        fandomTargetId: String(tab.fandomTargetId || tab.contactId || "").trim(),
+        fandomDisplayName: String(tab.fandomDisplayName || tab.fandomTargetName || "").trim()
       };
     })
     .filter(Boolean)
     .map((tab) => ({
       ...tab,
       worldbookIds: normalizeMountedIds(tab.worldbookIds || []),
+      mountedEntityRefs: normalizeMountedIds(tab.mountedEntityRefs || []),
       bubbleFocusMinutes: normalizeContextFocusMinutes(tab.bubbleFocusMinutes),
-      insFocusMinutes: normalizeContextFocusMinutes(tab.insFocusMinutes)
+      insFocusMinutes: normalizeContextFocusMinutes(tab.insFocusMinutes),
+      autoDetectMentionedContacts:
+        typeof tab.autoDetectMentionedContacts === "boolean"
+          ? tab.autoDetectMentionedContacts
+          : true
     }));
 }
 

@@ -264,6 +264,10 @@ const customTabDiscussionItemsEditorEl = document.querySelector("#custom-tab-dis
 const customTabHotTopicItemsEditorEl = document.querySelector("#custom-tab-hot-topic-items-editor");
 const customTabTimeAwarenessInput = document.querySelector("#custom-tab-time-awareness-input");
 const customTabWorldbookListEl = document.querySelector("#custom-tab-worldbook-list");
+const customTabMountedEntityListEl = document.querySelector("#custom-tab-mounted-entity-list");
+const customTabAutoDetectContactsInput = document.querySelector(
+  "#custom-tab-auto-detect-contacts-input"
+);
 const customTabBubbleFocusEnabledInput = document.querySelector(
   "#custom-tab-bubble-focus-enabled-input"
 );
@@ -841,6 +845,51 @@ function normalizeMountedIds(value) {
   return single ? [single] : [];
 }
 
+function normalizeMountedEntityRefs(value) {
+  const rawItems = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? [value]
+      : value && typeof value === "object"
+        ? [value]
+        : [];
+  const normalized = rawItems
+    .map((item) => {
+      if (typeof item === "string") {
+        const text = String(item || "").trim();
+        if (!text) {
+          return "";
+        }
+        if (text === "user" || text === "user:self") {
+          return "user:self";
+        }
+        if (text.startsWith("contact:")) {
+          const contactId = text.slice("contact:".length).trim();
+          return contactId ? `contact:${contactId}` : "";
+        }
+        return "";
+      }
+      const source = item && typeof item === "object" ? item : {};
+      const entityType = String(
+        source.entityType || source.type || source.refType || source.kind || ""
+      )
+        .trim()
+        .toLowerCase();
+      const entityId = String(
+        source.entityId || source.id || source.refId || source.contactId || ""
+      ).trim();
+      if (entityType === "user") {
+        return "user:self";
+      }
+      if (entityType === "contact" && entityId) {
+        return `contact:${entityId}`;
+      }
+      return "";
+    })
+    .filter(Boolean);
+  return [...new Set(normalized)];
+}
+
 function normalizeContextFocusMinutes(value, fallback = DEFAULT_CONTEXT_FOCUS_MINUTES) {
   return Math.min(
     MAX_CONTEXT_FOCUS_MINUTES,
@@ -906,7 +955,9 @@ function normalizeCustomTabs(tabs = []) {
           insFocusMinutes: DEFAULT_CONTEXT_FOCUS_MINUTES,
           forumDomainType: "general",
           fandomTargetId: "",
-          fandomDisplayName: ""
+          fandomDisplayName: "",
+          mountedEntityRefs: [],
+          autoDetectMentionedContacts: true
         };
       }
       if (!tab || typeof tab !== "object") {
@@ -982,7 +1033,20 @@ function normalizeCustomTabs(tabs = []) {
           "general"
         ),
         fandomTargetId: String(tab.fandomTargetId || tab.contactId || "").trim(),
-        fandomDisplayName: String(tab.fandomDisplayName || tab.fandomTargetName || "").trim()
+        fandomDisplayName: String(tab.fandomDisplayName || tab.fandomTargetName || "").trim(),
+        mountedEntityRefs: normalizeMountedEntityRefs(
+          tab.mountedEntityRefs ||
+            tab.mountedEntities ||
+            tab.publicEntityRefs ||
+            tab.entityRefs ||
+            []
+        ),
+        autoDetectMentionedContacts:
+          typeof tab.autoDetectMentionedContacts === "boolean"
+            ? tab.autoDetectMentionedContacts
+            : typeof tab.mentionedContactsEnabled === "boolean"
+              ? tab.mentionedContactsEnabled
+              : true
       };
     })
     .filter(Boolean)
@@ -1003,7 +1067,12 @@ function normalizeCustomTabs(tabs = []) {
       insFocusMinutes: normalizeContextFocusMinutes(tab.insFocusMinutes),
       forumDomainType: normalizeForumTabDomainType(tab.forumDomainType, "general"),
       fandomTargetId: String(tab.fandomTargetId || "").trim(),
-      fandomDisplayName: String(tab.fandomDisplayName || "").trim()
+      fandomDisplayName: String(tab.fandomDisplayName || "").trim(),
+      mountedEntityRefs: normalizeMountedEntityRefs(tab.mountedEntityRefs || []),
+      autoDetectMentionedContacts:
+        typeof tab.autoDetectMentionedContacts === "boolean"
+          ? tab.autoDetectMentionedContacts
+          : true
     }));
   const pinnedTab = normalizedTabs.find((tab) => tab.pinned) || null;
   if (!pinnedTab) {
@@ -1051,6 +1120,159 @@ function loadStoredMessageContacts() {
   } catch (_error) {
     return [];
   }
+}
+
+function getStoredForumUserPublicEntity() {
+  const profile = loadProfile();
+  const displayName =
+    String(profile.username || profile.userId || "用户本人").trim() || "用户本人";
+  const publicPersona = String(profile.personaPrompt || "").trim();
+  return publicPersona
+    ? {
+        ref: "user:self",
+        entityType: "user",
+        entityId: "self",
+        displayName,
+        publicPersona
+      }
+    : null;
+}
+
+function getStoredForumContactEntities() {
+  return loadStoredMessageContacts()
+    .map((contact) => ({
+      ref: `contact:${String(contact.id || "").trim()}`,
+      entityType: "contact",
+      entityId: String(contact.id || "").trim(),
+      displayName: String(contact.name || "").trim(),
+      publicPersona: String(contact.personaPrompt || "").trim()
+    }))
+    .filter((contact) => contact.entityId && contact.displayName && contact.publicPersona);
+}
+
+function resolveMountedForumEntities(refs = [], options = {}) {
+  const resolvedOptions = options && typeof options === "object" ? options : {};
+  const excludedContactIds = new Set(
+    normalizeMountedIds(resolvedOptions.excludedContactIds || [])
+  );
+  const contactMap = new Map(
+    getStoredForumContactEntities().map((entity) => [entity.entityId, entity])
+  );
+  return normalizeMountedEntityRefs(refs)
+    .map((ref) => {
+      if (ref === "user:self") {
+        return getStoredForumUserPublicEntity();
+      }
+      if (!ref.startsWith("contact:")) {
+        return null;
+      }
+      const contactId = ref.slice("contact:".length).trim();
+      if (!contactId || excludedContactIds.has(contactId)) {
+        return null;
+      }
+      return contactMap.get(contactId) || null;
+    })
+    .filter(Boolean);
+}
+
+function buildForumMountedEntityPromptText(entities = [], options = {}) {
+  const resolvedOptions = options && typeof options === "object" ? options : {};
+  const resolvedEntities = Array.isArray(entities) ? entities : [];
+  if (!resolvedEntities.length) {
+    return "";
+  }
+  const intro =
+    String(resolvedOptions.intro || "").trim() ||
+    "本页签默认讨论的公开人物背景（默认这个论坛里大多数人都知道，不需要从零解释）：";
+  return [
+    intro,
+    ...resolvedEntities.map((entity, index) =>
+      `${index + 1}. ${entity.displayName}：${entity.publicPersona}`
+    )
+  ].join("\n");
+}
+
+function extractForumMentionedContacts(textSections = [], options = {}) {
+  const resolvedOptions = options && typeof options === "object" ? options : {};
+  const excludedContactIds = new Set(
+    normalizeMountedIds(resolvedOptions.excludedContactIds || [])
+  );
+  const normalizedTexts = normalizeMountedIds(textSections)
+    .map((text) => String(text || "").trim())
+    .filter(Boolean);
+  if (!normalizedTexts.length) {
+    return [];
+  }
+  const contactEntities = getStoredForumContactEntities();
+  const ambiguousNames = new Set();
+  const nameCounts = new Map();
+  contactEntities.forEach((entity) => {
+    const key = String(entity.displayName || "").trim();
+    if (!key) {
+      return;
+    }
+    nameCounts.set(key, (nameCounts.get(key) || 0) + 1);
+  });
+  nameCounts.forEach((count, name) => {
+    if (count > 1) {
+      ambiguousNames.add(name);
+    }
+  });
+  return contactEntities
+    .filter((entity) => !excludedContactIds.has(entity.entityId))
+    .filter((entity) => !ambiguousNames.has(entity.displayName))
+    .map((entity) => ({
+      ...entity,
+      matchCount: normalizedTexts.reduce(
+        (total, text) => total + (text.includes(entity.displayName) ? 1 : 0),
+        0
+      )
+    }))
+    .filter((entity) => entity.matchCount > 0)
+    .sort(
+      (left, right) => right.matchCount - left.matchCount || left.displayName.localeCompare(right.displayName)
+    )
+    .slice(0, 3);
+}
+
+function buildForumMentionedContactsPromptText(tab = null, options = {}) {
+  const resolvedTab = tab && typeof tab === "object" ? tab : null;
+  const resolvedOptions = options && typeof options === "object" ? options : {};
+  const autoDetect =
+    resolvedOptions.force === true ||
+    (resolvedTab
+      ? resolvedTab.autoDetectMentionedContacts !== false
+      : resolvedOptions.autoDetectMentionedContacts !== false);
+  if (!autoDetect) {
+    return "";
+  }
+  const fandomTargetId = String(resolvedTab?.fandomTargetId || "").trim();
+  const textSections = [
+    String(resolvedTab?.discussionText || resolvedTab?.text || "").trim(),
+    String(resolvedTab?.hotTopic || "").trim(),
+    ...normalizeMountedIds(resolvedOptions.supplementalTexts || [])
+  ];
+  const mountedEntities = resolveMountedForumEntities(resolvedTab?.mountedEntityRefs || [], {
+    excludedContactIds: fandomTargetId ? [fandomTargetId] : []
+  });
+  const mentionedContacts = extractForumMentionedContacts(textSections, {
+    excludedContactIds: [
+      ...mountedEntities
+        .filter((entity) => entity.entityType === "contact")
+        .map((entity) => entity.entityId),
+      ...(fandomTargetId ? [fandomTargetId] : [])
+    ]
+  });
+  if (!mentionedContacts.length) {
+    return "";
+  }
+  const intro =
+    String(resolvedOptions.intro || "").trim() ||
+    "当前讨论里提到了这些人物（弱参考，不保证每个人都熟；允许有人直接问“这是谁来着？”）：";
+  return [
+    intro,
+    ...mentionedContacts.map((entity, index) => `${index + 1}. ${entity.displayName}：${entity.publicPersona}`)
+  ].join("\n");
 }
 
 function getForumFandomContactForTab(tab = null) {
@@ -1427,7 +1649,8 @@ function buildCustomTabSourceText(tab, options = {}) {
   const {
     includeAudience = true,
     includeDiscussionText = true,
-    includeHotTopic = true
+    includeHotTopic = true,
+    supplementalTexts = []
   } = options;
   const sections = [];
   const audience = String(tab.audience || "").trim();
@@ -1435,20 +1658,35 @@ function buildCustomTabSourceText(tab, options = {}) {
   const hotTopic = String(tab.hotTopic || "").trim();
   const fandomPublicPersona = String(tab.fandomPublicPersona || "").trim();
   const fandomDisplayName = String(tab.fandomDisplayName || "").trim();
+  const fandomTargetId = String(tab.fandomTargetId || "").trim();
+  const mountedEntitiesText = buildForumMountedEntityPromptText(
+    resolveMountedForumEntities(tab.mountedEntityRefs || [], {
+      excludedContactIds: fandomTargetId ? [fandomTargetId] : []
+    })
+  );
+  const mentionedContactsText = buildForumMentionedContactsPromptText(tab, {
+    supplementalTexts
+  });
 
   if (includeAudience && audience) {
     sections.push(`论坛活跃用户定位：${audience}`);
   }
   if (fandomPublicPersona) {
     sections.push(
-      `该页签对应角色的公共人设${fandomDisplayName ? `（${fandomDisplayName}）` : ""}：${fandomPublicPersona}`
+        `该页签对应角色的公共人设${fandomDisplayName ? `（${fandomDisplayName}）` : ""}：${fandomPublicPersona}`
     );
+  }
+  if (mountedEntitiesText) {
+    sections.push(mountedEntitiesText);
   }
   if (includeDiscussionText && discussionText) {
     sections.push(`论坛长期讨论背景：${discussionText}`);
   }
   if (includeHotTopic && hotTopic) {
     sections.push(`论坛当前核心热点：${hotTopic}`);
+  }
+  if (mentionedContactsText) {
+    sections.push(mentionedContactsText);
   }
 
   return sections.join("\n");
@@ -4502,6 +4740,19 @@ function buildForumBatchPublicContextText(
     : formatDateTime(getPromptNow(settings));
   const hotRefs = Array.isArray(options.hotRefs) ? options.hotRefs : [];
   const worldbookRefs = Array.isArray(generationContext?.worldbookRefs) ? generationContext.worldbookRefs : [];
+  const fandomTargetId = String(customTab?.fandomTargetId || "").trim();
+  const mountedEntitiesText = buildForumMountedEntityPromptText(
+    resolveMountedForumEntities(customTab?.mountedEntityRefs || [], {
+      excludedContactIds: fandomTargetId ? [fandomTargetId] : []
+    }),
+    {
+      intro: "已挂载的公开人物背景（默认这个论坛里大多数人都认识这些人，不需要从零介绍）："
+    }
+  );
+  const mentionedContactsText = buildForumMentionedContactsPromptText(customTab, {
+    supplementalTexts: forumPromptContext.supplementalTopicTexts,
+    intro: "当前讨论里顺带提到的人物（弱参考，不保证每个论坛用户都熟；允许有人直接问“这是谁？”）："
+  });
   const lines = [
     "<public_context>",
     `当前论坛：${String(customTab?.name || getFeedLabel(resolvedFeedType) || "论坛").trim()}`,
@@ -4509,6 +4760,7 @@ function buildForumBatchPublicContextText(
     customTab?.fandomPublicPersona
       ? `对应角色公共人设：${String(customTab.fandomPublicPersona || "").trim()}`
       : "",
+    mountedEntitiesText,
     `当前日期：${currentDateTime}`,
     hotRefs.length
       ? "优先级规则：当前热点与同层级即时语境（如 Bubble / INS）是本轮讨论的最高优先主线，默认应成为大多数帖子和回复的核心参考。"
@@ -4531,6 +4783,7 @@ function buildForumBatchPublicContextText(
           ...worldbookRefs.map((reference) => buildForumBatchReferenceLine(reference, 160))
         ].join("\n")
       : "",
+    mentionedContactsText,
     generationContext?.promptBlocks?.unknownBoundaryText
       ? generationContext.promptBlocks.unknownBoundaryText
       : "",
@@ -4679,7 +4932,9 @@ function buildPrompt(
   const runtimeCustomTab = resolvePromptRuntimeCustomTab(customTab, generationContext);
   const forumPromptContext = buildForumPromptContext(settings, resolvedFeedType);
   const feedSource = runtimeCustomTab
-    ? buildCustomTabSourceText(runtimeCustomTab).trim()
+    ? buildCustomTabSourceText(runtimeCustomTab, {
+        supplementalTexts: forumPromptContext.supplementalTopicTexts
+      }).trim()
     : buildFeedSourceText(settings, resolvedFeedType).trim();
   const forumSettingText = feedSource
     ? isBatchPrompt
@@ -4829,6 +5084,13 @@ function resolvePromptRuntimeCustomTab(customTab = null, generationContext = nul
     fandomTargetId: runtimeTab.fandomTargetId || baseTab.fandomTargetId,
     fandomDisplayName: runtimeTab.fandomDisplayName || baseTab.fandomDisplayName,
     fandomPublicPersona: runtimeTab.fandomPublicPersona || baseTab.fandomPublicPersona || "",
+    mountedEntityRefs: normalizeMountedEntityRefs(
+      runtimeTab.mountedEntityRefs || baseTab.mountedEntityRefs || []
+    ),
+    autoDetectMentionedContacts:
+      typeof runtimeTab.autoDetectMentionedContacts === "boolean"
+        ? runtimeTab.autoDetectMentionedContacts
+        : baseTab.autoDetectMentionedContacts !== false,
     discussionText: String(runtimeTab.discussionText || baseTab.discussionText || "").trim(),
     hotTopic: String(runtimeTab.hotTopic || baseTab.hotTopic || "").trim()
   };
@@ -4854,7 +5116,8 @@ function buildReplyPrompt(
   const promptTitle = parentReply ? "楼中楼回复" : "主楼回复";
   const feedSourceText = runtimeCustomTab
     ? buildCustomTabSourceText(runtimeCustomTab, {
-        includeAudience: false
+        includeAudience: false,
+        supplementalTexts: forumPromptContext.supplementalTopicTexts
       }).trim()
     : buildFeedSourceText(settings, resolvedFeedType).trim();
   const forumSettingText = feedSourceText
@@ -7160,6 +7423,45 @@ function renderCustomTabFormWorldbookSelector(selectedIds = []) {
     .join("");
 }
 
+function renderCustomTabMountedEntitySelector(selectedRefs = []) {
+  if (!customTabMountedEntityListEl) {
+    return;
+  }
+  const selectedRefSet = new Set(normalizeMountedEntityRefs(selectedRefs));
+  const userEntity = getStoredForumUserPublicEntity();
+  const options = [
+    userEntity
+      ? {
+          ref: userEntity.ref,
+          label: userEntity.displayName,
+          meta: "用户公共人设"
+        }
+      : null,
+    ...getStoredForumContactEntities().map((entity) => ({
+      ref: entity.ref,
+      label: entity.displayName,
+      meta: "联系人公共人设"
+    }))
+  ].filter(Boolean);
+  if (!options.length) {
+    customTabMountedEntityListEl.innerHTML =
+      '<div class="custom-tab-mount-empty">暂无可挂载人物；可先去 Message → 联系人 或 我 页面补充公共人设。</div>';
+    return;
+  }
+  customTabMountedEntityListEl.innerHTML = options
+    .map((option) => `
+      <label class="custom-tab-mount-option">
+        <input
+          type="checkbox"
+          value="${escapeHtml(option.ref)}"
+          ${selectedRefSet.has(option.ref) ? "checked" : ""}
+        />
+        <span>${escapeHtml(option.label)}<small>${escapeHtml(option.meta)}</small></span>
+      </label>
+    `)
+    .join("");
+}
+
 function updateCustomTabFormAdvancedState() {
   if (customTabBubbleFocusMinutesInput) {
     customTabBubbleFocusMinutesInput.disabled = !Boolean(customTabBubbleFocusEnabledInput?.checked);
@@ -7859,6 +8161,11 @@ function getCurrentCustomTabFormDraft() {
         .map((input) => (input instanceof HTMLInputElement ? String(input.value || "").trim() : ""))
         .filter(Boolean)
     : [];
+  const mountedEntityRefs = customTabMountedEntityListEl
+    ? [...customTabMountedEntityListEl.querySelectorAll("input[type='checkbox']:checked")]
+        .map((input) => (input instanceof HTMLInputElement ? String(input.value || "").trim() : ""))
+        .filter(Boolean)
+    : [];
   const draftItems = sortCustomTabContentItems(getCustomTabContentDraftState().items || []);
   const discussionItems = draftItems
     .filter((item) => item.bucket === "discussion")
@@ -7873,6 +8180,8 @@ function getCurrentCustomTabFormDraft() {
     text: buildCustomTabNumberedContentText(discussionItems),
     timeAwareness: Boolean(customTabTimeAwarenessInput?.checked),
     worldbookIds,
+    mountedEntityRefs,
+    autoDetectMentionedContacts: customTabAutoDetectContactsInput?.checked !== false,
     bubbleFocusEnabled: Boolean(customTabBubbleFocusEnabledInput?.checked),
     bubbleFocusMinutes: normalizeContextFocusMinutes(customTabBubbleFocusMinutesInput?.value),
     insFocusEnabled: Boolean(customTabInsFocusEnabledInput?.checked),
@@ -7904,6 +8213,10 @@ function resetCustomTabForm(preserveStatus = false) {
     customTabTimeAwarenessInput.checked = false;
   }
   renderCustomTabFormWorldbookSelector([]);
+  renderCustomTabMountedEntitySelector([]);
+  if (customTabAutoDetectContactsInput) {
+    customTabAutoDetectContactsInput.checked = true;
+  }
   if (customTabBubbleFocusEnabledInput) {
     customTabBubbleFocusEnabledInput.checked = false;
   }
@@ -8003,6 +8316,10 @@ function startCustomTabEdit(tabId) {
     customTabTimeAwarenessInput.checked = Boolean(tab.timeAwareness);
   }
   renderCustomTabFormWorldbookSelector(tab.worldbookIds || []);
+  renderCustomTabMountedEntitySelector(tab.mountedEntityRefs || []);
+  if (customTabAutoDetectContactsInput) {
+    customTabAutoDetectContactsInput.checked = tab.autoDetectMentionedContacts !== false;
+  }
   if (customTabBubbleFocusEnabledInput) {
     customTabBubbleFocusEnabledInput.checked = Boolean(tab.bubbleFocusEnabled);
   }
@@ -8128,6 +8445,7 @@ function renderCustomTabsManager() {
   const editingTab = state.customTabEditingId ? getCustomTab(state.customTabEditingId) : null;
   const currentDraft = getCurrentCustomTabFormDraft();
   renderCustomTabFormWorldbookSelector(currentDraft?.worldbookIds || []);
+  renderCustomTabMountedEntitySelector(currentDraft?.mountedEntityRefs || []);
   renderCustomTabContentEditor();
 
   if (!state.customTabs.length) {
@@ -8192,6 +8510,7 @@ function renderCustomTabsManager() {
     customTabNameInput,
     customTabAudienceInput,
     customTabTimeAwarenessInput,
+    customTabAutoDetectContactsInput,
     customTabBubbleFocusEnabledInput,
     customTabBubbleFocusMinutesInput,
     customTabInsFocusEnabledInput,
@@ -8204,6 +8523,15 @@ function renderCustomTabsManager() {
   });
   if (customTabWorldbookListEl) {
     customTabWorldbookListEl
+      .querySelectorAll("input[type='checkbox']")
+      .forEach((input) => {
+        if (input instanceof HTMLInputElement) {
+          input.disabled = disableCreation;
+        }
+      });
+  }
+  if (customTabMountedEntityListEl) {
+    customTabMountedEntityListEl
       .querySelectorAll("input[type='checkbox']")
       .forEach((input) => {
         if (input instanceof HTMLInputElement) {

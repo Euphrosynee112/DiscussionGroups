@@ -732,7 +732,10 @@
       description: "为一轮 Bubble 生成粉丝反应",
       sections: {
         context_library: [
+          createDynamicItem("bubble_private_domain", "私域氛围", "读取 Bubble 私域提示"),
           createDynamicItem("worldbook_context", "世界书背景", "读取挂载世界书"),
+          createDynamicItem("mounted_public_entities", "挂载人物背景", "读取 Bubble 默认熟悉的人物"),
+          createDynamicItem("mentioned_contacts_context", "提到的人物", "读取当前语境提到的人物"),
           createDynamicItem("hot_topics_context", "共同关注话题", "读取热点挂载"),
           createDynamicItem("recent_user_history", "最近用户发言背景", "读取最近 Bubble 用户发言"),
           createDynamicItem("message_intro", "Bubble 消息前缀", "按消息条数生成"),

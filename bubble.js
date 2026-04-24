@@ -8,6 +8,7 @@ const SETTINGS_KEY = "x_style_generator_settings_v2";
 const PROFILE_KEY = "x_style_generator_profile_v1";
 const PROFILE_POSTS_KEY = "x_style_generator_profile_posts_v1";
 const WORLD_BOOKS_KEY = "x_style_generator_message_worldbooks_v1";
+const MESSAGE_CONTACTS_KEY = "x_style_generator_message_contacts_v1";
 const DIRECT_MESSAGES_KEY = "x_style_generator_direct_messages_v1";
 const BUBBLE_ROOMS_KEY = "x_style_generator_bubble_rooms_v1";
 const BUBBLE_THREADS_KEY = "x_style_generator_bubble_threads_v1";
@@ -37,6 +38,8 @@ const DEFAULT_SETTINGS = {
     hotTopicsIncludeDiscussionText: true,
     hotTopicsIncludeHotTopic: false,
     historyRounds: DEFAULT_BUBBLE_HISTORY_ROUNDS,
+    mountedEntityRefs: [],
+    autoDetectMentionedContacts: true,
     worldbookEnabled: false,
     worldbookIds: []
   }
@@ -234,6 +237,10 @@ const bubbleChatHotTopicsTextInputEl = document.querySelector("#bubble-chat-hot-
 const bubbleChatHotTopicsTopicInputEl = document.querySelector("#bubble-chat-hot-topics-topic-input");
 const bubbleChatHotTopicsWarningEl = document.querySelector("#bubble-chat-hot-topics-warning");
 const bubbleChatHistoryRoundsInputEl = document.querySelector("#bubble-chat-history-rounds-input");
+const bubbleChatMountedEntityListEl = document.querySelector("#bubble-chat-mounted-entity-list");
+const bubbleChatAutoDetectContactsInputEl = document.querySelector(
+  "#bubble-chat-auto-detect-contacts-input"
+);
 const bubbleChatWorldbookInputEl = document.querySelector("#bubble-chat-worldbook-enabled-input");
 const bubbleChatWorldbookListEl = document.querySelector("#bubble-chat-worldbook-list");
 const bubbleChatSettingsStatusEl = document.querySelector("#bubble-chat-settings-status");
@@ -657,6 +664,51 @@ function normalizeMountedIds(value) {
   return single ? [single] : [];
 }
 
+function normalizeMountedEntityRefs(value) {
+  const rawItems = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? [value]
+      : value && typeof value === "object"
+        ? [value]
+        : [];
+  const normalized = rawItems
+    .map((item) => {
+      if (typeof item === "string") {
+        const text = String(item || "").trim();
+        if (!text) {
+          return "";
+        }
+        if (text === "user" || text === "user:self") {
+          return "user:self";
+        }
+        if (text.startsWith("contact:")) {
+          const contactId = text.slice("contact:".length).trim();
+          return contactId ? `contact:${contactId}` : "";
+        }
+        return "";
+      }
+      const source = item && typeof item === "object" ? item : {};
+      const entityType = String(
+        source.entityType || source.type || source.refType || source.kind || ""
+      )
+        .trim()
+        .toLowerCase();
+      const entityId = String(
+        source.entityId || source.id || source.refId || source.contactId || ""
+      ).trim();
+      if (entityType === "user") {
+        return "user:self";
+      }
+      if (entityType === "contact" && entityId) {
+        return `contact:${entityId}`;
+      }
+      return "";
+    })
+    .filter(Boolean);
+  return [...new Set(normalized)];
+}
+
 function normalizeBubblePromptSettings(source = {}) {
   const resolved = source && typeof source === "object" ? source : {};
   return {
@@ -673,6 +725,18 @@ function normalizeBubblePromptSettings(source = {}) {
       50,
       DEFAULT_BUBBLE_HISTORY_ROUNDS
     ),
+    mountedEntityRefs: normalizeMountedEntityRefs(
+      resolved.mountedEntityRefs ||
+        resolved.mountedEntities ||
+        resolved.publicEntityRefs ||
+        []
+    ),
+    autoDetectMentionedContacts:
+      typeof resolved.autoDetectMentionedContacts === "boolean"
+        ? resolved.autoDetectMentionedContacts
+        : typeof resolved.mentionedContactsEnabled === "boolean"
+          ? resolved.mentionedContactsEnabled
+          : true,
     worldbookEnabled: Boolean(resolved.worldbookEnabled),
     worldbookIds: normalizeMountedIds(resolved.worldbookIds || [])
   };
@@ -693,7 +757,12 @@ function normalizeCustomTabs(tabs = []) {
           audience: "",
           discussionText: "",
           hotTopic: "",
-          text: ""
+          text: "",
+          mountedEntityRefs: [],
+          autoDetectMentionedContacts: true,
+          forumDomainType: "general",
+          fandomTargetId: "",
+          fandomDisplayName: ""
         };
       }
       if (!tab || typeof tab !== "object") {
@@ -732,7 +801,22 @@ function normalizeCustomTabs(tabs = []) {
         audience: String(rawAudience || "").trim(),
         discussionText: String(rawDiscussionText || "").trim(),
         hotTopic: String(rawHotTopic || "").trim(),
-        text: String(rawDiscussionText || "").trim()
+        text: String(rawDiscussionText || "").trim(),
+        mountedEntityRefs: normalizeMountedEntityRefs(
+          tab.mountedEntityRefs ||
+            tab.mountedEntities ||
+            tab.publicEntityRefs ||
+            []
+        ),
+        autoDetectMentionedContacts:
+          typeof tab.autoDetectMentionedContacts === "boolean"
+            ? tab.autoDetectMentionedContacts
+            : typeof tab.mentionedContactsEnabled === "boolean"
+              ? tab.mentionedContactsEnabled
+              : true,
+        forumDomainType: String(tab.forumDomainType || tab.domainType || "general").trim(),
+        fandomTargetId: String(tab.fandomTargetId || tab.contactId || "").trim(),
+        fandomDisplayName: String(tab.fandomDisplayName || tab.fandomTargetName || "").trim()
       };
     })
     .filter(Boolean);
@@ -1439,6 +1523,192 @@ function loadProfile() {
   } catch (_error) {
     return { ...DEFAULT_PROFILE };
   }
+}
+
+function loadPublicProfileEntity() {
+  const raw = safeGetItem(PROFILE_KEY);
+  if (!raw) {
+    return null;
+  }
+  try {
+    const storedProfile = JSON.parse(raw);
+    const displayName =
+      String(storedProfile?.username || storedProfile?.userId || "用户本人").trim() || "用户本人";
+    const publicPersona = String(storedProfile?.personaPrompt || "").trim();
+    return publicPersona
+      ? {
+          ref: "user:self",
+          entityType: "user",
+          entityId: "self",
+          displayName,
+          publicPersona
+        }
+      : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function loadStoredMessageContacts() {
+  const raw = safeGetItem(MESSAGE_CONTACTS_KEY);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    const contacts = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.contacts)
+        ? parsed.contacts
+        : [];
+    return contacts
+      .filter((item) => item && typeof item === "object")
+      .map((item) => ({
+        id: String(item.id || "").trim(),
+        name: String(item.name || "").trim(),
+        personaPrompt: String(item.personaPrompt || "").trim()
+      }))
+      .filter((item) => item.id && item.name && item.personaPrompt);
+  } catch (_error) {
+    return [];
+  }
+}
+
+function getStoredBubbleContactEntities() {
+  return loadStoredMessageContacts().map((contact) => ({
+    ref: `contact:${contact.id}`,
+    entityType: "contact",
+    entityId: contact.id,
+    displayName: contact.name,
+    publicPersona: contact.personaPrompt
+  }));
+}
+
+function getBubbleFandomContactForTab(tab = null) {
+  const resolvedTab = tab && typeof tab === "object" ? tab : null;
+  if (!resolvedTab || String(resolvedTab.forumDomainType || "").trim() !== "contact_fandom") {
+    return null;
+  }
+  const targetId = String(resolvedTab.fandomTargetId || "").trim();
+  if (!targetId) {
+    return null;
+  }
+  return getStoredBubbleContactEntities().find((entity) => entity.entityId === targetId) || null;
+}
+
+function resolveBubbleMountedEntities(promptSettings = normalizeBubblePromptSettings(), options = {}) {
+  const resolvedOptions = options && typeof options === "object" ? options : {};
+  const excludedContactIds = new Set(
+    normalizeMountedIds(resolvedOptions.excludedContactIds || [])
+  );
+  const contactMap = new Map(
+    getStoredBubbleContactEntities().map((entity) => [entity.entityId, entity])
+  );
+  return normalizeMountedEntityRefs(promptSettings.mountedEntityRefs || [])
+    .map((ref) => {
+      if (ref === "user:self") {
+        return loadPublicProfileEntity();
+      }
+      if (!ref.startsWith("contact:")) {
+        return null;
+      }
+      const contactId = ref.slice("contact:".length).trim();
+      if (!contactId || excludedContactIds.has(contactId)) {
+        return null;
+      }
+      return contactMap.get(contactId) || null;
+    })
+    .filter(Boolean);
+}
+
+function buildBubbleMountedEntityPromptText(entities = [], options = {}) {
+  const resolvedOptions = options && typeof options === "object" ? options : {};
+  const resolvedEntities = Array.isArray(entities) ? entities : [];
+  if (!resolvedEntities.length) {
+    return "";
+  }
+  const intro =
+    String(resolvedOptions.intro || "").trim() ||
+    "Bubble 比论坛更偏粉丝私域；以下人物默认是这群粉丝长期熟悉、会直接代入讨论的对象：";
+  return [
+    intro,
+    ...resolvedEntities.map((entity, index) => `${index + 1}. ${entity.displayName}：${entity.publicPersona}`)
+  ].join("\n");
+}
+
+function extractBubbleMentionedContacts(textSections = [], options = {}) {
+  const resolvedOptions = options && typeof options === "object" ? options : {};
+  const excludedContactIds = new Set(
+    normalizeMountedIds(resolvedOptions.excludedContactIds || [])
+  );
+  const normalizedTexts = normalizeMountedIds(textSections)
+    .map((text) => String(text || "").trim())
+    .filter(Boolean);
+  if (!normalizedTexts.length) {
+    return [];
+  }
+  const contactEntities = getStoredBubbleContactEntities();
+  const ambiguousNames = new Set();
+  const nameCounts = new Map();
+  contactEntities.forEach((entity) => {
+    const key = String(entity.displayName || "").trim();
+    if (!key) {
+      return;
+    }
+    nameCounts.set(key, (nameCounts.get(key) || 0) + 1);
+  });
+  nameCounts.forEach((count, name) => {
+    if (count > 1) {
+      ambiguousNames.add(name);
+    }
+  });
+  return contactEntities
+    .filter((entity) => !excludedContactIds.has(entity.entityId))
+    .filter((entity) => !ambiguousNames.has(entity.displayName))
+    .map((entity) => ({
+      ...entity,
+      matchCount: normalizedTexts.reduce(
+        (total, text) => total + (text.includes(entity.displayName) ? 1 : 0),
+        0
+      )
+    }))
+    .filter((entity) => entity.matchCount > 0)
+    .sort(
+      (left, right) => right.matchCount - left.matchCount || left.displayName.localeCompare(right.displayName)
+    )
+    .slice(0, 3);
+}
+
+function buildBubbleMentionedContactsPromptText(
+  promptSettings = normalizeBubblePromptSettings(),
+  textSections = [],
+  options = {}
+) {
+  const resolvedOptions = options && typeof options === "object" ? options : {};
+  if (promptSettings.autoDetectMentionedContacts === false) {
+    return "";
+  }
+  const mountedEntities = resolveBubbleMountedEntities(promptSettings, {
+    excludedContactIds: normalizeMountedIds(resolvedOptions.excludedContactIds || [])
+  });
+  const mentionedContacts = extractBubbleMentionedContacts(textSections, {
+    excludedContactIds: [
+      ...mountedEntities
+        .filter((entity) => entity.entityType === "contact")
+        .map((entity) => entity.entityId),
+      ...normalizeMountedIds(resolvedOptions.excludedContactIds || [])
+    ]
+  });
+  if (!mentionedContacts.length) {
+    return "";
+  }
+  const intro =
+    String(resolvedOptions.intro || "").trim() ||
+    "这轮 Bubble / 最近粉丝语境里提到了这些人物（弱参考；有人熟，有人可能只听过名字）：";
+  return [
+    intro,
+    ...mentionedContacts.map((entity, index) => `${index + 1}. ${entity.displayName}：${entity.publicPersona}`)
+  ].join("\n");
 }
 
 function syncProfileStateFromStorage() {
@@ -2287,6 +2557,45 @@ function renderBubbleWorldbookMountOptions(selectedIds = []) {
     .join("");
 }
 
+function renderBubbleMountedEntityOptions(selectedRefs = []) {
+  if (!bubbleChatMountedEntityListEl) {
+    return;
+  }
+  const selectedRefSet = new Set(normalizeMountedEntityRefs(selectedRefs));
+  const userEntity = loadPublicProfileEntity();
+  const options = [
+    userEntity
+      ? {
+          ref: userEntity.ref,
+          label: userEntity.displayName,
+          meta: "用户公共人设"
+        }
+      : null,
+    ...getStoredBubbleContactEntities().map((entity) => ({
+      ref: entity.ref,
+      label: entity.displayName,
+      meta: "联系人公共人设"
+    }))
+  ].filter(Boolean);
+  if (!options.length) {
+    bubbleChatMountedEntityListEl.innerHTML =
+      '<div class="custom-tab-mount-empty">暂无可挂载人物；可先去 Message → 联系人 或 我 页面补充公共人设。</div>';
+    return;
+  }
+  bubbleChatMountedEntityListEl.innerHTML = options
+    .map((option) => `
+      <label class="bubble-chat-settings-option">
+        <input
+          type="checkbox"
+          value="${escapeHtml(option.ref)}"
+          ${selectedRefSet.has(option.ref) ? "checked" : ""}
+        />
+        <span>${escapeHtml(option.label)}<small>${escapeHtml(option.meta)}</small></span>
+      </label>
+    `)
+    .join("");
+}
+
 function updateBubbleChatSettingsFormState() {
   if (bubbleChatHotTopicsTabSelectEl) {
     bubbleChatHotTopicsTabSelectEl.disabled = !Boolean(bubbleChatHotTopicsInputEl?.checked);
@@ -2333,10 +2642,14 @@ function applyBubblePromptSettingsToForm(promptSettings) {
   if (bubbleChatHistoryRoundsInputEl) {
     bubbleChatHistoryRoundsInputEl.value = String(resolved.historyRounds);
   }
+  if (bubbleChatAutoDetectContactsInputEl) {
+    bubbleChatAutoDetectContactsInputEl.checked = resolved.autoDetectMentionedContacts !== false;
+  }
   if (bubbleChatWorldbookInputEl) {
     bubbleChatWorldbookInputEl.checked = resolved.worldbookEnabled;
   }
   renderBubbleHotTopicsTabOptions(resolved.hotTopicsTabId);
+  renderBubbleMountedEntityOptions(resolved.mountedEntityRefs);
   renderBubbleWorldbookMountOptions(resolved.worldbookIds);
   updateBubbleChatSettingsFormState();
   updateBubbleHotTopicsWarning(resolved);
@@ -2346,6 +2659,11 @@ function applyBubblePromptSettingsToForm(promptSettings) {
 function getCurrentBubblePromptSettingsDraft() {
   const tabs = getAvailableCustomTabs(loadSettings());
   const selectedTabId = String(bubbleChatHotTopicsTabSelectEl?.value || "").trim();
+  const selectedMountedEntityRefs = bubbleChatMountedEntityListEl
+    ? [...bubbleChatMountedEntityListEl.querySelectorAll("input[type='checkbox']:checked")]
+        .map((input) => (input instanceof HTMLInputElement ? String(input.value || "").trim() : ""))
+        .filter(Boolean)
+    : [];
   const selectedWorldbookIds = bubbleChatWorldbookListEl
     ? [...bubbleChatWorldbookListEl.querySelectorAll("input[type='checkbox']:checked")]
         .map((input) => (input instanceof HTMLInputElement ? String(input.value || "").trim() : ""))
@@ -2362,6 +2680,8 @@ function getCurrentBubblePromptSettingsDraft() {
       50,
       DEFAULT_BUBBLE_HISTORY_ROUNDS
     ),
+    mountedEntityRefs: selectedMountedEntityRefs,
+    autoDetectMentionedContacts: bubbleChatAutoDetectContactsInputEl?.checked !== false,
     worldbookEnabled: Boolean(bubbleChatWorldbookInputEl?.checked),
     worldbookIds: selectedWorldbookIds
   });
@@ -2709,20 +3029,43 @@ function buildBubbleHotTopicsContext(settings, promptSettings) {
   }
 
   const selectedTab = diagnostics.selectedTab;
-  const sections = [`这个粉丝团体最近也在关注论坛讨论区「${selectedTab.name}」。`];
+  const fandomContact = getBubbleFandomContactForTab(selectedTab);
+  const sections = [
+    `这个粉丝团体最近也在关注论坛讨论区「${selectedTab.name}」。`,
+    "这部分论坛内容只是补充 Bubble 粉丝最近共同在意的方向；真正的回复主语境仍然是创作者这一轮 Bubble 消息。"
+  ];
   const discussionText = String(selectedTab.discussionText || selectedTab.text || "").trim();
   const hotTopic = String(selectedTab.hotTopic || "").trim();
+  const fandomTargetId = String(selectedTab.fandomTargetId || "").trim();
+  const mountedEntitiesText = buildBubbleMountedEntityPromptText(
+    resolveBubbleMountedEntities(
+      {
+        mountedEntityRefs: selectedTab.mountedEntityRefs || [],
+        autoDetectMentionedContacts: selectedTab.autoDetectMentionedContacts !== false
+      },
+      {
+        excludedContactIds: fandomTargetId ? [fandomTargetId] : []
+      }
+    ),
+    {
+      intro: "这个论坛页签默认讨论的公开人物背景："
+    }
+  );
 
+  if (String(fandomContact?.publicPersona || "").trim()) {
+    sections.push(
+      `这个页签对应角色的公共人设：${String(fandomContact.publicPersona || "").trim()}`
+    );
+  }
+  if (mountedEntitiesText) {
+    sections.push(mountedEntitiesText);
+  }
   if (diagnostics.mountsDiscussionText && discussionText) {
     sections.push(`这个讨论区长期讨论的背景：${discussionText}`);
   }
   if (diagnostics.mountsHotTopic && hotTopic) {
     sections.push(`这个讨论区当前最主要的热点：${hotTopic}`);
   }
-
-  sections.push(
-    "这些论坛信息只用于补充这个粉丝群体最近共同关注的话题；回复仍要围绕创作者这一整轮 Bubble 消息本身来做反应。"
-  );
   return sections.join("\n\n");
 }
 
@@ -2787,6 +3130,39 @@ function buildBubbleWorldbookContext(promptSettings) {
   return entries.join("\n\n");
 }
 
+function buildBubbleEntityContextBlocks(
+  settings = getCurrentSettings(),
+  promptSettings = normalizeBubblePromptSettings(),
+  sourceMessages = [],
+  recentUserHistory = []
+) {
+  const diagnostics = getBubbleHotTopicsMountDiagnostics(settings, promptSettings);
+  const selectedTab = diagnostics.selectedTab || null;
+  const fandomTargetId = String(selectedTab?.fandomTargetId || "").trim();
+  const mountedText = buildBubbleMountedEntityPromptText(
+    resolveBubbleMountedEntities(promptSettings),
+    {
+      intro: "Bubble 比论坛更偏粉丝私域；以下人物默认是这群粉丝长期熟悉、会直接代入讨论的对象："
+    }
+  );
+  const textSections = [
+    ...(Array.isArray(sourceMessages) ? sourceMessages : []).map((item) => String(item?.text || "").trim()),
+    ...(Array.isArray(recentUserHistory) ? recentUserHistory : []).map((item) =>
+      String(item?.text || "").trim()
+    ),
+    String(selectedTab?.discussionText || selectedTab?.text || "").trim(),
+    String(selectedTab?.hotTopic || "").trim()
+  ].filter(Boolean);
+  const mentionedText = buildBubbleMentionedContactsPromptText(promptSettings, textSections, {
+    excludedContactIds: fandomTargetId ? [fandomTargetId] : [],
+    intro: "这轮 Bubble / 最近粉丝语境里提到了这些人物（弱参考；有人熟，有人可能只听过名字）："
+  });
+  return {
+    mountedText,
+    mentionedText
+  };
+}
+
 function buildFanReplyPrompt(
   profile,
   sourceMessages = [],
@@ -2814,13 +3190,23 @@ function buildFanReplyPrompt(
     : [];
   const worldbookContext = buildBubbleWorldbookContext(promptSettings);
   const hotTopicsContext = buildBubbleHotTopicsContext(settings, promptSettings);
+  const entityContext = buildBubbleEntityContextBlocks(
+    settings,
+    promptSettings,
+    normalizedMessages,
+    recentUserHistory
+  );
   return buildStructuredPromptSections(
     "bubble_fan_reply",
     {
       context_library: {
+        bubble_private_domain:
+          "Bubble 比公开论坛更偏粉丝私域；默认语气可以更熟、更贴身，但仍然只是粉丝视角，不要把猜测说成已确认事实。",
         worldbook_context: worldbookContext
           ? `补充背景设定（优先级低于粉丝团体近期关注话题、创作者人设与本轮 Bubble 消息，只作弱背景参考）：\n${worldbookContext}`
           : "",
+        mounted_public_entities: entityContext.mountedText,
+        mentioned_contacts_context: entityContext.mentionedText,
         hot_topics_context: hotTopicsContext
           ? `粉丝团体近期共同关注的话题：\n${hotTopicsContext}`
           : "",
@@ -2940,6 +3326,12 @@ function buildBubbleSeedReplyPrompt(
     .filter((item) => item.id);
   const worldbookContext = buildBubbleWorldbookContext(promptSettings);
   const hotTopicsContext = buildBubbleHotTopicsContext(settings, promptSettings);
+  const entityContext = buildBubbleEntityContextBlocks(
+    settings,
+    promptSettings,
+    normalizedMessages,
+    recentUserHistory
+  );
   const taskText = normalizedPersonas.length
     ? [
         "匿名 seed 回复任务：以下每个 seed 只用于决定语言、关注点和语气；输出中绝对不要写出论坛 ID、handle 或 seed 身份。",
@@ -2958,9 +3350,12 @@ function buildBubbleSeedReplyPrompt(
   return buildStructuredPromptSections(
     {
       contextLibrary: [
+        "Bubble 比公开论坛更偏粉丝私域；默认会更熟悉长期关注对象，但仍然只是粉丝聊天，不要把推测写成事实。",
         worldbookContext
           ? `补充背景设定（弱参考）：\n${worldbookContext}`
           : "",
+        entityContext.mountedText,
+        entityContext.mentionedText,
         hotTopicsContext
           ? `粉丝团体近期共同关注的话题：\n${hotTopicsContext}`
           : "",
