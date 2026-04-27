@@ -4188,6 +4188,116 @@ function buildVideoCallEventMessageText(kind = "connected", options = {}) {
   return buildConversationCallEventMessageText("video", kind, options);
 }
 
+function normalizeAssistantEndedCallMessageForConversation(conversation = null, message = null) {
+  if (!message || typeof message !== "object") {
+    return {
+      message,
+      changed: false,
+      endedActiveCall: false
+    };
+  }
+  const role = String(message.role || "").trim();
+  const messageType = String(message.messageType || "").trim();
+  if (
+    role !== "assistant" ||
+    (messageType !== "voice_call_event" && messageType !== "video_call_event")
+  ) {
+    return {
+      message,
+      changed: false,
+      endedActiveCall: false
+    };
+  }
+  const callEventKind = normalizeVoiceCallEventKind(message.callEventKind);
+  if (callEventKind !== "ended") {
+    return {
+      message,
+      changed: false,
+      endedActiveCall: false
+    };
+  }
+
+  const callMode = getConversationCallModeFromMessage(message);
+  const activeCallState = getConversationVoiceCallState(conversation);
+  const activeStartedAt = Number(activeCallState?.startedAt) || 0;
+  const messageCreatedAt = Number(message.createdAt) || 0;
+  const endedActiveCall =
+    Boolean(activeCallState?.active) &&
+    normalizeConversationCallMode(activeCallState?.callMode) === callMode &&
+    (!activeStartedAt || !messageCreatedAt || messageCreatedAt >= activeStartedAt - 1000);
+  const nextDurationSeconds =
+    Math.max(0, Math.floor(Number(message.callEventDurationSeconds) || 0)) ||
+    (endedActiveCall ? getVoiceCallDurationSeconds(activeCallState, messageCreatedAt || Date.now()) : 0);
+  const nextText = buildConversationCallEventMessageText(callMode, "ended", {
+    durationSeconds: nextDurationSeconds
+  });
+  const changed =
+    nextDurationSeconds !== Math.max(0, Math.floor(Number(message.callEventDurationSeconds) || 0)) ||
+    nextText !== String(message.text || "").trim() ||
+    normalizeConversationCallMode(message.callMode) !== callMode;
+
+  return {
+    message: changed
+      ? {
+          ...message,
+          callMode,
+          callEventKind: "ended",
+          callEventDurationSeconds: nextDurationSeconds,
+          text: nextText
+        }
+      : message,
+    changed,
+    endedActiveCall
+  };
+}
+
+function applyAssistantEndedCallMessagesToConversation(conversation = null, messages = []) {
+  const resolvedConversation = conversation && typeof conversation === "object" ? conversation : null;
+  let clearedActiveCall = false;
+  let changed = false;
+  const replacementsById = new Map();
+  const resolvedMessages = normalizeObjectArray(messages).map((message) => {
+    const source = message && typeof message === "object" ? message : {};
+    const result = normalizeAssistantEndedCallMessageForConversation(resolvedConversation, source);
+    const normalizedMessage = result.message && typeof result.message === "object" ? result.message : source;
+    if (result.changed) {
+      changed = true;
+    }
+    if (result.endedActiveCall) {
+      clearedActiveCall = true;
+    }
+    const messageId = String(normalizedMessage.id || "").trim();
+    if (messageId && result.changed) {
+      replacementsById.set(messageId, normalizedMessage);
+    }
+    return normalizedMessage;
+  });
+
+  if (clearedActiveCall && resolvedConversation) {
+    setConversationVoiceCallState(resolvedConversation, null);
+  }
+  if (resolvedConversation && replacementsById.size && Array.isArray(resolvedConversation.messages)) {
+    let conversationMessagesChanged = false;
+    resolvedConversation.messages = resolvedConversation.messages.map((message) => {
+      const replacement = replacementsById.get(String(message?.id || "").trim());
+      if (!replacement) {
+        return message;
+      }
+      conversationMessagesChanged = true;
+      return replacement;
+    });
+    if (conversationMessagesChanged) {
+      changed = true;
+    }
+  }
+
+  return {
+    messages: resolvedMessages,
+    changed,
+    clearedActiveCall
+  };
+}
+
 function parseConversationCallEventMessageText(text = "", callMode = "voice") {
   const normalized = String(text || "").replace(/\r/g, "").trim();
   if (!normalized.startsWith(`[${getConversationCallModeLabel(callMode)}事件]`)) {
@@ -14553,6 +14663,7 @@ function appendUniqueMessagesToConversation(conversation = null, messages = []) 
   if (!conversation || typeof conversation !== "object") {
     return [];
   }
+  const resolvedMessages = applyAssistantEndedCallMessagesToConversation(conversation, messages).messages;
   const currentMessages = normalizeObjectArray(conversation.messages).map((message) => ({
     ...(message && typeof message === "object" ? message : {})
   }));
@@ -14562,7 +14673,7 @@ function appendUniqueMessagesToConversation(conversation = null, messages = []) 
       .filter(Boolean)
   );
   const appendedMessages = [];
-  normalizeObjectArray(messages).forEach((message) => {
+  normalizeObjectArray(resolvedMessages).forEach((message) => {
     if (!message || typeof message !== "object") {
       return;
     }
@@ -18040,6 +18151,39 @@ function renderVideoCallPreviewMarkup(image = "", fallbackText = "", className =
   return `<div class="${escapeHtml(className)}"><span>${escapeHtml(fallbackText || "图")}</span></div>`;
 }
 
+function renderConversationVideoRemoteStageMarkup(conversation, meta = {}) {
+  const directVideoImage = getConversationVideoContactImage(conversation);
+  if (directVideoImage) {
+    return `<div class="messages-call-screen__video-remote"><img src="${escapeHtml(
+      directVideoImage
+    )}" alt="${escapeHtml(String(meta?.name || "对方"))} 的视频画面" /></div>`;
+  }
+
+  const snapshotImage = getConversationSnapshotAvatarImage(conversation);
+  if (snapshotImage) {
+    return `
+      <div class="messages-call-screen__video-remote messages-call-screen__video-remote--snapshot">
+        <div class="messages-call-screen__video-remote-bg" aria-hidden="true">
+          <img src="${escapeHtml(snapshotImage)}" alt="" />
+        </div>
+        <div class="messages-call-screen__video-remote-focus-shell">
+          <img
+            class="messages-call-screen__video-remote-focus"
+            src="${escapeHtml(snapshotImage)}"
+            alt="${escapeHtml(String(meta?.name || "对方"))} 的视频画面"
+          />
+        </div>
+      </div>
+    `;
+  }
+
+  return `<div class="messages-call-screen__video-remote messages-call-screen__video-remote--fallback">${buildAvatarMarkup(
+    "",
+    meta?.avatarText || getContactAvatarFallback({ name: meta?.name || "角色" }),
+    "messages-call-screen__video-remote-fallback"
+  )}</div>`;
+}
+
 function renderActiveVideoCallScreen(conversation, options = {}) {
   const renderOptions = options && typeof options === "object" ? options : {};
   const meta = getConversationMeta(conversation);
@@ -18060,22 +18204,11 @@ function renderActiveVideoCallScreen(conversation, options = {}) {
         .map((message) => renderConversationCallTranscriptItem(message, conversation))
         .join("")
     : '<div class="messages-call-screen__history-empty">本次视频还没有文字记录。</div>';
-  const remoteImage = getConversationVideoContactDisplayImage(conversation);
   const localImage = getConversationVideoUserDisplayImage(conversation);
   return `
     <section class="messages-call-screen messages-call-screen--video" aria-label="视频通话">
       <div class="messages-call-screen__video-stage">
-        ${
-          remoteImage
-            ? `<div class="messages-call-screen__video-remote"><img src="${escapeHtml(remoteImage)}" alt="${escapeHtml(
-                meta.name
-              )} 的视频画面" /></div>`
-            : `<div class="messages-call-screen__video-remote messages-call-screen__video-remote--fallback">${buildAvatarMarkup(
-                "",
-                meta.avatarText || getContactAvatarFallback({ name: meta.name }),
-                "messages-call-screen__video-remote-fallback"
-              )}</div>`
-        }
+        ${renderConversationVideoRemoteStageMarkup(conversation, meta)}
         <div class="messages-call-screen__video-topbar">
           <div class="messages-call-screen__video-info">
             <strong>${escapeHtml(meta.name)}</strong>
@@ -18156,24 +18289,13 @@ function renderActiveVideoCallScreen(conversation, options = {}) {
 
 function renderIncomingVideoCallRequestScreen(conversation, message) {
   const meta = getConversationMeta(conversation);
-  const remoteImage = getConversationVideoContactDisplayImage(conversation);
   const localImage = getConversationVideoUserDisplayImage(conversation);
   const note = String(message?.callRequestMessage || "").trim();
   const isReadonly = state.chatReadonlyMode;
   return `
     <section class="messages-call-screen messages-call-screen--video messages-call-screen--incoming-video" aria-label="视频来电请求">
       <div class="messages-call-screen__video-stage">
-        ${
-          remoteImage
-            ? `<div class="messages-call-screen__video-remote"><img src="${escapeHtml(remoteImage)}" alt="${escapeHtml(
-                meta.name
-              )} 的视频画面" /></div>`
-            : `<div class="messages-call-screen__video-remote messages-call-screen__video-remote--fallback">${buildAvatarMarkup(
-                "",
-                meta.avatarText || getContactAvatarFallback({ name: meta.name }),
-                "messages-call-screen__video-remote-fallback"
-              )}</div>`
-        }
+        ${renderConversationVideoRemoteStageMarkup(conversation, meta)}
         <div class="messages-call-screen__video-topbar">
           <div class="messages-call-screen__video-info">
             <strong>${escapeHtml(meta.name)}</strong>
@@ -23733,13 +23855,13 @@ async function requestConversationReply(options = {}) {
           return draft;
         })
       : updatedConversation;
-    const createdMessages = buildAssistantReplyMessagesForConversation(
+    const replyMessages = buildAssistantReplyMessagesForConversation(
       replyMessageBaseConversation || updatedConversation,
       replyResult.text,
       promptSettings,
       replyResult.privacySession
     );
-    if (!createdMessages.length) {
+    if (!replyMessages.length) {
       if (isRegenerate) {
         pushRegenerateDebugEvent(
           "created_messages_empty",
@@ -23757,6 +23879,10 @@ async function requestConversationReply(options = {}) {
       }
       return;
     }
+    const {
+      messages: createdMessages,
+      clearedActiveCall: assistantEndedActiveCall
+    } = applyAssistantEndedCallMessagesToConversation(updatedConversation, replyMessages);
     const nextAwarenessCounter =
       !isRegenerate && hasAwarenessMonitor && !hasManualAwarenessTrigger
         ? currentAwarenessCounter + 1
@@ -23769,6 +23895,9 @@ async function requestConversationReply(options = {}) {
         }
       }
       draft.messages = [...draft.messages, ...createdMessages];
+      if (assistantEndedActiveCall) {
+        setConversationVoiceCallState(draft, null);
+      }
       recalculateConversationUpdatedAt(draft);
       markConversationMutated(
         draft,
