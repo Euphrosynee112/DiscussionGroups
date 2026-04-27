@@ -19,6 +19,7 @@ const DEFAULT_REPLY_COUNT = 4;
 const MAX_FEED_ITEMS = 50;
 const MAX_POST_TEXT_LENGTH = 1400;
 const MAX_REPLY_TEXT_LENGTH = 1400;
+const FEED_AUTHORED_POST_VISIBLE_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_TEMPERATURE = 0.85;
 const DEFAULT_CONTEXT_FOCUS_MINUTES = 60;
 const MAX_CONTEXT_FOCUS_MINUTES = 1440;
@@ -532,6 +533,39 @@ function formatForumTimestamp(value = Date.now()) {
     "/",
     "-"
   );
+}
+
+function formatForumElapsedTimestamp(value = Date.now()) {
+  const createdAt = Number(value) || 0;
+  if (!createdAt) {
+    return "刚刚";
+  }
+  const deltaMs = Math.max(0, Date.now() - createdAt);
+  if (deltaMs < 60_000) {
+    return "刚刚";
+  }
+  const deltaMinutes = Math.floor(deltaMs / 60_000);
+  if (deltaMinutes < 60) {
+    return `${deltaMinutes}m`;
+  }
+  const deltaHours = Math.floor(deltaMinutes / 60);
+  if (deltaHours < 24) {
+    return `${deltaHours}h`;
+  }
+  const deltaDays = Math.floor(deltaHours / 24);
+  if (deltaDays < 7) {
+    return `${deltaDays}d`;
+  }
+  return formatForumTimestamp(createdAt);
+}
+
+function resolveForumItemTimeLabel(item = {}) {
+  const createdAt = Number(item?.createdAt) || 0;
+  const rawTime = String(item?.time || "").trim();
+  if (Boolean(item?.authorOwned)) {
+    return createdAt ? formatForumTimestamp(createdAt) : rawTime || "刚刚";
+  }
+  return createdAt ? formatForumElapsedTimestamp(createdAt) : rawTime || "刚刚";
 }
 
 function normalizeDateInputValue(value = "") {
@@ -5515,6 +5549,27 @@ function isHomeScrollTargetAtTop(scrollTarget = getHomeScrollTarget()) {
   return !scrollTarget || Math.max(Number(scrollTarget.scrollTop || 0), 0) <= 0.5;
 }
 
+function preserveHomeFeedViewportOnPrepend(feedType = state.activeFeed, renderWork = () => {}) {
+  const scrollTarget = getHomeScrollTarget();
+  const shouldPreserve =
+    typeof renderWork === "function" &&
+    state.activeTab === "home" &&
+    state.activeFeed === feedType &&
+    scrollTarget &&
+    Number(scrollTarget.scrollTop || 0) > 8;
+  const beforeScrollTop = shouldPreserve ? Number(scrollTarget.scrollTop || 0) : 0;
+  const beforeScrollHeight = shouldPreserve ? Number(scrollTarget.scrollHeight || 0) : 0;
+  renderWork();
+  if (!shouldPreserve) {
+    return;
+  }
+  const afterScrollHeight = Number(scrollTarget.scrollHeight || 0);
+  const heightDelta = afterScrollHeight - beforeScrollHeight;
+  if (Math.abs(heightDelta) > 0.5) {
+    scrollTarget.scrollTop = Math.max(0, beforeScrollTop + heightDelta);
+  }
+}
+
 function isHomeRefreshStartPosition() {
   if (!canRefreshCurrentHomeFeed()) {
     return false;
@@ -5614,7 +5669,7 @@ function switchTab(tabName) {
     profileScrollEl.scrollTop = 0;
   }
   if (nextTab === "home") {
-    switchHomeFeed(state.customTabs.length ? getDefaultVisibleHomeFeed() : "tags");
+    switchHomeFeed(state.customTabs.length ? getCurrentContentFeed(state.activeFeed) : "tags");
   }
 
   syncTabToLocation(nextTab);
@@ -5762,14 +5817,55 @@ function dedupePosts(posts) {
   });
 }
 
-function mergeFeedHistory(existingPosts, incomingPosts, limit = MAX_FEED_ITEMS) {
-  const authoredPosts = existingPosts.filter((post) => post.authorOwned);
-  const historicalGeneratedPosts = existingPosts.filter((post) => !post.authorOwned);
-  return dedupePosts([
-    ...authoredPosts,
-    ...incomingPosts,
-    ...historicalGeneratedPosts
-  ]).slice(0, limit);
+function getPostCreatedAtValue(post = {}) {
+  const numeric = Number(post?.createdAt) || 0;
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function sortPostsByCreatedAtDesc(posts = []) {
+  return (Array.isArray(posts) ? posts : [])
+    .map((post, index) => ({ post, index }))
+    .sort((left, right) => {
+      const timeDiff = getPostCreatedAtValue(right.post) - getPostCreatedAtValue(left.post);
+      if (timeDiff !== 0) {
+        return timeDiff;
+      }
+      return left.index - right.index;
+    })
+    .map((entry) => entry.post);
+}
+
+function isAuthoredPostVisibleInFeed(post = {}, bucketName = state.activeFeed) {
+  if (!post?.authorOwned) {
+    return true;
+  }
+  const resolvedBucket =
+    bucketName === "tags"
+      ? String(post?.feedType || getCurrentContentFeed()).trim()
+      : String(bucketName || "").trim();
+  if (!resolvedBucket || resolvedBucket === "profile") {
+    return true;
+  }
+  const createdAt = getPostCreatedAtValue(post);
+  if (!createdAt) {
+    return true;
+  }
+  return Date.now() - createdAt < FEED_AUTHORED_POST_VISIBLE_MS;
+}
+
+function getRenderableFeedPosts(bucketName = state.activeFeed, posts = state.feeds[bucketName] || []) {
+  return sortPostsByCreatedAtDesc(
+    (Array.isArray(posts) ? posts : []).filter((post) =>
+      isAuthoredPostVisibleInFeed(post, bucketName)
+    )
+  );
+}
+
+function mergeFeedHistory(existingPosts, incomingPosts, limit = MAX_FEED_ITEMS, bucketName = state.activeFeed) {
+  return getRenderableFeedPosts(
+    bucketName,
+    dedupePosts([...(Array.isArray(incomingPosts) ? incomingPosts : []), ...(Array.isArray(existingPosts) ? existingPosts : [])])
+  ).slice(0, limit);
 }
 
 function normalizeDirectionText(text) {
@@ -5932,6 +6028,7 @@ function normalizePost(item, index = 0, fallbackFeedType = DEFAULT_CONTENT_FEED)
 
 function renderFeedPost(post, bucketName = state.activeFeed) {
   const actualBucket = bucketName === "tags" ? post.feedType || getCurrentContentFeed() : bucketName;
+  const timeLabel = resolveForumItemTimeLabel(post);
   const avatarMarkup = post.authorOwned
     ? renderAvatarMarkup(
         truncate(state.profile.avatar || DEFAULT_PROFILE.avatar, 2),
@@ -5959,7 +6056,7 @@ function renderFeedPost(post, bucketName = state.activeFeed) {
           <div class="post-head">
             <strong>${escapeHtml(post.displayName)}</strong>
             <span class="post-handle">${escapeHtml(post.handle)}</span>
-            <span class="post-time">· ${escapeHtml(post.time)}</span>
+            <span class="post-time">· ${escapeHtml(timeLabel)}</span>
           </div>
           ${post.text ? `<p class="post-text">${escapeHtml(post.text)}</p>` : ""}
           ${repostMarkup}
@@ -6005,14 +6102,15 @@ function renderFeed(posts) {
   if (!feedEl) {
     return;
   }
-  if (!posts.length) {
+  const renderedPosts = Array.isArray(posts) ? posts : [];
+  if (!renderedPosts.length) {
     feedEl.innerHTML = `<p class="empty-state">${escapeHtml(
       getFeedLabel(state.activeFeed)
     )} 还没有内容，请先刷新当前分页签。</p>`;
     return;
   }
 
-  feedEl.innerHTML = posts.map((post) => renderFeedPost(post, state.activeFeed)).join("");
+  feedEl.innerHTML = renderedPosts.map((post) => renderFeedPost(post, state.activeFeed)).join("");
 }
 
 function getTagStatisticBuckets() {
@@ -6025,7 +6123,7 @@ function buildPopularTagStats() {
   const counts = new Map();
   const bucketNames = getTagStatisticBuckets();
   bucketNames.forEach((bucketName) => {
-    (state.feeds[bucketName] || []).forEach((post) => {
+    getRenderableFeedPosts(bucketName, state.feeds[bucketName] || []).forEach((post) => {
       getRenderableTags(post, bucketName).forEach((tag) => {
         const current = counts.get(tag) || { tag, total: 0, feeds: {} };
         current.total += 1;
@@ -6727,6 +6825,7 @@ function renderPostDiscussion(post, bucketName = state.activeFeed) {
 function renderReplyBranch(postId, replies, bucketName = state.activeFeed, depth = 1) {
   return replies
     .map((reply) => {
+      const timeLabel = resolveForumItemTimeLabel(reply);
       const toggleLabel = reply.expanded ? "收起回复" : "展开回复";
       const nestedBlock = reply.expanded
         ? reply.loading
@@ -6749,7 +6848,7 @@ function renderReplyBranch(postId, replies, bucketName = state.activeFeed, depth
               <div class="post-head">
                 <strong>${escapeHtml(reply.displayName)}</strong>
                 <span class="post-handle">${escapeHtml(reply.handle)}</span>
-                <span class="post-time">· ${escapeHtml(reply.time)}</span>
+                <span class="post-time">· ${escapeHtml(timeLabel)}</span>
               </div>
               <p class="reply-text">${escapeHtml(reply.text)}</p>
               <div class="reply-actions">
@@ -7022,6 +7121,7 @@ function submitThreadReply(postId, bucketName, parentReplyId = "") {
 function renderThreadModalReplyCard(reply, bucketName, postId, depth = 1) {
   const translationMarkup = renderTranslationBlock(reply.translationZh);
   const isLoading = isReplyTranslating(postId, reply.id, bucketName);
+  const timeLabel = resolveForumItemTimeLabel(reply);
   const translateLabel = isLoading
     ? "翻译中..."
     : reply.translationZh
@@ -7050,7 +7150,7 @@ function renderThreadModalReplyCard(reply, bucketName, postId, depth = 1) {
           <div class="post-head">
             <strong>${escapeHtml(reply.displayName)}</strong>
             <span class="post-handle">${escapeHtml(reply.handle)}</span>
-            <span class="post-time">· ${escapeHtml(reply.time)}</span>
+            <span class="post-time">· ${escapeHtml(timeLabel)}</span>
           </div>
           <p class="reply-text">${escapeHtml(reply.text)}</p>
           ${translationMarkup}
@@ -7092,6 +7192,7 @@ function renderThreadModalRootPost(post, bucketName, threadState = null) {
   if (!threadModalRootEl) {
     return;
   }
+  const timeLabel = resolveForumItemTimeLabel(post);
   const avatarMarkup = post.authorOwned
     ? renderAvatarMarkup(
         truncate(state.profile.avatar || DEFAULT_PROFILE.avatar, 2),
@@ -7115,7 +7216,7 @@ function renderThreadModalRootPost(post, bucketName, threadState = null) {
         <div class="post-head">
           <strong>${escapeHtml(post.displayName)}</strong>
           <span class="post-handle">${escapeHtml(post.handle)}</span>
-          <span class="post-time">· ${escapeHtml(post.time)}</span>
+          <span class="post-time">· ${escapeHtml(timeLabel)}</span>
         </div>
         ${post.text ? `<p class="post-text">${escapeHtml(post.text)}</p>` : ""}
         ${repostMarkup}
@@ -7449,7 +7550,7 @@ function renderActiveFeed() {
     renderPopularTags();
     return;
   }
-  renderFeed(state.feeds[state.activeFeed] || []);
+  renderFeed(getRenderableFeedPosts(state.activeFeed, state.feeds[state.activeFeed] || []));
 }
 
 function setCustomTabFormStatus(message, tone = "") {
@@ -7674,12 +7775,13 @@ function cloneCustomTabContentItem(item = {}) {
 
 function createLocalCustomTabContentItem(bucket = "discussion", contentText = "") {
   const nowIso = new Date().toISOString();
+  const defaultDiscussionDate = nowIso.slice(0, 10);
   return {
     id: `local_tab_item_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     tabId: String(state.customTabEditingId || "").trim(),
     bucket: normalizeCustomTabContentBucket(bucket, "discussion"),
     contentText: String(contentText || "").trim(),
-    discussionDate: "",
+    discussionDate: defaultDiscussionDate,
     enteredBucketAt: nowIso,
     sortOrder: null,
     refKey: "",
@@ -8734,7 +8836,9 @@ async function handleCustomTabFormSubmit() {
 }
 
 function getTagFilteredPosts(tag) {
-  const timelinePosts = getTagStatisticBuckets().flatMap((key) => state.feeds[key] || []);
+  const timelinePosts = getTagStatisticBuckets().flatMap((key) =>
+    getRenderableFeedPosts(key, state.feeds[key] || [])
+  );
   return dedupePosts(timelinePosts).filter((post) =>
     getRenderableTags(post, post.feedType || DEFAULT_CONTENT_FEED).includes(tag)
   );
@@ -10412,6 +10516,7 @@ async function refreshHomeFeed(trigger = "manual") {
   const existingFeedSnapshot = [...(state.feeds[targetFeed] || [])];
   let renderedPartialCount = 0;
   let hasPartialSuccess = false;
+  let latestProgressivePosts = [];
 
   syncAuthoredPostIdentity(profile);
   refreshAuthoredPostsEngagement(profile);
@@ -10444,12 +10549,15 @@ async function refreshHomeFeed(trigger = "manual") {
     state.feeds[targetFeed] = mergeFeedHistory(
       existingFeedSnapshot,
       normalizedIncomingPosts,
-      MAX_FEED_ITEMS
+      MAX_FEED_ITEMS,
+      targetFeed
     );
     state.discussions[targetFeed] = {};
     persistFeeds(state.feeds);
     persistDiscussions();
-    renderActiveFeed();
+    preserveHomeFeedViewportOnPrepend(targetFeed, () => {
+      renderActiveFeed();
+    });
     updateInsightPanel();
     setHomeStatus(
       `正在生成“${getFeedLabel(targetFeed)}”讨论流… 已完成 ${renderedPartialCount}/${homeCount} 条`,
@@ -10464,8 +10572,12 @@ async function refreshHomeFeed(trigger = "manual") {
 
     try {
       posts = await requestGeneratedPosts(settings, targetFeed, homeCount, {
-        onBatchSuccess: ({ mergedItems }) => {
-          applyProgressiveFeedSnapshot(mergedItems);
+        onBatchSuccess: ({ batchItems }) => {
+          latestProgressivePosts = sortPostsByCreatedAtDesc([
+            ...batchItems,
+            ...latestProgressivePosts
+          ]).slice(0, homeCount);
+          applyProgressiveFeedSnapshot(latestProgressivePosts);
         }
       });
     } catch (error) {
@@ -10482,7 +10594,9 @@ async function refreshHomeFeed(trigger = "manual") {
           `已先显示 ${renderedPartialCount}/${homeCount} 条讨论，后续批次失败：${errorMessage}`,
           "error"
         );
-        switchTab("home");
+        if (state.activeTab !== "home") {
+          switchTab("home");
+        }
       } else {
         setSettingsStatus(errorMessage, "error");
         setHomeStatus(`刷新失败：${errorMessage}`, "error");
@@ -10490,7 +10604,8 @@ async function refreshHomeFeed(trigger = "manual") {
       return;
     }
 
-    applyProgressiveFeedSnapshot(posts);
+    const finalizedPosts = latestProgressivePosts.length ? latestProgressivePosts : posts;
+    applyProgressiveFeedSnapshot(finalizedPosts);
     state.lastRefreshAt = `${formatDateTime()} · ${sourceLabel}`;
     safeSetItem(REFRESH_KEY, state.lastRefreshAt);
     renderActiveFeed();
@@ -10504,7 +10619,9 @@ async function refreshHomeFeed(trigger = "manual") {
       `配置已保存，当前分页签“${getFeedLabel(targetFeed)}”已使用 API 重新生成 ${homeCount} 条讨论。`,
       "success"
     );
-    switchTab("home");
+    if (state.activeTab !== "home") {
+      switchTab("home");
+    }
   } finally {
     state.isRefreshing = false;
     state.pullDistance = 0;
