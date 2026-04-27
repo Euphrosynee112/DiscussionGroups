@@ -22,6 +22,9 @@ const MESSAGE_RECENT_LOCATIONS_KEY = "x_style_generator_message_recent_locations
 const MESSAGE_COMMON_PLACES_KEY = "x_style_generator_common_places_v1";
 const MESSAGE_PRESENCE_STATE_KEY = "x_style_generator_presence_state_v1";
 const MESSAGE_VIDEO_MEDIA_KEY = "x_style_generator_message_video_media_v1";
+const MESSAGE_VIDEO_MEDIA_DB_NAME = "x_style_generator_message_video_media_db_v1";
+const MESSAGE_VIDEO_MEDIA_DB_VERSION = 1;
+const MESSAGE_VIDEO_MEDIA_STORE_NAME = "video_media_entries";
 const MESSAGE_REPLY_TASKS_KEY = "x_style_generator_message_reply_tasks_v1";
 const MESSAGE_REPLY_RECOVERY_KEY = "x_style_generator_message_reply_recovery_v1";
 const MESSAGE_ACTIVE_VIEW_KEY = "x_style_generator_message_active_view_v1";
@@ -35,6 +38,12 @@ const FORUM_TAB_DOMAIN_TYPES = new Set(["general", "user_fandom", "contact_fando
 const DEFAULT_TEMPERATURE = 0.85;
 const DEFAULT_MESSAGE_HISTORY_ROUNDS = 20;
 const MAX_MESSAGE_HISTORY_ROUNDS = 50;
+const CONVERSATION_VIDEO_MEDIA_COMPRESSION_STEPS = [
+  { maxSide: 820, quality: 0.74 },
+  { maxSide: 680, quality: 0.7 },
+  { maxSide: 540, quality: 0.66 },
+  { maxSide: 420, quality: 0.62 }
+];
 const DEFAULT_MESSAGE_REPLY_SENTENCE_LIMIT = 7;
 const MAX_MESSAGE_REPLY_SENTENCE_LIMIT = 20;
 const DEFAULT_MESSAGE_JOURNAL_LENGTH = 320;
@@ -753,6 +762,8 @@ const state = {
   chatSettingsOpen: false,
   chatSettingsVideoContactImage: "",
   chatSettingsVideoUserImage: "",
+  conversationVideoMediaMap: {},
+  conversationVideoMediaHydrated: false,
   autoScheduleRequestOpen: false,
   autoScheduleRequestDraft: {
     worldbookIds: [],
@@ -1024,6 +1035,16 @@ function safeSetItem(key, value) {
   memoryStorage[key] = value;
   try {
     window.localStorage.setItem(key, value);
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+function safeRemoveItem(key) {
+  delete memoryStorage[key];
+  try {
+    window.localStorage.removeItem(key);
     return true;
   } catch (_error) {
     return false;
@@ -8238,12 +8259,12 @@ function migrateLegacyConversationVideoMedia(conversations = [], storageKey = ""
 
   let mediaPersisted = true;
   if (mediaChanged) {
-    mediaPersisted = persistConversationVideoMediaMap(mediaMap);
+    mediaPersisted = persistConversationVideoMediaMapToLocalStorage(mediaMap);
     if (!mediaPersisted && storageKey) {
       const strippedPayload = JSON.stringify(strippedConversations);
       const strippedPersisted = safeSetItem(storageKey, strippedPayload);
       if (strippedPersisted) {
-        mediaPersisted = persistConversationVideoMediaMap(mediaMap);
+        mediaPersisted = persistConversationVideoMediaMapToLocalStorage(mediaMap);
       }
     }
   }
@@ -8308,12 +8329,197 @@ function normalizeConversationVideoMediaPayload(payload = {}) {
 }
 
 function loadConversationVideoMediaMap() {
-  return normalizeConversationVideoMediaPayload(readStoredJson(MESSAGE_VIDEO_MEDIA_KEY, {}));
+  const hydratedMap = normalizeConversationVideoMediaPayload(state.conversationVideoMediaMap);
+  if (state.conversationVideoMediaHydrated) {
+    return hydratedMap;
+  }
+  return normalizeConversationVideoMediaPayload({
+    ...readStoredJson(MESSAGE_VIDEO_MEDIA_KEY, {}),
+    ...hydratedMap
+  });
 }
 
-function persistConversationVideoMediaMap(payload = {}) {
+function persistConversationVideoMediaMapToLocalStorage(payload = {}) {
   const normalized = normalizeConversationVideoMediaPayload(payload);
   return safeSetItem(MESSAGE_VIDEO_MEDIA_KEY, JSON.stringify(normalized));
+}
+
+function openConversationVideoMediaDb() {
+  if (!window.indexedDB) {
+    return Promise.reject(new Error("IndexedDB 不可用。"));
+  }
+  return new Promise((resolve, reject) => {
+    const request = window.indexedDB.open(
+      MESSAGE_VIDEO_MEDIA_DB_NAME,
+      MESSAGE_VIDEO_MEDIA_DB_VERSION
+    );
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(MESSAGE_VIDEO_MEDIA_STORE_NAME)) {
+        db.createObjectStore(MESSAGE_VIDEO_MEDIA_STORE_NAME, {
+          keyPath: "contactId"
+        });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("视频图片数据库打开失败。"));
+  });
+}
+
+function waitForIndexedDbTransaction(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve(true);
+    transaction.onerror = () => reject(transaction.error || new Error("视频图片数据库写入失败。"));
+    transaction.onabort = () => reject(transaction.error || new Error("视频图片数据库写入已取消。"));
+  });
+}
+
+async function readConversationVideoMediaMapFromIndexedDb() {
+  const db = await openConversationVideoMediaDb();
+  try {
+    const transaction = db.transaction(MESSAGE_VIDEO_MEDIA_STORE_NAME, "readonly");
+    const store = transaction.objectStore(MESSAGE_VIDEO_MEDIA_STORE_NAME);
+    const entries = await new Promise((resolve, reject) => {
+      const request = store.getAll();
+      request.onsuccess = () => resolve(Array.isArray(request.result) ? request.result : []);
+      request.onerror = () => reject(request.error || new Error("视频图片读取失败。"));
+    });
+    return normalizeConversationVideoMediaPayload(
+      Object.fromEntries(
+        entries.map((entry) => [
+          String(entry?.contactId || "").trim(),
+          {
+            videoContactImage: entry?.videoContactImage || "",
+            videoUserImage: entry?.videoUserImage || ""
+          }
+        ])
+      )
+    );
+  } finally {
+    db.close();
+  }
+}
+
+async function writeConversationVideoMediaMapToIndexedDb(payload = {}) {
+  const normalized = normalizeConversationVideoMediaPayload(payload);
+  const db = await openConversationVideoMediaDb();
+  try {
+    const transaction = db.transaction(MESSAGE_VIDEO_MEDIA_STORE_NAME, "readwrite");
+    const store = transaction.objectStore(MESSAGE_VIDEO_MEDIA_STORE_NAME);
+    store.clear();
+    Object.entries(normalized).forEach(([contactId, entry]) => {
+      store.put({
+        contactId,
+        videoContactImage: entry.videoContactImage || "",
+        videoUserImage: entry.videoUserImage || "",
+        updatedAt: Date.now()
+      });
+    });
+    await waitForIndexedDbTransaction(transaction);
+    return true;
+  } finally {
+    db.close();
+  }
+}
+
+async function recompressConversationVideoMediaMap(payload = {}, options = {}) {
+  const source = normalizeConversationVideoMediaPayload(payload);
+  const entries = await Promise.all(
+    Object.entries(source).map(async ([contactId, entry]) => {
+      const videoContactImage = await recompressAvatarDataUrl(
+        entry.videoContactImage || "",
+        options
+      );
+      const videoUserImage = await recompressAvatarDataUrl(
+        entry.videoUserImage || "",
+        options
+      );
+      return [
+        contactId,
+        {
+          videoContactImage,
+          videoUserImage
+        }
+      ];
+    })
+  );
+  return normalizeConversationVideoMediaPayload(Object.fromEntries(entries));
+}
+
+async function persistConversationVideoMediaMapWithFallback(payload = {}) {
+  const normalized = normalizeConversationVideoMediaPayload(payload);
+  try {
+    await writeConversationVideoMediaMapToIndexedDb(normalized);
+    state.conversationVideoMediaMap = normalized;
+    state.conversationVideoMediaHydrated = true;
+    safeRemoveItem(MESSAGE_VIDEO_MEDIA_KEY);
+    return {
+      persisted: true,
+      compressed: false,
+      mediaMap: normalized
+    };
+  } catch (_error) {
+  }
+
+  let compressedMap = normalized;
+  for (const step of CONVERSATION_VIDEO_MEDIA_COMPRESSION_STEPS) {
+    try {
+      compressedMap = await recompressConversationVideoMediaMap(compressedMap, step);
+    } catch (_error) {
+      continue;
+    }
+    try {
+      await writeConversationVideoMediaMapToIndexedDb(compressedMap);
+      state.conversationVideoMediaMap = compressedMap;
+      state.conversationVideoMediaHydrated = true;
+      safeRemoveItem(MESSAGE_VIDEO_MEDIA_KEY);
+      return {
+        persisted: true,
+        compressed: true,
+        mediaMap: compressedMap
+      };
+    } catch (_error) {
+      if (persistConversationVideoMediaMapToLocalStorage(compressedMap)) {
+        state.conversationVideoMediaMap = compressedMap;
+        state.conversationVideoMediaHydrated = true;
+        return {
+          persisted: true,
+          compressed: true,
+          mediaMap: compressedMap
+        };
+      }
+    }
+  }
+
+  return {
+    persisted: false,
+    compressed: false,
+    mediaMap: normalized
+  };
+}
+
+async function hydrateConversationVideoMediaMap() {
+  const legacyMap = normalizeConversationVideoMediaPayload(readStoredJson(MESSAGE_VIDEO_MEDIA_KEY, {}));
+  let indexedDbMap = {};
+  try {
+    indexedDbMap = await readConversationVideoMediaMapFromIndexedDb();
+  } catch (_error) {
+    indexedDbMap = {};
+  }
+  const nextMap = normalizeConversationVideoMediaPayload({
+    ...legacyMap,
+    ...indexedDbMap
+  });
+  state.conversationVideoMediaMap = nextMap;
+  state.conversationVideoMediaHydrated = true;
+  if (Object.keys(legacyMap).length) {
+    try {
+      await writeConversationVideoMediaMapToIndexedDb(nextMap);
+      safeRemoveItem(MESSAGE_VIDEO_MEDIA_KEY);
+    } catch (_error) {
+    }
+  }
+  return nextMap;
 }
 
 function getStoredConversationVideoMedia(conversation = getConversationById()) {
@@ -19277,12 +19483,13 @@ function getConversationVideoUserDisplayImage(conversation = getConversationById
   return getConversationVideoUserImage(conversation) || String(state.profile?.avatarImage || "").trim();
 }
 
-function setConversationVideoMediaSettings(contactImage = "", userImage = "") {
+async function setConversationVideoMediaSettings(contactImage = "", userImage = "") {
   const conversation = getConversationById();
   if (!conversation) {
     return {
       conversationPersisted: false,
-      mediaPersisted: false
+      mediaPersisted: false,
+      mediaCompressed: false
     };
   }
   const resolvedContactImage = String(contactImage || "").trim();
@@ -19299,11 +19506,12 @@ function setConversationVideoMediaSettings(contactImage = "", userImage = "") {
       };
     }
   }
-  const mediaPersisted = persistConversationVideoMediaMap(mediaMap);
+  const mediaPersistResult = await persistConversationVideoMediaMapWithFallback(mediaMap);
   const conversationPersisted = persistConversations();
   return {
     conversationPersisted,
-    mediaPersisted
+    mediaPersisted: mediaPersistResult.persisted,
+    mediaCompressed: mediaPersistResult.compressed
   };
 }
 
@@ -22052,7 +22260,7 @@ function cleanupMessageShareInboxForDeletedContact(contactId = "", conversationI
   return inbox.length - nextInbox.length;
 }
 
-function cleanupConversationVideoMediaForDeletedContact(contactId = "") {
+async function cleanupConversationVideoMediaForDeletedContact(contactId = "") {
   const resolvedContactId = String(contactId || "").trim();
   if (!resolvedContactId) {
     return 0;
@@ -22062,7 +22270,7 @@ function cleanupConversationVideoMediaForDeletedContact(contactId = "") {
     return 0;
   }
   delete mediaMap[resolvedContactId];
-  persistConversationVideoMediaMap(mediaMap);
+  await persistConversationVideoMediaMapWithFallback(mediaMap);
   return 1;
 }
 
@@ -22180,7 +22388,7 @@ async function deleteConversationContactBundle(contactId = "", options = {}) {
     resolvedContactId,
     conversationIds
   );
-  const removedVideoMediaCount = cleanupConversationVideoMediaForDeletedContact(resolvedContactId);
+  const removedVideoMediaCount = await cleanupConversationVideoMediaForDeletedContact(resolvedContactId);
   const removedPlotThreadCount = preserveContact ? 0 : cleanupPlotThreadsForDeletedContact(resolvedContactId);
   const removedRaisingRecordCount = preserveContact
     ? 0
@@ -25429,8 +25637,8 @@ function attachEvents() {
       }
       try {
         state.chatSettingsVideoContactImage = await readAvatarAsDataUrl(file, {
-          maxSide: 900,
-          quality: 0.78
+          maxSide: 1440,
+          quality: 0.86
         });
         renderChatSettingsVideoPreviews();
         setEditorStatus(messagesChatSettingsStatusEl, "角色视频图片已更新。", "success");
@@ -25450,8 +25658,8 @@ function attachEvents() {
       }
       try {
         state.chatSettingsVideoUserImage = await readAvatarAsDataUrl(file, {
-          maxSide: 900,
-          quality: 0.78
+          maxSide: 1440,
+          quality: 0.86
         });
         renderChatSettingsVideoPreviews();
         setEditorStatus(messagesChatSettingsStatusEl, "用户视频图片已更新。", "success");
@@ -25533,7 +25741,7 @@ function attachEvents() {
   }
 
   if (messagesChatSettingsFormEl) {
-    messagesChatSettingsFormEl.addEventListener("submit", (event) => {
+    messagesChatSettingsFormEl.addEventListener("submit", async (event) => {
       event.preventDefault();
       const draft = getCurrentChatPromptSettingsDraft();
       const conversation = getConversationById();
@@ -25566,14 +25774,17 @@ function attachEvents() {
         setEditorStatus(messagesChatSettingsStatusEl, "当前没有打开的会话。", "error");
         return;
       }
-      const videoMediaSaveResult = setConversationVideoMediaSettings(
+      setEditorStatus(messagesChatSettingsStatusEl, "正在保存设置…", "");
+      const videoMediaSaveResult = await setConversationVideoMediaSettings(
         state.chatSettingsVideoContactImage,
         state.chatSettingsVideoUserImage
       );
-      state.chatSettingsVideoContactImage = conversation
-        ? getConversationVideoContactImage(conversation)
-        : "";
-      state.chatSettingsVideoUserImage = conversation ? getConversationVideoUserImage(conversation) : "";
+      if (videoMediaSaveResult.mediaPersisted) {
+        state.chatSettingsVideoContactImage = conversation
+          ? getConversationVideoContactImage(conversation)
+          : "";
+        state.chatSettingsVideoUserImage = conversation ? getConversationVideoUserImage(conversation) : "";
+      }
       setConversationAllowAiPresenceUpdate(
         Boolean(messagesChatAllowAiPresenceUpdateInputEl?.checked)
       );
@@ -25588,12 +25799,15 @@ function attachEvents() {
       updateChatHotTopicsWarning(savedPromptSettings);
       let chatSettingsStatusMessage = "对话回复设置已保存。";
       let chatSettingsStatusTone = "success";
-      if (!videoMediaSaveResult.conversationPersisted && videoMediaSaveResult.mediaPersisted) {
+      if (!videoMediaSaveResult.mediaPersisted) {
+        chatSettingsStatusMessage = "对话回复设置已保存，但视频图片写入本机存储失败，请换小图后重试。";
+        chatSettingsStatusTone = "error";
+      } else if (videoMediaSaveResult.mediaCompressed) {
+        chatSettingsStatusMessage = "对话回复设置已保存，视频图片已压缩后保存。";
+        chatSettingsStatusTone = "success";
+      } else if (!videoMediaSaveResult.conversationPersisted) {
         chatSettingsStatusMessage = "对话回复设置已保存，视频图片已单独保存。";
         chatSettingsStatusTone = "warning";
-      } else if (!videoMediaSaveResult.conversationPersisted && !videoMediaSaveResult.mediaPersisted) {
-        chatSettingsStatusMessage = "对话回复设置已保存，但视频图片写入本地缓存失败，请清理缓存后重试。";
-        chatSettingsStatusTone = "error";
       }
       setEditorStatus(
         messagesChatSettingsStatusEl,
@@ -25601,6 +25815,10 @@ function attachEvents() {
         chatSettingsStatusTone
       );
       setMessagesStatus(chatSettingsStatusMessage, chatSettingsStatusTone);
+      if (!videoMediaSaveResult.mediaPersisted) {
+        renderChatSettingsVideoPreviews(conversation);
+        return;
+      }
       if (state.activeConversationId && state.activeTab === "chat") {
         renderConversationDetail();
       }
@@ -27136,6 +27354,7 @@ function init() {
   renderMessagesPage();
   window.setTimeout(async () => {
     try {
+      await hydrateConversationVideoMediaMap();
       refreshStateFromStorage({
         forceLocalConversations: true
       });
