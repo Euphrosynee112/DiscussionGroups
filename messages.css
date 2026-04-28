@@ -1863,10 +1863,10 @@ body.embedded .messages-shell {
   position: absolute;
   left: 10px;
   right: 10px;
-  bottom: 96px;
+  bottom: 68px;
   z-index: 2;
   max-height: min(38%, 280px);
-  padding: 6px 2px 10px;
+  padding: 6px 2px 4px;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
@@ -4480,7 +4480,7 @@ body.embedded {
   .messages-call-screen__history--video {
     left: 8px;
     right: 8px;
-    bottom: 90px;
+    bottom: 64px;
     max-height: min(40%, 250px);
   }
 

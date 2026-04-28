@@ -44,6 +44,7 @@ const CONVERSATION_VIDEO_MEDIA_COMPRESSION_STEPS = [
   { maxSide: 540, quality: 0.66 },
   { maxSide: 420, quality: 0.62 }
 ];
+const ACTIVE_CALL_TRANSCRIPT_MESSAGE_LIMIT = 24;
 const DEFAULT_MESSAGE_REPLY_SENTENCE_LIMIT = 7;
 const MAX_MESSAGE_REPLY_SENTENCE_LIMIT = 20;
 const DEFAULT_MESSAGE_JOURNAL_LENGTH = 320;
@@ -18195,7 +18196,7 @@ function getActiveVoiceCallTranscriptMessages(conversation, callState) {
   const startedAt = Number(callState?.startedAt) || 0;
   return (Array.isArray(conversation?.messages) ? conversation.messages : [])
     .filter((message) => (Number(message?.createdAt) || 0) >= Math.max(0, startedAt - 1000))
-    .slice(-24);
+    .slice(-ACTIVE_CALL_TRANSCRIPT_MESSAGE_LIMIT);
 }
 
 function renderActiveVoiceCallScreen(conversation, options = {}) {
@@ -18841,6 +18842,27 @@ function syncConversationHistoryWindow(historyEl, renderWindow) {
   currentWindow.outerHTML = nextMarkup;
 }
 
+function getVisibleConversationHistoryTarget(conversation = null) {
+  const normalHistoryEl = messagesContentEl?.querySelector(".messages-conversation__history");
+  if (normalHistoryEl instanceof HTMLElement) {
+    return {
+      historyEl: normalHistoryEl,
+      mode: "conversation"
+    };
+  }
+  const callHistoryEl = messagesContentEl?.querySelector(".messages-call-screen__history");
+  if (callHistoryEl instanceof HTMLElement && isConversationVoiceCallActive(conversation)) {
+    return {
+      historyEl: callHistoryEl,
+      mode: "call"
+    };
+  }
+  return {
+    historyEl: null,
+    mode: ""
+  };
+}
+
 function appendConversationMessageToVisibleHistory(
   message,
   conversation,
@@ -18848,7 +18870,7 @@ function appendConversationMessageToVisibleHistory(
   options = {}
 ) {
   const messageId = String(message?.id || "").trim();
-  const historyEl = messagesContentEl?.querySelector(".messages-conversation__history");
+  const { historyEl, mode } = getVisibleConversationHistoryTarget(conversation);
   if (!(historyEl instanceof HTMLElement) || !conversation) {
     return false;
   }
@@ -18870,6 +18892,14 @@ function appendConversationMessageToVisibleHistory(
   if (!renderWindow.visibleCount) {
     return false;
   }
+  if (mode === "call") {
+    const callState = getConversationVoiceCallState(conversation);
+    const startedAt = Number(callState?.startedAt) || 0;
+    const createdAt = Number(message?.createdAt) || 0;
+    if (startedAt && createdAt && createdAt < Math.max(0, startedAt - 1000)) {
+      return false;
+    }
+  }
   if (
     messageId &&
     [...historyEl.querySelectorAll("[data-message-id]")]
@@ -18881,17 +18911,25 @@ function appendConversationMessageToVisibleHistory(
   const shouldStickToBottom =
     renderOptions.scrollBehavior === "bottom" ||
     (renderOptions.scrollBehavior !== "preserve" && isConversationHistoryNearBottom());
-  const emptyEl = historyEl.querySelector(".messages-conversation__empty");
+  const emptyEl = historyEl.querySelector(
+    mode === "call" ? ".messages-call-screen__history-empty" : ".messages-conversation__empty"
+  );
   if (emptyEl) {
     emptyEl.remove();
   }
-  syncConversationHistoryWindow(historyEl, renderWindow);
+  if (mode !== "call") {
+    syncConversationHistoryWindow(historyEl, renderWindow);
+  }
   historyEl.insertAdjacentHTML(
     "beforeend",
-    renderConversationMessage(message, conversation, promptSettings)
+    mode === "call"
+      ? renderConversationCallTranscriptItem(message, conversation)
+      : renderConversationMessage(message, conversation, promptSettings)
   );
   const visibleRows = [...historyEl.querySelectorAll(".messages-message-row")];
-  const overflowCount = Math.max(0, visibleRows.length - renderWindow.visibleCount);
+  const overflowLimit =
+    mode === "call" ? ACTIVE_CALL_TRANSCRIPT_MESSAGE_LIMIT : renderWindow.visibleCount;
+  const overflowCount = Math.max(0, visibleRows.length - overflowLimit);
   if (overflowCount > 0) {
     visibleRows.slice(0, overflowCount).forEach((row) => row.remove());
   }
